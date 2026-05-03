@@ -19,10 +19,12 @@ venv/
 *.pkl
 *.pth.tar
 
-# Data
-data/train_images/
-data/val_images/
-data/test_images/
+# Data (images and labels are large, not tracked by git)
+data/Tunnel200 dataset/
+data/crack/
+data/*.png
+data/*.jpg
+data/*.npy
 *.npy
 
 # Results (training outputs)
