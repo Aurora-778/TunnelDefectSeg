@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.egg-info/
+*.egg
+*.whl
+
+# Virtual environment
+venv/
+.venv/
+
+# Models & weights (too large for git)
+*.pth
+*.pt
+*.onnx
+*.pb
+*.h5
+*.pkl
+*.pth.tar
+
+# Data
+data/train_images/
+data/val_images/
+data/test_images/
+*.npy
+
+# Results (training outputs)
+results/
+outputs/
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.zip
+*.rar
+*.tar
+*.tar.gz
