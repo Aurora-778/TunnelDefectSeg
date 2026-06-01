@@ -124,3 +124,31 @@ Example output file:
 
 - The old legacy report under `experiments/ResNet50_FCN_6cls/` belongs to the previous run and should not be used as the clean retrain result.
 - If the masks or folder structure change, regenerate `multiclass_labels/` before training.
+
+## Confidence-risk post-inference module
+
+This workspace now includes a post-inference module for confidence-aware tunnel defect review. It reuses the trained segmentation checkpoint, applies a small test-time augmentation set, fuses aligned predictions, estimates uncertainty, measures defect morphology, and writes an explainable risk report.
+
+Run it on one image or a folder:
+
+```powershell
+python run_confidence_risk.py <image-or-folder> --output-dir experiments/confidence_risk --tta-mode light
+```
+
+Main artifacts per image:
+
+- `<stem>_single_mask.png`
+- `<stem>_fused_mask.png`
+- `<stem>_overlay.png`
+- `<stem>_uncertainty_heatmap.png`
+- `<stem>_disagreement_heatmap.png`
+- `<stem>_skeleton.png`
+- `<stem>_report.json`
+
+Compare single-pass and fused predictions where labels are available:
+
+```powershell
+python evaluate_confidence_risk.py --split test --limit 20 --output experiments/confidence_risk_eval.json
+```
+
+Implementation notes and patent-oriented framing are in `docs/patent-notes/tunnel-defect-confidence-risk.md`.
