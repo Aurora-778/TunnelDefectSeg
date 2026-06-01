@@ -148,10 +148,12 @@ def preprocess_image(img_path: Path, input_size: tuple[int, int]) -> tuple[torch
 def load_model():
     from train_resnet50 import Config, ResNet50SegmentationModel
 
+    local_pretrained = Path(Config.DATA_ROOT) / Path(Config.PRETRAINED).name
+    pretrained_path = str(local_pretrained) if local_pretrained.exists() else Config.PRETRAINED
     model = ResNet50SegmentationModel(
         num_classes=Config.NUM_CLASSES,
         backbone="fcn",
-        pretrained_path=Config.PRETRAINED,
+        pretrained_path=pretrained_path,
     ).to(Config.DEVICE)
     ckpt_path = Path(Config.SAVE_DIR) / "best_model.pth"
     if not ckpt_path.exists():
