@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>隧道病害可信评估展示台</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --paper: #edf1f4;
+      --panel: #ffffff;
+      --line: #22313f;
+      --muted: #607180;
+      --amber: #f4b942;
+      --cyan: #00a6a6;
+      --red: #d94a38;
+      --green: #1c8b5f;
+      --blue: #2f64b2;
+      --shadow: rgba(23, 33, 43, 0.16);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { overflow-x: hidden; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(34,49,63,0.05) 1px, transparent 1px) 0 0 / 28px 28px,
+        linear-gradient(0deg, rgba(34,49,63,0.04) 1px, transparent 1px) 0 0 / 28px 28px,
+        var(--paper);
+      font-family: "Bahnschrift", "Aptos", "Microsoft YaHei UI", sans-serif;
+    }
+
+    .shell {
+      width: min(1480px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 22px 0 42px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(240px, 1.3fr) repeat(4, minmax(118px, 0.46fr));
+      gap: 10px;
+      align-items: stretch;
+      margin-bottom: 12px;
+    }
+
+    .brand {
+      border: 2px solid var(--line);
+      background: var(--panel);
+      padding: 14px 16px;
+      min-height: 94px;
+      box-shadow: 5px 5px 0 var(--ink);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 28px;
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .brand p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .stat {
+      border: 2px solid var(--line);
+      background: #f8fbfd;
+      padding: 10px;
+      min-height: 94px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .stat strong {
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .stat span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .risk-medium { background: var(--amber); color: var(--ink); }
+    .risk-medium span { color: rgba(23,33,43,0.72); }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: 310px minmax(0, 1fr) 370px;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 2px solid var(--line);
+      background: var(--panel);
+      box-shadow: 4px 4px 0 var(--shadow);
+      min-width: 0;
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 2px solid var(--line);
+      padding: 10px 12px;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+
+    .panel-body { padding: 12px; }
+
+    .case-id {
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 35px;
+      margin: 0 0 8px;
+    }
+
+    .status-strip {
+      display: grid;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .strip-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 8px 9px;
+      font-size: 13px;
+    }
+
+    .strip-row b {
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-weight: 700;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      padding: 4px 8px;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--amber);
+      display: inline-block;
+    }
+
+    .viewer {
+      min-height: 640px;
+      display: grid;
+      grid-template-rows: auto minmax(360px, 1fr) auto;
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 10px;
+      border-bottom: 2px solid var(--line);
+      background: #dfe8ee;
+    }
+
+    button {
+      font: inherit;
+      color: var(--ink);
+      border: 2px solid var(--line);
+      background: #fff;
+      padding: 8px 10px;
+      cursor: pointer;
+      min-height: 38px;
+    }
+
+    button:hover { transform: translate(-1px, -1px); box-shadow: 2px 2px 0 var(--line); }
+    button.active { background: var(--cyan); color: #fff; }
+
+    .image-stage {
+      position: relative;
+      display: grid;
+      place-items: center;
+      padding: 14px;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(244,185,66,0.16), transparent 32%),
+        linear-gradient(135deg, #263545, #111922);
+      overflow: hidden;
+    }
+
+    .image-stage img {
+      width: min(100%, 760px);
+      max-height: 520px;
+      object-fit: contain;
+      border: 2px solid #000;
+      background: #000;
+      image-rendering: auto;
+    }
+
+    .stage-label {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      background: var(--amber);
+      border: 2px solid var(--line);
+      padding: 7px 10px;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 12px;
+    }
+
+    .filmstrip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+      gap: 8px;
+      padding: 10px;
+      background: #eef4f7;
+      border-top: 2px solid var(--line);
+    }
+
+    .thumb {
+      border: 2px solid transparent;
+      background: #fff;
+      padding: 4px;
+      cursor: pointer;
+      min-height: 82px;
+    }
+
+    .thumb.active { border-color: var(--cyan); }
+    .thumb img { width: 100%; height: 54px; object-fit: cover; display: block; border: 1px solid var(--line); }
+    .thumb span { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 9px;
+      min-height: 78px;
+    }
+
+    .metric span { color: var(--muted); font-size: 12px; }
+    .metric b { display: block; font-family: "Cascadia Mono", "Consolas", monospace; font-size: 22px; margin-top: 6px; }
+
+    .bar-list { display: grid; gap: 8px; }
+    .bar-row { display: grid; grid-template-columns: 92px 1fr 54px; gap: 8px; align-items: center; font-size: 12px; }
+    .bar-track { height: 13px; border: 1px solid var(--line); background: #dfe8ee; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--blue); }
+    .bar-fill.bad { background: var(--red); }
+    .bar-fill.good { background: var(--green); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      background: #fff;
+      table-layout: fixed;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 7px 6px;
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    th { background: #dfe8ee; font-family: "Cascadia Mono", "Consolas", monospace; }
+
+    .lower {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      gap: 12px;
+    }
+
+    .reason-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .reason-list li {
+      border-left: 8px solid var(--amber);
+      background: #fff;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 430px;
+      overflow: auto;
+      background: #17212b;
+      color: #dce7ef;
+      padding: 12px;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .callout {
+      border: 2px solid var(--line);
+      background: #fff;
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .split-note {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 8px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1180px) {
+      header { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .brand { grid-column: 1 / -1; }
+      .dashboard, .lower { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 680px) {
+      .shell { width: min(100% - 18px, 1480px); padding-top: 10px; }
+      header { grid-template-columns: 1fr; }
+      .panel-title { align-items: flex-start; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+      .strip-row { display: grid; grid-template-columns: 1fr; gap: 4px; }
+      .strip-row b { overflow-wrap: anywhere; }
+      .tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .tabs button { width: 100%; }
+      .image-stage { padding: 8px; min-height: 310px; }
+      .image-stage img { width: 100%; }
+      .filmstrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric-grid { grid-template-columns: 1fr; }
+      .bar-row { grid-template-columns: 78px minmax(0, 1fr) 46px; }
+      .brand h1 { font-size: 23px; }
+      pre { max-height: 360px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <section class="brand">
+        <h1>隧道病害可信评估展示台</h1>
+        <p>Multi-pose fusion / uncertainty / skeleton / risk report</p>
+      </section>
+      <section class="stat risk-medium"><span>Risk level</span><strong>MEDIUM</strong></section>
+      <section class="stat"><span>Risk score</span><strong>3.25</strong></section>
+      <section class="stat"><span>Defect pixels</span><strong>517</strong></section>
+      <section class="stat"><span>Review</span><strong>YES</strong></section>
+    </header>
+
+    <section class="dashboard">
+      <aside class="panel">
+        <div class="panel-title">Case file <span class="pill"><i class="dot"></i> active</span></div>
+        <div class="panel-body">
+          <h2 class="case-id">t1_1</h2>
+          <div class="status-strip">
+            <div class="strip-row"><span>TTA specs</span><b>identity + hflip</b></div>
+            <div class="strip-row"><span>Image grid</span><b>384 x 384</b></div>
+            <div class="strip-row"><span>Defect class</span><b>simple</b></div>
+            <div class="strip-row"><span>Direction</span><b>vertical</b></div>
+            <div class="strip-row"><span>Skeleton length</span><b>49</b></div>
+            <div class="strip-row"><span>Component count</span><b>1</b></div>
+          </div>
+          <p class="split-note">单次预测有 1108 个 simple 像素，融合后收敛为 517 个；高不确定性集中在 defect 区域。</p>
+        </div>
+      </aside>
+
+      <section class="panel viewer">
+        <div class="tabs" id="tabs"></div>
+        <div class="image-stage">
+          <div class="stage-label" id="stageLabel">Overlay</div>
+          <img id="stageImage" src="assets/t1_1_overlay.png" alt="当前影像证据" />
+        </div>
+        <div class="filmstrip" id="filmstrip"></div>
+      </section>
+
+      <aside class="panel">
+        <div class="panel-title">Risk evidence <span>JSON-backed</span></div>
+        <div class="panel-body">
+          <div class="metric-grid">
+            <div class="metric"><span>Mean uncertainty</span><b>0.0046</b></div>
+            <div class="metric"><span>Max uncertainty</span><b>0.4433</b></div>
+            <div class="metric"><span>Defect uncertainty</span><b>0.3663</b></div>
+            <div class="metric"><span>High defect fraction</span><b>65.76%</b></div>
+          </div>
+
+          <h3>风险触发原因</h3>
+          <ul class="reason-list">
+            <li>class severity weight 1.00</li>
+            <li>small area ratio 0.0035</li>
+            <li>moderate skeleton length 49</li>
+            <li>high mean uncertainty 0.366</li>
+            <li>high uncertain-area fraction 0.658</li>
+          </ul>
+
+          <h3>类别像素变化</h3>
+          <div class="bar-list">
+            <div class="bar-row"><span>single bg</span><div class="bar-track"><div class="bar-fill good" style="width:99.25%"></div></div><b>146348</b></div>
+            <div class="bar-row"><span>single defect</span><div class="bar-track"><div class="bar-fill" style="width:0.75%"></div></div><b>1108</b></div>
+            <div class="bar-row"><span>fused bg</span><div class="bar-track"><div class="bar-fill good" style="width:99.65%"></div></div><b>146939</b></div>
+            <div class="bar-row"><span>fused defect</span><div class="bar-track"><div class="bar-fill" style="width:0.35%"></div></div><b>517</b></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="lower">
+      <section class="panel">
+        <div class="panel-title">Evaluation contrast <span>single vs fused</span></div>
+        <div class="panel-body">
+          <div class="metric-grid">
+            <div class="metric"><span>Single mIoU</span><b>0.2221</b></div>
+            <div class="metric"><span>Fused mIoU</span><b>0.1732</b></div>
+            <div class="metric"><span>Delta mIoU</span><b>-0.0489</b></div>
+            <div class="metric"><span>Mean uncertainty</span><b>0.1554</b></div>
+          </div>
+          <h3>形态量化明细</h3>
+          <table>
+            <thead>
+              <tr><th>Class</th><th>Area</th><th>Area ratio</th><th>Components</th><th>Skeleton</th><th>Direction</th><th>Risk</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>simple</td><td>517</td><td>0.003506</td><td>1</td><td>49</td><td>vertical 87.24 deg</td><td>medium / review</td></tr>
+              <tr><td>blocky</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
+              <tr><td>pipeline</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
+              <tr><td>vertical</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
+              <tr><td>horizontal</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Structured report <span>excerpt</span></div>
+        <pre id="jsonBlock"></pre>
+      </section>
+    </section>
+
+    <section class="panel" style="margin-top:12px;">
+      <div class="panel-title">Patent figure chain <span>export-ready</span></div>
+      <div class="panel-body">
+        <div class="callout">
+          输入图像 -> 单次预测 -> 多姿态融合预测 -> 不确定性热力图 -> 骨架/连通域量化 -> 风险等级与复核建议。当前样例展示的是“分割可信评估与风险分级”的完整证据链；指标上融合 mIoU 未必更高，但可解释性和复核定位明显增强。
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const views = [
+      ["Original", "assets/t1_1_original.jpg"],
+      ["Single mask", "assets/t1_1_single_mask.png"],
+      ["Fused mask", "assets/t1_1_fused_mask.png"],
+      ["Overlay", "assets/t1_1_overlay.png"],
+      ["Uncertainty", "assets/t1_1_uncertainty_heatmap.png"],
+      ["Disagreement", "assets/t1_1_disagreement_heatmap.png"],
+      ["Skeleton", "assets/t1_1_skeleton.png"]
+    ];
+
+    const report = {
+      stem: "t1_1",
+      risk: {
+        risk_level: "medium",
+        score: 3.25,
+        review_required: true,
+        suggestions: [
+          "Medium image-based defect risk; review morphology and uncertainty before acceptance.",
+          "Manual review recommended because uncertainty is high in detected defect regions."
+        ]
+      },
+      uncertainty_summary: {
+        mean: 0.004636249,
+        max: 0.443340689,
+        high_fraction: 0.006103516,
+        defect_mean: 0.366320997,
+        defect_high_fraction: 0.657640232
+      },
+      morphology: {
+        defect_area_pixels: 517,
+        defect_area_ratio: 0.003506131,
+        defect_component_count: 1,
+        defect_skeleton_length: 49,
+        simple_bbox: [137, 142, 16, 37],
+        dominant_direction: "vertical",
+        dominant_direction_degrees: 87.2362
+      },
+      evaluation: {
+        single_mIoU: 0.222122077,
+        fused_mIoU: 0.173192874,
+        delta_mIoU: -0.048929203,
+        single_mDice: 0.265404568,
+        fused_mDice: 0.195361235
+      }
+    };
+
+    const tabs = document.querySelector("#tabs");
+    const filmstrip = document.querySelector("#filmstrip");
+    const stageImage = document.querySelector("#stageImage");
+    const stageLabel = document.querySelector("#stageLabel");
+
+    function selectView(index) {
+      stageImage.src = views[index][1];
+      stageLabel.textContent = views[index][0];
+      document.querySelectorAll("[data-view]").forEach((node) => {
+        node.classList.toggle("active", Number(node.dataset.view) === index);
+      });
+    }
+
+    views.forEach((view, index) => {
+      const button = document.createElement("button");
+      button.textContent = view[0];
+      button.dataset.view = index;
+      button.addEventListener("click", () => selectView(index));
+      tabs.appendChild(button);
+
+      const thumb = document.createElement("div");
+      thumb.className = "thumb";
+      thumb.dataset.view = index;
+      thumb.innerHTML = `<img src="${view[1]}" alt="${view[0]} thumbnail"><span>${view[0]}</span>`;
+      thumb.addEventListener("click", () => selectView(index));
+      filmstrip.appendChild(thumb);
+    });
+
+    document.querySelector("#jsonBlock").textContent = JSON.stringify(report, null, 2);
+    selectView(3);
+  </script>
+</body>
+</html>
