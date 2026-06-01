@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Model weights and training artifacts
+*.pth
+*.pt
+*.onnx
+experiments/
+save/
+work_dirs/
+
+# Local datasets and generated labels
+1/
+2/
+3/
+4/
+5/
+multiclass_labels/
+annotations/
+class_manifest.csv
+class_summary.json
+
+# Logs
+*.log
+*.err.log
+
+# Local OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
