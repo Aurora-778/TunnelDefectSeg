@@ -1,7 +1,7 @@
 ---
 title: Tunnel Defect Confidence Risk Plan
 type: feat
-status: active
+status: completed
 date: 2026-06-01
 origin: docs/brainstorms/2026-06-01-tunnel-defect-confidence-risk-requirements.md
 ---

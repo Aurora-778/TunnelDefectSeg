@@ -115,7 +115,7 @@ def write_result_artifacts(
         "uncertainty_summary": unc_summary,
         "morphology": morphology,
         "risk": risk,
-        "artifacts": {name: str(path.name) for name, path in paths.items() if name != "report"},
+        "artifacts": {name: str(path.name) for name, path in paths.items()},
     }
     save_json(report, paths["report"])
     return report
@@ -199,7 +199,7 @@ def run_batch(input_path: Path, output_dir: Path | None = None, tta_mode: str = 
         "output_dir": str(out_dir),
         "num_images": len(reports),
         "risk_counts": {},
-        "reports": [f"{Path(item['artifacts']['report']).stem}.json" if "report" in item.get("artifacts", {}) else f"{item['stem']}_report.json" for item in reports],
+        "reports": [item["artifacts"]["report"] for item in reports],
     }
     for report in reports:
         level = report["risk"]["risk_level"]
