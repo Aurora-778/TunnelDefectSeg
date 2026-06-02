@@ -470,12 +470,12 @@
     <header>
       <section class="brand">
         <h1>隧道病害可信评估展示台</h1>
-        <p>多姿态融合 / 不确定性 / 骨架形态 / 风险报告</p>
+        <p>TTA fusion / Uncertainty / Skeleton morphology / Risk report</p>
       </section>
-      <section class="stat risk-medium" id="riskLevelCard"><span>风险等级</span><strong id="riskLevel">中</strong></section>
-      <section class="stat"><span>风险分</span><strong id="riskScore">3.25</strong></section>
-      <section class="stat"><span>缺陷像素</span><strong id="defectPixels">517</strong></section>
-      <section class="stat"><span>人工复核</span><strong id="reviewFlag">是</strong></section>
+      <section class="stat risk-medium" id="riskLevelCard"><span>Risk level</span><strong id="riskLevel">Medium</strong></section>
+      <section class="stat"><span>Risk score</span><strong id="riskScore">3.25</strong></section>
+      <section class="stat"><span>Defect pixels</span><strong id="defectPixels">517</strong></section>
+      <section class="stat"><span>Review</span><strong id="reviewFlag">YES</strong></section>
     </header>
 
     <section class="panel upload-panel">
@@ -496,16 +496,16 @@
 
     <section class="dashboard">
       <aside class="panel">
-        <div class="panel-title">样本信息 <span class="pill"><i class="dot"></i> 当前样本</span></div>
+        <div class="panel-title">Case file <span class="pill"><i class="dot"></i> 当前样本</span></div>
         <div class="panel-body">
           <h2 class="case-id" id="caseId">t1_1</h2>
           <div class="status-strip" id="statusStrip">
-            <div class="strip-row"><span>增强策略</span><b>identity + hflip</b></div>
-            <div class="strip-row"><span>输入尺寸</span><b>384 x 384</b></div>
-            <div class="strip-row"><span>主缺陷类别</span><b>simple</b></div>
-            <div class="strip-row"><span>主方向</span><b>vertical</b></div>
-            <div class="strip-row"><span>骨架长度</span><b>49</b></div>
-            <div class="strip-row"><span>连通域数量</span><b>1</b></div>
+            <div class="strip-row"><span>TTA specs</span><b>identity + hflip</b></div>
+            <div class="strip-row"><span>Input size</span><b>384 x 384</b></div>
+            <div class="strip-row"><span>Main class</span><b>simple</b></div>
+            <div class="strip-row"><span>Direction</span><b>vertical</b></div>
+            <div class="strip-row"><span>Skeleton length</span><b>49</b></div>
+            <div class="strip-row"><span>Components</span><b>1</b></div>
           </div>
           <p class="split-note" id="caseNote">单次预测有 1108 个缺陷像素，融合后收敛为 517 个；风险等级由形态特征和不确定性共同给出。</p>
         </div>
@@ -521,13 +521,13 @@
       </section>
 
       <aside class="panel">
-        <div class="panel-title">风险证据 <span>JSON 驱动</span></div>
+        <div class="panel-title">Risk evidence <span>JSON-backed</span></div>
         <div class="panel-body">
           <div class="metric-grid" id="riskMetrics">
-            <div class="metric"><span>平均不确定性</span><b>0.0046</b><small>整张图预测分布的平均不确定程度，越高表示模型越不确定。</small></div>
-            <div class="metric"><span>最大不确定性</span><b>0.4433</b><small>图中最不确定的像素值，用于定位边界或疑似误判区域。</small></div>
-            <div class="metric"><span>缺陷区不确定性</span><b>0.3663</b><small>只在已检测缺陷区域内统计，更贴近复核风险。</small></div>
-            <div class="metric"><span>高不确定缺陷占比</span><b>65.76%</b><small>缺陷区域中超过阈值的比例，越高越建议人工确认。</small></div>
+            <div class="metric"><span>Mean uncertainty</span><b>0.0046</b><small>整张图预测分布的平均不确定程度，越高表示模型越不确定。</small></div>
+            <div class="metric"><span>Max uncertainty</span><b>0.4433</b><small>图中最不确定的像素值，用于定位边界或疑似误判区域。</small></div>
+            <div class="metric"><span>Defect uncertainty</span><b>0.3663</b><small>只在已检测缺陷区域内统计，更贴近复核风险。</small></div>
+            <div class="metric"><span>High defect fraction</span><b>65.76%</b><small>缺陷区域中超过阈值的比例，越高越建议人工确认。</small></div>
           </div>
 
           <h3>风险触发原因</h3>
@@ -552,13 +552,13 @@
 
     <section class="lower">
       <section class="panel">
-        <div class="panel-title">检测摘要 <span>单次预测 vs 融合预测</span></div>
+        <div class="panel-title">Metrics summary <span>Single vs fused</span></div>
         <div class="panel-body">
           <div class="metric-grid" id="summaryMetrics">
-            <div class="metric"><span>单次 mIoU</span><b>0.2221</b><small>单次预测与人工标注的重叠度，1 表示完全一致。</small></div>
-            <div class="metric"><span>融合 mIoU</span><b>0.1732</b><small>多姿态融合后与人工标注的重叠度。</small></div>
-            <div class="metric"><span>mIoU 变化</span><b>-0.0489</b><small>融合 mIoU 减去单次 mIoU，用于观察融合是否改善精度。</small></div>
-            <div class="metric"><span>平均不确定性</span><b>0.1554</b><small>评估样本上的平均不确定程度。</small></div>
+            <div class="metric"><span>Single mIoU</span><b>0.2221</b><small>单次预测与人工标注 GT 的重叠度，1 表示完全一致。</small></div>
+            <div class="metric"><span>Fused mIoU</span><b>0.1732</b><small>TTA 融合预测与人工标注 GT 的重叠度。</small></div>
+            <div class="metric"><span>Delta mIoU</span><b>-0.0489</b><small>Fused mIoU - Single mIoU，用于观察融合是否改善精度。</small></div>
+            <div class="metric"><span>Mean uncertainty</span><b>0.1554</b><small>评估样本上的平均不确定程度。</small></div>
           </div>
           <h3>形态量化明细</h3>
           <table>
@@ -577,25 +577,25 @@
       </section>
 
       <section class="panel">
-        <div class="panel-title">结构化报告 <span>JSON 摘要</span></div>
+        <div class="panel-title">Structured report <span>JSON excerpt</span></div>
         <pre id="jsonBlock"></pre>
       </section>
     </section>
 
     <section class="panel" style="margin-top:12px;">
-      <div class="panel-title">指标说明 <span>中文标注</span></div>
+      <div class="panel-title">Metric glossary <span>中文说明</span></div>
       <div class="panel-body">
         <div class="glossary">
           <div class="glossary-item"><b>风险等级</b><p>由缺陷面积、骨架长度、连通域数量和不确定性综合得到，分为 none / low / medium / high。</p></div>
           <div class="glossary-item"><b>风险分</b><p>风险等级背后的连续分值。分值越高，代表病害形态或模型不确定性越需要关注。</p></div>
           <div class="glossary-item"><b>缺陷像素</b><p>融合预测 mask 中非背景类别的像素总数，反映检测到的病害区域大小。</p></div>
-          <div class="glossary-item"><b>人工复核</b><p>当缺陷区不确定性偏高，系统会给出“是”，表示建议人工检查该图。</p></div>
+          <div class="glossary-item"><b>Review</b><p>当缺陷区不确定性偏高，系统会给出 YES，表示建议人工检查该图。</p></div>
           <div class="glossary-item"><b>增强策略</b><p>TTA，即测试时增强。当前用原图和水平翻转图共同预测，再对齐融合。</p></div>
-          <div class="glossary-item"><b>不确定性</b><p>由多类别概率熵归一化得到，范围约 0-1。越高表示模型越拿不准。</p></div>
+          <div class="glossary-item"><b>Uncertainty</b><p>由多类别概率熵归一化得到，范围约 0-1。越高表示模型越拿不准。</p></div>
           <div class="glossary-item"><b>高不确定缺陷占比</b><p>缺陷像素中不确定性超过阈值的比例，是复核建议的重要依据。</p></div>
           <div class="glossary-item"><b>连通域</b><p>互相分离的缺陷块数量。数量多可能表示破碎、散裂或误检碎片。</p></div>
           <div class="glossary-item"><b>骨架长度</b><p>把缺陷区域细化成中心线后的长度，适合描述裂缝类长条形病害。</p></div>
-          <div class="glossary-item"><b>mIoU</b><p>预测区域与真实标注的平均交并比，只在有标注的评估样例里有意义。</p></div>
+          <div class="glossary-item"><b>mIoU</b><p>预测 mask 与人工标注 GT 的平均交并比。没有 GT 的自选图片显示 N/A。</p></div>
           <div class="glossary-item"><b>Disagreement</b><p>多姿态预测之间不一致的位置，能辅助发现边界不稳或模型犹豫区域。</p></div>
           <div class="glossary-item"><b>Overlay</b><p>把融合 mask 叠加到原图上，用于直观看缺陷位置和覆盖范围。</p></div>
         </div>
@@ -603,7 +603,7 @@
     </section>
 
     <section class="panel" style="margin-top:12px;">
-      <div class="panel-title">专利证据链 <span>可导出</span></div>
+      <div class="panel-title">Patent evidence chain <span>可导出</span></div>
       <div class="panel-body">
         <div class="callout">
           输入图像 -> 单次预测 -> 多姿态融合预测 -> 不确定性热力图 -> 骨架/连通域量化 -> 风险等级与复核建议。当前样例展示的是“分割可信评估与风险分级”的完整证据链；指标上融合 mIoU 未必更高，但可解释性和复核定位明显增强。
@@ -696,13 +696,13 @@
 
     function viewLabel(label) {
       const labels = {
-        Original: "原图",
-        "Single mask": "单次掩膜",
-        "Fused mask": "融合掩膜",
-        Overlay: "叠加图",
-        Uncertainty: "不确定性图",
-        Disagreement: "分歧图",
-        Skeleton: "骨架图"
+        Original: "Original 原图",
+        "Single mask": "Single mask",
+        "Fused mask": "Fused mask",
+        Overlay: "Overlay",
+        Uncertainty: "Uncertainty",
+        Disagreement: "Disagreement",
+        Skeleton: "Skeleton"
       };
       return labels[label] || label;
     }
@@ -720,7 +720,7 @@
     }
 
     function riskLabel(level) {
-      const labels = { none: "无", low: "低", medium: "中", high: "高" };
+      const labels = { none: "None", low: "Low", medium: "Medium", high: "High" };
       return labels[String(level || "none").toLowerCase()] || level;
     }
 
@@ -792,7 +792,7 @@
       document.querySelector("#riskLevel").textContent = riskLabel(level);
       document.querySelector("#riskScore").textContent = fmt(risk.score, 2);
       document.querySelector("#defectPixels").textContent = report.morphology?.defect_area_pixels ?? 0;
-      document.querySelector("#reviewFlag").textContent = risk.review_required ? "是" : "否";
+      document.querySelector("#reviewFlag").textContent = risk.review_required ? "YES" : "NO";
     }
 
     function renderCase(report) {
@@ -802,12 +802,12 @@
       const imageShape = morph.image_shape ? `${morph.image_shape[1]} x ${morph.image_shape[0]}` : "384 x 384";
       document.querySelector("#caseId").textContent = report.stem || "uploaded";
       document.querySelector("#statusStrip").innerHTML = [
-        ["增强策略", (report.tta_specs || []).join(" + ") || "identity + hflip"],
-        ["输入尺寸", imageShape],
-        ["主缺陷类别", classLabel(detected.class_name || "none")],
-        ["主方向", detected.dominant_direction || "无"],
-        ["骨架长度", morph.defect_skeleton_length ?? detected.skeleton_length ?? 0],
-        ["连通域数量", morph.defect_component_count ?? detected.component_count ?? 0]
+        ["TTA specs", (report.tta_specs || []).join(" + ") || "identity + hflip"],
+        ["Input size", imageShape],
+        ["Main class", classLabel(detected.class_name || "none")],
+        ["Direction", detected.dominant_direction || "none"],
+        ["Skeleton length", morph.defect_skeleton_length ?? detected.skeleton_length ?? 0],
+        ["Components", morph.defect_component_count ?? detected.component_count ?? 0]
       ].map(([label, value]) => `<div class="strip-row"><span>${label}</span><b>${value}</b></div>`).join("");
 
       const singleDefect = defectPixelCount(report.single_prediction_stats);
@@ -854,15 +854,15 @@
     function renderSummary(report) {
       const ev = report.evaluation;
       const metrics = ev ? [
-        ["单次 mIoU", fmt(ev.single_mIoU), "单次预测与人工标注的重叠度，1 表示完全一致。"],
-        ["融合 mIoU", fmt(ev.fused_mIoU), "多姿态融合后与人工标注的重叠度。"],
-        ["mIoU 变化", fmt(ev.delta_mIoU), "融合 mIoU 减去单次 mIoU，用于观察融合是否改善精度。"],
-        ["平均不确定性", fmt(ev.mean_uncertainty ?? report.uncertainty_summary?.mean), "评估样本上的平均不确定程度。"]
+        ["Single mIoU", fmt(ev.single_mIoU), "单次预测与人工标注 GT 的重叠度，1 表示完全一致。"],
+        ["Fused mIoU", fmt(ev.fused_mIoU), "TTA 融合预测与人工标注 GT 的重叠度。"],
+        ["Delta mIoU", fmt(ev.delta_mIoU), "Fused mIoU - Single mIoU，用于观察融合是否改善精度。"],
+        ["Mean uncertainty", fmt(ev.mean_uncertainty ?? report.uncertainty_summary?.mean), "预测概率分布的平均不确定程度，越高越不稳定。"]
       ] : [
-        ["推理耗时", report.elapsed_ms ? `${report.elapsed_ms} ms` : "-", "从上传到生成全部证据图和报告的后端耗时。"],
-        ["增强策略", (report.tta_specs || []).join(" + ") || "-", "本次检测使用的测试时增强组合。"],
-        ["总像素数", report.morphology?.total_pixels ?? "-", "模型输入尺寸下参与统计的像素总数。"],
-        ["报告状态", report.report_url ? "已保存" : "页面内", "结构化 JSON 报告是否已写入本地输出目录。"]
+        ["Single mIoU", "N/A", "自选图片没有人工标注 GT，无法计算真实 mIoU。"],
+        ["Fused mIoU", "N/A", "mIoU 必须用预测 mask 与 GT mask 比较；当前只有输入图像。"],
+        ["Delta mIoU", "N/A", "没有 Single/Fused mIoU 时，mIoU 变化也不可计算。"],
+        ["Mean uncertainty", fmt(report.uncertainty_summary?.mean), "这个指标不需要 GT，可直接从模型概率分布计算。"]
       ];
       document.querySelector("#summaryMetrics").innerHTML = metrics.map(([label, value, help]) => metricCard(label, value, help)).join("");
     }
