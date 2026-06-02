@@ -619,9 +619,11 @@
   <script>
     const sampleViews = [
       { label: "Original", url: "assets/t1_1_original.jpg" },
+      { label: "GT mask", url: "assets/t1_1_gt_mask.png" },
       { label: "Single mask", url: "assets/t1_1_single_mask.png" },
       { label: "Fused mask", url: "assets/t1_1_fused_mask.png" },
       { label: "Selected mask", url: "assets/t1_1_selected_mask.png" },
+      { label: "GT overlay", url: "assets/t1_1_gt_overlay.png" },
       { label: "Overlay", url: "assets/t1_1_overlay.png" },
       { label: "Selected overlay", url: "assets/t1_1_selected_overlay.png" },
       { label: "Uncertainty", url: "assets/t1_1_uncertainty_heatmap.png" },
@@ -718,9 +720,11 @@
     function viewLabel(label) {
       const labels = {
         Original: "原图",
+        "GT mask": "GT 标注",
         "Single mask": "单次 mask",
         "Fused mask": "融合 mask",
         "Selected mask": "选择 mask",
+        "GT overlay": "GT 叠加图",
         Overlay: "叠加图",
         "Selected overlay": "选择叠加图",
         Uncertainty: "不确定性图",
