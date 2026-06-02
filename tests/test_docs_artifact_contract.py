@@ -10,7 +10,10 @@ def test_readme_lists_runner_artifacts():
     artifact_names = [
         "_single_mask.png",
         "_fused_mask.png",
+        "_hybrid_mask.png",
+        "_selected_mask.png",
         "_overlay.png",
+        "_selected_overlay.png",
         "_uncertainty_heatmap.png",
         "_disagreement_heatmap.png",
         "_skeleton.png",
@@ -25,8 +28,16 @@ def test_readme_lists_runner_artifacts():
 def test_patent_note_mentions_full_method_chain():
     note = (ROOT / "docs" / "patent-notes" / "tunnel-defect-confidence-risk.md").read_text(encoding="utf-8")
 
-    for phrase in ["多姿态", "不确定性", "骨架", "风险分级", "复核建议"]:
+    for phrase in ["多姿态", "自适应", "selected mask", "不确定性", "骨架", "风险分级", "复核建议"]:
         assert phrase in note
+
+
+def test_docs_do_not_treat_self_iou_as_ground_truth_accuracy():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    note = (ROOT / "docs" / "patent-notes" / "tunnel-defect-confidence-risk.md").read_text(encoding="utf-8")
+
+    assert "not ground-truth mIoU" in readme
+    assert "not a substitute for label-based accuracy" in note
 
 
 def test_patent_note_does_not_claim_structural_safety_diagnosis():

@@ -127,7 +127,7 @@ Example output file:
 
 ## Confidence-risk post-inference module
 
-This workspace now includes a post-inference module for confidence-aware tunnel defect review. It reuses the trained segmentation checkpoint, applies a small test-time augmentation set, fuses aligned predictions, estimates uncertainty, measures defect morphology, and writes an explainable risk report.
+This workspace now includes a post-inference module for confidence-aware tunnel defect review. It reuses the trained segmentation checkpoint, applies a small test-time augmentation set, fuses aligned predictions, estimates uncertainty, adaptively selects a practical output mask, measures defect morphology, and writes an explainable risk report.
 
 Run it on one image or a folder:
 
@@ -139,23 +139,46 @@ Main artifacts per image:
 
 - `<stem>_single_mask.png`
 - `<stem>_fused_mask.png`
+- `<stem>_hybrid_mask.png`
+- `<stem>_selected_mask.png`
 - `<stem>_overlay.png`
+- `<stem>_selected_overlay.png`
 - `<stem>_uncertainty_heatmap.png`
 - `<stem>_disagreement_heatmap.png`
 - `<stem>_skeleton.png`
 - `<stem>_report.json`
 
-Compare single-pass and fused predictions where labels are available:
+The `selected_mask` is chosen by adaptive fusion from single, fused, and hybrid candidates. It is the default mask for morphology, skeleton, risk scoring, and the live demo overlay. The report also includes `Self IoU`, which compares single and fused model outputs only; it is not ground-truth mIoU.
+
+Compare single-pass, fused, and selected predictions where labels are available:
 
 ```powershell
 python evaluate_confidence_risk.py --split test --limit 20 --output experiments/confidence_risk_eval.json
 ```
 
+Adaptive thresholds can be searched on the validation split only, so test/all data stay reserved for reporting:
+
+```powershell
+python evaluate_confidence_risk.py --split val --limit 0 --search-config --output experiments/adaptive_fusion_config_search_val.json
+```
+
+Latest full-run evidence with the validation-selected adaptive defaults:
+
+| Split | Samples | Single mIoU | Fixed fused mIoU | Selected mIoU | Selected vs fused |
+|---|---:|---:|---:|---:|---:|
+| `val` | 150 | 0.3238 | 0.3091 | 0.3261 | +0.0170 |
+| `test` | 150 | 0.3305 | 0.3165 | 0.3306 | +0.0141 |
+| `all` | 1000 | 0.3725 | 0.3287 | 0.3680 | +0.0393 |
+
+The adaptive module mainly recovers the mIoU lost by fixed TTA fusion while keeping uncertainty, disagreement, selected overlay, skeleton, morphology, and risk evidence available. It is not a retrained segmentation backbone, so `selected_mIoU` should be read as a safer post-processing output rather than a guaranteed improvement over `single_mIoU` on every split.
+
 Implementation notes and patent-oriented framing are in `docs/patent-notes/tunnel-defect-confidence-risk.md`.
 
 ## Live web detector
 
-The `web_app.py` server provides a local drag-and-drop detection UI. It serves `web_demo/index.html`, accepts image uploads, runs the confidence-risk inference pipeline, and returns the generated mask, overlay, uncertainty, disagreement, skeleton, and JSON risk report.
+The `web_app.py` server provides a local drag-and-drop detection UI. It serves `web_demo/index.html`, accepts image uploads, runs the confidence-risk inference pipeline, and returns the generated single/fused/selected masks, overlays, uncertainty, disagreement, skeleton, and JSON risk report.
+
+Uploaded images do not include ground-truth masks, so the UI correctly displays true mIoU as `N/A`. It can still show `Self IoU` as a model self-consistency signal.
 
 Start it on Windows:
 

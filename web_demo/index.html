@@ -474,7 +474,7 @@
       </section>
       <section class="stat risk-medium" id="riskLevelCard"><span>Risk level</span><strong id="riskLevel">Medium</strong></section>
       <section class="stat"><span>Risk score</span><strong id="riskScore">3.25</strong></section>
-      <section class="stat"><span>Defect pixels</span><strong id="defectPixels">517</strong></section>
+      <section class="stat"><span>Defect pixels</span><strong id="defectPixels">1108</strong></section>
       <section class="stat"><span>Review</span><strong id="reviewFlag">YES</strong></section>
     </header>
 
@@ -501,21 +501,22 @@
           <h2 class="case-id" id="caseId">t1_1</h2>
           <div class="status-strip" id="statusStrip">
             <div class="strip-row"><span>TTA specs</span><b>identity + hflip</b></div>
+            <div class="strip-row"><span>Selection</span><b>single</b></div>
             <div class="strip-row"><span>Input size</span><b>384 x 384</b></div>
             <div class="strip-row"><span>Main class</span><b>simple</b></div>
             <div class="strip-row"><span>Direction</span><b>vertical</b></div>
-            <div class="strip-row"><span>Skeleton length</span><b>49</b></div>
+            <div class="strip-row"><span>Skeleton length</span><b>63</b></div>
             <div class="strip-row"><span>Components</span><b>1</b></div>
           </div>
-          <p class="split-note" id="caseNote">单次预测有 1108 个缺陷像素，融合后收敛为 517 个；风险等级由形态特征和不确定性共同给出。</p>
+          <p class="split-note" id="caseNote">单次预测有 1108 个缺陷像素，选择输出为 1108 个；adaptive selection 回退 single 以保护小缺陷证据。</p>
         </div>
       </aside>
 
       <section class="panel viewer">
         <div class="tabs" id="tabs"></div>
         <div class="image-stage">
-          <div class="stage-label" id="stageLabel">Overlay</div>
-          <img id="stageImage" src="assets/t1_1_overlay.png" alt="当前影像证据" />
+          <div class="stage-label" id="stageLabel">选择叠加图</div>
+          <img id="stageImage" src="assets/t1_1_selected_overlay.png" alt="当前影像证据" />
         </div>
         <div class="filmstrip" id="filmstrip"></div>
       </section>
@@ -526,17 +527,17 @@
           <div class="metric-grid" id="riskMetrics">
             <div class="metric"><span>Mean uncertainty</span><b>0.0046</b><small>整张图预测分布的平均不确定程度，越高表示模型越不确定。</small></div>
             <div class="metric"><span>Max uncertainty</span><b>0.4433</b><small>图中最不确定的像素值，用于定位边界或疑似误判区域。</small></div>
-            <div class="metric"><span>Defect uncertainty</span><b>0.3663</b><small>只在已检测缺陷区域内统计，更贴近复核风险。</small></div>
-            <div class="metric"><span>High defect fraction</span><b>65.76%</b><small>缺陷区域中超过阈值的比例，越高越建议人工确认。</small></div>
+            <div class="metric"><span>Defect uncertainty</span><b>0.3732</b><small>只在已检测缺陷区域内统计，更贴近复核风险。</small></div>
+            <div class="metric"><span>High defect fraction</span><b>74.91%</b><small>缺陷区域中超过阈值的比例，越高越建议人工确认。</small></div>
           </div>
 
           <h3>风险触发原因</h3>
           <ul class="reason-list" id="reasonList">
             <li>类别严重度权重 1.00</li>
-            <li>面积占比较小 0.0035</li>
-            <li>骨架长度中等 49</li>
-            <li>缺陷区平均不确定性较高 0.366</li>
-            <li>高不确定缺陷占比较高 0.658</li>
+            <li>面积占比较小 0.0075</li>
+            <li>骨架长度中等 63</li>
+            <li>缺陷区平均不确定性较高 0.373</li>
+            <li>高不确定缺陷占比较高 0.749</li>
           </ul>
 
           <h3>类别像素变化</h3>
@@ -545,6 +546,7 @@
             <div class="bar-row"><span>single defect</span><div class="bar-track"><div class="bar-fill" style="width:0.75%"></div></div><b>1108</b></div>
             <div class="bar-row"><span>fused bg</span><div class="bar-track"><div class="bar-fill good" style="width:99.65%"></div></div><b>146939</b></div>
             <div class="bar-row"><span>fused defect</span><div class="bar-track"><div class="bar-fill" style="width:0.35%"></div></div><b>517</b></div>
+            <div class="bar-row"><span>selected defect</span><div class="bar-track"><div class="bar-fill" style="width:0.75%"></div></div><b>1108</b></div>
           </div>
         </div>
       </aside>
@@ -552,12 +554,13 @@
 
     <section class="lower">
       <section class="panel">
-        <div class="panel-title">Metrics summary <span>Single vs fused</span></div>
+        <div class="panel-title">Metrics summary <span>Single / Fused / Selected</span></div>
         <div class="panel-body">
           <div class="metric-grid" id="summaryMetrics">
             <div class="metric"><span>Single mIoU</span><b>0.2221</b><small>单次预测与人工标注 GT 的重叠度，1 表示完全一致。</small></div>
             <div class="metric"><span>Fused mIoU</span><b>0.1732</b><small>TTA 融合预测与人工标注 GT 的重叠度。</small></div>
-            <div class="metric"><span>Delta mIoU</span><b>-0.0489</b><small>Fused mIoU - Single mIoU，用于观察融合是否改善精度。</small></div>
+            <div class="metric"><span>Selected mIoU</span><b>0.2221</b><small>Adaptive fusion 选择输出与人工标注 GT 的重叠度。</small></div>
+            <div class="metric"><span>Delta selected</span><b>0</b><small>Selected mIoU - Single mIoU，用于观察自适应选择是否损伤精度。</small></div>
             <div class="metric"><span>Mean uncertainty</span><b>0.1554</b><small>评估样本上的平均不确定程度。</small></div>
           </div>
           <h3>形态量化明细</h3>
@@ -566,7 +569,7 @@
               <tr><th>类别</th><th>面积像素</th><th>面积占比</th><th>连通域</th><th>骨架长度</th><th>主方向</th><th>风险</th></tr>
             </thead>
             <tbody id="morphologyRows">
-              <tr><td>simple</td><td>517</td><td>0.003506</td><td>1</td><td>49</td><td>vertical 87.24 deg</td><td>Medium / 需复核</td></tr>
+              <tr><td>simple</td><td>1108</td><td>0.007514</td><td>1</td><td>63</td><td>vertical 88.19 deg</td><td>Medium / 需复核</td></tr>
               <tr><td>blocky</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
               <tr><td>pipeline</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
               <tr><td>vertical</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
@@ -618,7 +621,9 @@
       { label: "Original", url: "assets/t1_1_original.jpg" },
       { label: "Single mask", url: "assets/t1_1_single_mask.png" },
       { label: "Fused mask", url: "assets/t1_1_fused_mask.png" },
+      { label: "Selected mask", url: "assets/t1_1_selected_mask.png" },
       { label: "Overlay", url: "assets/t1_1_overlay.png" },
+      { label: "Selected overlay", url: "assets/t1_1_selected_overlay.png" },
       { label: "Uncertainty", url: "assets/t1_1_uncertainty_heatmap.png" },
       { label: "Disagreement", url: "assets/t1_1_disagreement_heatmap.png" },
       { label: "Skeleton", url: "assets/t1_1_skeleton.png" }
@@ -630,6 +635,14 @@
       class_names: { "0": "background", "1": "simple", "2": "blocky", "3": "pipeline", "4": "vertical", "5": "horizontal" },
       single_prediction_stats: { "0": 146348, "1": 1108 },
       fused_prediction_stats: { "0": 146939, "1": 517 },
+      selected_prediction_stats: { "0": 146348, "1": 1108 },
+      adaptive_selection: {
+        mode: "single",
+        reasons: [
+          "fused foreground shrinkage ratio 0.467",
+          "fallback to single mask to protect small defect evidence"
+        ]
+      },
       self_consistency: {
         single_fused_mIoU: 0.4666,
         foreground_iou: 0.4666,
@@ -640,18 +653,18 @@
         mean: 0.004636249,
         max: 0.443340689,
         high_fraction: 0.006103516,
-        defect_mean: 0.366320997,
-        defect_high_fraction: 0.657640232
+        defect_mean: 0.373247832,
+        defect_high_fraction: 0.749097473
       },
       morphology: {
         image_shape: [384, 384],
         total_pixels: 147456,
-        defect_area_pixels: 517,
-        defect_area_ratio: 0.003506131,
+        defect_area_pixels: 1108,
+        defect_area_ratio: 0.007514106,
         defect_component_count: 1,
-        defect_skeleton_length: 49,
+        defect_skeleton_length: 63,
         classes: [
-          { class_id: 1, class_name: "simple", area_pixels: 517, area_ratio: 0.003506131, component_count: 1, skeleton_length: 49, dominant_direction: "vertical", dominant_direction_degrees: 87.2362 },
+          { class_id: 1, class_name: "simple", area_pixels: 1108, area_ratio: 0.007514106, component_count: 1, skeleton_length: 63, dominant_direction: "vertical", dominant_direction_degrees: 88.19 },
           { class_id: 2, class_name: "blocky", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
           { class_id: 3, class_name: "pipeline", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
           { class_id: 4, class_name: "vertical", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
@@ -663,7 +676,7 @@
         score: 3.25,
         review_required: true,
         class_results: [
-          { class_id: 1, class_name: "simple", risk_level: "medium", review_required: true, reasons: ["class severity weight 1.00", "small area ratio 0.0035", "moderate skeleton length 49", "high mean uncertainty 0.366", "high uncertain-area fraction 0.658"] }
+          { class_id: 1, class_name: "simple", risk_level: "medium", review_required: true, reasons: ["class severity weight 1.00", "small area ratio 0.0075", "moderate skeleton length 63", "high mean uncertainty 0.373", "high uncertain-area fraction 0.749"] }
         ],
         suggestions: [
           "Medium image-based defect risk; review morphology and uncertainty before acceptance.",
@@ -673,6 +686,7 @@
       evaluation: {
         single_mIoU: 0.222122077,
         fused_mIoU: 0.173192874,
+        selected_mIoU: 0.222122077,
         delta_mIoU: -0.048929203,
         mean_uncertainty: 0.1554
       }
@@ -706,7 +720,9 @@
         Original: "原图",
         "Single mask": "单次 mask",
         "Fused mask": "融合 mask",
+        "Selected mask": "选择 mask",
         Overlay: "叠加图",
+        "Selected overlay": "选择叠加图",
         Uncertainty: "不确定性图",
         Disagreement: "分歧图",
         Skeleton: "骨架图"
@@ -753,7 +769,12 @@
         .replace("Manual review recommended because uncertainty is high in detected defect regions.", "缺陷区域不确定性较高，建议人工复核。")
         .replace("Low image-based defect risk; routine review is sufficient.", "图像病害风险较低，常规复核即可。")
         .replace("High image-based defect risk; prioritize manual review and field confirmation.", "图像病害风险较高，优先人工复核并现场确认。")
-        .replace("No defect passed the configured measurement filters.", "没有缺陷通过当前测量过滤规则。");
+        .replace("No defect passed the configured measurement filters.", "没有缺陷通过当前测量过滤规则。")
+        .replace("fused foreground shrinkage ratio", "fused 前景收缩比例")
+        .replace("fallback to single mask to protect small defect evidence", "回退 single mask 以保护小缺陷证据")
+        .replace("stable single/fused foreground IoU", "single/fused 前景 IoU 稳定")
+        .replace("stable fused-to-single area ratio", "fused/single 面积比例稳定")
+        .replace("low single/fused foreground IoU", "single/fused 前景 IoU 偏低");
     }
 
     function setStatus(text, type = "") {
@@ -791,7 +812,8 @@
         filmstrip.appendChild(thumb);
       });
 
-      const overlayIndex = Math.max(0, views.findIndex((item) => item.label === "Overlay"));
+      const selectedOverlayIndex = views.findIndex((item) => item.label === "Selected overlay");
+      const overlayIndex = selectedOverlayIndex >= 0 ? selectedOverlayIndex : Math.max(0, views.findIndex((item) => item.label === "Overlay"));
       selectView(overlayIndex);
     }
 
@@ -814,6 +836,7 @@
       document.querySelector("#caseId").textContent = report.stem || "uploaded";
       document.querySelector("#statusStrip").innerHTML = [
         ["TTA specs", (report.tta_specs || []).join(" + ") || "identity + hflip"],
+        ["Selection", report.adaptive_selection?.mode || "fused"],
         ["Input size", imageShape],
         ["Main class", classLabel(detected.class_name || "none")],
         ["Direction", detected.dominant_direction || "none"],
@@ -822,8 +845,9 @@
       ].map(([label, value]) => `<div class="strip-row"><span>${label}</span><b>${value}</b></div>`).join("");
 
       const singleDefect = defectPixelCount(report.single_prediction_stats);
-      const fusedDefect = defectPixelCount(report.fused_prediction_stats);
-      document.querySelector("#caseNote").textContent = `单次预测有 ${singleDefect} 个缺陷像素，融合后为 ${fusedDefect} 个；风险等级由形态特征和不确定性共同给出。`;
+      const selectedDefect = defectPixelCount(report.selected_prediction_stats || report.fused_prediction_stats);
+      const mode = report.adaptive_selection?.mode || "fused";
+      document.querySelector("#caseNote").textContent = `单次预测有 ${singleDefect} 个缺陷像素，选择输出为 ${selectedDefect} 个；adaptive selection 当前使用 ${mode}。`;
     }
 
     function renderRisk(report) {
@@ -850,9 +874,9 @@
       const total = report.morphology?.total_pixels || 1;
       const rows = [];
       const classNames = report.class_names || {};
-      for (const [kind, stats] of [["single", report.single_prediction_stats || {}], ["fused", report.fused_prediction_stats || {}]]) {
+      for (const [kind, stats] of [["single", report.single_prediction_stats || {}], ["fused", report.fused_prediction_stats || {}], ["selected", report.selected_prediction_stats || {}]]) {
         for (const [classId, count] of Object.entries(stats)) {
-          const kindLabel = kind === "single" ? "单次" : "融合";
+          const kindLabel = kind === "single" ? "单次" : kind === "fused" ? "融合" : "选择";
           const label = `${kindLabel} ${classLabel(classNames[classId] || `class ${classId}`)}`;
           const width = Math.min(100, Math.max(0.2, Number(count) / total * 100));
           const tone = classId === "0" ? "good" : "";
@@ -867,12 +891,14 @@
       const metrics = ev ? [
         ["Single mIoU", fmt(ev.single_mIoU), "单次预测与人工标注 GT 的重叠度，1 表示完全一致。"],
         ["Fused mIoU", fmt(ev.fused_mIoU), "TTA 融合预测与人工标注 GT 的重叠度。"],
-        ["Delta mIoU", fmt(ev.delta_mIoU), "Fused mIoU - Single mIoU，用于观察融合是否改善精度。"],
+        ["Selected mIoU", fmt(ev.selected_mIoU ?? ev.single_mIoU), "Adaptive fusion 选择输出与人工标注 GT 的重叠度。"],
+        ["Delta selected", fmt((ev.selected_mIoU ?? ev.single_mIoU) - ev.single_mIoU), "Selected mIoU - Single mIoU，用于观察自适应选择是否损伤精度。"],
         ["Mean uncertainty", fmt(ev.mean_uncertainty ?? report.uncertainty_summary?.mean), "预测概率分布的平均不确定程度，越高越不稳定。"]
       ] : [
         ["Single mIoU", "N/A", "自选图片没有人工标注 GT，无法计算真实 mIoU。"],
         ["Fused mIoU", "N/A", "mIoU 必须用预测 mask 与 GT mask 比较；当前只有输入图像。"],
-        ["Delta mIoU", "N/A", "没有 Single/Fused mIoU 时，mIoU 变化也不可计算。"],
+        ["Selected mIoU", "N/A", "Selected mask 也需要 GT 才能计算真实 mIoU。"],
+        ["Selection", report.adaptive_selection?.mode || "-", "adaptive fusion 选择的输出模式：single / fused / hybrid。"],
         ["Self IoU", fmt(report.self_consistency?.single_fused_mIoU), "只比较 Single mask 与 Fused mask 的一致性，不代表真实精度。"],
         ["Mean uncertainty", fmt(report.uncertainty_summary?.mean), "这个指标不需要 GT，可直接从模型概率分布计算。"]
       ];

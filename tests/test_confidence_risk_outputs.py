@@ -32,7 +32,10 @@ def test_write_result_artifacts_creates_expected_files(tmp_path):
     expected = [
         "sample_single_mask.png",
         "sample_fused_mask.png",
+        "sample_hybrid_mask.png",
+        "sample_selected_mask.png",
         "sample_overlay.png",
+        "sample_selected_overlay.png",
         "sample_uncertainty_heatmap.png",
         "sample_disagreement_heatmap.png",
         "sample_skeleton.png",
@@ -44,6 +47,11 @@ def test_write_result_artifacts_creates_expected_files(tmp_path):
     saved = json.loads((tmp_path / "sample_report.json").read_text(encoding="utf-8"))
     assert saved["tta_specs"] == ["identity", "hflip"]
     assert saved["fused_prediction_stats"]["5"] == 8
+    assert "selected_prediction_stats" in saved
+    assert saved["artifacts"]["selected_mask"] == "sample_selected_mask.png"
+    assert saved["artifacts"]["selected_overlay"] == "sample_selected_overlay.png"
+    assert saved["adaptive_selection"]["mode"] in {"single", "fused", "hybrid"}
+    assert saved["adaptive_selection"]["reasons"]
     assert saved["self_consistency"]["single_fused_mIoU"] == 0.0
     assert saved["self_consistency"]["foreground_iou"] == 0.0
     assert saved["self_consistency"]["pixel_agreement"] < 1.0

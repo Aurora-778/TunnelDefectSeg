@@ -1,6 +1,14 @@
 import numpy as np
 
-from evaluate_confidence_risk import aggregate_comparisons, compare_predictions, segmentation_report, summarize_class_subset
+from adaptive_fusion import AdaptiveFusionConfig
+from evaluate_confidence_risk import (
+    aggregate_comparisons,
+    candidate_adaptive_configs,
+    compare_predictions,
+    evaluate_records,
+    segmentation_report,
+    summarize_class_subset,
+)
 
 
 def test_segmentation_report_returns_per_class_metrics():
@@ -19,13 +27,26 @@ def test_compare_predictions_reports_single_and_fused_delta():
     target = np.array([[0, 1], [1, 2]], dtype=np.uint8)
     single = np.array([[0, 1], [2, 2]], dtype=np.uint8)
     fused = target.copy()
+    selected = target.copy()
     uncertainty = np.zeros((2, 2), dtype=np.float32)
 
-    result = compare_predictions(single, fused, target, uncertainty=uncertainty, num_classes=3, weak_class_ids=[1, 2])
+    result = compare_predictions(
+        single,
+        fused,
+        target,
+        selected_mask=selected,
+        selection_mode="fused",
+        uncertainty=uncertainty,
+        num_classes=3,
+        weak_class_ids=[1, 2],
+    )
 
     assert result["supported"] is True
     assert result["fused"]["mIoU"] > result["single"]["mIoU"]
+    assert result["selected"]["mIoU"] == result["fused"]["mIoU"]
     assert result["delta"]["mIoU"] > 0
+    assert result["delta"]["selected_vs_single_mIoU"] > 0
+    assert result["selection_mode"] == "fused"
     assert result["uncertainty_summary"]["mean"] == 0.0
 
 
@@ -57,10 +78,57 @@ def test_aggregate_comparisons_summarizes_supported_samples():
     target = np.array([[0, 1], [1, 2]], dtype=np.uint8)
     single = np.array([[0, 1], [2, 2]], dtype=np.uint8)
     fused = target.copy()
-    comparison = compare_predictions(single, fused, target, uncertainty=np.zeros((2, 2), dtype=np.float32), num_classes=3)
+    comparison = compare_predictions(
+        single,
+        fused,
+        target,
+        selected_mask=single,
+        selection_mode="single",
+        uncertainty=np.zeros((2, 2), dtype=np.float32),
+        num_classes=3,
+    )
 
     result = aggregate_comparisons([comparison])
 
     assert result["supported"] is True
     assert result["fused_mIoU"] >= result["single_mIoU"]
+    assert result["selected_mIoU"] == result["single_mIoU"]
     assert result["delta_mIoU"] >= 0
+    assert result["selection_mode_counts"] == {"single": 1}
+
+
+def test_candidate_configs_are_available_for_validation_search():
+    configs = candidate_adaptive_configs()
+
+    assert configs
+    assert all(isinstance(config, AdaptiveFusionConfig) for config in configs)
+
+
+def test_evaluate_records_applies_supplied_adaptive_config():
+    single = np.zeros((10, 10), dtype=np.uint8)
+    fused = np.zeros((10, 10), dtype=np.uint8)
+    single.flat[:10] = 1
+    fused.flat[:7] = 1
+    record = {
+        "image": "sample.jpg",
+        "single_mask": single,
+        "fused_mask": fused,
+        "target": single,
+        "entropy": np.ones((10, 10), dtype=np.float32),
+        "disagreement": np.ones((10, 10), dtype=np.float32),
+    }
+
+    strict = evaluate_records(
+        [record],
+        num_classes=2,
+        fusion_config=AdaptiveFusionConfig(stable_self_iou=0.95, stable_area_ratio=0.92, shrink_ratio=0.80),
+    )[0]
+    permissive = evaluate_records(
+        [record],
+        num_classes=2,
+        fusion_config=AdaptiveFusionConfig(stable_self_iou=0.65, stable_area_ratio=0.65, shrink_ratio=0.80),
+    )[0]
+
+    assert strict["selection_mode"] == "single"
+    assert permissive["selection_mode"] == "fused"
+    assert strict["selected"]["mIoU"] > permissive["selected"]["mIoU"]

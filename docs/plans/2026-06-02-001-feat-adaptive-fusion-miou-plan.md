@@ -1,7 +1,7 @@
 ---
 title: Adaptive Fusion mIoU Recovery Plan
 type: feat
-status: active
+status: completed
 date: 2026-06-02
 origin: docs/brainstorms/2026-06-01-tunnel-defect-confidence-risk-requirements.md
 ---
@@ -233,6 +233,20 @@ Success should be judged in this order:
 2. `selected_mIoU` on `test` is not meaningfully below `single_mIoU`.
 3. Reports still expose uncertainty, disagreement, morphology, risk, and review guidance.
 4. Upload UI does not misrepresent unlabeled images as having true mIoU.
+
+---
+
+## Completion Evidence
+
+Final validation-selected defaults: `stable_self_iou=0.95`, `stable_area_ratio=0.92`, `shrink_ratio=0.60`, `low_uncertainty=0.35`, `low_disagreement=0.25`, `min_recovered_component_pixels=3`.
+
+| Scope | Samples | Single mIoU | Fixed fused mIoU | Selected mIoU | Selected vs fused |
+|---|---:|---:|---:|---:|---:|
+| `val` | 150 | 0.3238 | 0.3091 | 0.3261 | +0.0170 |
+| `test` | 150 | 0.3305 | 0.3165 | 0.3306 | +0.0141 |
+| `all` | 1000 | 0.3725 | 0.3287 | 0.3680 | +0.0393 |
+
+The selected output meets the primary success criteria on `test`: it is above fixed `fused_mIoU` and not meaningfully below the single-pass baseline. On all labeled samples, it remains much stronger than fixed fusion but is lower than single-pass output, so claims should emphasize adaptive recovery from fixed fusion and explainable confidence/risk evidence rather than universal single-pass mIoU improvement.
 
 ---
 

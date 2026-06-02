@@ -10,6 +10,7 @@ from PIL import Image
 import torch
 from torchvision import transforms
 
+from adaptive_fusion import select_adaptive_mask
 from morphology_adapter import CLASS_NAMES, MorphologyConfig, measure_mask, skeleton_mask
 from risk_adapter import RiskConfig, score_image
 from tta_confidence import (
@@ -111,17 +112,33 @@ def write_result_artifacts(
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    selection = select_adaptive_mask(
+        single_mask=single_mask,
+        fused_mask=fused_mask,
+        entropy_uncertainty=entropy_uncertainty,
+        disagreement_uncertainty=disagreement_uncertainty,
+    )
+    selected_mask = selection["selected_mask"]
+    hybrid_mask = selection["hybrid_mask"]
+
     fused_rgb = colorize_mask(fused_mask)
     single_rgb = colorize_mask(single_mask)
-    skeleton_rgb = colorize_mask(skeleton_mask(fused_mask, min_component_area=(morphology_config or MorphologyConfig()).min_component_area))
+    selected_rgb = colorize_mask(selected_mask)
+    hybrid_rgb = colorize_mask(hybrid_mask)
+    min_component_area = (morphology_config or MorphologyConfig()).min_component_area
+    skeleton_rgb = colorize_mask(skeleton_mask(selected_mask, min_component_area=min_component_area))
     entropy_rgb = heatmap_from_uncertainty(entropy_uncertainty)
     disagreement_rgb = heatmap_from_uncertainty(disagreement_uncertainty)
     overlay = overlay_image(raw_resized, fused_rgb)
+    selected_overlay = overlay_image(raw_resized, selected_rgb)
 
     paths = {
         "single_mask": output_dir / f"{stem}_single_mask.png",
         "fused_mask": output_dir / f"{stem}_fused_mask.png",
+        "hybrid_mask": output_dir / f"{stem}_hybrid_mask.png",
+        "selected_mask": output_dir / f"{stem}_selected_mask.png",
         "overlay": output_dir / f"{stem}_overlay.png",
+        "selected_overlay": output_dir / f"{stem}_selected_overlay.png",
         "uncertainty_heatmap": output_dir / f"{stem}_uncertainty_heatmap.png",
         "disagreement_heatmap": output_dir / f"{stem}_disagreement_heatmap.png",
         "skeleton": output_dir / f"{stem}_skeleton.png",
@@ -130,13 +147,16 @@ def write_result_artifacts(
 
     Image.fromarray(single_rgb).save(paths["single_mask"])
     Image.fromarray(fused_rgb).save(paths["fused_mask"])
+    Image.fromarray(hybrid_rgb).save(paths["hybrid_mask"])
+    Image.fromarray(selected_rgb).save(paths["selected_mask"])
     Image.fromarray(overlay).save(paths["overlay"])
+    Image.fromarray(selected_overlay).save(paths["selected_overlay"])
     Image.fromarray(entropy_rgb).save(paths["uncertainty_heatmap"])
     Image.fromarray(disagreement_rgb).save(paths["disagreement_heatmap"])
     Image.fromarray(skeleton_rgb).save(paths["skeleton"])
 
-    morphology = measure_mask(fused_mask, config=morphology_config or MorphologyConfig())
-    unc_summary = uncertainty_summary(entropy_uncertainty, mask=fused_mask)
+    morphology = measure_mask(selected_mask, config=morphology_config or MorphologyConfig())
+    unc_summary = uncertainty_summary(entropy_uncertainty, mask=selected_mask)
     risk = score_image(morphology, unc_summary, config=risk_config or RiskConfig())
 
     report = {
@@ -145,7 +165,14 @@ def write_result_artifacts(
         "class_names": {str(k): v for k, v in CLASS_NAMES.items()},
         "single_prediction_stats": prediction_stats(single_mask),
         "fused_prediction_stats": prediction_stats(fused_mask),
+        "hybrid_prediction_stats": prediction_stats(hybrid_mask),
+        "selected_prediction_stats": prediction_stats(selected_mask),
         "self_consistency": prediction_consistency_stats(single_mask, fused_mask),
+        "adaptive_selection": {
+            "mode": selection["selection_mode"],
+            "reasons": selection["selection_reasons"],
+            "consistency": selection["consistency"],
+        },
         "uncertainty_summary": unc_summary,
         "morphology": morphology,
         "risk": risk,
