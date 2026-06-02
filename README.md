@@ -36,6 +36,23 @@ This workspace contains a unified training and evaluation pipeline for tunnel de
 
 ## Training entrypoints
 
+### SegFormer B1 upgrade path
+
+The ResNet50 baseline can localize some defects but often predicts bent or thin masks as block-like regions. Prepare a SegFormer B1 replacement baseline with:
+
+```powershell
+python segformer_tools.py --out-dir experiments/segformer_b1 --segformer-repo-root "C:\Users\26822\Desktop\隧道病害检测\third_party\SegFormer-master"
+```
+
+This creates:
+
+- `experiments/segformer_b1/mmseg/`
+- `experiments/segformer_b1/configs/segformer_b1_6cls.py`
+- `experiments/segformer_b1/train_segformer_b1.ps1`
+- `experiments/segformer_b1/test_segformer_b1.ps1`
+
+Training still requires a SegFormer/mmseg environment with `mmcv`, `mmseg`, and `timm`. The current repository can prepare the data and config without those dependencies.
+
 ### Resume-capable baseline run
 
 - `run_train_resnet50.bat`
