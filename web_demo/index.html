@@ -327,6 +327,40 @@
 
     .metric span { color: var(--muted); font-size: 12px; }
     .metric b { display: block; font-family: "Cascadia Mono", "Consolas", monospace; font-size: 22px; margin-top: 6px; }
+    .metric small {
+      display: block;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .glossary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .glossary-item {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 9px;
+      min-height: 92px;
+    }
+
+    .glossary-item b {
+      display: block;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .glossary-item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
 
     .bar-list { display: grid; gap: 8px; }
     .bar-row { display: grid; grid-template-columns: 92px 1fr 54px; gap: 8px; align-items: center; font-size: 12px; }
@@ -424,6 +458,7 @@
       .image-stage img { width: 100%; }
       .filmstrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric-grid { grid-template-columns: 1fr; }
+      .glossary { grid-template-columns: 1fr; }
       .bar-row { grid-template-columns: 78px minmax(0, 1fr) 46px; }
       .brand h1 { font-size: 23px; }
       pre { max-height: 360px; }
@@ -435,12 +470,12 @@
     <header>
       <section class="brand">
         <h1>隧道病害可信评估展示台</h1>
-        <p>Multi-pose fusion / uncertainty / skeleton / risk report</p>
+        <p>多姿态融合 / 不确定性 / 骨架形态 / 风险报告</p>
       </section>
-      <section class="stat risk-medium" id="riskLevelCard"><span>Risk level</span><strong id="riskLevel">MEDIUM</strong></section>
-      <section class="stat"><span>Risk score</span><strong id="riskScore">3.25</strong></section>
-      <section class="stat"><span>Defect pixels</span><strong id="defectPixels">517</strong></section>
-      <section class="stat"><span>Review</span><strong id="reviewFlag">YES</strong></section>
+      <section class="stat risk-medium" id="riskLevelCard"><span>风险等级</span><strong id="riskLevel">中</strong></section>
+      <section class="stat"><span>风险分</span><strong id="riskScore">3.25</strong></section>
+      <section class="stat"><span>缺陷像素</span><strong id="defectPixels">517</strong></section>
+      <section class="stat"><span>人工复核</span><strong id="reviewFlag">是</strong></section>
     </header>
 
     <section class="panel upload-panel">
@@ -461,18 +496,18 @@
 
     <section class="dashboard">
       <aside class="panel">
-        <div class="panel-title">Case file <span class="pill"><i class="dot"></i> active</span></div>
+        <div class="panel-title">样本信息 <span class="pill"><i class="dot"></i> 当前样本</span></div>
         <div class="panel-body">
           <h2 class="case-id" id="caseId">t1_1</h2>
           <div class="status-strip" id="statusStrip">
-            <div class="strip-row"><span>TTA specs</span><b>identity + hflip</b></div>
-            <div class="strip-row"><span>Image grid</span><b>384 x 384</b></div>
-            <div class="strip-row"><span>Defect class</span><b>simple</b></div>
-            <div class="strip-row"><span>Direction</span><b>vertical</b></div>
-            <div class="strip-row"><span>Skeleton length</span><b>49</b></div>
-            <div class="strip-row"><span>Component count</span><b>1</b></div>
+            <div class="strip-row"><span>增强策略</span><b>identity + hflip</b></div>
+            <div class="strip-row"><span>输入尺寸</span><b>384 x 384</b></div>
+            <div class="strip-row"><span>主缺陷类别</span><b>simple</b></div>
+            <div class="strip-row"><span>主方向</span><b>vertical</b></div>
+            <div class="strip-row"><span>骨架长度</span><b>49</b></div>
+            <div class="strip-row"><span>连通域数量</span><b>1</b></div>
           </div>
-          <p class="split-note" id="caseNote">单次预测有 1108 个 simple 像素，融合后收敛为 517 个；高不确定性集中在 defect 区域。</p>
+          <p class="split-note" id="caseNote">单次预测有 1108 个缺陷像素，融合后收敛为 517 个；风险等级由形态特征和不确定性共同给出。</p>
         </div>
       </aside>
 
@@ -486,22 +521,22 @@
       </section>
 
       <aside class="panel">
-        <div class="panel-title">Risk evidence <span>JSON-backed</span></div>
+        <div class="panel-title">风险证据 <span>JSON 驱动</span></div>
         <div class="panel-body">
           <div class="metric-grid" id="riskMetrics">
-            <div class="metric"><span>Mean uncertainty</span><b>0.0046</b></div>
-            <div class="metric"><span>Max uncertainty</span><b>0.4433</b></div>
-            <div class="metric"><span>Defect uncertainty</span><b>0.3663</b></div>
-            <div class="metric"><span>High defect fraction</span><b>65.76%</b></div>
+            <div class="metric"><span>平均不确定性</span><b>0.0046</b><small>整张图预测分布的平均不确定程度，越高表示模型越不确定。</small></div>
+            <div class="metric"><span>最大不确定性</span><b>0.4433</b><small>图中最不确定的像素值，用于定位边界或疑似误判区域。</small></div>
+            <div class="metric"><span>缺陷区不确定性</span><b>0.3663</b><small>只在已检测缺陷区域内统计，更贴近复核风险。</small></div>
+            <div class="metric"><span>高不确定缺陷占比</span><b>65.76%</b><small>缺陷区域中超过阈值的比例，越高越建议人工确认。</small></div>
           </div>
 
           <h3>风险触发原因</h3>
           <ul class="reason-list" id="reasonList">
-            <li>class severity weight 1.00</li>
-            <li>small area ratio 0.0035</li>
-            <li>moderate skeleton length 49</li>
-            <li>high mean uncertainty 0.366</li>
-            <li>high uncertain-area fraction 0.658</li>
+            <li>类别严重度权重 1.00</li>
+            <li>面积占比较小 0.0035</li>
+            <li>骨架长度中等 49</li>
+            <li>缺陷区平均不确定性较高 0.366</li>
+            <li>高不确定缺陷占比较高 0.658</li>
           </ul>
 
           <h3>类别像素变化</h3>
@@ -517,38 +552,58 @@
 
     <section class="lower">
       <section class="panel">
-        <div class="panel-title">Evaluation contrast <span>single vs fused</span></div>
+        <div class="panel-title">检测摘要 <span>单次预测 vs 融合预测</span></div>
         <div class="panel-body">
           <div class="metric-grid" id="summaryMetrics">
-            <div class="metric"><span>Single mIoU</span><b>0.2221</b></div>
-            <div class="metric"><span>Fused mIoU</span><b>0.1732</b></div>
-            <div class="metric"><span>Delta mIoU</span><b>-0.0489</b></div>
-            <div class="metric"><span>Mean uncertainty</span><b>0.1554</b></div>
+            <div class="metric"><span>单次 mIoU</span><b>0.2221</b><small>单次预测与人工标注的重叠度，1 表示完全一致。</small></div>
+            <div class="metric"><span>融合 mIoU</span><b>0.1732</b><small>多姿态融合后与人工标注的重叠度。</small></div>
+            <div class="metric"><span>mIoU 变化</span><b>-0.0489</b><small>融合 mIoU 减去单次 mIoU，用于观察融合是否改善精度。</small></div>
+            <div class="metric"><span>平均不确定性</span><b>0.1554</b><small>评估样本上的平均不确定程度。</small></div>
           </div>
           <h3>形态量化明细</h3>
           <table>
             <thead>
-              <tr><th>Class</th><th>Area</th><th>Area ratio</th><th>Components</th><th>Skeleton</th><th>Direction</th><th>Risk</th></tr>
+              <tr><th>类别</th><th>面积像素</th><th>面积占比</th><th>连通域</th><th>骨架长度</th><th>主方向</th><th>风险</th></tr>
             </thead>
             <tbody id="morphologyRows">
-              <tr><td>simple</td><td>517</td><td>0.003506</td><td>1</td><td>49</td><td>vertical 87.24 deg</td><td>medium / review</td></tr>
-              <tr><td>blocky</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
-              <tr><td>pipeline</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
-              <tr><td>vertical</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
-              <tr><td>horizontal</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
+              <tr><td>simple 类</td><td>517</td><td>0.003506</td><td>1</td><td>49</td><td>vertical 87.24 deg</td><td>中 / 需复核</td></tr>
+              <tr><td>块状类</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>无</td></tr>
+              <tr><td>管线类</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>无</td></tr>
+              <tr><td>竖向类</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>无</td></tr>
+              <tr><td>横向类</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>无</td></tr>
             </tbody>
           </table>
         </div>
       </section>
 
       <section class="panel">
-        <div class="panel-title">Structured report <span>excerpt</span></div>
+        <div class="panel-title">结构化报告 <span>JSON 摘要</span></div>
         <pre id="jsonBlock"></pre>
       </section>
     </section>
 
     <section class="panel" style="margin-top:12px;">
-      <div class="panel-title">Patent figure chain <span>export-ready</span></div>
+      <div class="panel-title">指标说明 <span>中文标注</span></div>
+      <div class="panel-body">
+        <div class="glossary">
+          <div class="glossary-item"><b>风险等级</b><p>由缺陷面积、骨架长度、连通域数量和不确定性综合得到，分为 none / low / medium / high。</p></div>
+          <div class="glossary-item"><b>风险分</b><p>风险等级背后的连续分值。分值越高，代表病害形态或模型不确定性越需要关注。</p></div>
+          <div class="glossary-item"><b>缺陷像素</b><p>融合预测 mask 中非背景类别的像素总数，反映检测到的病害区域大小。</p></div>
+          <div class="glossary-item"><b>人工复核</b><p>当缺陷区不确定性偏高，系统会给出“是”，表示建议人工检查该图。</p></div>
+          <div class="glossary-item"><b>增强策略</b><p>TTA，即测试时增强。当前用原图和水平翻转图共同预测，再对齐融合。</p></div>
+          <div class="glossary-item"><b>不确定性</b><p>由多类别概率熵归一化得到，范围约 0-1。越高表示模型越拿不准。</p></div>
+          <div class="glossary-item"><b>高不确定缺陷占比</b><p>缺陷像素中不确定性超过阈值的比例，是复核建议的重要依据。</p></div>
+          <div class="glossary-item"><b>连通域</b><p>互相分离的缺陷块数量。数量多可能表示破碎、散裂或误检碎片。</p></div>
+          <div class="glossary-item"><b>骨架长度</b><p>把缺陷区域细化成中心线后的长度，适合描述裂缝类长条形病害。</p></div>
+          <div class="glossary-item"><b>mIoU</b><p>预测区域与真实标注的平均交并比，只在有标注的评估样例里有意义。</p></div>
+          <div class="glossary-item"><b>Disagreement</b><p>多姿态预测之间不一致的位置，能辅助发现边界不稳或模型犹豫区域。</p></div>
+          <div class="glossary-item"><b>Overlay</b><p>把融合 mask 叠加到原图上，用于直观看缺陷位置和覆盖范围。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top:12px;">
+      <div class="panel-title">专利证据链 <span>可导出</span></div>
       <div class="panel-body">
         <div class="callout">
           输入图像 -> 单次预测 -> 多姿态融合预测 -> 不确定性热力图 -> 骨架/连通域量化 -> 风险等级与复核建议。当前样例展示的是“分割可信评估与风险分级”的完整证据链；指标上融合 mIoU 未必更高，但可解释性和复核定位明显增强。
@@ -635,6 +690,61 @@
       return `${(Number(value) * 100).toFixed(2)}%`;
     }
 
+    function metricCard(label, value, help) {
+      return `<div class="metric"><span>${label}</span><b>${value}</b><small>${help}</small></div>`;
+    }
+
+    function viewLabel(label) {
+      const labels = {
+        Original: "原图",
+        "Single mask": "单次掩膜",
+        "Fused mask": "融合掩膜",
+        Overlay: "叠加图",
+        Uncertainty: "不确定性图",
+        Disagreement: "分歧图",
+        Skeleton: "骨架图"
+      };
+      return labels[label] || label;
+    }
+
+    function classLabel(name) {
+      const labels = {
+        background: "背景",
+        simple: "simple 类",
+        blocky: "块状类",
+        pipeline: "管线类",
+        vertical: "竖向类",
+        horizontal: "横向类"
+      };
+      return labels[name] || name;
+    }
+
+    function riskLabel(level) {
+      const labels = { none: "无", low: "低", medium: "中", high: "高" };
+      return labels[String(level || "none").toLowerCase()] || level;
+    }
+
+    function translateReason(reason) {
+      return String(reason)
+        .replace("class severity weight", "类别严重度权重")
+        .replace("small area ratio", "面积占比较小")
+        .replace("moderate area ratio", "面积占比中等")
+        .replace("large area ratio", "面积占比较大")
+        .replace("moderate skeleton length", "骨架长度中等")
+        .replace("long skeleton length", "骨架较长")
+        .replace("many connected components", "连通域数量较多")
+        .replace("multiple connected components", "存在多个连通域")
+        .replace("fragmentation index", "碎片化指数")
+        .replace("high mean uncertainty", "缺陷区平均不确定性较高")
+        .replace("high uncertain-area fraction", "高不确定缺陷占比较高")
+        .replace("no detected defect pixels after filtering", "过滤后未检测到有效缺陷像素")
+        .replace("Medium image-based defect risk; review morphology and uncertainty before acceptance.", "图像病害风险为中等，建议结合形态和不确定性复核。")
+        .replace("Manual review recommended because uncertainty is high in detected defect regions.", "缺陷区域不确定性较高，建议人工复核。")
+        .replace("Low image-based defect risk; routine review is sufficient.", "图像病害风险较低，常规复核即可。")
+        .replace("High image-based defect risk; prioritize manual review and field confirmation.", "图像病害风险较高，优先人工复核并现场确认。")
+        .replace("No defect passed the configured measurement filters.", "没有缺陷通过当前测量过滤规则。");
+    }
+
     function setStatus(text, type = "") {
       uploadStatus.textContent = text;
       uploadStatus.className = `upload-status ${type}`.trim();
@@ -644,7 +754,7 @@
       const view = activeViews[index];
       if (!view) return;
       stageImage.src = view.url;
-      stageLabel.textContent = view.label;
+      stageLabel.textContent = viewLabel(view.label);
       document.querySelectorAll("[data-view]").forEach((node) => {
         node.classList.toggle("active", Number(node.dataset.view) === index);
       });
@@ -657,7 +767,7 @@
 
       views.forEach((view, index) => {
         const button = document.createElement("button");
-        button.textContent = view.label;
+        button.textContent = viewLabel(view.label);
         button.dataset.view = index;
         button.addEventListener("click", () => selectView(index));
         tabs.appendChild(button);
@@ -665,7 +775,7 @@
         const thumb = document.createElement("div");
         thumb.className = "thumb";
         thumb.dataset.view = index;
-        thumb.innerHTML = `<img src="${view.url}" alt="${view.label} thumbnail"><span>${view.label}</span>`;
+        thumb.innerHTML = `<img src="${view.url}" alt="${viewLabel(view.label)} thumbnail"><span>${viewLabel(view.label)}</span>`;
         thumb.addEventListener("click", () => selectView(index));
         filmstrip.appendChild(thumb);
       });
@@ -679,10 +789,10 @@
       const level = String(risk.risk_level || "none").toLowerCase();
       const riskCard = document.querySelector("#riskLevelCard");
       riskCard.className = `stat risk-${level}`;
-      document.querySelector("#riskLevel").textContent = level.toUpperCase();
+      document.querySelector("#riskLevel").textContent = riskLabel(level);
       document.querySelector("#riskScore").textContent = fmt(risk.score, 2);
       document.querySelector("#defectPixels").textContent = report.morphology?.defect_area_pixels ?? 0;
-      document.querySelector("#reviewFlag").textContent = risk.review_required ? "YES" : "NO";
+      document.querySelector("#reviewFlag").textContent = risk.review_required ? "是" : "否";
     }
 
     function renderCase(report) {
@@ -692,12 +802,12 @@
       const imageShape = morph.image_shape ? `${morph.image_shape[1]} x ${morph.image_shape[0]}` : "384 x 384";
       document.querySelector("#caseId").textContent = report.stem || "uploaded";
       document.querySelector("#statusStrip").innerHTML = [
-        ["TTA specs", (report.tta_specs || []).join(" + ") || "identity + hflip"],
-        ["Image grid", imageShape],
-        ["Defect class", detected.class_name || "none"],
-        ["Direction", detected.dominant_direction || "none"],
-        ["Skeleton length", morph.defect_skeleton_length ?? detected.skeleton_length ?? 0],
-        ["Component count", morph.defect_component_count ?? detected.component_count ?? 0]
+        ["增强策略", (report.tta_specs || []).join(" + ") || "identity + hflip"],
+        ["输入尺寸", imageShape],
+        ["主缺陷类别", classLabel(detected.class_name || "none")],
+        ["主方向", detected.dominant_direction || "无"],
+        ["骨架长度", morph.defect_skeleton_length ?? detected.skeleton_length ?? 0],
+        ["连通域数量", morph.defect_component_count ?? detected.component_count ?? 0]
       ].map(([label, value]) => `<div class="strip-row"><span>${label}</span><b>${value}</b></div>`).join("");
 
       const singleDefect = defectPixelCount(report.single_prediction_stats);
@@ -708,15 +818,15 @@
     function renderRisk(report) {
       const unc = report.uncertainty_summary || {};
       document.querySelector("#riskMetrics").innerHTML = [
-        ["Mean uncertainty", fmt(unc.mean)],
-        ["Max uncertainty", fmt(unc.max)],
-        ["Defect uncertainty", fmt(unc.defect_mean)],
-        ["High defect fraction", pct(unc.defect_high_fraction)]
-      ].map(([label, value]) => `<div class="metric"><span>${label}</span><b>${value}</b></div>`).join("");
+        ["平均不确定性", fmt(unc.mean), "整张图预测分布的平均不确定程度，越高表示模型越不确定。"],
+        ["最大不确定性", fmt(unc.max), "图中最不确定的像素值，用于定位边界或疑似误判区域。"],
+        ["缺陷区不确定性", fmt(unc.defect_mean), "只在已检测缺陷区域内统计，更贴近复核风险。"],
+        ["高不确定缺陷占比", pct(unc.defect_high_fraction), "缺陷区域中超过阈值的比例，越高越建议人工确认。"]
+      ].map(([label, value, help]) => metricCard(label, value, help)).join("");
 
       const activeResult = (report.risk?.class_results || []).find((item) => item.risk_level !== "none") || report.risk?.class_results?.[0];
       const reasons = activeResult?.reasons || report.risk?.suggestions || ["No risk reasons available."];
-      document.querySelector("#reasonList").innerHTML = reasons.map((reason) => `<li>${reason}</li>`).join("");
+      document.querySelector("#reasonList").innerHTML = reasons.map((reason) => `<li>${translateReason(reason)}</li>`).join("");
     }
 
     function defectPixelCount(stats = {}) {
@@ -731,7 +841,8 @@
       const classNames = report.class_names || {};
       for (const [kind, stats] of [["single", report.single_prediction_stats || {}], ["fused", report.fused_prediction_stats || {}]]) {
         for (const [classId, count] of Object.entries(stats)) {
-          const label = `${kind} ${classNames[classId] || `class ${classId}`}`;
+          const kindLabel = kind === "single" ? "单次" : "融合";
+          const label = `${kindLabel} ${classLabel(classNames[classId] || `class ${classId}`)}`;
           const width = Math.min(100, Math.max(0.2, Number(count) / total * 100));
           const tone = classId === "0" ? "good" : "";
           rows.push(`<div class="bar-row"><span>${label}</span><div class="bar-track"><div class="bar-fill ${tone}" style="width:${width}%"></div></div><b>${count}</b></div>`);
@@ -743,17 +854,17 @@
     function renderSummary(report) {
       const ev = report.evaluation;
       const metrics = ev ? [
-        ["Single mIoU", fmt(ev.single_mIoU)],
-        ["Fused mIoU", fmt(ev.fused_mIoU)],
-        ["Delta mIoU", fmt(ev.delta_mIoU)],
-        ["Mean uncertainty", fmt(ev.mean_uncertainty ?? report.uncertainty_summary?.mean)]
+        ["单次 mIoU", fmt(ev.single_mIoU), "单次预测与人工标注的重叠度，1 表示完全一致。"],
+        ["融合 mIoU", fmt(ev.fused_mIoU), "多姿态融合后与人工标注的重叠度。"],
+        ["mIoU 变化", fmt(ev.delta_mIoU), "融合 mIoU 减去单次 mIoU，用于观察融合是否改善精度。"],
+        ["平均不确定性", fmt(ev.mean_uncertainty ?? report.uncertainty_summary?.mean), "评估样本上的平均不确定程度。"]
       ] : [
-        ["Elapsed", report.elapsed_ms ? `${report.elapsed_ms} ms` : "-"],
-        ["TTA mode", (report.tta_specs || []).join(" + ") || "-"],
-        ["Total pixels", report.morphology?.total_pixels ?? "-"],
-        ["Report", report.report_url ? "saved" : "inline"]
+        ["推理耗时", report.elapsed_ms ? `${report.elapsed_ms} ms` : "-", "从上传到生成全部证据图和报告的后端耗时。"],
+        ["增强策略", (report.tta_specs || []).join(" + ") || "-", "本次检测使用的测试时增强组合。"],
+        ["总像素数", report.morphology?.total_pixels ?? "-", "模型输入尺寸下参与统计的像素总数。"],
+        ["报告状态", report.report_url ? "已保存" : "页面内", "结构化 JSON 报告是否已写入本地输出目录。"]
       ];
-      document.querySelector("#summaryMetrics").innerHTML = metrics.map(([label, value]) => `<div class="metric"><span>${label}</span><b>${value}</b></div>`).join("");
+      document.querySelector("#summaryMetrics").innerHTML = metrics.map(([label, value, help]) => metricCard(label, value, help)).join("");
     }
 
     function renderMorphology(report) {
@@ -761,8 +872,8 @@
       const rows = (report.morphology?.classes || []).map((item) => {
         const risk = riskByClass.get(Number(item.class_id));
         const direction = item.dominant_direction ? `${item.dominant_direction} ${fmt(item.dominant_direction_degrees, 2)} deg` : "-";
-        const review = risk?.review_required ? " / review" : "";
-        return `<tr><td>${item.class_name}</td><td>${item.area_pixels}</td><td>${fmt(item.area_ratio, 6)}</td><td>${item.component_count}</td><td>${item.skeleton_length}</td><td>${direction}</td><td>${risk?.risk_level || "none"}${review}</td></tr>`;
+        const review = risk?.review_required ? " / 需复核" : "";
+        return `<tr><td>${classLabel(item.class_name)}</td><td>${item.area_pixels}</td><td>${fmt(item.area_ratio, 6)}</td><td>${item.component_count}</td><td>${item.skeleton_length}</td><td>${direction}</td><td>${riskLabel(risk?.risk_level || "none")}${review}</td></tr>`;
       });
       document.querySelector("#morphologyRows").innerHTML = rows.join("");
     }
