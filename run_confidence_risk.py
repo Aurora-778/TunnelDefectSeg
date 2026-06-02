@@ -64,6 +64,39 @@ def prediction_stats(mask: np.ndarray) -> dict[str, int]:
     return {str(int(u)): int(c) for u, c in zip(uniq.tolist(), counts.tolist())}
 
 
+def prediction_consistency_stats(single_mask: np.ndarray, fused_mask: np.ndarray) -> dict:
+    single = np.asarray(single_mask)
+    fused = np.asarray(fused_mask)
+    if single.shape != fused.shape:
+        raise ValueError("single_mask and fused_mask must have the same shape")
+
+    class_ious = {}
+    present_ious = []
+    for class_id in range(1, len(CLASS_NAMES)):
+        single_class = single == class_id
+        fused_class = fused == class_id
+        union = np.logical_or(single_class, fused_class).sum()
+        if union == 0:
+            class_ious[str(class_id)] = None
+            continue
+        iou = float(np.logical_and(single_class, fused_class).sum() / union)
+        class_ious[str(class_id)] = iou
+        present_ious.append(iou)
+
+    single_fg = single > 0
+    fused_fg = fused > 0
+    fg_union = np.logical_or(single_fg, fused_fg).sum()
+    foreground_iou = float(np.logical_and(single_fg, fused_fg).sum() / fg_union) if fg_union else 1.0
+
+    return {
+        "single_fused_mIoU": float(np.mean(present_ious)) if present_ious else 1.0,
+        "foreground_iou": foreground_iou,
+        "pixel_agreement": float(np.mean(single == fused)),
+        "class_ious": class_ious,
+        "note": "Self-consistency between model outputs only; this is not ground-truth mIoU.",
+    }
+
+
 def write_result_artifacts(
     stem: str,
     raw_resized: np.ndarray,
@@ -112,6 +145,7 @@ def write_result_artifacts(
         "class_names": {str(k): v for k, v in CLASS_NAMES.items()},
         "single_prediction_stats": prediction_stats(single_mask),
         "fused_prediction_stats": prediction_stats(fused_mask),
+        "self_consistency": prediction_consistency_stats(single_mask, fused_mask),
         "uncertainty_summary": unc_summary,
         "morphology": morphology,
         "risk": risk,

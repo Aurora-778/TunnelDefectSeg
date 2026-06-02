@@ -566,11 +566,11 @@
               <tr><th>类别</th><th>面积像素</th><th>面积占比</th><th>连通域</th><th>骨架长度</th><th>主方向</th><th>风险</th></tr>
             </thead>
             <tbody id="morphologyRows">
-              <tr><td>simple 类</td><td>517</td><td>0.003506</td><td>1</td><td>49</td><td>vertical 87.24 deg</td><td>中 / 需复核</td></tr>
-              <tr><td>块状类</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>无</td></tr>
-              <tr><td>管线类</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>无</td></tr>
-              <tr><td>竖向类</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>无</td></tr>
-              <tr><td>横向类</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>无</td></tr>
+              <tr><td>simple</td><td>517</td><td>0.003506</td><td>1</td><td>49</td><td>vertical 87.24 deg</td><td>Medium / 需复核</td></tr>
+              <tr><td>blocky</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
+              <tr><td>pipeline</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
+              <tr><td>vertical</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
+              <tr><td>horizontal</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
             </tbody>
           </table>
         </div>
@@ -596,6 +596,7 @@
           <div class="glossary-item"><b>连通域</b><p>互相分离的缺陷块数量。数量多可能表示破碎、散裂或误检碎片。</p></div>
           <div class="glossary-item"><b>骨架长度</b><p>把缺陷区域细化成中心线后的长度，适合描述裂缝类长条形病害。</p></div>
           <div class="glossary-item"><b>mIoU</b><p>预测 mask 与人工标注 GT 的平均交并比。没有 GT 的自选图片显示 N/A。</p></div>
+          <div class="glossary-item"><b>Self IoU</b><p>只比较 Single mask 和 Fused mask 的一致性，可用于无 GT 图片，但不能代表真实精度。</p></div>
           <div class="glossary-item"><b>Disagreement</b><p>多姿态预测之间不一致的位置，能辅助发现边界不稳或模型犹豫区域。</p></div>
           <div class="glossary-item"><b>Overlay</b><p>把融合 mask 叠加到原图上，用于直观看缺陷位置和覆盖范围。</p></div>
         </div>
@@ -629,6 +630,12 @@
       class_names: { "0": "background", "1": "simple", "2": "blocky", "3": "pipeline", "4": "vertical", "5": "horizontal" },
       single_prediction_stats: { "0": 146348, "1": 1108 },
       fused_prediction_stats: { "0": 146939, "1": 517 },
+      self_consistency: {
+        single_fused_mIoU: 0.4666,
+        foreground_iou: 0.4666,
+        pixel_agreement: 0.9959,
+        note: "Self-consistency between model outputs only; this is not ground-truth mIoU."
+      },
       uncertainty_summary: {
         mean: 0.004636249,
         max: 0.443340689,
@@ -696,13 +703,13 @@
 
     function viewLabel(label) {
       const labels = {
-        Original: "Original 原图",
-        "Single mask": "Single mask",
-        "Fused mask": "Fused mask",
-        Overlay: "Overlay",
-        Uncertainty: "Uncertainty",
-        Disagreement: "Disagreement",
-        Skeleton: "Skeleton"
+        Original: "原图",
+        "Single mask": "单次 mask",
+        "Fused mask": "融合 mask",
+        Overlay: "叠加图",
+        Uncertainty: "不确定性图",
+        Disagreement: "分歧图",
+        Skeleton: "骨架图"
       };
       return labels[label] || label;
     }
@@ -717,6 +724,10 @@
         horizontal: "横向类"
       };
       return labels[name] || name;
+    }
+
+    function rawClassLabel(name) {
+      return name || "none";
     }
 
     function riskLabel(level) {
@@ -862,6 +873,7 @@
         ["Single mIoU", "N/A", "自选图片没有人工标注 GT，无法计算真实 mIoU。"],
         ["Fused mIoU", "N/A", "mIoU 必须用预测 mask 与 GT mask 比较；当前只有输入图像。"],
         ["Delta mIoU", "N/A", "没有 Single/Fused mIoU 时，mIoU 变化也不可计算。"],
+        ["Self IoU", fmt(report.self_consistency?.single_fused_mIoU), "只比较 Single mask 与 Fused mask 的一致性，不代表真实精度。"],
         ["Mean uncertainty", fmt(report.uncertainty_summary?.mean), "这个指标不需要 GT，可直接从模型概率分布计算。"]
       ];
       document.querySelector("#summaryMetrics").innerHTML = metrics.map(([label, value, help]) => metricCard(label, value, help)).join("");
@@ -873,7 +885,7 @@
         const risk = riskByClass.get(Number(item.class_id));
         const direction = item.dominant_direction ? `${item.dominant_direction} ${fmt(item.dominant_direction_degrees, 2)} deg` : "-";
         const review = risk?.review_required ? " / 需复核" : "";
-        return `<tr><td>${classLabel(item.class_name)}</td><td>${item.area_pixels}</td><td>${fmt(item.area_ratio, 6)}</td><td>${item.component_count}</td><td>${item.skeleton_length}</td><td>${direction}</td><td>${riskLabel(risk?.risk_level || "none")}${review}</td></tr>`;
+        return `<tr><td>${rawClassLabel(item.class_name)}</td><td>${item.area_pixels}</td><td>${fmt(item.area_ratio, 6)}</td><td>${item.component_count}</td><td>${item.skeleton_length}</td><td>${direction}</td><td>${riskLabel(risk?.risk_level || "none")}${review}</td></tr>`;
       });
       document.querySelector("#morphologyRows").innerHTML = rows.join("");
     }

@@ -44,6 +44,9 @@ def test_write_result_artifacts_creates_expected_files(tmp_path):
     saved = json.loads((tmp_path / "sample_report.json").read_text(encoding="utf-8"))
     assert saved["tta_specs"] == ["identity", "hflip"]
     assert saved["fused_prediction_stats"]["5"] == 8
+    assert saved["self_consistency"]["single_fused_mIoU"] == 0.0
+    assert saved["self_consistency"]["foreground_iou"] == 0.0
+    assert saved["self_consistency"]["pixel_agreement"] < 1.0
     assert saved["morphology"]["defect_area_pixels"] > 0
     assert saved["risk"]["risk_level"] in {"low", "medium", "high"}
     assert report["artifacts"]["overlay"] == "sample_overlay.png"
