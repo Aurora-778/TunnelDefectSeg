@@ -92,6 +92,72 @@
 
     .risk-medium { background: var(--amber); color: var(--ink); }
     .risk-medium span { color: rgba(23,33,43,0.72); }
+    .risk-high { background: var(--red); color: #fff; }
+    .risk-high span { color: rgba(255,255,255,0.82); }
+    .risk-low { background: #d7eadf; color: var(--ink); }
+    .risk-none { background: #f8fbfd; color: var(--ink); }
+
+    .upload-panel {
+      margin-bottom: 12px;
+    }
+
+    .drop-zone {
+      display: grid;
+      grid-template-columns: minmax(220px, 0.78fr) minmax(260px, 1.22fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-height: 112px;
+      border: 2px dashed var(--line);
+      background:
+        linear-gradient(90deg, rgba(0,166,166,0.10), transparent),
+        #fff;
+      padding: 14px;
+      cursor: pointer;
+    }
+
+    .drop-zone.dragging {
+      border-color: var(--cyan);
+      box-shadow: inset 0 0 0 3px rgba(0,166,166,0.22);
+    }
+
+    .drop-title {
+      margin: 0;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .drop-zone p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    .upload-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .upload-status {
+      margin-top: 8px;
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .busy {
+      color: var(--blue);
+      font-weight: 700;
+    }
+
+    .error {
+      color: var(--red);
+      font-weight: 700;
+    }
 
     .dashboard {
       display: grid;
@@ -347,6 +413,8 @@
     @media (max-width: 680px) {
       .shell { width: min(100% - 18px, 1480px); padding-top: 10px; }
       header { grid-template-columns: 1fr; }
+      .drop-zone { grid-template-columns: 1fr; cursor: default; }
+      .upload-actions { justify-content: flex-start; }
       .panel-title { align-items: flex-start; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
       .strip-row { display: grid; grid-template-columns: 1fr; gap: 4px; }
       .strip-row b { overflow-wrap: anywhere; }
@@ -369,18 +437,34 @@
         <h1>隧道病害可信评估展示台</h1>
         <p>Multi-pose fusion / uncertainty / skeleton / risk report</p>
       </section>
-      <section class="stat risk-medium"><span>Risk level</span><strong>MEDIUM</strong></section>
-      <section class="stat"><span>Risk score</span><strong>3.25</strong></section>
-      <section class="stat"><span>Defect pixels</span><strong>517</strong></section>
-      <section class="stat"><span>Review</span><strong>YES</strong></section>
+      <section class="stat risk-medium" id="riskLevelCard"><span>Risk level</span><strong id="riskLevel">MEDIUM</strong></section>
+      <section class="stat"><span>Risk score</span><strong id="riskScore">3.25</strong></section>
+      <section class="stat"><span>Defect pixels</span><strong id="defectPixels">517</strong></section>
+      <section class="stat"><span>Review</span><strong id="reviewFlag">YES</strong></section>
     </header>
+
+    <section class="panel upload-panel">
+      <div class="drop-zone" id="dropZone">
+        <div>
+          <p class="drop-title">拖入图片实时检测</p>
+          <p>支持 jpg / png / bmp / tif；首次检测会加载模型权重，后续图片复用同一个模型实例。</p>
+        </div>
+        <p id="uploadHint">把隧道衬砌图片拖到这里，或点击选择文件。检测完成后，下方证据图和风险报告会自动刷新。</p>
+        <div class="upload-actions">
+          <button type="button" id="pickFile">选择图片</button>
+          <button type="button" id="resetSample">恢复样例</button>
+          <input type="file" id="fileInput" accept="image/*" hidden />
+        </div>
+      </div>
+      <div class="upload-status" id="uploadStatus">实时检测服务：等待上传。</div>
+    </section>
 
     <section class="dashboard">
       <aside class="panel">
         <div class="panel-title">Case file <span class="pill"><i class="dot"></i> active</span></div>
         <div class="panel-body">
-          <h2 class="case-id">t1_1</h2>
-          <div class="status-strip">
+          <h2 class="case-id" id="caseId">t1_1</h2>
+          <div class="status-strip" id="statusStrip">
             <div class="strip-row"><span>TTA specs</span><b>identity + hflip</b></div>
             <div class="strip-row"><span>Image grid</span><b>384 x 384</b></div>
             <div class="strip-row"><span>Defect class</span><b>simple</b></div>
@@ -388,7 +472,7 @@
             <div class="strip-row"><span>Skeleton length</span><b>49</b></div>
             <div class="strip-row"><span>Component count</span><b>1</b></div>
           </div>
-          <p class="split-note">单次预测有 1108 个 simple 像素，融合后收敛为 517 个；高不确定性集中在 defect 区域。</p>
+          <p class="split-note" id="caseNote">单次预测有 1108 个 simple 像素，融合后收敛为 517 个；高不确定性集中在 defect 区域。</p>
         </div>
       </aside>
 
@@ -404,7 +488,7 @@
       <aside class="panel">
         <div class="panel-title">Risk evidence <span>JSON-backed</span></div>
         <div class="panel-body">
-          <div class="metric-grid">
+          <div class="metric-grid" id="riskMetrics">
             <div class="metric"><span>Mean uncertainty</span><b>0.0046</b></div>
             <div class="metric"><span>Max uncertainty</span><b>0.4433</b></div>
             <div class="metric"><span>Defect uncertainty</span><b>0.3663</b></div>
@@ -412,7 +496,7 @@
           </div>
 
           <h3>风险触发原因</h3>
-          <ul class="reason-list">
+          <ul class="reason-list" id="reasonList">
             <li>class severity weight 1.00</li>
             <li>small area ratio 0.0035</li>
             <li>moderate skeleton length 49</li>
@@ -421,7 +505,7 @@
           </ul>
 
           <h3>类别像素变化</h3>
-          <div class="bar-list">
+          <div class="bar-list" id="pixelBars">
             <div class="bar-row"><span>single bg</span><div class="bar-track"><div class="bar-fill good" style="width:99.25%"></div></div><b>146348</b></div>
             <div class="bar-row"><span>single defect</span><div class="bar-track"><div class="bar-fill" style="width:0.75%"></div></div><b>1108</b></div>
             <div class="bar-row"><span>fused bg</span><div class="bar-track"><div class="bar-fill good" style="width:99.65%"></div></div><b>146939</b></div>
@@ -435,7 +519,7 @@
       <section class="panel">
         <div class="panel-title">Evaluation contrast <span>single vs fused</span></div>
         <div class="panel-body">
-          <div class="metric-grid">
+          <div class="metric-grid" id="summaryMetrics">
             <div class="metric"><span>Single mIoU</span><b>0.2221</b></div>
             <div class="metric"><span>Fused mIoU</span><b>0.1732</b></div>
             <div class="metric"><span>Delta mIoU</span><b>-0.0489</b></div>
@@ -446,7 +530,7 @@
             <thead>
               <tr><th>Class</th><th>Area</th><th>Area ratio</th><th>Components</th><th>Skeleton</th><th>Direction</th><th>Risk</th></tr>
             </thead>
-            <tbody>
+            <tbody id="morphologyRows">
               <tr><td>simple</td><td>517</td><td>0.003506</td><td>1</td><td>49</td><td>vertical 87.24 deg</td><td>medium / review</td></tr>
               <tr><td>blocky</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
               <tr><td>pipeline</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>none</td></tr>
@@ -474,27 +558,22 @@
   </main>
 
   <script>
-    const views = [
-      ["Original", "assets/t1_1_original.jpg"],
-      ["Single mask", "assets/t1_1_single_mask.png"],
-      ["Fused mask", "assets/t1_1_fused_mask.png"],
-      ["Overlay", "assets/t1_1_overlay.png"],
-      ["Uncertainty", "assets/t1_1_uncertainty_heatmap.png"],
-      ["Disagreement", "assets/t1_1_disagreement_heatmap.png"],
-      ["Skeleton", "assets/t1_1_skeleton.png"]
+    const sampleViews = [
+      { label: "Original", url: "assets/t1_1_original.jpg" },
+      { label: "Single mask", url: "assets/t1_1_single_mask.png" },
+      { label: "Fused mask", url: "assets/t1_1_fused_mask.png" },
+      { label: "Overlay", url: "assets/t1_1_overlay.png" },
+      { label: "Uncertainty", url: "assets/t1_1_uncertainty_heatmap.png" },
+      { label: "Disagreement", url: "assets/t1_1_disagreement_heatmap.png" },
+      { label: "Skeleton", url: "assets/t1_1_skeleton.png" }
     ];
 
-    const report = {
+    const sampleReport = {
       stem: "t1_1",
-      risk: {
-        risk_level: "medium",
-        score: 3.25,
-        review_required: true,
-        suggestions: [
-          "Medium image-based defect risk; review morphology and uncertainty before acceptance.",
-          "Manual review recommended because uncertainty is high in detected defect regions."
-        ]
-      },
+      tta_specs: ["identity", "hflip"],
+      class_names: { "0": "background", "1": "simple", "2": "blocky", "3": "pipeline", "4": "vertical", "5": "horizontal" },
+      single_prediction_stats: { "0": 146348, "1": 1108 },
+      fused_prediction_stats: { "0": 146939, "1": 517 },
       uncertainty_summary: {
         mean: 0.004636249,
         max: 0.443340689,
@@ -503,53 +582,257 @@
         defect_high_fraction: 0.657640232
       },
       morphology: {
+        image_shape: [384, 384],
+        total_pixels: 147456,
         defect_area_pixels: 517,
         defect_area_ratio: 0.003506131,
         defect_component_count: 1,
         defect_skeleton_length: 49,
-        simple_bbox: [137, 142, 16, 37],
-        dominant_direction: "vertical",
-        dominant_direction_degrees: 87.2362
+        classes: [
+          { class_id: 1, class_name: "simple", area_pixels: 517, area_ratio: 0.003506131, component_count: 1, skeleton_length: 49, dominant_direction: "vertical", dominant_direction_degrees: 87.2362 },
+          { class_id: 2, class_name: "blocky", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
+          { class_id: 3, class_name: "pipeline", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
+          { class_id: 4, class_name: "vertical", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
+          { class_id: 5, class_name: "horizontal", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null }
+        ]
+      },
+      risk: {
+        risk_level: "medium",
+        score: 3.25,
+        review_required: true,
+        class_results: [
+          { class_id: 1, class_name: "simple", risk_level: "medium", review_required: true, reasons: ["class severity weight 1.00", "small area ratio 0.0035", "moderate skeleton length 49", "high mean uncertainty 0.366", "high uncertain-area fraction 0.658"] }
+        ],
+        suggestions: [
+          "Medium image-based defect risk; review morphology and uncertainty before acceptance.",
+          "Manual review recommended because uncertainty is high in detected defect regions."
+        ]
       },
       evaluation: {
         single_mIoU: 0.222122077,
         fused_mIoU: 0.173192874,
         delta_mIoU: -0.048929203,
-        single_mDice: 0.265404568,
-        fused_mDice: 0.195361235
+        mean_uncertainty: 0.1554
       }
     };
 
+    let activeViews = [];
     const tabs = document.querySelector("#tabs");
     const filmstrip = document.querySelector("#filmstrip");
     const stageImage = document.querySelector("#stageImage");
     const stageLabel = document.querySelector("#stageLabel");
+    const dropZone = document.querySelector("#dropZone");
+    const fileInput = document.querySelector("#fileInput");
+    const uploadStatus = document.querySelector("#uploadStatus");
+
+    function fmt(value, digits = 4) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return Number(value).toFixed(digits).replace(/\.?0+$/, "");
+    }
+
+    function pct(value) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return `${(Number(value) * 100).toFixed(2)}%`;
+    }
+
+    function setStatus(text, type = "") {
+      uploadStatus.textContent = text;
+      uploadStatus.className = `upload-status ${type}`.trim();
+    }
 
     function selectView(index) {
-      stageImage.src = views[index][1];
-      stageLabel.textContent = views[index][0];
+      const view = activeViews[index];
+      if (!view) return;
+      stageImage.src = view.url;
+      stageLabel.textContent = view.label;
       document.querySelectorAll("[data-view]").forEach((node) => {
         node.classList.toggle("active", Number(node.dataset.view) === index);
       });
     }
 
-    views.forEach((view, index) => {
-      const button = document.createElement("button");
-      button.textContent = view[0];
-      button.dataset.view = index;
-      button.addEventListener("click", () => selectView(index));
-      tabs.appendChild(button);
+    function renderViews(views) {
+      activeViews = views;
+      tabs.replaceChildren();
+      filmstrip.replaceChildren();
 
-      const thumb = document.createElement("div");
-      thumb.className = "thumb";
-      thumb.dataset.view = index;
-      thumb.innerHTML = `<img src="${view[1]}" alt="${view[0]} thumbnail"><span>${view[0]}</span>`;
-      thumb.addEventListener("click", () => selectView(index));
-      filmstrip.appendChild(thumb);
+      views.forEach((view, index) => {
+        const button = document.createElement("button");
+        button.textContent = view.label;
+        button.dataset.view = index;
+        button.addEventListener("click", () => selectView(index));
+        tabs.appendChild(button);
+
+        const thumb = document.createElement("div");
+        thumb.className = "thumb";
+        thumb.dataset.view = index;
+        thumb.innerHTML = `<img src="${view.url}" alt="${view.label} thumbnail"><span>${view.label}</span>`;
+        thumb.addEventListener("click", () => selectView(index));
+        filmstrip.appendChild(thumb);
+      });
+
+      const overlayIndex = Math.max(0, views.findIndex((item) => item.label === "Overlay"));
+      selectView(overlayIndex);
+    }
+
+    function renderHeader(report) {
+      const risk = report.risk || {};
+      const level = String(risk.risk_level || "none").toLowerCase();
+      const riskCard = document.querySelector("#riskLevelCard");
+      riskCard.className = `stat risk-${level}`;
+      document.querySelector("#riskLevel").textContent = level.toUpperCase();
+      document.querySelector("#riskScore").textContent = fmt(risk.score, 2);
+      document.querySelector("#defectPixels").textContent = report.morphology?.defect_area_pixels ?? 0;
+      document.querySelector("#reviewFlag").textContent = risk.review_required ? "YES" : "NO";
+    }
+
+    function renderCase(report) {
+      const morph = report.morphology || {};
+      const classes = morph.classes || [];
+      const detected = classes.find((item) => Number(item.area_pixels || 0) > 0) || classes[0] || {};
+      const imageShape = morph.image_shape ? `${morph.image_shape[1]} x ${morph.image_shape[0]}` : "384 x 384";
+      document.querySelector("#caseId").textContent = report.stem || "uploaded";
+      document.querySelector("#statusStrip").innerHTML = [
+        ["TTA specs", (report.tta_specs || []).join(" + ") || "identity + hflip"],
+        ["Image grid", imageShape],
+        ["Defect class", detected.class_name || "none"],
+        ["Direction", detected.dominant_direction || "none"],
+        ["Skeleton length", morph.defect_skeleton_length ?? detected.skeleton_length ?? 0],
+        ["Component count", morph.defect_component_count ?? detected.component_count ?? 0]
+      ].map(([label, value]) => `<div class="strip-row"><span>${label}</span><b>${value}</b></div>`).join("");
+
+      const singleDefect = defectPixelCount(report.single_prediction_stats);
+      const fusedDefect = defectPixelCount(report.fused_prediction_stats);
+      document.querySelector("#caseNote").textContent = `单次预测有 ${singleDefect} 个缺陷像素，融合后为 ${fusedDefect} 个；风险等级由形态特征和不确定性共同给出。`;
+    }
+
+    function renderRisk(report) {
+      const unc = report.uncertainty_summary || {};
+      document.querySelector("#riskMetrics").innerHTML = [
+        ["Mean uncertainty", fmt(unc.mean)],
+        ["Max uncertainty", fmt(unc.max)],
+        ["Defect uncertainty", fmt(unc.defect_mean)],
+        ["High defect fraction", pct(unc.defect_high_fraction)]
+      ].map(([label, value]) => `<div class="metric"><span>${label}</span><b>${value}</b></div>`).join("");
+
+      const activeResult = (report.risk?.class_results || []).find((item) => item.risk_level !== "none") || report.risk?.class_results?.[0];
+      const reasons = activeResult?.reasons || report.risk?.suggestions || ["No risk reasons available."];
+      document.querySelector("#reasonList").innerHTML = reasons.map((reason) => `<li>${reason}</li>`).join("");
+    }
+
+    function defectPixelCount(stats = {}) {
+      return Object.entries(stats)
+        .filter(([id]) => id !== "0")
+        .reduce((sum, [, count]) => sum + Number(count || 0), 0);
+    }
+
+    function renderPixelBars(report) {
+      const total = report.morphology?.total_pixels || 1;
+      const rows = [];
+      const classNames = report.class_names || {};
+      for (const [kind, stats] of [["single", report.single_prediction_stats || {}], ["fused", report.fused_prediction_stats || {}]]) {
+        for (const [classId, count] of Object.entries(stats)) {
+          const label = `${kind} ${classNames[classId] || `class ${classId}`}`;
+          const width = Math.min(100, Math.max(0.2, Number(count) / total * 100));
+          const tone = classId === "0" ? "good" : "";
+          rows.push(`<div class="bar-row"><span>${label}</span><div class="bar-track"><div class="bar-fill ${tone}" style="width:${width}%"></div></div><b>${count}</b></div>`);
+        }
+      }
+      document.querySelector("#pixelBars").innerHTML = rows.join("");
+    }
+
+    function renderSummary(report) {
+      const ev = report.evaluation;
+      const metrics = ev ? [
+        ["Single mIoU", fmt(ev.single_mIoU)],
+        ["Fused mIoU", fmt(ev.fused_mIoU)],
+        ["Delta mIoU", fmt(ev.delta_mIoU)],
+        ["Mean uncertainty", fmt(ev.mean_uncertainty ?? report.uncertainty_summary?.mean)]
+      ] : [
+        ["Elapsed", report.elapsed_ms ? `${report.elapsed_ms} ms` : "-"],
+        ["TTA mode", (report.tta_specs || []).join(" + ") || "-"],
+        ["Total pixels", report.morphology?.total_pixels ?? "-"],
+        ["Report", report.report_url ? "saved" : "inline"]
+      ];
+      document.querySelector("#summaryMetrics").innerHTML = metrics.map(([label, value]) => `<div class="metric"><span>${label}</span><b>${value}</b></div>`).join("");
+    }
+
+    function renderMorphology(report) {
+      const riskByClass = new Map((report.risk?.class_results || []).map((item) => [Number(item.class_id), item]));
+      const rows = (report.morphology?.classes || []).map((item) => {
+        const risk = riskByClass.get(Number(item.class_id));
+        const direction = item.dominant_direction ? `${item.dominant_direction} ${fmt(item.dominant_direction_degrees, 2)} deg` : "-";
+        const review = risk?.review_required ? " / review" : "";
+        return `<tr><td>${item.class_name}</td><td>${item.area_pixels}</td><td>${fmt(item.area_ratio, 6)}</td><td>${item.component_count}</td><td>${item.skeleton_length}</td><td>${direction}</td><td>${risk?.risk_level || "none"}${review}</td></tr>`;
+      });
+      document.querySelector("#morphologyRows").innerHTML = rows.join("");
+    }
+
+    function renderReport(report, views) {
+      renderHeader(report);
+      renderCase(report);
+      renderRisk(report);
+      renderPixelBars(report);
+      renderSummary(report);
+      renderMorphology(report);
+      renderViews(views);
+      document.querySelector("#jsonBlock").textContent = JSON.stringify(report, null, 2);
+    }
+
+    async function detectFile(file) {
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        setStatus("请选择图片文件。", "error");
+        return;
+      }
+
+      setStatus(`检测中：${file.name}。首次运行会加载模型，请等待。`, "busy");
+      const form = new FormData();
+      form.append("image", file);
+
+      try {
+        const response = await fetch("/api/detect", { method: "POST", body: form });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || `HTTP ${response.status}`);
+        }
+        renderReport(payload.report, payload.report.views);
+        setStatus(`检测完成：${file.name}，耗时 ${payload.report.elapsed_ms} ms。`);
+      } catch (error) {
+        setStatus(`检测失败：${error.message}。确认已用 python web_app.py 启动服务。`, "error");
+      }
+    }
+
+    dropZone.addEventListener("click", (event) => {
+      if (event.target.id !== "resetSample") fileInput.click();
+    });
+    document.querySelector("#pickFile").addEventListener("click", (event) => {
+      event.stopPropagation();
+      fileInput.click();
+    });
+    document.querySelector("#resetSample").addEventListener("click", (event) => {
+      event.stopPropagation();
+      renderReport(sampleReport, sampleViews);
+      setStatus("已恢复样例结果。");
+    });
+    fileInput.addEventListener("change", () => detectFile(fileInput.files[0]));
+
+    ["dragenter", "dragover"].forEach((name) => {
+      dropZone.addEventListener(name, (event) => {
+        event.preventDefault();
+        dropZone.classList.add("dragging");
+      });
+    });
+    ["dragleave", "drop"].forEach((name) => {
+      dropZone.addEventListener(name, (event) => {
+        event.preventDefault();
+        dropZone.classList.remove("dragging");
+      });
+    });
+    dropZone.addEventListener("drop", (event) => {
+      detectFile(event.dataTransfer.files[0]);
     });
 
-    document.querySelector("#jsonBlock").textContent = JSON.stringify(report, null, 2);
-    selectView(3);
+    renderReport(sampleReport, sampleViews);
   </script>
 </body>
 </html>

@@ -152,3 +152,21 @@ python evaluate_confidence_risk.py --split test --limit 20 --output experiments/
 ```
 
 Implementation notes and patent-oriented framing are in `docs/patent-notes/tunnel-defect-confidence-risk.md`.
+
+## Live web detector
+
+The `web_app.py` server provides a local drag-and-drop detection UI. It serves `web_demo/index.html`, accepts image uploads, runs the confidence-risk inference pipeline, and returns the generated mask, overlay, uncertainty, disagreement, skeleton, and JSON risk report.
+
+Start it on Windows:
+
+```powershell
+python web_app.py --host 127.0.0.1 --port 8000
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Generated live outputs are written under `experiments/web_live/`, which is intentionally ignored by git.
