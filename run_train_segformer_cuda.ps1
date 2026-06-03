@@ -93,3 +93,4 @@ if ($DryRun) {
 
 Set-Location $SegFormerRepoRoot
 & $PythonExe @trainArgs
+exit $LASTEXITCODE

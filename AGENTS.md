@@ -51,6 +51,12 @@ The SegFormer decode head also originally hardcoded `SyncBN`, which fails on Win
 
 with `norm_cfg=self.norm_cfg` inside `linear_fuse`, so the generated config can use `BN`.
 
+The old mmseg evaluation code also used removed NumPy aliases. It has been locally patched at:
+
+`C:/Users/26822/Desktop/隧道病害检测/third_party/SegFormer-master/mmseg/core/evaluation/metrics.py`
+
+with `dtype=np.float64` instead of `dtype=np.float`, so validation mIoU evaluation works on NumPy 1.24+.
+
 ## Domestic Mirrors
 
 Prefer domestic mirrors for installs:
@@ -144,6 +150,7 @@ python -m pytest tests/test_segformer_tools.py
 - Do not rely on default `python` for SegFormer launchers; explicitly use `D:/users/anaconda3/envs/segformer-phase2/python.exe`.
 - TensorBoard is disabled in the generated SegFormer config to avoid extra Windows/Python dependency friction. Text logging remains enabled.
 - The generated SegFormer config uses `BN`, not `SyncBN`, for Windows single-GPU training.
+- The external SegFormer source has a NumPy 1.24 compatibility patch for evaluation metrics (`np.float` -> `np.float64`).
 - `pretrained/mit_b1.pth` is present under the SegFormer source tree and has been verified with `torch.load`. The generated config can use it with `--pretrained C:/Users/26822/Desktop/隧道病害检测/third_party/SegFormer-master/pretrained/mit_b1.pth`.
 - The existing web app may already be running at `http://127.0.0.1:8000/`.
 
