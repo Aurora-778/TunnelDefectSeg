@@ -84,6 +84,18 @@ Regenerate the mmseg dataset/config/launchers:
 Run training:
 
 ```powershell
+& 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1'
+```
+
+Smoke-test the training entrypoint:
+
+```powershell
+& 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1' -SmokeTest
+```
+
+The generated launcher can also be run directly:
+
+```powershell
 & 'C:/Users/26822/Downloads/data/experiments/segformer_b1/train_segformer_b1.ps1'
 ```
 

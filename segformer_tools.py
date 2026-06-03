@@ -28,6 +28,12 @@ def _portable_path(path: Path) -> str:
     return path.resolve().as_posix()
 
 
+def _portable_optional_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    return Path(path).resolve().as_posix()
+
+
 @dataclass(frozen=True)
 class SegFormerExportConfig:
     data_root: Path = Path(r"C:\Users\26822\Downloads\data")
@@ -305,7 +311,7 @@ def main() -> None:
         max_iters=args.max_iters,
         eval_interval=args.eval_interval,
         python_executable=args.python_executable,
-        pretrained=args.pretrained,
+        pretrained=_portable_optional_path(args.pretrained),
     )
     result = prepare_segformer(config, args.segformer_repo_root)
     print(json.dumps(result, indent=2, ensure_ascii=False))
