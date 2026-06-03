@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$PythonExe = 'D:\users\anaconda3\envs\segformer-phase2\python.exe',
     [string]$SegFormerRepoRoot = 'C:\Users\26822\Desktop\隧道病害检测\third_party\SegFormer-master',
     [string]$OutDir = 'experiments\segformer_b1',
