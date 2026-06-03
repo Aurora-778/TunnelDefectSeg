@@ -49,6 +49,9 @@ if (-not $SkipPrepare) {
         Write-Host "& '$PythonExe' $($prepareArgs -join ' ')"
     } else {
         & $PythonExe @prepareArgs
+        if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+        }
     }
 }
 
