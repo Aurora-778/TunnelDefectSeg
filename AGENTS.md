@@ -153,3 +153,4 @@ python -m pytest tests/test_segformer_tools.py
 - Use `apply_patch` for manual file edits.
 - Do not revert user changes.
 - After each meaningful work chunk, commit and push to `origin/main` unless the user says otherwise.
+- Look in `docs/solutions/` for reusable solved-problem notes before re-solving workflow, tooling, environment, or training-entrypoint issues.
