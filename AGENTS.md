@@ -57,6 +57,12 @@ The old mmseg evaluation code also used removed NumPy aliases. It has been local
 
 with `dtype=np.float64` instead of `dtype=np.float`, so validation mIoU evaluation works on NumPy 1.24+.
 
+The mmcv text logger can crash after validation when `time` exists but `data_time` is absent from the log buffer. It has been locally patched at:
+
+`D:/users/anaconda3/envs/segformer-phase2/lib/site-packages/mmcv/runner/hooks/logger/text.py`
+
+to print `data_time` only when that key exists, preventing `KeyError: 'data_time'` after validation.
+
 ## Domestic Mirrors
 
 Prefer domestic mirrors for installs:
@@ -151,6 +157,7 @@ python -m pytest tests/test_segformer_tools.py
 - TensorBoard is disabled in the generated SegFormer config to avoid extra Windows/Python dependency friction. Text logging remains enabled.
 - The generated SegFormer config uses `BN`, not `SyncBN`, for Windows single-GPU training.
 - The external SegFormer source has a NumPy 1.24 compatibility patch for evaluation metrics (`np.float` -> `np.float64`).
+- The local mmcv text logger has a validation-log compatibility patch for missing `data_time`.
 - `pretrained/mit_b1.pth` is present under the SegFormer source tree and has been verified with `torch.load`. The generated config can use it with `--pretrained C:/Users/26822/Desktop/隧道病害检测/third_party/SegFormer-master/pretrained/mit_b1.pth`.
 - The existing web app may already be running at `http://127.0.0.1:8000/`.
 
