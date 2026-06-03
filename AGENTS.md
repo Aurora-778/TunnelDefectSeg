@@ -120,7 +120,7 @@ python -m pytest tests/test_segformer_tools.py
 - Do not rely on default `python` for SegFormer launchers; explicitly use `D:/users/anaconda3/envs/segformer-phase2/python.exe`.
 - TensorBoard is disabled in the generated SegFormer config to avoid extra Windows/Python dependency friction. Text logging remains enabled.
 - The generated SegFormer config uses `BN`, not `SyncBN`, for Windows single-GPU training.
-- `pretrained/mit_b1.pth` is not currently present. The generated config defaults to `pretrained=None`, so training can start from scratch. If a valid MiT-B1 pretrained checkpoint is available, regenerate with `--pretrained <path>`.
+- `pretrained/mit_b1.pth` is present under the SegFormer source tree and has been verified with `torch.load`. The generated config can use it with `--pretrained C:/Users/26822/Desktop/隧道病害检测/third_party/SegFormer-master/pretrained/mit_b1.pth`.
 - The existing web app may already be running at `http://127.0.0.1:8000/`.
 
 ## Repository Rules
