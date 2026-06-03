@@ -10,8 +10,12 @@ echo SegFormer CUDA training launcher
 echo.
 echo Current directory: %CD%
 echo Double-click this file to start full training.
-echo For smoke test, run from command line:
+echo To continue from latest.pth, double-click:
+echo       resume_train_segformer_cuda.bat
+echo For command-line smoke/resume tests:
 echo       run_train_segformer_cuda.bat -SmokeTest
+echo       run_train_segformer_cuda.bat -ResumeLatest
+echo       run_train_segformer_cuda.bat -ResumeFrom path\to\checkpoint.pth
 echo ============================================================
 echo.
 

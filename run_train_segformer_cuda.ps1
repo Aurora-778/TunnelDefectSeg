@@ -4,6 +4,8 @@
     [string]$OutDir = 'experiments\segformer_b1',
     [string]$Pretrained = 'C:\Users\26822\Desktop\隧道病害检测\third_party\SegFormer-master\pretrained\mit_b1.pth',
     [int]$Gpus = 1,
+    [string]$ResumeFrom = '',
+    [switch]$ResumeLatest,
     [switch]$SkipPrepare,
     [switch]$SmokeTest,
     [switch]$DryRun
@@ -59,12 +61,30 @@ if (-not (Test-Path -LiteralPath $ConfigPath)) {
     throw "SegFormer config not found: $ConfigPath"
 }
 
+$ResumeFromPortable = $null
+if ($ResumeLatest) {
+    $LatestCheckpoint = Join-Path $WorkDir 'latest.pth'
+    if (-not (Test-Path -LiteralPath $LatestCheckpoint)) {
+        throw "Latest checkpoint not found: $LatestCheckpoint"
+    }
+    $ResumeFromPortable = Convert-ToPortablePath $LatestCheckpoint
+} elseif ($ResumeFrom) {
+    if (-not (Test-Path -LiteralPath $ResumeFrom)) {
+        throw "Resume checkpoint not found: $ResumeFrom"
+    }
+    $ResumeFromPortable = Convert-ToPortablePath $ResumeFrom
+}
+
 $trainArgs = @(
     'tools/train.py',
     $ConfigPathPortable,
     '--work-dir', $WorkDirPortable,
     '--gpus', $Gpus
 )
+
+if ($ResumeFromPortable) {
+    $trainArgs += @('--resume-from', $ResumeFromPortable)
+}
 
 if ($SmokeTest) {
     $SmokeWorkDir = Join-Path $RepoRoot (Join-Path $OutDir 'runs\smoke_pretrained_cuda')
@@ -87,6 +107,9 @@ Write-Host "[2/2] Starting SegFormer CUDA training..."
 Write-Host "Python: $PythonExe"
 Write-Host "Config: $ConfigPath"
 Write-Host "Work dir: $($trainArgs[$trainArgs.IndexOf('--work-dir') + 1])"
+if ($ResumeFromPortable -and -not $SmokeTest) {
+    Write-Host "Resume from: $ResumeFromPortable"
+}
 
 if ($DryRun) {
     Write-Host "Set-Location '$SegFormerRepoRoot'"

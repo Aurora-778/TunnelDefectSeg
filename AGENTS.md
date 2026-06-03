@@ -99,10 +99,22 @@ Run training:
 Double-click `run_train_segformer_cuda.bat` from Windows Explorer.
 ```
 
+Resume training from the current checkpoint:
+
+```powershell
+Double-click `resume_train_segformer_cuda.bat` from Windows Explorer.
+```
+
 PowerShell equivalent:
 
 ```powershell
 & 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1'
+```
+
+Resume equivalent:
+
+```powershell
+& 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1' -ResumeLatest
 ```
 
 Smoke-test the training entrypoint:
