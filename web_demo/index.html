@@ -576,6 +576,52 @@
       font-size: 13px;
     }
 
+    .advantage-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .advantage-card {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 11px;
+      min-height: 154px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 7px;
+      overflow-wrap: anywhere;
+    }
+
+    .advantage-card b {
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 14px;
+    }
+
+    .advantage-card strong {
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 26px;
+      line-height: 1;
+      color: var(--green);
+    }
+
+    .advantage-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .advantage-note {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      background: #f8fbfd;
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
     pre {
       margin: 0;
       white-space: pre-wrap;
@@ -626,7 +672,7 @@
       .image-stage img { width: 100%; }
       .filmstrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric-grid { grid-template-columns: 1fr; }
-      .stage-metrics, .experiment-notes { grid-template-columns: 1fr; }
+      .stage-metrics, .experiment-notes, .advantage-grid { grid-template-columns: 1fr; }
       .score-head { display: grid; grid-template-columns: 1fr; }
       .score-badge { width: 100%; }
       .compare-row { grid-template-columns: 74px 1fr 44px; }
@@ -790,6 +836,21 @@
         <div class="panel-title">Structured report <span>JSON excerpt</span></div>
         <pre id="jsonBlock"></pre>
       </section>
+    </section>
+
+    <section class="panel" style="margin-top:12px;">
+      <div class="panel-title">增强模块优势证据 <span>Adaptive fusion / uncertainty / morphology</span></div>
+      <div class="panel-body">
+        <div class="advantage-grid" id="advantageGrid">
+          <div class="advantage-card"><b>Adaptive selection</b><strong>+0.0489</strong><p>Selected mIoU 相比 Fused mIoU 的保护收益。</p></div>
+          <div class="advantage-card"><b>Small defect guard</b><strong>591 px</strong><p>融合收缩时保留下来的小缺陷像素。</p></div>
+          <div class="advantage-card"><b>Uncertainty triage</b><strong>74.91%</strong><p>缺陷区域中高不确定像素占比，触发人工复核。</p></div>
+          <div class="advantage-card"><b>Morphology evidence</b><strong>63</strong><p>骨架长度、方向和连通域把 mask 变成可解释结构证据。</p></div>
+        </div>
+        <div class="advantage-note" id="advantageNote">
+          当前样例里，普通 TTA fusion 把缺陷区域从 1108 px 收缩到 517 px，mIoU 从 0.2221 降到 0.1732；增强模块检测到收缩后选择 single mask，保住小缺陷证据，同时输出不确定性和形态风险。
+        </div>
+      </div>
     </section>
 
     <section class="panel" style="margin-top:12px;">
@@ -1174,6 +1235,57 @@
       document.querySelector("#summaryMetrics").innerHTML = metrics.map(([label, value, help]) => metricCard(label, value, help)).join("");
     }
 
+    function renderAdvantages(report) {
+      const ev = report.evaluation;
+      const singleDefect = defectPixelCount(report.single_prediction_stats);
+      const fusedDefect = defectPixelCount(report.fused_prediction_stats);
+      const selectedDefect = defectPixelCount(report.selected_prediction_stats || report.fused_prediction_stats);
+      const protectedPixels = Math.max(0, selectedDefect - fusedDefect);
+      const shrinkRatio = singleDefect > 0 ? 1 - fusedDefect / singleDefect : null;
+      const foregroundIoU = report.self_consistency?.foreground_iou;
+      const defectHighFraction = report.uncertainty_summary?.defect_high_fraction;
+      const skeletonLength = report.morphology?.defect_skeleton_length ?? 0;
+      const componentCount = report.morphology?.defect_component_count ?? 0;
+      const selectionMode = report.adaptive_selection?.mode || "fused";
+
+      const hasGT = Boolean(ev && ev.single_mIoU !== undefined && ev.fused_mIoU !== undefined);
+      const guardGain = hasGT ? (ev.selected_mIoU ?? ev.single_mIoU) - ev.fused_mIoU : null;
+      const relativeGuardGain = hasGT && ev.fused_mIoU ? guardGain / ev.fused_mIoU : null;
+
+      document.querySelector("#advantageGrid").innerHTML = [
+        [
+          "Adaptive selection",
+          hasGT ? signedDelta(guardGain, 4) : selectionMode,
+          hasGT
+            ? `Selected mIoU 相比 Fused mIoU 的保护收益，约 ${pct(relativeGuardGain)} 相对提升。`
+            : "自选图片没有 GT，不能算真实 mIoU；这里展示模块最终选择的输出模式。"
+        ],
+        [
+          "Small defect guard",
+          `${protectedPixels} px`,
+          shrinkRatio !== null
+            ? `TTA fusion 前景收缩 ${pct(shrinkRatio)}；selection 保留下 ${protectedPixels} 个缺陷像素。`
+            : "当前图未检测到缺陷前景，无法计算收缩保护量。"
+        ],
+        [
+          "Uncertainty triage",
+          pct(defectHighFraction),
+          `缺陷区高不确定像素占比；该值不依赖 GT，可用于实时复核提示。`
+        ],
+        [
+          "Morphology evidence",
+          `${skeletonLength}`,
+          `骨架长度 ${skeletonLength}，连通域 ${componentCount}；把 mask 转成方向、长度、碎片化等工程量。`
+        ]
+      ].map(([title, value, help]) => `<div class="advantage-card"><b>${title}</b><strong>${value}</strong><p>${help}</p></div>`).join("");
+
+      const gtSentence = hasGT
+        ? `有 GT 的样例中，Fused mIoU=${fmt(ev.fused_mIoU)}，Selected mIoU=${fmt(ev.selected_mIoU ?? ev.single_mIoU)}，说明增强模块避免了这次融合收缩造成的精度损失。`
+        : `自选图片没有 GT，因此不能直接证明 mIoU 提升；但仍可展示 selection mode、前景收缩、uncertainty、disagreement 和 morphology 这些无 GT 可计算证据。`;
+      document.querySelector("#advantageNote").textContent =
+        `${gtSentence} Single/Fused foreground IoU=${fmt(foregroundIoU)}，当前 selection=${selectionMode}，保留缺陷像素 ${selectedDefect} px。`;
+    }
+
     function renderMorphology(report) {
       const riskByClass = new Map((report.risk?.class_results || []).map((item) => [Number(item.class_id), item]));
       const rows = (report.morphology?.classes || []).map((item) => {
@@ -1191,6 +1303,7 @@
       renderRisk(report);
       renderPixelBars(report);
       renderSummary(report);
+      renderAdvantages(report);
       renderMorphology(report);
       renderViews(views);
       document.querySelector("#jsonBlock").textContent = JSON.stringify(report, null, 2);
