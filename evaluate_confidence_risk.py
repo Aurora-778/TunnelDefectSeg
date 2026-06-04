@@ -11,6 +11,7 @@ import torch.nn.functional as F
 
 from adaptive_fusion import AdaptiveFusionConfig, select_adaptive_mask
 from data_adapter import discover_samples, load_label_mask, split_dataset
+from enhancement_evidence import summarize_enhancement_evidence
 from metrics_adapter import confusion_matrix_from_batch, metrics_from_confusion_matrix
 from run_confidence_risk import load_model, preprocess_image
 from tta_confidence import default_tta_specs, light_tta_specs, predict_single_probs, predict_tta_probs, uncertainty_summary
@@ -208,6 +209,7 @@ def evaluate_pairs(
         "aggregate": aggregate,
         "samples": per_sample,
     }
+    result["enhancement_evidence"] = summarize_enhancement_evidence(result)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     return result
@@ -278,6 +280,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tta-mode", choices=["light", "default"], default="light")
     parser.add_argument("--search-config", action="store_true", help="Search adaptive fusion thresholds on the val split only.")
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--evidence-output", type=Path, default=None, help="Optional compact enhancement evidence JSON output.")
     return parser.parse_args()
 
 
@@ -297,6 +300,12 @@ def main() -> None:
         print(json.dumps(result["best"], indent=2, ensure_ascii=False))
     else:
         result = evaluate_pairs(split_pairs, output, limit=args.limit, tta_mode=args.tta_mode)
+        if args.evidence_output:
+            args.evidence_output.parent.mkdir(parents=True, exist_ok=True)
+            args.evidence_output.write_text(
+                json.dumps(result["enhancement_evidence"], indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
         print(json.dumps(result["aggregate"], indent=2, ensure_ascii=False))
 
 

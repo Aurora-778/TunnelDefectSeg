@@ -1,0 +1,185 @@
+{
+  "supported": true,
+  "num_samples": 1000,
+  "metric_summary": {
+    "single_mIoU": 0.3724539307016909,
+    "fused_mIoU": 0.32870279928685536,
+    "selected_mIoU": 0.3680254158297874,
+    "selected_vs_fused_mIoU": 0.03932261654293195,
+    "selected_vs_single_mIoU": -0.004428514871903581,
+    "single_mDice": 0.382775145669584,
+    "fused_mDice": 0.3405239681362434,
+    "selected_mDice": 0.3786073011439971
+  },
+  "selection": {
+    "mode_counts": {
+      "single": 856,
+      "fused": 144
+    },
+    "mode_rates": {
+      "single": 0.856,
+      "fused": 0.144
+    }
+  },
+  "foreground_shrinkage": {
+    "event_count": 838,
+    "event_rate": 0.838,
+    "mean_fused_to_single_area_ratio_on_shrink_events": 0.8927048221117553,
+    "mean_shrink_fraction_on_shrink_events": 0.1072951778882446,
+    "total_shrunk_pixels": 1341567
+  },
+  "small_defect_guard": {
+    "protected_event_count": 721,
+    "protected_event_rate": 0.721,
+    "successful_guard_count": 614,
+    "successful_guard_rate": 0.614,
+    "total_protected_pixels_vs_fused": 1230616,
+    "mean_protected_pixels_vs_fused": 1706.8183079056867
+  },
+  "miou_recovery": {
+    "fixed_fusion_harm_count": 817,
+    "fixed_fusion_harm_rate": 0.817,
+    "selected_recovers_over_fused_count": 699,
+    "selected_recovers_over_fused_rate": 0.699,
+    "selected_matches_or_beats_single_count": 882,
+    "selected_matches_or_beats_single_rate": 0.882
+  },
+  "uncertainty_review": {
+    "high_uncertainty_threshold": 0.5,
+    "high_defect_uncertainty_count": 431,
+    "high_defect_uncertainty_rate": 0.431,
+    "mean_defect_high_uncertainty_fraction": 0.48019895811192553,
+    "mean_defect_uncertainty": 0.2708600537944585
+  },
+  "class_iou_summary": [
+    {
+      "class_id": 0,
+      "class_name": "background",
+      "single_iou": 0.9764930210655898,
+      "fused_iou": 0.968839646618441,
+      "selected_iou": 0.9748725305734024,
+      "selected_vs_fused_iou": 0.006032883954961377,
+      "selected_vs_single_iou": -0.0016204904921873764,
+      "num_supported": 1000
+    },
+    {
+      "class_id": 1,
+      "class_name": "simple",
+      "single_iou": 0.06273979815520549,
+      "fused_iou": 0.04310808379089903,
+      "selected_iou": 0.06029027712940835,
+      "selected_vs_fused_iou": 0.017182193338509316,
+      "selected_vs_single_iou": -0.0024495210257971384,
+      "num_supported": 376
+    },
+    {
+      "class_id": 2,
+      "class_name": "blocky",
+      "single_iou": 0.16658563060446674,
+      "fused_iou": 0.13118299995201205,
+      "selected_iou": 0.1616578540936729,
+      "selected_vs_fused_iou": 0.030474854141660845,
+      "selected_vs_single_iou": -0.0049277765107938465,
+      "num_supported": 573
+    },
+    {
+      "class_id": 3,
+      "class_name": "pipeline",
+      "single_iou": 0.04021657803983629,
+      "fused_iou": 0.028839540781529133,
+      "selected_iou": 0.04007671604708342,
+      "selected_vs_fused_iou": 0.011237175265554285,
+      "selected_vs_single_iou": -0.00013986199275287103,
+      "num_supported": 303
+    },
+    {
+      "class_id": 4,
+      "class_name": "vertical",
+      "single_iou": 0.00018510990874853224,
+      "fused_iou": 0.00016841149879446123,
+      "selected_iou": 0.0001829967819363344,
+      "selected_vs_fused_iou": 1.4585283141873158e-05,
+      "selected_vs_single_iou": -2.113126812197853e-06,
+      "num_supported": 438
+    },
+    {
+      "class_id": 5,
+      "class_name": "horizontal",
+      "single_iou": 0.0040184391282564215,
+      "fused_iou": 0.0022723280365048145,
+      "selected_iou": 0.003937496255379163,
+      "selected_vs_fused_iou": 0.0016651682188743482,
+      "selected_vs_single_iou": -8.094287287725883e-05,
+      "num_supported": 594
+    }
+  ],
+  "representative_examples": {
+    "small_defect_guard": {
+      "image": "pos_10_t3_16.jpg",
+      "selection_mode": "single",
+      "single_foreground_pixels": 5985,
+      "fused_foreground_pixels": 5572,
+      "selected_foreground_pixels": 5985,
+      "foreground_shrink_pixels": 413,
+      "protected_pixels_vs_fused": 413,
+      "selected_vs_fused_mIoU": 0.5670739367836857,
+      "selected_vs_single_mIoU": 0.0,
+      "defect_high_uncertainty_fraction": 0.9929824561403509,
+      "self_foreground_iou": 0.7990348692403487,
+      "selection_reasons": [
+        "low single/fused foreground IoU 0.799",
+        "fallback to single mask because fused evidence is not stable enough"
+      ]
+    },
+    "stable_fused": {
+      "image": "t2_35.jpg",
+      "selection_mode": "fused",
+      "single_foreground_pixels": 0,
+      "fused_foreground_pixels": 0,
+      "selected_foreground_pixels": 0,
+      "foreground_shrink_pixels": 0,
+      "protected_pixels_vs_fused": 0,
+      "selected_vs_fused_mIoU": 0.0,
+      "selected_vs_single_mIoU": 0.0,
+      "defect_high_uncertainty_fraction": 0.0,
+      "self_foreground_iou": 1.0,
+      "selection_reasons": [
+        "single and fused masks both contain no foreground defect pixels"
+      ]
+    },
+    "high_uncertainty_review": {
+      "image": "neg_-5_t1_16.jpg",
+      "selection_mode": "single",
+      "single_foreground_pixels": 9392,
+      "fused_foreground_pixels": 9344,
+      "selected_foreground_pixels": 9392,
+      "foreground_shrink_pixels": 48,
+      "protected_pixels_vs_fused": 48,
+      "selected_vs_fused_mIoU": 0.00069023718437769,
+      "selected_vs_single_mIoU": 0.0,
+      "defect_high_uncertainty_fraction": 1.0,
+      "self_foreground_iou": 0.9238114796180306,
+      "selection_reasons": [
+        "low single/fused foreground IoU 0.924",
+        "fallback to single mask because fused evidence is not stable enough"
+      ]
+    },
+    "limitation_case": {
+      "image": "pos_10_t2_12.jpg",
+      "selection_mode": "fused",
+      "single_foreground_pixels": 32108,
+      "fused_foreground_pixels": 31912,
+      "selected_foreground_pixels": 31912,
+      "foreground_shrink_pixels": 196,
+      "protected_pixels_vs_fused": 0,
+      "selected_vs_fused_mIoU": 0.0,
+      "selected_vs_single_mIoU": -0.4883776734386689,
+      "defect_high_uncertainty_fraction": 0.1788355477563299,
+      "self_foreground_iou": 0.9609164420485176,
+      "selection_reasons": [
+        "stable single/fused foreground IoU 0.961",
+        "stable fused-to-single area ratio 0.994"
+      ]
+    }
+  }
+}
