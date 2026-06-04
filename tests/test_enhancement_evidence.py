@@ -113,3 +113,28 @@ def test_summarize_enhancement_evidence_aggregates_modes_and_examples():
     assert result["representative_examples"]["high_uncertainty_review"]["image"] == "guard.jpg"
     assert result["representative_examples"]["limitation_case"]["image"] == "limitation.jpg"
     assert result["class_iou_summary"][1]["class_name"] == "simple"
+
+
+def test_stable_fused_example_prefers_non_empty_defect_over_empty_background():
+    empty = _comparison(
+        "empty.jpg",
+        single=[[0, 0], [0, 0]],
+        fused=[[0, 0], [0, 0]],
+        selected=[[0, 0], [0, 0]],
+        target=[[0, 0], [0, 0]],
+        mode="fused",
+    )
+    empty["adaptive_selection"]["consistency"]["foreground_iou"] = 1.0
+    defect = _comparison(
+        "defect.jpg",
+        single=[[0, 1], [0, 1]],
+        fused=[[0, 1], [0, 1]],
+        selected=[[0, 1], [0, 1]],
+        target=[[0, 1], [0, 1]],
+        mode="fused",
+    )
+    defect["adaptive_selection"]["consistency"]["foreground_iou"] = 0.98
+
+    result = summarize_enhancement_evidence({"samples": [empty, defect]})
+
+    assert result["representative_examples"]["stable_fused"]["image"] == "defect.jpg"

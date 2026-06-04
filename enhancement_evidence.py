@@ -158,6 +158,24 @@ def _best_example(samples: list[dict], evidence_rows: list[dict], predicate, sco
 
 
 def representative_examples(samples: list[dict], evidence_rows: list[dict]) -> dict[str, dict | None]:
+    stable_fused_with_defect = _best_example(
+        samples,
+        evidence_rows,
+        lambda item: item["selection_mode"] == "fused" and item["selected_foreground_pixels"] > 0,
+        lambda item: (
+            item["self_foreground_iou"] or 0.0,
+            item["selected_vs_single_mIoU"] or 0.0,
+        ),
+    )
+    stable_fused_any = _best_example(
+        samples,
+        evidence_rows,
+        lambda item: item["selection_mode"] == "fused",
+        lambda item: (
+            item["self_foreground_iou"] or 0.0,
+            item["selected_vs_single_mIoU"] or 0.0,
+        ),
+    )
     return {
         "small_defect_guard": _best_example(
             samples,
@@ -172,15 +190,7 @@ def representative_examples(samples: list[dict], evidence_rows: list[dict]) -> d
                 item["protected_pixels_vs_fused"],
             ),
         ),
-        "stable_fused": _best_example(
-            samples,
-            evidence_rows,
-            lambda item: item["selection_mode"] == "fused",
-            lambda item: (
-                item["self_foreground_iou"] or 0.0,
-                item["selected_vs_single_mIoU"] or 0.0,
-            ),
-        ),
+        "stable_fused": stable_fused_with_defect or stable_fused_any,
         "high_uncertainty_review": _best_example(
             samples,
             evidence_rows,

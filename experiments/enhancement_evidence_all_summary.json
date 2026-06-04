@@ -132,19 +132,20 @@
       ]
     },
     "stable_fused": {
-      "image": "t2_35.jpg",
+      "image": "neg_-10_t4_40.jpg",
       "selection_mode": "fused",
-      "single_foreground_pixels": 0,
-      "fused_foreground_pixels": 0,
-      "selected_foreground_pixels": 0,
-      "foreground_shrink_pixels": 0,
+      "single_foreground_pixels": 73124,
+      "fused_foreground_pixels": 72529,
+      "selected_foreground_pixels": 72529,
+      "foreground_shrink_pixels": 595,
       "protected_pixels_vs_fused": 0,
       "selected_vs_fused_mIoU": 0.0,
-      "selected_vs_single_mIoU": 0.0,
-      "defect_high_uncertainty_fraction": 0.0,
-      "self_foreground_iou": 1.0,
+      "selected_vs_single_mIoU": -0.00210140104365808,
+      "defect_high_uncertainty_fraction": 0.16127342166581643,
+      "self_foreground_iou": 0.9793305882832566,
       "selection_reasons": [
-        "single and fused masks both contain no foreground defect pixels"
+        "stable single/fused foreground IoU 0.979",
+        "stable fused-to-single area ratio 0.992"
       ]
     },
     "high_uncertainty_review": {
