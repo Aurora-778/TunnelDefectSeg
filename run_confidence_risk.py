@@ -104,6 +104,38 @@ def prediction_consistency_stats(single_mask: np.ndarray, fused_mask: np.ndarray
     }
 
 
+def _default_mask_source() -> dict:
+    return {
+        "name": "legacy_resnet50_fcn",
+        "type": "torch",
+        "probability_tta": True,
+        "uncertainty_available": True,
+        "disagreement_available": True,
+    }
+
+
+def _measurement_available(source: dict, field: str) -> bool:
+    return bool(source.get(field, True))
+
+
+def _unavailable_summary(reason: str) -> dict:
+    return {
+        "available": False,
+        "mean": None,
+        "max": None,
+        "high_fraction": None,
+        "defect_mean": None,
+        "defect_high_fraction": None,
+        "reason": reason,
+    }
+
+
+def _available_uncertainty_summary(uncertainty: np.ndarray, mask: np.ndarray | None = None) -> dict:
+    summary = uncertainty_summary(uncertainty, mask=mask)
+    summary["available"] = True
+    return summary
+
+
 def write_result_artifacts(
     stem: str,
     raw_resized: np.ndarray,
@@ -118,6 +150,11 @@ def write_result_artifacts(
     risk_config: RiskConfig | None = None,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
+    source = dict(mask_source or _default_mask_source())
+    uncertainty_available = _measurement_available(source, "uncertainty_available")
+    disagreement_available = _measurement_available(source, "disagreement_available")
+    source["uncertainty_available"] = uncertainty_available
+    source["disagreement_available"] = disagreement_available
 
     selection = select_adaptive_mask(
         single_mask=single_mask,
@@ -163,16 +200,30 @@ def write_result_artifacts(
     Image.fromarray(skeleton_rgb).save(paths["skeleton"])
 
     morphology = measure_mask(selected_mask, config=morphology_config or MorphologyConfig())
-    unc_summary = uncertainty_summary(entropy_uncertainty, mask=selected_mask)
-    risk = score_image(morphology, unc_summary, config=risk_config or RiskConfig())
+    if uncertainty_available:
+        unc_summary = _available_uncertainty_summary(entropy_uncertainty, mask=selected_mask)
+    else:
+        unc_summary = _unavailable_summary(
+            "Mask source did not provide probability/TTA uncertainty; zero-valued heatmap is a placeholder artifact."
+        )
+    if disagreement_available:
+        disagreement_summary = _available_uncertainty_summary(disagreement_uncertainty, mask=selected_mask)
+    else:
+        disagreement_summary = _unavailable_summary(
+            "Mask source did not provide multiple aligned predictions for disagreement measurement."
+        )
+
+    risk_uncertainty = unc_summary if uncertainty_available else None
+    risk = score_image(morphology, risk_uncertainty, config=risk_config or RiskConfig())
+    risk["uncertainty_available"] = uncertainty_available
+    if not uncertainty_available:
+        risk["suggestions"].append(
+            "Uncertainty unavailable for this mask source; review relies on morphology and selected-mask evidence."
+        )
 
     report = {
         "stem": stem,
-        "mask_source": mask_source or {
-            "name": "legacy_resnet50_fcn",
-            "type": "torch",
-            "probability_tta": True,
-        },
+        "mask_source": source,
         "tta_specs": list(tta_specs or []),
         "class_names": {str(k): v for k, v in CLASS_NAMES.items()},
         "single_prediction_stats": prediction_stats(single_mask),
@@ -186,6 +237,7 @@ def write_result_artifacts(
             "consistency": selection["consistency"],
         },
         "uncertainty_summary": unc_summary,
+        "disagreement_summary": disagreement_summary,
         "morphology": morphology,
         "risk": risk,
         "artifacts": {name: str(path.name) for name, path in paths.items()},

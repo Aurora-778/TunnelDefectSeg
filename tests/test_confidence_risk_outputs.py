@@ -111,6 +111,8 @@ class _FakeSegFormerSource:
                 "name": "segformer_b1",
                 "type": "mmsegmentation",
                 "probability_tta": False,
+                "uncertainty_available": False,
+                "disagreement_available": False,
             },
         }
 
@@ -122,6 +124,10 @@ def test_process_image_accepts_segformer_like_mask_source(tmp_path):
     report = process_image(_FakeSegFormerSource(), _FakeSegFormerConfig, image_path, tmp_path)
 
     assert report["mask_source"]["name"] == "segformer_b1"
+    assert report["uncertainty_summary"]["available"] is False
+    assert report["disagreement_summary"]["available"] is False
+    assert report["risk"]["uncertainty_available"] is False
+    assert any("unavailable" in item for item in report["risk"]["suggestions"])
     assert report["tta_specs"] == ["segformer_single"]
     assert report["single_prediction_stats"]["1"] == 8
     assert report["fused_prediction_stats"]["1"] == 8

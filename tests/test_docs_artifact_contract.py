@@ -82,3 +82,10 @@ def test_readme_documents_explicit_segformer_mask_source():
     assert "legacy_resnet50_fcn" in readme
     assert "segformer_b1" in readme
     assert "mask_source" in readme
+
+
+def test_web_demo_documents_unavailable_uncertainty_for_single_mask_sources():
+    html = (ROOT / "web_demo" / "index.html").read_text(encoding="utf-8")
+
+    assert "uncertainty_summary?.available === false" in html
+    assert "未计算 uncertainty" in html

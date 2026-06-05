@@ -49,6 +49,8 @@ class SegFormerMaskSource:
             "checkpoint": str(self.checkpoint_path),
             "device": self.device,
             "probability_tta": False,
+            "uncertainty_available": False,
+            "disagreement_available": False,
             "note": "SegFormer mask source; confidence-risk artifacts are generated from mask output.",
         }
 

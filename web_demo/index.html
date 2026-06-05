@@ -1341,12 +1341,19 @@
 
     function renderRisk(report) {
       const unc = report.uncertainty_summary || {};
-      document.querySelector("#riskMetrics").innerHTML = [
+      const uncertaintyUnavailable = report.uncertainty_summary?.available === false;
+      const riskMetrics = uncertaintyUnavailable ? [
+        ["平均不确定性", "N/A", "当前 mask source 未计算 uncertainty；不能把占位热力图的 0 理解为模型很确定。"],
+        ["最大不确定性", "N/A", "未计算 uncertainty，边界和疑似误判区域需要结合 mask 形态复核。"],
+        ["缺陷区不确定性", "N/A", "未计算 uncertainty，风险提示当前主要来自 morphology 和 selected-mask evidence。"],
+        ["高不确定缺陷占比", "N/A", "未计算 uncertainty，无法统计高不确定缺陷像素比例。"]
+      ] : [
         ["平均不确定性", fmt(unc.mean), "整张图预测分布的平均不确定程度，越高表示模型越不确定。"],
         ["最大不确定性", fmt(unc.max), "图中最不确定的像素值，用于定位边界或疑似误判区域。"],
         ["缺陷区不确定性", fmt(unc.defect_mean), "只在已检测缺陷区域内统计，更贴近复核风险。"],
         ["高不确定缺陷占比", pct(unc.defect_high_fraction), "缺陷区域中超过阈值的比例，越高越建议人工确认。"]
-      ].map(([label, value, help]) => metricCard(label, value, help)).join("");
+      ];
+      document.querySelector("#riskMetrics").innerHTML = riskMetrics.map(([label, value, help]) => metricCard(label, value, help)).join("");
 
       const activeResult = (report.risk?.class_results || []).find((item) => item.risk_level !== "none") || report.risk?.class_results?.[0];
       const reasons = activeResult?.reasons || report.risk?.suggestions || ["No risk reasons available."];
@@ -1377,19 +1384,20 @@
 
     function renderSummary(report) {
       const ev = report.evaluation;
+      const uncertaintyUnavailable = report.uncertainty_summary?.available === false;
       const metrics = ev ? [
         ["Single mIoU", fmt(ev.single_mIoU), "单次预测与人工标注 GT 的重叠度，1 表示完全一致。"],
         ["Fused mIoU", fmt(ev.fused_mIoU), "TTA 融合预测与人工标注 GT 的重叠度。"],
         ["Selected mIoU", fmt(ev.selected_mIoU ?? ev.single_mIoU), "Adaptive fusion 选择输出与人工标注 GT 的重叠度。"],
         ["Delta selected", fmt((ev.selected_mIoU ?? ev.single_mIoU) - ev.single_mIoU), "Selected mIoU - Single mIoU，用于观察自适应选择是否损伤精度。"],
-        ["Mean uncertainty", fmt(ev.mean_uncertainty ?? report.uncertainty_summary?.mean), "预测概率分布的平均不确定程度，越高越不稳定。"]
+        ["Mean uncertainty", uncertaintyUnavailable ? "N/A" : fmt(ev.mean_uncertainty ?? report.uncertainty_summary?.mean), uncertaintyUnavailable ? "当前 mask source 未计算 uncertainty。" : "预测概率分布的平均不确定程度，越高越不稳定。"]
       ] : [
         ["Single mIoU", "N/A", "自选图片没有人工标注 GT，无法计算真实 mIoU。"],
         ["Fused mIoU", "N/A", "mIoU 必须用预测 mask 与 GT mask 比较；当前只有输入图像。"],
         ["Selected mIoU", "N/A", "Selected mask 也需要 GT 才能计算真实 mIoU。"],
         ["Selection", report.adaptive_selection?.mode || "-", "adaptive fusion 选择的输出模式：single / fused / hybrid。"],
         ["Self IoU", fmt(report.self_consistency?.single_fused_mIoU), "只比较 Single mask 与 Fused mask 的一致性，不代表真实精度。"],
-        ["Mean uncertainty", fmt(report.uncertainty_summary?.mean), "这个指标不需要 GT，可直接从模型概率分布计算。"]
+        ["Mean uncertainty", uncertaintyUnavailable ? "N/A" : fmt(report.uncertainty_summary?.mean), uncertaintyUnavailable ? "当前 mask source 未计算 uncertainty；自选图片仍可查看 mask、morphology 和 Self IoU。" : "这个指标不需要 GT，可直接从模型概率分布计算。"]
       ];
       document.querySelector("#summaryMetrics").innerHTML = metrics.map(([label, value, help]) => metricCard(label, value, help)).join("");
     }
