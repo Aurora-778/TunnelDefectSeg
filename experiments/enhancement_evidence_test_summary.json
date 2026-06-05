@@ -46,6 +46,8 @@
   },
   "uncertainty_review": {
     "high_uncertainty_threshold": 0.5,
+    "review_fraction_threshold": 0.5,
+    "pixel_high_uncertainty_threshold": 0.35,
     "high_defect_uncertainty_count": 61,
     "high_defect_uncertainty_rate": 0.4066666666666667,
     "mean_defect_high_uncertainty_fraction": 0.4748138440824297,

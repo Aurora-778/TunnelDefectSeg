@@ -306,6 +306,14 @@ def aggregate_comparisons(comparisons: list[dict]) -> dict:
     ]
     overlap_summary = None
     if overlap_values:
+        threshold_values = [
+            float(item["high_threshold"])
+            for item in overlap_values
+            if item.get("high_threshold") is not None
+        ]
+        pixel_high_uncertainty_threshold = None
+        if threshold_values and all(np.isclose(value, threshold_values[0]) for value in threshold_values):
+            pixel_high_uncertainty_threshold = threshold_values[0]
         total_error_pixels = int(sum(item["error_pixels"] for item in overlap_values))
         total_high_uncertainty_pixels = int(sum(item["high_uncertainty_pixels"] for item in overlap_values))
         total_high_uncertainty_error_pixels = int(
@@ -313,6 +321,7 @@ def aggregate_comparisons(comparisons: list[dict]) -> dict:
         )
         overlap_summary = {
             "num_samples": len(overlap_values),
+            "pixel_high_uncertainty_threshold": pixel_high_uncertainty_threshold,
             "mean_error_rate": float(np.mean([item["error_rate"] for item in overlap_values])),
             "mean_high_uncertainty_rate": float(np.mean([item["high_uncertainty_rate"] for item in overlap_values])),
             "mean_error_high_uncertainty_fraction": float(

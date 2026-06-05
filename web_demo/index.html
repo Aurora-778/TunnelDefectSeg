@@ -978,6 +978,8 @@
       uncertainty_review: {
         high_defect_uncertainty_count: 431,
         high_uncertainty_threshold: 0.5,
+        review_fraction_threshold: 0.5,
+        pixel_high_uncertainty_threshold: 0.35,
         mean_error_high_uncertainty_fraction: 0.4800912345681968,
         mean_high_uncertainty_error_fraction: 0.7135018392130845,
         micro_error_high_uncertainty_fraction: 0.4454186935198407,
@@ -1102,6 +1104,9 @@
         ?? uncertaintyReview.mean_error_high_uncertainty_fraction;
       const uncertaintyPrecision = uncertaintyReview.micro_high_uncertainty_error_fraction
         ?? uncertaintyReview.mean_high_uncertainty_error_fraction;
+      const pixelHighThreshold = uncertaintyReview.pixel_high_uncertainty_threshold;
+      const reviewFractionThreshold = uncertaintyReview.review_fraction_threshold
+        ?? uncertaintyReview.high_uncertainty_threshold;
       const errorPixels = uncertaintyReview.total_error_pixels;
       const overlapPixels = uncertaintyReview.total_high_uncertainty_error_pixels;
       const modeCounts = summary?.selection?.mode_counts || {};
@@ -1131,17 +1136,17 @@
         [
           "Review signal",
           `${intFmt(review)} / ${intFmt(sampleCount)}`,
-          `缺陷区高不确定性达到复核阈值；fixed fusion harmed ${intFmt(harm)}，selected recovered ${intFmt(recovers)}。`
+          `缺陷区高不确定像素占比达到复核比例阈值 ${pct(reviewFractionThreshold)}；fixed fusion harmed ${intFmt(harm)}，selected recovered ${intFmt(recovers)}。`
         ],
         [
           "Error coverage",
           pct(errorCoverage),
-          `错误像素中被高不确定性覆盖的比例；overlap ${intFmt(overlapPixels)} / error ${intFmt(errorPixels)}。`
+          `错误像素中被高不确定性覆盖的比例；像素高不确定阈值 ${fmt(pixelHighThreshold, 2)}，overlap ${intFmt(overlapPixels)} / error ${intFmt(errorPixels)}。`
         ],
         [
           "HU error precision",
           pct(uncertaintyPrecision),
-          `高不确定区域里实际预测错误的比例，说明 uncertainty heatmap 是否能有效指向误判区域。`
+          `高不确定区域里实际预测错误的比例，说明 uncertainty heatmap 是否能有效指向误判区域；像素阈值同上。`
         ]
       ].map(([title, value, help]) => `<div class="advantage-card"><b>${title}</b><strong>${value}</strong><p>${help}</p></div>`).join("");
 
@@ -1149,7 +1154,7 @@
         ? "selected-vs-single 暂无数据"
         : `selected vs single mIoU ${signedDelta(selectedVsSingle, 4)}`;
       document.querySelector("#aggregateEvidenceNote").textContent =
-        `全量证据来自 ${sourceLabel}。Selection modes: single ${intFmt(modeCounts.single || 0)}, fused ${intFmt(modeCounts.fused || 0)}；${singleText}。高不确定区域命中错误 ${pct(uncertaintyPrecision)}，可作为人工复核优先级证据。这个面板描述增强模块相对 fixed fusion 的可靠性收益，单图上传仍只刷新下方 per-image evidence。`;
+        `全量证据来自 ${sourceLabel}。Selection modes: single ${intFmt(modeCounts.single || 0)}, fused ${intFmt(modeCounts.fused || 0)}；${singleText}。像素高不确定阈值 ${fmt(pixelHighThreshold, 2)}，复核比例阈值 ${pct(reviewFractionThreshold)}；高不确定区域命中错误 ${pct(uncertaintyPrecision)}，可作为人工复核优先级证据。这个面板描述增强模块相对 fixed fusion 的可靠性收益，单图上传仍只刷新下方 per-image evidence。`;
     }
 
     async function loadAggregateEvidence() {

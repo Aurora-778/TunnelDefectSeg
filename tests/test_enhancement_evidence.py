@@ -112,6 +112,8 @@ def test_summarize_enhancement_evidence_aggregates_modes_and_examples():
     assert result["uncertainty_review"]["total_error_pixels"] == 2
     assert result["uncertainty_review"]["total_high_uncertainty_error_pixels"] == 0
     assert result["uncertainty_review"]["micro_error_high_uncertainty_fraction"] == 0.0
+    assert np.isclose(result["uncertainty_review"]["pixel_high_uncertainty_threshold"], 0.35)
+    assert result["uncertainty_review"]["review_fraction_threshold"] == 0.5
     assert result["representative_examples"]["small_defect_guard"]["image"] == "guard.jpg"
     assert result["representative_examples"]["stable_fused"]["image"] == "stable.jpg"
     assert result["representative_examples"]["high_uncertainty_review"]["image"] == "guard.jpg"

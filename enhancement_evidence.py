@@ -32,6 +32,13 @@ def _mean(values: list[float | None]) -> float | None:
     return float(np.mean(valid)) if valid else None
 
 
+def _common_float(values: list[float | None]) -> float | None:
+    valid = [float(value) for value in values if value is not None]
+    if valid and all(np.isclose(value, valid[0]) for value in valid):
+        return valid[0]
+    return None
+
+
 def _rate(count: int, total: int) -> float:
     return float(count / total) if total else 0.0
 
@@ -97,6 +104,7 @@ def sample_enhancement_evidence(sample: dict) -> dict:
         "defect_mean_uncertainty": _finite_float(uncertainty.get("defect_mean")),
         "error_high_uncertainty_fraction": _finite_float(error_overlap.get("error_high_uncertainty_fraction")),
         "high_uncertainty_error_fraction": _finite_float(error_overlap.get("high_uncertainty_error_fraction")),
+        "pixel_high_uncertainty_threshold": _finite_float(error_overlap.get("high_threshold")),
         "error_pixels": int(error_overlap.get("error_pixels", 0) or 0),
         "high_uncertainty_pixels": int(error_overlap.get("high_uncertainty_pixels", 0) or 0),
         "high_uncertainty_error_pixels": int(error_overlap.get("high_uncertainty_error_pixels", 0) or 0),
@@ -301,6 +309,11 @@ def summarize_enhancement_evidence(evaluation: dict, high_uncertainty_threshold:
         },
         "uncertainty_review": {
             "high_uncertainty_threshold": high_uncertainty_threshold,
+            "review_fraction_threshold": high_uncertainty_threshold,
+            "pixel_high_uncertainty_threshold": _fallback(
+                _finite_float(overlap_aggregate.get("pixel_high_uncertainty_threshold")),
+                _common_float([item["pixel_high_uncertainty_threshold"] for item in overlap_rows]),
+            ),
             "high_defect_uncertainty_count": len(high_uncertainty_events),
             "high_defect_uncertainty_rate": _rate(len(high_uncertainty_events), total),
             "mean_defect_high_uncertainty_fraction": _mean([item["defect_high_uncertainty_fraction"] for item in evidence_rows]),

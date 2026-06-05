@@ -115,6 +115,7 @@ def test_aggregate_comparisons_summarizes_supported_samples():
     assert result["selection_mode_counts"] == {"single": 1}
     assert result["uncertainty_error_overlap"]["total_error_pixels"] == 1
     assert result["uncertainty_error_overlap"]["micro_error_high_uncertainty_fraction"] == 0.0
+    assert result["uncertainty_error_overlap"]["pixel_high_uncertainty_threshold"] == 0.35
 
 
 def test_candidate_configs_are_available_for_validation_search():
