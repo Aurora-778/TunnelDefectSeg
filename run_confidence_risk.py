@@ -13,6 +13,12 @@ from torchvision import transforms
 from adaptive_fusion import select_adaptive_mask
 from morphology_adapter import CLASS_NAMES, MorphologyConfig, measure_mask, skeleton_mask
 from risk_adapter import RiskConfig, score_image
+from segformer_inference_adapter import (
+    DEFAULT_SEGFORMER_CHECKPOINT,
+    DEFAULT_SEGFORMER_CONFIG,
+    DEFAULT_SEGFORMER_REPO_ROOT,
+    load_segformer_mask_source,
+)
 from tta_confidence import (
     default_tta_specs,
     light_tta_specs,
@@ -107,6 +113,7 @@ def write_result_artifacts(
     disagreement_uncertainty: np.ndarray,
     output_dir: Path,
     tta_specs: list[str] | None = None,
+    mask_source: dict | None = None,
     morphology_config: MorphologyConfig | None = None,
     risk_config: RiskConfig | None = None,
 ) -> dict:
@@ -161,6 +168,11 @@ def write_result_artifacts(
 
     report = {
         "stem": stem,
+        "mask_source": mask_source or {
+            "name": "legacy_resnet50_fcn",
+            "type": "torch",
+            "probability_tta": True,
+        },
         "tta_specs": list(tta_specs or []),
         "class_names": {str(k): v for k, v in CLASS_NAMES.items()},
         "single_prediction_stats": prediction_stats(single_mask),
@@ -206,7 +218,23 @@ def preprocess_image(img_path: Path, input_size: tuple[int, int]) -> tuple[torch
     return tf(img), resized
 
 
-def load_model():
+def load_model(
+    model_source: str = "legacy",
+    segformer_config: Path = DEFAULT_SEGFORMER_CONFIG,
+    segformer_checkpoint: Path = DEFAULT_SEGFORMER_CHECKPOINT,
+    segformer_repo_root: Path = DEFAULT_SEGFORMER_REPO_ROOT,
+    segformer_device: str = "cuda:0",
+):
+    if model_source == "segformer":
+        return load_segformer_mask_source(
+            config_path=segformer_config,
+            checkpoint_path=segformer_checkpoint,
+            repo_root=segformer_repo_root,
+            device=segformer_device,
+        )
+    if model_source != "legacy":
+        raise ValueError(f"Unsupported model source: {model_source}")
+
     from train_resnet50 import Config, ResNet50SegmentationModel
 
     local_pretrained = Path(Config.DATA_ROOT) / Path(Config.PRETRAINED).name
@@ -225,30 +253,66 @@ def load_model():
     return model, Config
 
 
-def process_image(model, config, image_path: Path, output_dir: Path, tta_mode: str = "light") -> dict:
+def _predict_confidence_inputs(model, config, image_path: Path, tta_mode: str) -> dict:
+    if hasattr(model, "predict_confidence_inputs"):
+        return model.predict_confidence_inputs(image_path, config.INPUT_SIZE, tta_mode=tta_mode)
+
     specs = default_tta_specs() if tta_mode == "default" else light_tta_specs()
     tensor, raw_resized = preprocess_image(image_path, config.INPUT_SIZE)
     single_probs = predict_single_probs(model, tensor, device=config.DEVICE)
     single_mask = single_probs.argmax(dim=0).numpy().astype(np.uint8)
     tta_result = predict_tta_probs(model, tensor, specs=specs, device=config.DEVICE)
+    return {
+        "raw_resized": raw_resized,
+        "single_mask": single_mask,
+        "fused_mask": tta_result["fused_mask"].numpy().astype(np.uint8),
+        "entropy_uncertainty": tta_result["entropy_uncertainty"].numpy(),
+        "disagreement_uncertainty": tta_result["disagreement_uncertainty"].numpy(),
+        "tta_specs": tta_result["specs"],
+        "mask_source": {
+            "name": "legacy_resnet50_fcn",
+            "type": "torch",
+            "probability_tta": True,
+        },
+    }
+
+
+def process_image(model, config, image_path: Path, output_dir: Path, tta_mode: str = "light") -> dict:
+    prediction = _predict_confidence_inputs(model, config, image_path, tta_mode=tta_mode)
 
     report = write_result_artifacts(
         stem=image_path.stem,
-        raw_resized=raw_resized,
-        single_mask=single_mask,
-        fused_mask=tta_result["fused_mask"].numpy().astype(np.uint8),
-        entropy_uncertainty=tta_result["entropy_uncertainty"].numpy(),
-        disagreement_uncertainty=tta_result["disagreement_uncertainty"].numpy(),
+        raw_resized=prediction["raw_resized"],
+        single_mask=prediction["single_mask"],
+        fused_mask=prediction["fused_mask"],
+        entropy_uncertainty=prediction["entropy_uncertainty"],
+        disagreement_uncertainty=prediction["disagreement_uncertainty"],
         output_dir=output_dir,
-        tta_specs=tta_result["specs"],
+        tta_specs=prediction["tta_specs"],
+        mask_source=prediction["mask_source"],
     )
     report["image_path"] = str(image_path)
     save_json(report, output_dir / f"{image_path.stem}_report.json")
     return report
 
 
-def run_batch(input_path: Path, output_dir: Path | None = None, tta_mode: str = "light") -> dict:
-    model, config = load_model()
+def run_batch(
+    input_path: Path,
+    output_dir: Path | None = None,
+    tta_mode: str = "light",
+    model_source: str = "legacy",
+    segformer_config: Path = DEFAULT_SEGFORMER_CONFIG,
+    segformer_checkpoint: Path = DEFAULT_SEGFORMER_CHECKPOINT,
+    segformer_repo_root: Path = DEFAULT_SEGFORMER_REPO_ROOT,
+    segformer_device: str = "cuda:0",
+) -> dict:
+    model, config = load_model(
+        model_source=model_source,
+        segformer_config=segformer_config,
+        segformer_checkpoint=segformer_checkpoint,
+        segformer_repo_root=segformer_repo_root,
+        segformer_device=segformer_device,
+    )
     out_dir = output_dir or (Path(config.SAVE_DIR) / "confidence_risk")
     images = collect_images(input_path)
     reports = []
@@ -258,6 +322,7 @@ def run_batch(input_path: Path, output_dir: Path | None = None, tta_mode: str = 
     summary = {
         "input": str(input_path),
         "output_dir": str(out_dir),
+        "model_source": model_source,
         "num_images": len(reports),
         "risk_counts": {},
         "reports": [item["artifacts"]["report"] for item in reports],
@@ -274,12 +339,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("input", type=Path, help="Image file or folder to process.")
     parser.add_argument("--output-dir", type=Path, default=None, help="Optional output directory.")
     parser.add_argument("--tta-mode", choices=["light", "default"], default="light", help="TTA transform set.")
+    parser.add_argument("--model-source", choices=["legacy", "segformer"], default="legacy")
+    parser.add_argument("--segformer-config", type=Path, default=DEFAULT_SEGFORMER_CONFIG)
+    parser.add_argument("--segformer-checkpoint", type=Path, default=DEFAULT_SEGFORMER_CHECKPOINT)
+    parser.add_argument("--segformer-repo-root", type=Path, default=DEFAULT_SEGFORMER_REPO_ROOT)
+    parser.add_argument("--segformer-device", default="cuda:0")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    summary = run_batch(args.input, output_dir=args.output_dir, tta_mode=args.tta_mode)
+    summary = run_batch(
+        args.input,
+        output_dir=args.output_dir,
+        tta_mode=args.tta_mode,
+        model_source=args.model_source,
+        segformer_config=args.segformer_config,
+        segformer_checkpoint=args.segformer_checkpoint,
+        segformer_repo_root=args.segformer_repo_root,
+        segformer_device=args.segformer_device,
+    )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 

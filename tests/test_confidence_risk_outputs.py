@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from run_confidence_risk import collect_images, write_result_artifacts
+from run_confidence_risk import collect_images, load_model, process_image, write_result_artifacts
 
 
 def test_write_result_artifacts_creates_expected_files(tmp_path):
@@ -27,6 +27,7 @@ def test_write_result_artifacts_creates_expected_files(tmp_path):
         disagreement_uncertainty=disagreement,
         output_dir=tmp_path,
         tta_specs=["identity", "hflip"],
+        mask_source={"name": "unit_test_source", "type": "synthetic", "probability_tta": False},
     )
 
     expected = [
@@ -45,6 +46,8 @@ def test_write_result_artifacts_creates_expected_files(tmp_path):
         assert (tmp_path / name).exists()
 
     saved = json.loads((tmp_path / "sample_report.json").read_text(encoding="utf-8"))
+    assert saved["mask_source"]["name"] == "unit_test_source"
+    assert saved["mask_source"]["probability_tta"] is False
     assert saved["tta_specs"] == ["identity", "hflip"]
     assert saved["fused_prediction_stats"]["5"] == 8
     assert "selected_prediction_stats" in saved
@@ -81,3 +84,60 @@ def test_collect_images_rejects_folder_without_images(tmp_path):
 
     with pytest.raises(ValueError, match="No supported images"):
         collect_images(tmp_path)
+
+
+class _FakeSegFormerConfig:
+    INPUT_SIZE = (12, 12)
+    NUM_CLASSES = 6
+    DEVICE = "cpu"
+    SAVE_DIR = "unused"
+
+
+class _FakeSegFormerSource:
+    def predict_confidence_inputs(self, image_path, input_size, tta_mode="light"):
+        mask = np.zeros(input_size, dtype=np.uint8)
+        mask[5, 2:10] = 1
+        uncertainty = np.zeros(input_size, dtype=np.float32)
+        raw = np.zeros((*input_size, 3), dtype=np.uint8)
+        raw[..., 1] = 80
+        return {
+            "raw_resized": raw,
+            "single_mask": mask,
+            "fused_mask": mask.copy(),
+            "entropy_uncertainty": uncertainty,
+            "disagreement_uncertainty": uncertainty.copy(),
+            "tta_specs": ["segformer_single"],
+            "mask_source": {
+                "name": "segformer_b1",
+                "type": "mmsegmentation",
+                "probability_tta": False,
+            },
+        }
+
+
+def test_process_image_accepts_segformer_like_mask_source(tmp_path):
+    image_path = tmp_path / "segformer_input.jpg"
+    Image.fromarray(np.zeros((12, 12, 3), dtype=np.uint8)).save(image_path)
+
+    report = process_image(_FakeSegFormerSource(), _FakeSegFormerConfig, image_path, tmp_path)
+
+    assert report["mask_source"]["name"] == "segformer_b1"
+    assert report["tta_specs"] == ["segformer_single"]
+    assert report["single_prediction_stats"]["1"] == 8
+    assert report["fused_prediction_stats"]["1"] == 8
+    assert (tmp_path / "segformer_input_report.json").exists()
+
+
+def test_segformer_source_missing_checkpoint_fails_before_mmseg_import(tmp_path):
+    config_path = tmp_path / "segformer.py"
+    repo_root = tmp_path / "SegFormer-master"
+    config_path.write_text("model = dict()\n", encoding="utf-8")
+    repo_root.mkdir()
+
+    with pytest.raises(FileNotFoundError, match="Missing SegFormer checkpoint"):
+        load_model(
+            model_source="segformer",
+            segformer_config=config_path,
+            segformer_checkpoint=tmp_path / "missing.pth",
+            segformer_repo_root=repo_root,
+        )

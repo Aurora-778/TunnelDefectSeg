@@ -152,6 +152,14 @@ Run it on one image or a folder:
 python run_confidence_risk.py <image-or-folder> --output-dir experiments/confidence_risk --tta-mode light
 ```
 
+The default mask source is the legacy ResNet50/FCN path. To run the same artifact pipeline with the trained SegFormer checkpoint, use the SegFormer environment and select the source explicitly:
+
+```powershell
+& 'D:/users/anaconda3/envs/segformer-phase2/python.exe' run_confidence_risk.py <image-or-folder> --model-source segformer --segformer-config experiments/segformer_b1/configs/segformer_b1_6cls.py --segformer-checkpoint experiments/segformer_b1/runs/segformer_b1_6cls/latest.pth --output-dir experiments/segformer_b1/confidence_risk
+```
+
+Each report includes a `mask_source` block so downstream demos can distinguish `legacy_resnet50_fcn` from `segformer_b1`. SegFormer mode currently supplies the trained mask source to the confidence-risk artifact chain; the adaptive enhancement logic remains model-agnostic.
+
 Main artifacts per image:
 
 - `<stem>_single_mask.png`
