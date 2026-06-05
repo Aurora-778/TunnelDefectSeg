@@ -54,6 +54,48 @@ def summarize_class_subset(report: dict, class_ids: list[int]) -> dict:
     }
 
 
+def uncertainty_error_overlap(
+    pred_mask: np.ndarray,
+    target_mask: np.ndarray,
+    uncertainty: np.ndarray | None,
+    high_threshold: float = 0.35,
+) -> dict | None:
+    if uncertainty is None:
+        return None
+
+    pred = np.asarray(pred_mask)
+    target = np.asarray(target_mask)
+    unc = np.asarray(uncertainty, dtype=np.float32)
+    if pred.shape != target.shape or pred.shape != unc.shape:
+        raise ValueError("pred_mask, target_mask, and uncertainty must have the same shape")
+
+    errors = pred != target
+    high_uncertainty = unc >= high_threshold
+    error_pixels = int(errors.sum())
+    high_uncertainty_pixels = int(high_uncertainty.sum())
+    high_uncertainty_error_pixels = int(np.logical_and(errors, high_uncertainty).sum())
+    total_pixels_count = int(pred.size)
+    correct = ~errors
+
+    return {
+        "high_threshold": float(high_threshold),
+        "total_pixels": total_pixels_count,
+        "error_pixels": error_pixels,
+        "high_uncertainty_pixels": high_uncertainty_pixels,
+        "high_uncertainty_error_pixels": high_uncertainty_error_pixels,
+        "error_rate": float(error_pixels / total_pixels_count) if total_pixels_count else 0.0,
+        "high_uncertainty_rate": float(high_uncertainty_pixels / total_pixels_count) if total_pixels_count else 0.0,
+        "error_high_uncertainty_fraction": (
+            float(high_uncertainty_error_pixels / error_pixels) if error_pixels else 0.0
+        ),
+        "high_uncertainty_error_fraction": (
+            float(high_uncertainty_error_pixels / high_uncertainty_pixels) if high_uncertainty_pixels else 0.0
+        ),
+        "mean_uncertainty_on_error": float(np.mean(unc[errors])) if error_pixels else None,
+        "mean_uncertainty_on_correct": float(np.mean(unc[correct])) if np.any(correct) else None,
+    }
+
+
 def compare_predictions(
     single_mask: np.ndarray,
     fused_mask: np.ndarray,
@@ -95,6 +137,7 @@ def compare_predictions(
         "weak_class_fused": summarize_class_subset(fused, weak_ids),
         "weak_class_selected": summarize_class_subset(selected, weak_ids),
         "uncertainty_summary": uncertainty_summary(uncertainty, mask=selected_arr) if uncertainty is not None else None,
+        "uncertainty_error_overlap": uncertainty_error_overlap(selected_arr, target_mask, uncertainty),
     }
 
 
@@ -256,7 +299,56 @@ def aggregate_comparisons(comparisons: list[dict]) -> dict:
     for item in supported:
         mode = item.get("selection_mode", item.get("adaptive_selection", {}).get("mode", "unknown"))
         selection_counts[mode] = selection_counts.get(mode, 0) + 1
-    return {
+    overlap_values = [
+        item["uncertainty_error_overlap"]
+        for item in supported
+        if item.get("uncertainty_error_overlap") is not None
+    ]
+    overlap_summary = None
+    if overlap_values:
+        total_error_pixels = int(sum(item["error_pixels"] for item in overlap_values))
+        total_high_uncertainty_pixels = int(sum(item["high_uncertainty_pixels"] for item in overlap_values))
+        total_high_uncertainty_error_pixels = int(
+            sum(item["high_uncertainty_error_pixels"] for item in overlap_values)
+        )
+        overlap_summary = {
+            "num_samples": len(overlap_values),
+            "mean_error_rate": float(np.mean([item["error_rate"] for item in overlap_values])),
+            "mean_high_uncertainty_rate": float(np.mean([item["high_uncertainty_rate"] for item in overlap_values])),
+            "mean_error_high_uncertainty_fraction": float(
+                np.mean([item["error_high_uncertainty_fraction"] for item in overlap_values])
+            ),
+            "mean_high_uncertainty_error_fraction": float(
+                np.mean([item["high_uncertainty_error_fraction"] for item in overlap_values])
+            ),
+            "total_error_pixels": total_error_pixels,
+            "total_high_uncertainty_pixels": total_high_uncertainty_pixels,
+            "total_high_uncertainty_error_pixels": total_high_uncertainty_error_pixels,
+            "micro_error_high_uncertainty_fraction": (
+                float(total_high_uncertainty_error_pixels / total_error_pixels)
+                if total_error_pixels else 0.0
+            ),
+            "micro_high_uncertainty_error_fraction": (
+                float(total_high_uncertainty_error_pixels / total_high_uncertainty_pixels)
+                if total_high_uncertainty_pixels else 0.0
+            ),
+            "mean_uncertainty_on_error": float(
+                np.mean([
+                    item["mean_uncertainty_on_error"]
+                    for item in overlap_values
+                    if item["mean_uncertainty_on_error"] is not None
+                ])
+            ) if any(item["mean_uncertainty_on_error"] is not None for item in overlap_values) else None,
+            "mean_uncertainty_on_correct": float(
+                np.mean([
+                    item["mean_uncertainty_on_correct"]
+                    for item in overlap_values
+                    if item["mean_uncertainty_on_correct"] is not None
+                ])
+            ) if any(item["mean_uncertainty_on_correct"] is not None for item in overlap_values) else None,
+        }
+
+    result = {
         "supported": True,
         "single_mIoU": float(np.mean([item["single"]["mIoU"] for item in supported])),
         "fused_mIoU": float(np.mean([item["fused"]["mIoU"] for item in supported])),
@@ -270,6 +362,9 @@ def aggregate_comparisons(comparisons: list[dict]) -> dict:
         "selection_mode_counts": selection_counts,
         "mean_uncertainty": float(np.mean(uncertainty_values)) if uncertainty_values else None,
     }
+    if overlap_summary is not None:
+        result["uncertainty_error_overlap"] = overlap_summary
+    return result
 
 
 def parse_args() -> argparse.Namespace:

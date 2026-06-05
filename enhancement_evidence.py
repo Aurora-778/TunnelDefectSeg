@@ -36,6 +36,10 @@ def _rate(count: int, total: int) -> float:
     return float(count / total) if total else 0.0
 
 
+def _fallback(value: float | None, fallback: float | None) -> float | None:
+    return value if value is not None else fallback
+
+
 def prediction_class_pixels(report: dict, class_id: int) -> int:
     matrix = np.asarray(report.get("confusion_matrix", []), dtype=np.int64)
     if matrix.ndim != 2 or matrix.size == 0 or class_id >= matrix.shape[1]:
@@ -69,6 +73,7 @@ def sample_enhancement_evidence(sample: dict) -> dict:
     selected_vs_single = _finite_float(delta.get("selected_vs_single_mIoU"))
     fused_vs_single = _finite_float(delta.get("mIoU"))
     uncertainty = sample.get("uncertainty_summary") or {}
+    error_overlap = sample.get("uncertainty_error_overlap") or {}
     consistency = (sample.get("adaptive_selection") or {}).get("consistency") or {}
 
     return {
@@ -90,6 +95,13 @@ def sample_enhancement_evidence(sample: dict) -> dict:
         "selected_matches_or_beats_single": bool(selected_vs_single is not None and selected_vs_single >= 0),
         "defect_high_uncertainty_fraction": _finite_float(uncertainty.get("defect_high_fraction")),
         "defect_mean_uncertainty": _finite_float(uncertainty.get("defect_mean")),
+        "error_high_uncertainty_fraction": _finite_float(error_overlap.get("error_high_uncertainty_fraction")),
+        "high_uncertainty_error_fraction": _finite_float(error_overlap.get("high_uncertainty_error_fraction")),
+        "error_pixels": int(error_overlap.get("error_pixels", 0) or 0),
+        "high_uncertainty_pixels": int(error_overlap.get("high_uncertainty_pixels", 0) or 0),
+        "high_uncertainty_error_pixels": int(error_overlap.get("high_uncertainty_error_pixels", 0) or 0),
+        "mean_uncertainty_on_error": _finite_float(error_overlap.get("mean_uncertainty_on_error")),
+        "mean_uncertainty_on_correct": _finite_float(error_overlap.get("mean_uncertainty_on_correct")),
         "self_foreground_iou": _finite_float(consistency.get("foreground_iou")),
     }
 
@@ -140,6 +152,8 @@ def _example(sample: dict, evidence: dict) -> dict:
         "selected_vs_fused_mIoU": evidence.get("selected_vs_fused_mIoU"),
         "selected_vs_single_mIoU": evidence.get("selected_vs_single_mIoU"),
         "defect_high_uncertainty_fraction": evidence.get("defect_high_uncertainty_fraction"),
+        "error_high_uncertainty_fraction": evidence.get("error_high_uncertainty_fraction"),
+        "high_uncertainty_error_fraction": evidence.get("high_uncertainty_error_fraction"),
         "self_foreground_iou": evidence.get("self_foreground_iou"),
         "selection_reasons": (sample.get("adaptive_selection") or {}).get("reasons", []),
     }
@@ -194,8 +208,14 @@ def representative_examples(samples: list[dict], evidence_rows: list[dict]) -> d
         "high_uncertainty_review": _best_example(
             samples,
             evidence_rows,
-            lambda item: item["defect_high_uncertainty_fraction"] is not None,
-            lambda item: item["defect_high_uncertainty_fraction"] or 0.0,
+            lambda item: (
+                item["defect_high_uncertainty_fraction"] is not None
+                or item["error_high_uncertainty_fraction"] is not None
+            ),
+            lambda item: (
+                item["error_high_uncertainty_fraction"] or 0.0,
+                item["defect_high_uncertainty_fraction"] or 0.0,
+            ),
         ),
         "limitation_case": _best_example(
             samples,
@@ -233,6 +253,11 @@ def summarize_enhancement_evidence(evaluation: dict, high_uncertainty_threshold:
         and item["defect_high_uncertainty_fraction"] >= high_uncertainty_threshold
     ]
     aggregate = evaluation.get("aggregate", {})
+    overlap_aggregate = aggregate.get("uncertainty_error_overlap") or {}
+    overlap_rows = [item for item in evidence_rows if item["error_high_uncertainty_fraction"] is not None]
+    total_error_pixels = int(sum(item["error_pixels"] for item in overlap_rows))
+    total_high_uncertainty_pixels = int(sum(item["high_uncertainty_pixels"] for item in overlap_rows))
+    total_high_uncertainty_error_pixels = int(sum(item["high_uncertainty_error_pixels"] for item in overlap_rows))
 
     return {
         "supported": True,
@@ -280,6 +305,40 @@ def summarize_enhancement_evidence(evaluation: dict, high_uncertainty_threshold:
             "high_defect_uncertainty_rate": _rate(len(high_uncertainty_events), total),
             "mean_defect_high_uncertainty_fraction": _mean([item["defect_high_uncertainty_fraction"] for item in evidence_rows]),
             "mean_defect_uncertainty": _mean([item["defect_mean_uncertainty"] for item in evidence_rows]),
+            "mean_error_high_uncertainty_fraction": _fallback(
+                _finite_float(overlap_aggregate.get("mean_error_high_uncertainty_fraction")),
+                _mean([item["error_high_uncertainty_fraction"] for item in overlap_rows]),
+            ),
+            "mean_high_uncertainty_error_fraction": _fallback(
+                _finite_float(overlap_aggregate.get("mean_high_uncertainty_error_fraction")),
+                _mean([item["high_uncertainty_error_fraction"] for item in overlap_rows]),
+            ),
+            "micro_error_high_uncertainty_fraction": _fallback(
+                _finite_float(overlap_aggregate.get("micro_error_high_uncertainty_fraction")),
+                float(total_high_uncertainty_error_pixels / total_error_pixels) if total_error_pixels else None,
+            ),
+            "micro_high_uncertainty_error_fraction": _fallback(
+                _finite_float(overlap_aggregate.get("micro_high_uncertainty_error_fraction")),
+                (
+                    float(total_high_uncertainty_error_pixels / total_high_uncertainty_pixels)
+                    if total_high_uncertainty_pixels else None
+                ),
+            ),
+            "total_error_pixels": int(overlap_aggregate.get("total_error_pixels", total_error_pixels) or 0),
+            "total_high_uncertainty_pixels": int(
+                overlap_aggregate.get("total_high_uncertainty_pixels", total_high_uncertainty_pixels) or 0
+            ),
+            "total_high_uncertainty_error_pixels": int(
+                overlap_aggregate.get("total_high_uncertainty_error_pixels", total_high_uncertainty_error_pixels) or 0
+            ),
+            "mean_uncertainty_on_error": _fallback(
+                _finite_float(overlap_aggregate.get("mean_uncertainty_on_error")),
+                _mean([item["mean_uncertainty_on_error"] for item in overlap_rows]),
+            ),
+            "mean_uncertainty_on_correct": _fallback(
+                _finite_float(overlap_aggregate.get("mean_uncertainty_on_correct")),
+                _mean([item["mean_uncertainty_on_correct"] for item in overlap_rows]),
+            ),
         },
         "class_iou_summary": _class_iou_summary(samples, num_classes=len(CLASS_NAMES)),
         "representative_examples": representative_examples(samples, evidence_rows),

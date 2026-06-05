@@ -59,6 +59,7 @@ def test_sample_enhancement_evidence_reports_shrinkage_and_protection():
     assert result["foreground_shrink_pixels"] == 2
     assert result["protected_pixels_vs_fused"] == 2
     assert result["selected_recovers_over_fused"] is True
+    assert result["error_high_uncertainty_fraction"] == 0.0
 
 
 def test_summarize_enhancement_evidence_aggregates_modes_and_examples():
@@ -108,6 +109,9 @@ def test_summarize_enhancement_evidence_aggregates_modes_and_examples():
     assert result["small_defect_guard"]["total_protected_pixels_vs_fused"] == 2
     assert result["miou_recovery"]["selected_recovers_over_fused_count"] >= 1
     assert result["uncertainty_review"]["high_defect_uncertainty_count"] == 1
+    assert result["uncertainty_review"]["total_error_pixels"] == 2
+    assert result["uncertainty_review"]["total_high_uncertainty_error_pixels"] == 0
+    assert result["uncertainty_review"]["micro_error_high_uncertainty_fraction"] == 0.0
     assert result["representative_examples"]["small_defect_guard"]["image"] == "guard.jpg"
     assert result["representative_examples"]["stable_fused"]["image"] == "stable.jpg"
     assert result["representative_examples"]["high_uncertainty_review"]["image"] == "guard.jpg"

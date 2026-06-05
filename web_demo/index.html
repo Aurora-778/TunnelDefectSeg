@@ -977,7 +977,16 @@
       },
       uncertainty_review: {
         high_defect_uncertainty_count: 431,
-        high_uncertainty_threshold: 0.5
+        high_uncertainty_threshold: 0.5,
+        mean_error_high_uncertainty_fraction: 0.4800912345681968,
+        mean_high_uncertainty_error_fraction: 0.7135018392130845,
+        micro_error_high_uncertainty_fraction: 0.4454186935198407,
+        micro_high_uncertainty_error_fraction: 0.7826871944180835,
+        total_error_pixels: 20742129,
+        total_high_uncertainty_pixels: 11804118,
+        total_high_uncertainty_error_pixels: 9238932,
+        mean_uncertainty_on_error: 0.28029261776432396,
+        mean_uncertainty_on_correct: 0.018612491859239525
       }
     };
 
@@ -1087,7 +1096,14 @@
       const protectedPixels = summary?.small_defect_guard?.total_protected_pixels_vs_fused;
       const recovers = summary?.miou_recovery?.selected_recovers_over_fused_count;
       const harm = summary?.miou_recovery?.fixed_fusion_harm_count;
-      const review = summary?.uncertainty_review?.high_defect_uncertainty_count;
+      const uncertaintyReview = summary?.uncertainty_review || {};
+      const review = uncertaintyReview.high_defect_uncertainty_count;
+      const errorCoverage = uncertaintyReview.micro_error_high_uncertainty_fraction
+        ?? uncertaintyReview.mean_error_high_uncertainty_fraction;
+      const uncertaintyPrecision = uncertaintyReview.micro_high_uncertainty_error_fraction
+        ?? uncertaintyReview.mean_high_uncertainty_error_fraction;
+      const errorPixels = uncertaintyReview.total_error_pixels;
+      const overlapPixels = uncertaintyReview.total_high_uncertainty_error_pixels;
       const modeCounts = summary?.selection?.mode_counts || {};
       const source = meta.source || summary?.source || "fallback-sample";
       const split = meta.split || summary?.split || "all";
@@ -1116,6 +1132,16 @@
           "Review signal",
           `${intFmt(review)} / ${intFmt(sampleCount)}`,
           `缺陷区高不确定性达到复核阈值；fixed fusion harmed ${intFmt(harm)}，selected recovered ${intFmt(recovers)}。`
+        ],
+        [
+          "Error coverage",
+          pct(errorCoverage),
+          `错误像素中被高不确定性覆盖的比例；overlap ${intFmt(overlapPixels)} / error ${intFmt(errorPixels)}。`
+        ],
+        [
+          "HU error precision",
+          pct(uncertaintyPrecision),
+          `高不确定区域里实际预测错误的比例，说明 uncertainty heatmap 是否能有效指向误判区域。`
         ]
       ].map(([title, value, help]) => `<div class="advantage-card"><b>${title}</b><strong>${value}</strong><p>${help}</p></div>`).join("");
 
@@ -1123,7 +1149,7 @@
         ? "selected-vs-single 暂无数据"
         : `selected vs single mIoU ${signedDelta(selectedVsSingle, 4)}`;
       document.querySelector("#aggregateEvidenceNote").textContent =
-        `全量证据来自 ${sourceLabel}。Selection modes: single ${intFmt(modeCounts.single || 0)}, fused ${intFmt(modeCounts.fused || 0)}；${singleText}。这个面板描述增强模块相对 fixed fusion 的可靠性收益，单图上传仍只刷新下方 per-image evidence。`;
+        `全量证据来自 ${sourceLabel}。Selection modes: single ${intFmt(modeCounts.single || 0)}, fused ${intFmt(modeCounts.fused || 0)}；${singleText}。高不确定区域命中错误 ${pct(uncertaintyPrecision)}，可作为人工复核优先级证据。这个面板描述增强模块相对 fixed fusion 的可靠性收益，单图上传仍只刷新下方 per-image evidence。`;
     }
 
     async function loadAggregateEvidence() {

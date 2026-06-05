@@ -49,7 +49,16 @@
     "high_defect_uncertainty_count": 61,
     "high_defect_uncertainty_rate": 0.4066666666666667,
     "mean_defect_high_uncertainty_fraction": 0.4748138440824297,
-    "mean_defect_uncertainty": 0.2762826460848252
+    "mean_defect_uncertainty": 0.2762826460848252,
+    "mean_error_high_uncertainty_fraction": 0.47381780715006566,
+    "mean_high_uncertainty_error_fraction": 0.7466386754137719,
+    "micro_error_high_uncertainty_fraction": 0.4565825239115712,
+    "micro_high_uncertainty_error_fraction": 0.8065974731756403,
+    "total_error_pixels": 3233790,
+    "total_high_uncertainty_pixels": 1830519,
+    "total_high_uncertainty_error_pixels": 1476492,
+    "mean_uncertainty_on_error": 0.2821328968554735,
+    "mean_uncertainty_on_correct": 0.017776550946291537
   },
   "class_iou_summary": [
     {
@@ -125,6 +134,8 @@
       "selected_vs_fused_mIoU": 0.3402683569767724,
       "selected_vs_single_mIoU": 0.0,
       "defect_high_uncertainty_fraction": 0.4574788902291918,
+      "error_high_uncertainty_fraction": 0.5715617715617716,
+      "high_uncertainty_error_fraction": 0.17216683050133408,
       "self_foreground_iou": 0.8997832747926164,
       "selection_reasons": [
         "low single/fused foreground IoU 0.900",
@@ -142,6 +153,8 @@
       "selected_vs_fused_mIoU": 0.0,
       "selected_vs_single_mIoU": -0.07760786682632598,
       "defect_high_uncertainty_fraction": 0.19770455900087328,
+      "error_high_uncertainty_fraction": 0.2085889570552147,
+      "high_uncertainty_error_fraction": 0.9661363214263604,
       "self_foreground_iou": 0.9776082677165354,
       "selection_reasons": [
         "stable single/fused foreground IoU 0.978",
@@ -149,19 +162,21 @@
       ]
     },
     "high_uncertainty_review": {
-      "image": "neg_-5_t5_10.jpg",
+      "image": "pos_5_t4_21.jpg",
       "selection_mode": "single",
-      "single_foreground_pixels": 9392,
-      "fused_foreground_pixels": 9344,
-      "selected_foreground_pixels": 9392,
-      "foreground_shrink_pixels": 48,
-      "protected_pixels_vs_fused": 48,
-      "selected_vs_fused_mIoU": 0.0005377275869145604,
+      "single_foreground_pixels": 29854,
+      "fused_foreground_pixels": 30332,
+      "selected_foreground_pixels": 29854,
+      "foreground_shrink_pixels": 0,
+      "protected_pixels_vs_fused": 0,
+      "selected_vs_fused_mIoU": 0.04911093880747902,
       "selected_vs_single_mIoU": 0.0,
-      "defect_high_uncertainty_fraction": 1.0,
-      "self_foreground_iou": 0.9238114796180306,
+      "defect_high_uncertainty_fraction": 0.997789240972734,
+      "error_high_uncertainty_fraction": 0.9765192923445131,
+      "high_uncertainty_error_fraction": 0.9051744813526802,
+      "self_foreground_iou": 0.9233055315885341,
       "selection_reasons": [
-        "low single/fused foreground IoU 0.924",
+        "low single/fused foreground IoU 0.923",
         "fallback to single mask because fused evidence is not stable enough"
       ]
     },
@@ -176,6 +191,8 @@
       "selected_vs_fused_mIoU": 0.0,
       "selected_vs_single_mIoU": -0.08375957659959488,
       "defect_high_uncertainty_fraction": 0.5330434064572954,
+      "error_high_uncertainty_fraction": 0.5418218760582458,
+      "high_uncertainty_error_fraction": 0.9765716700314568,
       "self_foreground_iou": 0.9554355880173601,
       "selection_reasons": [
         "stable single/fused foreground IoU 0.955",

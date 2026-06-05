@@ -8,6 +8,7 @@ from evaluate_confidence_risk import (
     evaluate_records,
     segmentation_report,
     summarize_class_subset,
+    uncertainty_error_overlap,
 )
 
 
@@ -48,6 +49,23 @@ def test_compare_predictions_reports_single_and_fused_delta():
     assert result["delta"]["selected_vs_single_mIoU"] > 0
     assert result["selection_mode"] == "fused"
     assert result["uncertainty_summary"]["mean"] == 0.0
+    assert result["uncertainty_error_overlap"]["error_pixels"] == 0
+
+
+def test_uncertainty_error_overlap_reports_error_coverage_and_precision():
+    target = np.array([[0, 1], [1, 2]], dtype=np.uint8)
+    pred = np.array([[0, 0], [0, 2]], dtype=np.uint8)
+    uncertainty = np.array([[0.0, 0.9], [0.1, 0.8]], dtype=np.float32)
+
+    result = uncertainty_error_overlap(pred, target, uncertainty, high_threshold=0.35)
+
+    assert result["error_pixels"] == 2
+    assert result["high_uncertainty_pixels"] == 2
+    assert result["high_uncertainty_error_pixels"] == 1
+    assert result["error_high_uncertainty_fraction"] == 0.5
+    assert result["high_uncertainty_error_fraction"] == 0.5
+    assert np.isclose(result["mean_uncertainty_on_error"], 0.5)
+    assert np.isclose(result["mean_uncertainty_on_correct"], 0.4)
 
 
 def test_compare_predictions_handles_missing_labels():
@@ -95,6 +113,8 @@ def test_aggregate_comparisons_summarizes_supported_samples():
     assert result["selected_mIoU"] == result["single_mIoU"]
     assert result["delta_mIoU"] >= 0
     assert result["selection_mode_counts"] == {"single": 1}
+    assert result["uncertainty_error_overlap"]["total_error_pixels"] == 1
+    assert result["uncertainty_error_overlap"]["micro_error_high_uncertainty_fraction"] == 0.0
 
 
 def test_candidate_configs_are_available_for_validation_search():
