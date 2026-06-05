@@ -173,6 +173,7 @@ python -m pytest tests/test_segformer_tools.py
 - `pretrained/mit_b1.pth` is present under the SegFormer source tree and has been verified with `torch.load`. The generated config can use it with `--pretrained C:/Users/26822/Desktop/隧道病害检测/third_party/SegFormer-master/pretrained/mit_b1.pth`.
 - The existing web app may already be running at `http://127.0.0.1:8000/`.
 - Enhancement evidence representative examples should prefer non-empty defect foreground cases. Empty stable masks can be used as fallback, but should not be the primary `stable_fused` patent/demo example.
+- Uncertainty-to-error evidence has two separate thresholds. `pixel_high_uncertainty_threshold` marks high-uncertainty pixels and is currently `0.35`; `review_fraction_threshold` counts samples whose defect region has enough high-uncertainty pixels and is currently `0.5`. Do not describe both as a single `high_uncertainty_threshold`.
 
 ## Repository Rules
 

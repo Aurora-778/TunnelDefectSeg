@@ -1,6 +1,7 @@
 ---
 title: Enhancement evidence summaries from evaluation JSON
 date: 2026-06-04
+last_updated: 2026-06-05
 category: best-practices
 module: enhancement evidence evaluation
 problem_type: best_practice
@@ -31,6 +32,7 @@ When turning segmentation enhancement results into report-ready evidence, prefer
 - Foreground shrinkage counts, rates, and total shrunk pixels.
 - Small-defect guard counts and protected pixels.
 - High-defect-uncertainty review rates.
+- Uncertainty-to-error overlap when GT masks are available.
 - Class-level IoU comparisons.
 - Representative examples for patent figures.
 
@@ -52,6 +54,15 @@ columns = predicted classes
 foreground prediction pixels = sum(columns 1..N)
 ```
 
+For uncertainty/error evidence, keep the metric names explicit:
+
+- `error_high_uncertainty_fraction`: among wrong pixels, how many were covered by high uncertainty. This is error coverage / recall.
+- `high_uncertainty_error_fraction`: among high-uncertainty pixels, how many were actually wrong. This is uncertainty precision.
+- `pixel_high_uncertainty_threshold`: the per-pixel cutoff used to mark a pixel as high uncertainty. Current value: `0.35`.
+- `review_fraction_threshold`: the per-sample cutoff used to count a sample as needing review based on the fraction of high-uncertainty defect pixels. Current value: `0.5`.
+
+Do not collapse those thresholds into one generic `high_uncertainty_threshold`. They answer different questions: pixel marking vs sample-level review triage.
+
 Generated summaries should be committed when they are small and intentionally used as stage evidence. The current compact outputs are:
 
 - `experiments/enhancement_evidence_test_summary.json`
@@ -71,6 +82,15 @@ The compact summaries make that measurable. After U1, the generated evidence sho
 | all 1000 images | +0.0393 | 721 / 1000 | 614 / 1000 | 1,230,616 px |
 
 That is much stronger than a single `t1_1` demo because it describes how often the module protects against fixed-fusion shrinkage.
+
+After U3, the uncertainty overlap evidence added a second defensible claim: high-uncertainty regions are useful review targets when labels are available.
+
+| Scope | Error coverage | High-uncertainty error precision | Pixel threshold | Review fraction threshold |
+|---|---:|---:|---:|---:|
+| test 150 images | 45.66% | 80.66% | 0.35 | 0.50 |
+| all 1000 images | 44.54% | 78.27% | 0.35 | 0.50 |
+
+This supports review prioritization, not fake accuracy for unlabeled uploads. For drag-and-drop images without GT, keep showing self-consistency, uncertainty, disagreement, morphology, and selection mode; do not show true mIoU or error-overlap metrics.
 
 Representative-example selection also matters. A bug in the first version selected an empty-background image as `stable_fused` because both `single` and `fused` masks had no foreground, giving `self_foreground_iou = 1.0`. That is mathematically consistent but weak as a demo or patent figure. A stable fused example should prefer a non-empty defect foreground case:
 
@@ -114,6 +134,19 @@ New evaluations can also emit the compact evidence directly:
 ```powershell
 python evaluate_confidence_risk.py --split test --output experiments/adaptive_fusion_eval_test_full.json --evidence-output experiments/enhancement_evidence_test_summary.json
 ```
+
+Lock the threshold vocabulary with focused tests:
+
+```python
+result = aggregate_comparisons([comparison])
+assert result["uncertainty_error_overlap"]["pixel_high_uncertainty_threshold"] == 0.35
+
+summary = summarize_enhancement_evidence(evaluation, high_uncertainty_threshold=0.5)
+assert np.isclose(summary["uncertainty_review"]["pixel_high_uncertainty_threshold"], 0.35)
+assert summary["uncertainty_review"]["review_fraction_threshold"] == 0.5
+```
+
+The web panel should present both values. `Error coverage` and `HU error precision` use `pixel_high_uncertainty_threshold`; `Review signal` uses `review_fraction_threshold`.
 
 Protect the representative-example behavior with a focused test:
 
