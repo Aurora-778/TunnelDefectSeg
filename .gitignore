@@ -7,7 +7,7 @@ __pycache__/
 *.pth
 *.pt
 *.onnx
-experiments/
+/experiments/
 save/
 work_dirs/
 

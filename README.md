@@ -189,7 +189,17 @@ Latest full-run evidence with the validation-selected adaptive defaults:
 
 The adaptive module mainly recovers the mIoU lost by fixed TTA fusion while keeping uncertainty, disagreement, selected overlay, skeleton, morphology, and risk evidence available. It is not a retrained segmentation backbone, so `selected_mIoU` should be read as a safer post-processing output rather than a guaranteed improvement over `single_mIoU` on every split.
 
+Additional generated evidence now includes small-defect guard counts and uncertainty-to-error overlap:
+
+| Split | Protected pixels vs fused | Successful guard events | Error coverage | HU error precision |
+|---|---:|---:|---:|---:|
+| `test` | 156,301 | 72 / 150 | 45.66% | 80.66% |
+| `all` | 1,230,616 | 614 / 1000 | 44.54% | 78.27% |
+
+`Error coverage` and `HU error precision` require ground-truth masks. The current pixel high-uncertainty threshold is `0.35`, while the sample-level review fraction threshold is `0.5`.
+
 Implementation notes and patent-oriented framing are in `docs/patent-notes/tunnel-defect-confidence-risk.md`.
+The stage experiment tables are collected in `docs/experiments/enhancement-evidence-summary.md`.
 
 ## Live web detector
 

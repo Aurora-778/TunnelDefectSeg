@@ -24,6 +24,8 @@ This makes the method easier to demonstrate than a pure network replacement:
 - Selected prediction vs. skeleton/morphology visualization.
 - Risk report explaining why manual review is or is not recommended.
 
+SegFormer B1 is treated as a stronger segmentation backbone, while the confidence-risk module is a post-inference enhancement layer. The enhancement claim should remain model-agnostic: a backbone provides candidate masks and probabilities; the post-inference method evaluates consistency, uncertainty, morphology, and review priority.
+
 ## Generated Evidence
 
 The implementation can generate the following patent-friendly artifacts:
@@ -63,4 +65,27 @@ This module provides image-based defect risk guidance and manual-review suggesti
 
 Using the validation-selected adaptive defaults, the selected output recovers most of the accuracy lost by fixed TTA fusion. On the 150-image test split, `selected_mIoU` is 0.3306 versus 0.3165 for fixed fused output and 0.3305 for the single-pass baseline. On all 1000 labeled samples, `selected_mIoU` is 0.3680 versus 0.3287 for fixed fused output and 0.3725 for single-pass output.
 
+| Scope | Samples | Single mIoU | Fixed fused mIoU | Selected mIoU | Selected vs fused | Selected vs single |
+|---|---:|---:|---:|---:|---:|---:|
+| Test split | 150 | 0.3305 | 0.3165 | 0.3306 | +0.0141 | +0.0001 |
+| All labeled samples | 1000 | 0.3725 | 0.3287 | 0.3680 | +0.0393 | -0.0044 |
+
+The small-defect guard evidence is stronger than a single selected example because it is measured over labeled splits:
+
+| Scope | Protected events | Successful guard events | Fixed fusion harmed | Selected recovered | Protected pixels vs fused |
+|---|---:|---:|---:|---:|---:|
+| Test split | 99 / 150 | 72 / 150 | 99 / 150 | 81 / 150 | 156,301 |
+| All labeled samples | 721 / 1000 | 614 / 1000 | 817 / 1000 | 699 / 1000 | 1,230,616 |
+
+Uncertainty-to-error overlap is reported only when GT masks are available. It supports review prioritization by checking whether high-uncertainty regions coincide with prediction errors:
+
+| Scope | Error coverage | HU error precision | Pixel high-uncertainty threshold | Review fraction threshold |
+|---|---:|---:|---:|---:|
+| Test split | 45.66% | 80.66% | 0.35 | 0.50 |
+| All labeled samples | 44.54% | 78.27% | 0.35 | 0.50 |
+
 This means the patent contribution should be framed as confidence-aware adaptive output selection and explainable risk evidence, not as a newly trained segmentation backbone that universally improves raw single-pass mIoU.
+
+The trained SegFormer B1 checkpoint separately validates backbone segmentation quality. Its final logged evaluation reached `mIoU 84.33`, `mAcc 91.17`, and `aAcc 98.62`, with strong `pipeline`, `vertical`, and `horizontal` classes. This should be presented as backbone evidence, not as proof that the post-inference enhancement itself changes raw segmentation training quality.
+
+For a fuller experiment-ready table, see `docs/experiments/enhancement-evidence-summary.md`.
