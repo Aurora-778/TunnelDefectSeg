@@ -582,6 +582,12 @@
       gap: 10px;
     }
 
+    .aggregate-evidence {
+      margin-bottom: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
     .advantage-card {
       border: 1px solid var(--line);
       background: #fff;
@@ -619,6 +625,19 @@
       padding: 10px;
       font-size: 13px;
       line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .evidence-source {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: var(--muted);
       overflow-wrap: anywhere;
     }
 
@@ -673,6 +692,7 @@
       .filmstrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric-grid { grid-template-columns: 1fr; }
       .stage-metrics, .experiment-notes, .advantage-grid { grid-template-columns: 1fr; }
+      .evidence-source { display: grid; grid-template-columns: 1fr; }
       .score-head { display: grid; grid-template-columns: 1fr; }
       .score-badge { width: 100%; }
       .compare-row { grid-template-columns: 74px 1fr 44px; }
@@ -841,6 +861,21 @@
     <section class="panel" style="margin-top:12px;">
       <div class="panel-title">增强模块优势证据 <span>Adaptive fusion / uncertainty / morphology</span></div>
       <div class="panel-body">
+        <div class="aggregate-evidence">
+          <div class="evidence-source">
+            <span>Dataset evidence</span>
+            <b id="aggregateEvidenceSource">等待加载 generated JSON</b>
+          </div>
+          <div class="advantage-grid" id="aggregateEvidenceGrid">
+            <div class="advantage-card"><b>Selected vs Fused</b><strong>+0.0393</strong><p>all split 上 selected mIoU 相比 fixed fused 的恢复量。</p></div>
+            <div class="advantage-card"><b>Successful guard</b><strong>614 / 1000</strong><p>保护小缺陷且 selected-vs-fused mIoU 有正收益的样本数。</p></div>
+            <div class="advantage-card"><b>Protected pixels</b><strong>1,230,616</strong><p>all split 中相对 fixed fused 保护下来的缺陷前景像素。</p></div>
+            <div class="advantage-card"><b>Review signal</b><strong>431 / 1000</strong><p>缺陷区高不确定性达到复核阈值的样本数。</p></div>
+          </div>
+          <div class="advantage-note" id="aggregateEvidenceNote">
+            正在读取 experiments/enhancement_evidence_all_summary.json；若文件缺失，会显示内置阶段性样例值。
+          </div>
+        </div>
         <div class="advantage-grid" id="advantageGrid">
           <div class="advantage-card"><b>Adaptive selection</b><strong>+0.0489</strong><p>Selected mIoU 相比 Fused mIoU 的保护收益。</p></div>
           <div class="advantage-card"><b>Small defect guard</b><strong>591 px</strong><p>融合收缩时保留下来的小缺陷像素。</p></div>
@@ -918,6 +953,32 @@
         { name: "vertical", earlyIoU: 91.90, finalIoU: 95.85, acc: 97.75 },
         { name: "horizontal", earlyIoU: 78.03, finalIoU: 83.17, acc: 88.34 }
       ]
+    };
+
+    const fallbackEvidenceSummary = {
+      source: "fallback-sample",
+      split: "all",
+      num_samples: 1000,
+      metric_summary: {
+        selected_vs_fused_mIoU: 0.03932261654293195,
+        selected_vs_single_mIoU: -0.004428514871903581
+      },
+      selection: {
+        mode_counts: { single: 856, fused: 144 }
+      },
+      small_defect_guard: {
+        successful_guard_count: 614,
+        protected_event_count: 721,
+        total_protected_pixels_vs_fused: 1230616
+      },
+      miou_recovery: {
+        selected_recovers_over_fused_count: 699,
+        fixed_fusion_harm_count: 817
+      },
+      uncertainty_review: {
+        high_defect_uncertainty_count: 431,
+        high_uncertainty_threshold: 0.5
+      }
     };
 
     const sampleReport = {
@@ -1002,6 +1063,11 @@
       return `${(Number(value) * 100).toFixed(2)}%`;
     }
 
+    function intFmt(value) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return Number(value).toLocaleString("en-US");
+    }
+
     function metricCard(label, value, help) {
       return `<div class="metric"><span>${label}</span><b>${value}</b><small>${help}</small></div>`;
     }
@@ -1010,6 +1076,68 @@
       const num = Number(value || 0);
       const sign = num > 0 ? "+" : "";
       return `${sign}${num.toFixed(digits)}`;
+    }
+
+    function renderAggregateEvidence(summary, meta = {}) {
+      const sampleCount = Number(summary?.num_samples || 0);
+      const selectedVsFused = summary?.metric_summary?.selected_vs_fused_mIoU;
+      const selectedVsSingle = summary?.metric_summary?.selected_vs_single_mIoU;
+      const successfulGuard = summary?.small_defect_guard?.successful_guard_count;
+      const protectedEvents = summary?.small_defect_guard?.protected_event_count;
+      const protectedPixels = summary?.small_defect_guard?.total_protected_pixels_vs_fused;
+      const recovers = summary?.miou_recovery?.selected_recovers_over_fused_count;
+      const harm = summary?.miou_recovery?.fixed_fusion_harm_count;
+      const review = summary?.uncertainty_review?.high_defect_uncertainty_count;
+      const modeCounts = summary?.selection?.mode_counts || {};
+      const source = meta.source || summary?.source || "fallback-sample";
+      const split = meta.split || summary?.split || "all";
+      const sourceLabel = source === "generated-json"
+        ? `generated JSON / ${split} split / ${sampleCount} samples`
+        : `fallback sample values / ${split} split`;
+
+      document.querySelector("#aggregateEvidenceSource").textContent = sourceLabel;
+      document.querySelector("#aggregateEvidenceGrid").innerHTML = [
+        [
+          "Selected vs Fused",
+          signedDelta(selectedVsFused, 4),
+          `${split} split 上 selected mIoU 相比 fixed fused 的恢复量；不是 selected 必然超过 single。`
+        ],
+        [
+          "Successful guard",
+          `${intFmt(successfulGuard)} / ${intFmt(sampleCount)}`,
+          `保护小缺陷且 selected-vs-fused mIoU 有正收益；保护事件总数 ${intFmt(protectedEvents)}。`
+        ],
+        [
+          "Protected pixels",
+          intFmt(protectedPixels),
+          `相对 fixed fused 被保留下来的缺陷前景像素，用于支撑 small defect guard。`
+        ],
+        [
+          "Review signal",
+          `${intFmt(review)} / ${intFmt(sampleCount)}`,
+          `缺陷区高不确定性达到复核阈值；fixed fusion harmed ${intFmt(harm)}，selected recovered ${intFmt(recovers)}。`
+        ]
+      ].map(([title, value, help]) => `<div class="advantage-card"><b>${title}</b><strong>${value}</strong><p>${help}</p></div>`).join("");
+
+      const singleText = selectedVsSingle === null || selectedVsSingle === undefined
+        ? "selected-vs-single 暂无数据"
+        : `selected vs single mIoU ${signedDelta(selectedVsSingle, 4)}`;
+      document.querySelector("#aggregateEvidenceNote").textContent =
+        `全量证据来自 ${sourceLabel}。Selection modes: single ${intFmt(modeCounts.single || 0)}, fused ${intFmt(modeCounts.fused || 0)}；${singleText}。这个面板描述增强模块相对 fixed fusion 的可靠性收益，单图上传仍只刷新下方 per-image evidence。`;
+    }
+
+    async function loadAggregateEvidence() {
+      try {
+        const response = await fetch("/api/evidence");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const split = payload.summaries?.all ? "all" : payload.summaries?.test ? "test" : "fallback";
+        const summary = payload.summaries?.[split] || fallbackEvidenceSummary;
+        renderAggregateEvidence(summary, { source: payload.source, split });
+      } catch (error) {
+        renderAggregateEvidence(fallbackEvidenceSummary, { source: "fallback-sample", split: "all" });
+        document.querySelector("#aggregateEvidenceNote").textContent += ` API 暂不可用：${error.message}。`;
+      }
     }
 
     function viewLabel(label) {
@@ -1364,6 +1492,7 @@
     });
 
     renderExperiment();
+    loadAggregateEvidence();
     renderReport(sampleReport, sampleViews);
   </script>
 </body>

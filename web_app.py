@@ -21,6 +21,10 @@ from run_confidence_risk import IMAGE_SUFFIXES, load_model, process_image
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web_demo"
 OUTPUT_ROOT = ROOT / "experiments" / "web_live"
+EVIDENCE_FILES = {
+    "test": ROOT / "experiments" / "enhancement_evidence_test_summary.json",
+    "all": ROOT / "experiments" / "enhancement_evidence_all_summary.json",
+}
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 _MODEL = None
@@ -37,6 +41,27 @@ def _safe_filename(filename: str) -> str:
 
 def _json_bytes(payload: dict, status: HTTPStatus = HTTPStatus.OK) -> tuple[int, bytes, str]:
     return int(status), json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8"
+
+
+def _load_evidence_payload() -> dict:
+    summaries = {}
+    missing = []
+    errors = {}
+    for split, path in EVIDENCE_FILES.items():
+        if not path.exists():
+            missing.append(split)
+            continue
+        try:
+            summaries[split] = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors[split] = str(exc)
+    return {
+        "ok": True,
+        "source": "generated-json" if summaries else "fallback",
+        "summaries": summaries,
+        "missing": missing,
+        "errors": errors,
+    }
 
 
 def _load_model_once():
@@ -140,6 +165,9 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/health":
             self._send_json({"ok": True, "model_loaded": _MODEL is not None})
+            return
+        if path == "/api/evidence":
+            self._send_json(_load_evidence_payload())
             return
 
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
