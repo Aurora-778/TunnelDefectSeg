@@ -13,14 +13,20 @@
 <div class="deck">
 
   <section class="slide" data-title="Title">
-    <p class="kicker">tunnel defect segmentation / project report</p>
-    <h1 class="h1 anim-fade-up" data-anim="fade-up">隧道病害语义分割<br><span class="grad">与可信增强检测系统</span></h1>
-    <p class="lede mt-m">6 类病害分割、SegFormer 骨干升级、adaptive selection、uncertainty evidence、Web 拖拽实时检测展示。</p>
-    <div class="metric-strip mt-l">
-      <div><b>1000</b><span>标注样本</span></div>
-      <div><b>6</b><span>语义类别</span></div>
-      <div><b>84.33%</b><span>SegFormer mIoU</span></div>
-      <div><b>+0.0393</b><span>selected vs fused</span></div>
+    <div class="cover-grid">
+      <div class="cover-copy">
+        <h1 class="h1 anim-fade-up" data-anim="fade-up">隧道病害<span class="title-image" aria-hidden="true"></span>语义分割与可信增强</h1>
+        <p class="lede mt-m">从 6 类病害分割模型，到 adaptive selection、uncertainty evidence、morphology risk report，再到可拖拽实时检测的 Web 展示。</p>
+        <div class="cover-actions">
+          <span>SegFormer B1 backbone</span>
+          <span>Confidence-risk enhancement</span>
+        </div>
+      </div>
+      <div class="cover-media">
+        <figure><img src="../../../web_demo/assets/t1_1_selected_overlay.png" alt="selected overlay"></figure>
+        <figure><img src="../../../web_demo/assets/t1_1_uncertainty_heatmap.png" alt="uncertainty heatmap"></figure>
+        <figure><img src="../../../web_demo/assets/t1_1_skeleton.png" alt="skeleton"></figure>
+      </div>
     </div>
     <div class="deck-footer"><span class="mono">ResNet50 baseline -> SegFormer B1 -> Confidence-risk enhancement</span><span class="slide-number" data-current="1" data-total="12"></span></div>
     <div class="notes">开头直接说明项目范围：不是只做一个分割模型，而是做了从数据、训练、增强、评估到 Web 展示的一套闭环。重点突出两个层次：SegFormer 提升原始分割质量，增强模块提升输出可靠性和可解释性。</div>
@@ -143,13 +149,12 @@
   </section>
 
   <section class="slide" data-title="Innovation">
-    <p class="kicker">innovation points</p>
     <h2 class="h2">创新点：围绕“可信输出”组织，而不是堆组件。</h2>
-    <div class="grid g2 mt-l">
-      <div class="innovation"><span>01</span><h4>有害融合识别</h4><p>通过 self IoU、前景缩减、uncertainty、disagreement 判断 TTA fused 是否正在损伤小缺陷。</p></div>
-      <div class="innovation"><span>02</span><h4>自适应 mask 选择</h4><p>在 single、fused、hybrid 之间选择输出，减少固定融合导致的前景丢失。</p></div>
-      <div class="innovation"><span>03</span><h4>形态量化复核</h4><p>对 selected mask 计算面积、连通域、骨架长度、方向等指标，支持可解释风险提示。</p></div>
-      <div class="innovation"><span>04</span><h4>GT-aware 展示边界</h4><p>有 GT 才算真实 mIoU；无 GT 上传只展示 self-consistency、morphology、risk，避免伪精度。</p></div>
+    <div class="innovation-bento mt-l">
+      <div class="innovation wide"><span>harmful fusion detection</span><h4>识别固定融合是否正在损伤小缺陷</h4><p>通过 self IoU、前景缩减、uncertainty、disagreement 判断 fused mask 是否把细小病害抹掉。</p></div>
+      <div class="innovation tall"><span>adaptive output</span><h4>single / fused / hybrid 自适应选择</h4><p>不是盲目融合，而是在不同候选 mask 之间选择最适合复核的输出。</p></div>
+      <div class="innovation"><span>morphology</span><h4>形态量化复核</h4><p>面积、连通域、骨架长度、方向，形成结构化风险依据。</p></div>
+      <div class="innovation"><span>GT-aware UI</span><h4>不制造伪 mIoU</h4><p>有 GT 才展示真实 mIoU；无 GT 上传显示 self-consistency 与 risk evidence。</p></div>
     </div>
     <div class="callout mt-m">可申请方向：一种面向隧道病害分割的置信感知自适应输出选择与复核提示方法。</div>
     <div class="deck-footer"><span class="mono">claim: ordered decision loop + measurable review evidence</span><span class="slide-number" data-current="7" data-total="12"></span></div>
@@ -157,21 +162,22 @@
   </section>
 
   <section class="slide" data-title="Metrics">
-    <p class="kicker">dataset-level evidence</p>
     <h2 class="h2">实验结果：selected 明显恢复 fixed fused 损失。</h2>
-    <div class="table-card mt-l">
-      <table>
-        <thead><tr><th>Scope</th><th>Samples</th><th>Single mIoU</th><th>Fixed fused</th><th>Selected</th><th>Selected vs fused</th></tr></thead>
-        <tbody>
-          <tr><td>Test split</td><td>150</td><td>0.3305</td><td>0.3165</td><td>0.3306</td><td class="pos">+0.0141</td></tr>
-          <tr><td>All labeled</td><td>1000</td><td>0.3725</td><td>0.3287</td><td>0.3680</td><td class="pos">+0.0393</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="bar-metrics mt-l">
-      <div><span style="width:37%"></span><b>Single 0.3725</b></div>
-      <div><span style="width:33%"></span><b>Fixed fused 0.3287</b></div>
-      <div><span style="width:36.8%"></span><b>Selected 0.3680</b></div>
+    <div class="metric-story mt-l">
+      <div class="metric-hero">
+        <span>selected vs fixed fused</span>
+        <b>+0.0393</b>
+        <p>全量 1000 张标注样本上，adaptive selection 恢复了固定融合损失。</p>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Scope</th><th>Samples</th><th>Single mIoU</th><th>Fixed fused</th><th>Selected</th><th>Gain</th></tr></thead>
+          <tbody>
+            <tr><td>Test split</td><td>150</td><td>0.3305</td><td>0.3165</td><td>0.3306</td><td class="pos">+0.0141</td></tr>
+            <tr><td>All labeled</td><td>1000</td><td>0.3725</td><td>0.3287</td><td>0.3680</td><td class="pos">+0.0393</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
     <p class="dim mt-m">结论边界：selected 不承诺总是超过 single；它的主要价值是避免固定融合损伤，并保留可解释证据。</p>
     <div class="deck-footer"><span class="mono">experiments/enhancement_evidence_all_summary.json</span><span class="slide-number" data-current="8" data-total="12"></span></div>
@@ -272,9 +278,25 @@
     <div class="summary-line mt-l">项目已达到阶段性展示状态：模型结果、增强证据、Web 演示和专利方向均已形成闭环。</div>
     <div class="deck-footer"><span class="mono">stage complete · next: probability-aware SegFormer enhancement</span><span class="slide-number" data-current="12" data-total="12"></span></div>
     <div class="notes">最后一页直接收束，不加感谢页。用一句话概括：现在能演示，能讲实验数据，也能讲清楚创新边界；下一步是把 SegFormer 的概率不确定性补齐。</div>
-  </section>
+</section>
 
 </div>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
 <script src="assets/runtime.js"></script>
+<script>
+  function animateActiveSlide() {
+    if (!window.gsap) return;
+    const slide = document.querySelector(".slide.is-active");
+    if (!slide) return;
+    const targets = slide.querySelectorAll(".h1,.h2,.lede,.card,.innovation,.table-card,.metric-hero,figure,.terminal,.callout,.summary-line");
+    gsap.fromTo(targets, { y: 24, opacity: 0 }, { y: 0, opacity: 1, duration: .7, stagger: .045, ease: "power2.out" });
+  }
+  window.addEventListener("load", animateActiveSlide);
+  new MutationObserver(animateActiveSlide).observe(document.querySelector(".deck"), {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["class"]
+  });
+</script>
 </body>
 </html>

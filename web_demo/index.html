@@ -6,17 +6,18 @@
   <title>隧道病害可信评估展示台</title>
   <style>
     :root {
-      --ink: #17212b;
-      --paper: #edf1f4;
-      --panel: #ffffff;
-      --line: #22313f;
-      --muted: #607180;
+      --ink: #f4f7fb;
+      --paper: #0b1118;
+      --panel: rgba(249, 252, 255, 0.94);
+      --line: #17212b;
+      --muted: #8ea0b2;
       --amber: #f4b942;
       --cyan: #00a6a6;
       --red: #d94a38;
       --green: #1c8b5f;
       --blue: #2f64b2;
       --shadow: rgba(23, 33, 43, 0.16);
+      --glow: rgba(0, 166, 166, 0.26);
     }
 
     * { box-sizing: border-box; }
@@ -25,18 +26,210 @@
 
     body {
       margin: 0;
-      color: var(--ink);
+      color: #eaf1f8;
       background:
-        linear-gradient(90deg, rgba(34,49,63,0.05) 1px, transparent 1px) 0 0 / 28px 28px,
-        linear-gradient(0deg, rgba(34,49,63,0.04) 1px, transparent 1px) 0 0 / 28px 28px,
+        radial-gradient(circle at 8% 6%, rgba(0,166,166,.24), transparent 31%),
+        radial-gradient(circle at 86% 18%, rgba(244,185,66,.18), transparent 28%),
+        linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px) 0 0 / 28px 28px,
+        linear-gradient(0deg, rgba(255,255,255,0.03) 1px, transparent 1px) 0 0 / 28px 28px,
         var(--paper);
-      font-family: "Bahnschrift", "Aptos", "Microsoft YaHei UI", sans-serif;
+      font-family: "Geist", "Aptos", "Microsoft YaHei UI", sans-serif;
     }
 
     .shell {
       width: min(1480px, calc(100% - 32px));
       margin: 0 auto;
       padding: 22px 0 42px;
+    }
+
+    .premium-nav {
+      position: sticky;
+      top: 14px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      width: min(1180px, 100%);
+      margin: 0 auto 36px;
+      padding: 10px 12px 10px 18px;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 999px;
+      background: rgba(11,17,24,.72);
+      box-shadow: 0 24px 80px rgba(0,0,0,.32);
+      backdrop-filter: blur(18px);
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .nav-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: conic-gradient(from 120deg, var(--cyan), #fff, var(--amber), var(--cyan));
+      box-shadow: 0 0 24px rgba(0,166,166,.42);
+      flex: none;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .nav-links a {
+      color: rgba(234,241,248,.78);
+      text-decoration: none;
+      font-size: 12px;
+      padding: 7px 10px;
+      border-radius: 999px;
+    }
+
+    .nav-links a:hover {
+      background: rgba(255,255,255,.1);
+      color: #fff;
+    }
+
+    .hero-chapter {
+      position: relative;
+      min-height: 560px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr);
+      gap: 54px;
+      align-items: center;
+      margin-bottom: 34px;
+      padding: 56px;
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 34px;
+      background:
+        linear-gradient(115deg, rgba(11,17,24,.92), rgba(11,17,24,.68)),
+        url("assets/t1_1_original.jpg") center / cover;
+      overflow: hidden;
+      box-shadow: 0 34px 120px rgba(0,0,0,.34);
+    }
+
+    .hero-chapter::before {
+      content: "";
+      position: absolute;
+      inset: auto -10% -32% 12%;
+      height: 340px;
+      background: radial-gradient(closest-side, rgba(0,166,166,.42), transparent 70%);
+      filter: blur(20px);
+      pointer-events: none;
+    }
+
+    .hero-copy,
+    .hero-media {
+      position: relative;
+      z-index: 1;
+      min-width: 0;
+    }
+
+    .hero-copy h1 {
+      width: min(100%, 1060px);
+      margin: 0;
+      font-size: clamp(3rem, 5vw, 5.75rem);
+      line-height: .98;
+      letter-spacing: 0;
+      color: #fff;
+      text-wrap: balance;
+    }
+
+    .inline-image {
+      display: inline-block;
+      width: clamp(74px, 9vw, 126px);
+      height: .54em;
+      margin: 0 .12em;
+      border-radius: 999px;
+      vertical-align: .02em;
+      background: url("assets/t1_1_selected_overlay.png") center / cover;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.28);
+    }
+
+    .hero-copy p {
+      width: min(720px, 100%);
+      margin: 28px 0 0;
+      color: rgba(234,241,248,.78);
+      font-size: 18px;
+      line-height: 1.72;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 34px;
+    }
+
+    .hero-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 46px;
+      padding: 0 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.24);
+      text-decoration: none;
+      font-weight: 800;
+    }
+
+    .hero-btn.primary {
+      background: #fff;
+      color: #101820;
+    }
+
+    .hero-btn.secondary {
+      background: rgba(255,255,255,.08);
+      color: #fff;
+    }
+
+    .hero-media {
+      align-self: stretch;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      gap: 16px;
+    }
+
+    .media-card {
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 26px;
+      background: rgba(255,255,255,.08);
+      box-shadow: 0 28px 90px rgba(0,0,0,.36);
+    }
+
+    .media-card img {
+      width: 100%;
+      height: 100%;
+      min-height: 330px;
+      object-fit: cover;
+      display: block;
+      filter: contrast(1.12) saturate(.86);
+      transition: transform .7s ease;
+    }
+
+    .media-card:hover img {
+      transform: scale(1.055);
+    }
+
+    .hero-caption {
+      color: rgba(234,241,248,.72);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .quick-stats {
+      margin-bottom: 34px;
     }
 
     header {
@@ -50,6 +243,7 @@
     .brand {
       border: 2px solid var(--line);
       background: var(--panel);
+      color: #17212b;
       padding: 14px 16px;
       min-height: 94px;
       box-shadow: 5px 5px 0 var(--ink);
@@ -72,6 +266,7 @@
     .stat {
       border: 2px solid var(--line);
       background: #f8fbfd;
+      color: #17212b;
       padding: 10px;
       min-height: 94px;
       display: flex;
@@ -90,19 +285,19 @@
       font-size: 12px;
     }
 
-    .risk-medium { background: var(--amber); color: var(--ink); }
+    .risk-medium { background: var(--amber); color: #17212b; }
     .risk-medium span { color: rgba(23,33,43,0.72); }
     .risk-high { background: var(--red); color: #fff; }
     .risk-high span { color: rgba(255,255,255,0.82); }
-    .risk-low { background: #d7eadf; color: var(--ink); }
-    .risk-none { background: #f8fbfd; color: var(--ink); }
+    .risk-low { background: #d7eadf; color: #17212b; }
+    .risk-none { background: #f8fbfd; color: #17212b; }
 
     .upload-panel {
-      margin-bottom: 12px;
+      margin-bottom: 34px;
     }
 
     .experiment-panel {
-      margin-bottom: 12px;
+      margin-bottom: 34px;
     }
 
     .experiment-grid {
@@ -115,6 +310,7 @@
     .score-board {
       border: 1px solid var(--line);
       background: #fff;
+      color: #17212b;
       padding: 12px;
       display: grid;
       gap: 10px;
@@ -228,6 +424,7 @@
     .result-bars {
       border: 1px solid var(--line);
       background: #fff;
+      color: #17212b;
       padding: 12px;
       display: grid;
       gap: 9px;
@@ -273,12 +470,13 @@
       grid-template-columns: minmax(220px, 0.78fr) minmax(260px, 1.22fr) auto;
       gap: 12px;
       align-items: center;
-      min-height: 112px;
-      border: 2px dashed var(--line);
+      min-height: 136px;
+      border: 1px dashed rgba(0,166,166,.56);
+      border-radius: 24px;
       background:
-        linear-gradient(90deg, rgba(0,166,166,0.10), transparent),
-        #fff;
-      padding: 14px;
+        radial-gradient(circle at 10% 0%, rgba(0,166,166,0.22), transparent 38%),
+        linear-gradient(90deg, rgba(255,255,255,0.98), rgba(237,246,249,0.94));
+      padding: 20px;
       cursor: pointer;
     }
 
@@ -329,29 +527,33 @@
     .dashboard {
       display: grid;
       grid-template-columns: 310px minmax(0, 1fr) 370px;
-      gap: 12px;
+      gap: 18px;
       align-items: start;
     }
 
     .panel {
-      border: 2px solid var(--line);
+      border: 1px solid rgba(23,33,43,.22);
+      border-radius: 24px;
       background: var(--panel);
-      box-shadow: 4px 4px 0 var(--shadow);
+      box-shadow: 0 28px 80px rgba(0,0,0,.18);
       min-width: 0;
+      overflow: hidden;
     }
 
     .panel-title {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 2px solid var(--line);
-      padding: 10px 12px;
+      border-bottom: 1px solid rgba(23,33,43,.16);
+      padding: 14px 16px;
       font-family: "Cascadia Mono", "Consolas", monospace;
       font-size: 13px;
       text-transform: uppercase;
+      color: #17212b;
+      background: rgba(255,255,255,.42);
     }
 
-    .panel-body { padding: 12px; }
+    .panel-body { padding: 16px; color: #17212b; }
 
     .case-id {
       font-family: "Cascadia Mono", "Consolas", monospace;
@@ -400,7 +602,7 @@
     }
 
     .viewer {
-      min-height: 640px;
+      min-height: 680px;
       display: grid;
       grid-template-rows: auto minmax(360px, 1fr) auto;
     }
@@ -409,22 +611,24 @@
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
-      padding: 10px;
-      border-bottom: 2px solid var(--line);
-      background: #dfe8ee;
+      padding: 14px;
+      border-bottom: 1px solid rgba(23,33,43,.16);
+      background: #ecf4f7;
     }
 
     button {
       font: inherit;
-      color: var(--ink);
-      border: 2px solid var(--line);
+      color: #17212b;
+      border: 1px solid rgba(23,33,43,.36);
+      border-radius: 999px;
       background: #fff;
-      padding: 8px 10px;
+      padding: 9px 13px;
       cursor: pointer;
       min-height: 38px;
+      transition: transform .28s ease, box-shadow .28s ease, background .28s ease;
     }
 
-    button:hover { transform: translate(-1px, -1px); box-shadow: 2px 2px 0 var(--line); }
+    button:hover { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(23,33,43,.16); }
     button.active { background: var(--cyan); color: #fff; }
 
     .image-stage {
@@ -583,20 +787,28 @@
     }
 
     .aggregate-evidence {
-      margin-bottom: 10px;
+      margin-bottom: 18px;
       display: grid;
-      gap: 10px;
+      gap: 14px;
     }
 
     .advantage-card {
-      border: 1px solid var(--line);
-      background: #fff;
-      padding: 11px;
+      border: 1px solid rgba(23,33,43,.18);
+      border-radius: 20px;
+      background:
+        linear-gradient(160deg, #fff, #f2f8fa);
+      padding: 16px;
       min-height: 154px;
       display: grid;
       grid-template-rows: auto auto 1fr;
       gap: 7px;
       overflow-wrap: anywhere;
+      transition: transform .5s ease, box-shadow .5s ease;
+    }
+
+    .advantage-card:hover {
+      transform: translateY(-4px) scale(1.012);
+      box-shadow: 0 24px 60px rgba(23,33,43,.14);
     }
 
     .advantage-card b {
@@ -656,9 +868,10 @@
     }
 
     .callout {
-      border: 2px solid var(--line);
+      border: 1px solid rgba(23,33,43,.18);
+      border-radius: 18px;
       background: #fff;
-      padding: 10px;
+      padding: 14px;
       font-size: 13px;
       line-height: 1.5;
     }
@@ -670,15 +883,54 @@
       line-height: 1.45;
     }
 
+    .interest-bento {
+      scroll-margin-top: 120px;
+    }
+
+    .advantage-grid,
+    #aggregateEvidenceGrid {
+      grid-auto-flow: dense;
+    }
+
+    #aggregateEvidenceGrid {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }
+
+    #aggregateEvidenceGrid .advantage-card:nth-child(1) { grid-column: span 5; }
+    #aggregateEvidenceGrid .advantage-card:nth-child(2) { grid-column: span 7; }
+    #aggregateEvidenceGrid .advantage-card:nth-child(3),
+    #aggregateEvidenceGrid .advantage-card:nth-child(4),
+    #aggregateEvidenceGrid .advantage-card:nth-child(5) { grid-column: span 4; }
+    #aggregateEvidenceGrid .advantage-card:nth-child(6) { grid-column: span 12; }
+
+    .motion-card {
+      will-change: transform, opacity;
+    }
+
+    .reveal-word {
+      display: inline-block;
+      will-change: opacity;
+    }
+
     @media (max-width: 1180px) {
+      .hero-chapter { grid-template-columns: 1fr; padding: 40px; }
+      .hero-media { min-height: 380px; }
       header { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .brand { grid-column: 1 / -1; }
       .dashboard, .lower, .experiment-grid { grid-template-columns: 1fr; }
       .stage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #aggregateEvidenceGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #aggregateEvidenceGrid .advantage-card { grid-column: span 1 !important; }
     }
 
     @media (max-width: 680px) {
       .shell { width: min(100% - 18px, 1480px); padding-top: 10px; }
+      .premium-nav { position: static; align-items: flex-start; border-radius: 22px; flex-direction: column; }
+      .nav-links { justify-content: flex-start; }
+      .hero-chapter { min-height: auto; padding: 26px; border-radius: 24px; }
+      .hero-copy h1 { font-size: clamp(2.5rem, 13vw, 3.7rem); }
+      .hero-actions { display: grid; grid-template-columns: 1fr; }
+      .hero-btn { width: 100%; }
       header { grid-template-columns: 1fr; }
       .drop-zone { grid-template-columns: 1fr; cursor: default; }
       .upload-actions { justify-content: flex-start; }
@@ -707,7 +959,31 @@
 </head>
 <body>
   <main class="shell">
-    <header>
+    <nav class="premium-nav">
+      <div class="nav-brand"><span class="nav-mark"></span><span>tunnel defect studio</span></div>
+      <div class="nav-links">
+        <a href="#detect">实时检测</a>
+        <a href="#evidence">增强证据</a>
+        <a href="#patent">专利链条</a>
+      </div>
+    </nav>
+
+    <section class="hero-chapter" id="top">
+      <div class="hero-copy">
+        <h1>可信隧道病害<span class="inline-image" aria-hidden="true"></span>检测工作台</h1>
+        <p class="scrub-text">把语义分割结果转化为可复核的工程证据：mask source、adaptive selection、uncertainty、morphology 与 risk report 在同一页面完成闭环。</p>
+        <div class="hero-actions">
+          <a class="hero-btn primary" href="#detect">开始检测</a>
+          <a class="hero-btn secondary" href="#evidence">查看增强证据</a>
+        </div>
+      </div>
+      <div class="hero-media">
+        <div class="media-card motion-image"><img src="assets/t1_1_selected_overlay.png" alt="隧道病害检测叠加结果"></div>
+        <div class="hero-caption">当前样例展示 selected overlay。自选图片无 GT 时不会显示真实 mIoU，只显示 self-consistency 与复核证据。</div>
+      </div>
+    </section>
+
+    <header class="quick-stats">
       <section class="brand">
         <h1>隧道病害可信评估展示台</h1>
         <p>TTA fusion / Uncertainty / Skeleton morphology / Risk report</p>
@@ -718,7 +994,7 @@
       <section class="stat"><span>Review</span><strong id="reviewFlag">YES</strong></section>
     </header>
 
-    <section class="panel upload-panel">
+    <section class="panel upload-panel" id="detect">
       <div class="drop-zone" id="dropZone">
         <div>
           <p class="drop-title">拖入图片实时检测</p>
@@ -858,7 +1134,7 @@
       </section>
     </section>
 
-    <section class="panel" style="margin-top:12px;">
+    <section class="panel interest-bento" id="evidence" style="margin-top:34px;">
       <div class="panel-title">增强模块优势证据 <span>Adaptive fusion / uncertainty / morphology</span></div>
       <div class="panel-body">
         <div class="aggregate-evidence">
@@ -888,7 +1164,7 @@
       </div>
     </section>
 
-    <section class="panel" style="margin-top:12px;">
+    <section class="panel" id="patent" style="margin-top:34px;">
       <div class="panel-title">Metric glossary <span>中文说明</span></div>
       <div class="panel-body">
         <div class="glossary">
@@ -919,6 +1195,8 @@
     </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
   <script>
     const sampleViews = [
       { label: "Original", url: "assets/t1_1_original.jpg" },
@@ -1240,6 +1518,74 @@
       uploadStatus.className = `upload-status ${type}`.trim();
     }
 
+    function initTasteMotion() {
+      if (!window.gsap || !window.ScrollTrigger) return;
+      gsap.registerPlugin(ScrollTrigger);
+
+      document.querySelectorAll(".scrub-text").forEach((node) => {
+        if (!node.dataset.split) {
+          const parts = node.textContent.trim().split(/(\s+)/);
+          node.innerHTML = parts.map((part) => {
+            if (!part.trim()) return part;
+            return `<span class="reveal-word">${part}</span>`;
+          }).join("");
+          node.dataset.split = "true";
+        }
+        gsap.fromTo(
+          node.querySelectorAll(".reveal-word"),
+          { opacity: 0.18 },
+          {
+            opacity: 1,
+            stagger: 0.035,
+            ease: "none",
+            scrollTrigger: {
+              trigger: node,
+              start: "top 72%",
+              end: "bottom 46%",
+              scrub: true
+            }
+          }
+        );
+      });
+
+      gsap.utils.toArray(".motion-image img, .image-stage img").forEach((img) => {
+        gsap.fromTo(
+          img,
+          { scale: 0.88, opacity: 0.82 },
+          {
+            scale: 1,
+            opacity: 1,
+            ease: "power2.out",
+            scrollTrigger: {
+              trigger: img,
+              start: "top 86%",
+              end: "bottom 18%",
+              scrub: true
+            }
+          }
+        );
+      });
+
+      gsap.utils.toArray(".advantage-card").forEach((card, index) => {
+        gsap.fromTo(
+          card,
+          { y: 54 + index * 5, opacity: 0.18, scale: 0.96 },
+          {
+            y: 0,
+            opacity: 1,
+            scale: 1,
+            ease: "power2.out",
+            scrollTrigger: {
+              trigger: card,
+              start: "top 88%",
+              end: "top 52%",
+              scrub: true
+            }
+          }
+        );
+      });
+    }
+
     function selectView(index) {
       const view = activeViews[index];
       if (!view) return;
@@ -1533,6 +1879,7 @@
     renderExperiment();
     loadAggregateEvidence();
     renderReport(sampleReport, sampleViews);
+    initTasteMotion();
   </script>
 </body>
 </html>
