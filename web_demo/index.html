@@ -152,7 +152,7 @@
       margin: 0 .12em;
       border-radius: 999px;
       vertical-align: .02em;
-      background: url("assets/t1_1_selected_overlay.png") center / cover;
+      background: url("assets/segformer_t1_1_selected_overlay.png") center / cover;
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.28);
     }
 
@@ -978,7 +978,7 @@
         </div>
       </div>
       <div class="hero-media">
-        <div class="media-card motion-image"><img src="assets/t1_1_selected_overlay.png" alt="隧道病害检测叠加结果"></div>
+        <div class="media-card motion-image"><img src="assets/segformer_t1_1_selected_overlay.png" alt="隧道病害检测叠加结果"></div>
         <div class="hero-caption">当前样例展示 selected overlay。自选图片无 GT 时不会显示真实 mIoU，只显示 self-consistency 与复核证据。</div>
       </div>
     </section>
@@ -1065,7 +1065,7 @@
         <div class="tabs" id="tabs"></div>
         <div class="image-stage">
           <div class="stage-label" id="stageLabel">选择叠加图</div>
-          <img id="stageImage" src="assets/t1_1_selected_overlay.png" alt="当前影像证据" />
+          <img id="stageImage" src="assets/segformer_t1_1_selected_overlay.png" alt="当前影像证据" />
         </div>
         <div class="filmstrip" id="filmstrip"></div>
       </section>
@@ -1201,15 +1201,15 @@
     const sampleViews = [
       { label: "Original", url: "assets/t1_1_original.jpg" },
       { label: "GT mask", url: "assets/t1_1_gt_mask.png" },
-      { label: "Single mask", url: "assets/t1_1_single_mask.png" },
-      { label: "Fused mask", url: "assets/t1_1_fused_mask.png" },
-      { label: "Selected mask", url: "assets/t1_1_selected_mask.png" },
+      { label: "Single mask", url: "assets/segformer_t1_1_single_mask.png" },
+      { label: "Fused mask", url: "assets/segformer_t1_1_fused_mask.png" },
+      { label: "Selected mask", url: "assets/segformer_t1_1_selected_mask.png" },
       { label: "GT overlay", url: "assets/t1_1_gt_overlay.png" },
-      { label: "Overlay", url: "assets/t1_1_overlay.png" },
-      { label: "Selected overlay", url: "assets/t1_1_selected_overlay.png" },
-      { label: "Uncertainty", url: "assets/t1_1_uncertainty_heatmap.png" },
-      { label: "Disagreement", url: "assets/t1_1_disagreement_heatmap.png" },
-      { label: "Skeleton", url: "assets/t1_1_skeleton.png" }
+      { label: "Overlay", url: "assets/segformer_t1_1_overlay.png" },
+      { label: "Selected overlay", url: "assets/segformer_t1_1_selected_overlay.png" },
+      { label: "Uncertainty", url: "assets/segformer_t1_1_uncertainty_heatmap.png" },
+      { label: "Disagreement", url: "assets/segformer_t1_1_disagreement_heatmap.png" },
+      { label: "Skeleton", url: "assets/segformer_t1_1_skeleton.png" }
     ];
 
     const experimentResult = {
@@ -1272,40 +1272,67 @@
 
     const sampleReport = {
       stem: "t1_1",
-      tta_specs: ["identity", "hflip"],
+      mask_source: {
+        name: "segformer_b1",
+        type: "mmsegmentation",
+        probability_tta: false,
+        uncertainty_available: false,
+        disagreement_available: false
+      },
+      tta_specs: ["segformer_single"],
       class_names: { "0": "background", "1": "simple", "2": "blocky", "3": "pipeline", "4": "vertical", "5": "horizontal" },
-      single_prediction_stats: { "0": 146348, "1": 1108 },
-      fused_prediction_stats: { "0": 146939, "1": 517 },
-      selected_prediction_stats: { "0": 146348, "1": 1108 },
+      single_prediction_stats: { "0": 146438, "1": 1018 },
+      fused_prediction_stats: { "0": 146438, "1": 1018 },
+      selected_prediction_stats: { "0": 146438, "1": 1018 },
       adaptive_selection: {
-        mode: "single",
+        mode: "fused",
         reasons: [
-          "fused foreground shrinkage ratio 0.467",
-          "fallback to single mask to protect small defect evidence"
-        ]
+          "stable single/fused foreground IoU 1.000",
+          "stable fused-to-single area ratio 1.000"
+        ],
+        consistency: {
+          foreground_iou: 1.0,
+          pixel_agreement: 1.0,
+          single_foreground_pixels: 1018,
+          fused_foreground_pixels: 1018,
+          fused_to_single_area_ratio: 1.0,
+          single_to_fused_area_ratio: 1.0
+        }
       },
       self_consistency: {
-        single_fused_mIoU: 0.4666,
-        foreground_iou: 0.4666,
-        pixel_agreement: 0.9959,
+        single_fused_mIoU: 1.0,
+        foreground_iou: 1.0,
+        pixel_agreement: 1.0,
+        class_ious: { "1": 1.0, "2": null, "3": null, "4": null, "5": null },
         note: "Self-consistency between model outputs only; this is not ground-truth mIoU."
       },
       uncertainty_summary: {
-        mean: 0.004636249,
-        max: 0.443340689,
-        high_fraction: 0.006103516,
-        defect_mean: 0.373247832,
-        defect_high_fraction: 0.749097473
+        available: false,
+        mean: null,
+        max: null,
+        high_fraction: null,
+        defect_mean: null,
+        defect_high_fraction: null,
+        reason: "Mask source did not provide probability/TTA uncertainty; zero-valued heatmap is a placeholder artifact."
+      },
+      disagreement_summary: {
+        available: false,
+        mean: null,
+        max: null,
+        high_fraction: null,
+        defect_mean: null,
+        defect_high_fraction: null,
+        reason: "Mask source did not provide multiple aligned predictions for disagreement measurement."
       },
       morphology: {
         image_shape: [384, 384],
         total_pixels: 147456,
-        defect_area_pixels: 1108,
-        defect_area_ratio: 0.007514106,
+        defect_area_pixels: 1018,
+        defect_area_ratio: 0.006903754,
         defect_component_count: 1,
-        defect_skeleton_length: 63,
+        defect_skeleton_length: 65,
         classes: [
-          { class_id: 1, class_name: "simple", area_pixels: 1108, area_ratio: 0.007514106, component_count: 1, skeleton_length: 63, dominant_direction: "vertical", dominant_direction_degrees: 88.19 },
+          { class_id: 1, class_name: "simple", raw_area_pixels: 1018, area_pixels: 1018, area_ratio: 0.006903754, component_count: 1, largest_component_area: 1018, skeleton_length: 65, dominant_direction: "horizontal", dominant_direction_degrees: 159.99, fragmentation_index: 0, fragmented: false },
           { class_id: 2, class_name: "blocky", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
           { class_id: 3, class_name: "pipeline", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
           { class_id: 4, class_name: "vertical", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
@@ -1313,23 +1340,21 @@
         ]
       },
       risk: {
-        risk_level: "medium",
-        score: 3.25,
-        review_required: true,
+        risk_level: "low",
+        score: 1.75,
+        review_required: false,
         class_results: [
-          { class_id: 1, class_name: "simple", risk_level: "medium", review_required: true, reasons: ["class severity weight 1.00", "small area ratio 0.0075", "moderate skeleton length 63", "high mean uncertainty 0.373", "high uncertain-area fraction 0.749"] }
+          { class_id: 1, class_name: "simple", risk_level: "low", review_required: false, reasons: ["class severity weight 1.00", "small area ratio 0.0069", "moderate skeleton length 65"] },
+          { class_id: 2, class_name: "blocky", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] },
+          { class_id: 3, class_name: "pipeline", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] },
+          { class_id: 4, class_name: "vertical", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] },
+          { class_id: 5, class_name: "horizontal", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] }
         ],
         suggestions: [
-          "Medium image-based defect risk; review morphology and uncertainty before acceptance.",
-          "Manual review recommended because uncertainty is high in detected defect regions."
-        ]
-      },
-      evaluation: {
-        single_mIoU: 0.222122077,
-        fused_mIoU: 0.173192874,
-        selected_mIoU: 0.222122077,
-        delta_mIoU: -0.048929203,
-        mean_uncertainty: 0.1554
+          "Low image-based defect risk; routine review is sufficient.",
+          "Uncertainty unavailable for this mask source; review relies on morphology and selected-mask evidence."
+        ],
+        uncertainty_available: false
       }
     };
 
@@ -1504,6 +1529,7 @@
         .replace("Medium image-based defect risk; review morphology and uncertainty before acceptance.", "图像病害风险为中等，建议结合形态和不确定性复核。")
         .replace("Manual review recommended because uncertainty is high in detected defect regions.", "缺陷区域不确定性较高，建议人工复核。")
         .replace("Low image-based defect risk; routine review is sufficient.", "图像病害风险较低，常规复核即可。")
+        .replace("Uncertainty unavailable for this mask source; review relies on morphology and selected-mask evidence.", "当前 mask source 未计算 uncertainty，复核依据主要来自 morphology 和 selected-mask evidence。")
         .replace("High image-based defect risk; prioritize manual review and field confirmation.", "图像病害风险较高，优先人工复核并现场确认。")
         .replace("No defect passed the configured measurement filters.", "没有缺陷通过当前测量过滤规则。")
         .replace("fused foreground shrinkage ratio", "fused 前景收缩比例")
