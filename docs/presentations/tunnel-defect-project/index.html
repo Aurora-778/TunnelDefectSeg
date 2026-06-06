@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>隧道病害语义分割与可信增强展示</title>
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="assets/base.css">
+<link rel="stylesheet" href="assets/animations/animations.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="tpl-tech-sharing project-deck">
+<div class="deck">
+
+  <section class="slide" data-title="Title">
+    <p class="kicker">tunnel defect segmentation / project report</p>
+    <h1 class="h1 anim-fade-up" data-anim="fade-up">隧道病害语义分割<br><span class="grad">与可信增强检测系统</span></h1>
+    <p class="lede mt-m">6 类病害分割、SegFormer 骨干升级、adaptive selection、uncertainty evidence、Web 拖拽实时检测展示。</p>
+    <div class="metric-strip mt-l">
+      <div><b>1000</b><span>标注样本</span></div>
+      <div><b>6</b><span>语义类别</span></div>
+      <div><b>84.33%</b><span>SegFormer mIoU</span></div>
+      <div><b>+0.0393</b><span>selected vs fused</span></div>
+    </div>
+    <div class="deck-footer"><span class="mono">ResNet50 baseline -> SegFormer B1 -> Confidence-risk enhancement</span><span class="slide-number" data-current="1" data-total="12"></span></div>
+    <div class="notes">开头直接说明项目范围：不是只做一个分割模型，而是做了从数据、训练、增强、评估到 Web 展示的一套闭环。重点突出两个层次：SegFormer 提升原始分割质量，增强模块提升输出可靠性和可解释性。</div>
+  </section>
+
+  <section class="slide" data-title="Problem">
+    <p class="kicker">problem definition</p>
+    <h2 class="h2">要解决的问题：模型预测能用，但不够可信。</h2>
+    <div class="grid g3 mt-l">
+      <div class="card card-accent"><h4>形态容易失真</h4><p class="dim">折角、细长、局部断裂病害容易被预测成规整块状区域。</p><span class="tag">mask quality</span></div>
+      <div class="card card-accent"><h4>单张图片没有 GT</h4><p class="dim">用户拖入图片时无法计算真实 mIoU，不能用伪指标误导展示。</p><span class="tag">no ground truth</span></div>
+      <div class="card card-accent"><h4>缺少复核依据</h4><p class="dim">只输出最终 mask 不够，老师或工程人员需要知道风险来自哪里。</p><span class="tag">review evidence</span></div>
+    </div>
+    <div class="callout mt-l">项目目标：在更强分割骨干之上，增加可解释的后处理增强和风险提示，而不是只追求单个最终 mask。</div>
+    <div class="deck-footer"><span class="mono">design target: better mask source + inspectable reliability layer</span><span class="slide-number" data-current="2" data-total="12"></span></div>
+    <div class="notes">这一页解释为什么要做增强模块。老师通常会问：为什么不只是换模型？回答是：换模型解决原始分割能力，增强模块解决自选图片场景中的可靠展示、复核提示和专利差异化。</div>
+  </section>
+
+  <section class="slide" data-title="Dataset">
+    <p class="kicker">dataset and labels</p>
+    <h2 class="h2">数据集：1000 张图，6 类统一标签。</h2>
+    <div class="grid g2 mt-l">
+      <div class="card">
+        <h4>数据组织</h4>
+        <div class="stack mt-m">
+          <div class="kv"><span>总样本</span><b>1000 paired image/mask</b></div>
+          <div class="kv"><span>类别数量</span><b>6 classes</b></div>
+          <div class="kv"><span>训练/验证/测试</span><b>700 / 150 / 150</b></div>
+          <div class="kv"><span>输入尺寸</span><b>384 x 384</b></div>
+        </div>
+      </div>
+      <div class="card">
+        <h4>类别映射</h4>
+        <div class="class-grid mt-m">
+          <span>0 background</span><span>1 simple</span><span>2 blocky</span>
+          <span>3 pipeline</span><span>4 vertical</span><span>5 horizontal</span>
+        </div>
+        <p class="dim mt-m">所有 mask 统一转换到 folder-level class id，避免不同文件夹标签语义不一致。</p>
+      </div>
+    </div>
+    <div class="deck-footer"><span class="mono">data_adapter.py · build_6class_labels.py · deterministic split</span><span class="slide-number" data-current="3" data-total="12"></span></div>
+    <div class="notes">这页只讲清楚数据基础，不展开过多细节。强调 6 类统一标签很重要，因为后续 mIoU、per-class IoU、Web 展示都依赖一致标签空间。</div>
+  </section>
+
+  <section class="slide" data-title="System">
+    <p class="kicker">system architecture</p>
+    <h2 class="h2">整体流程：分割模型 + 可信增强 + Web 展示。</h2>
+    <div class="flow mt-l">
+      <div><b>Image</b><span>输入图像</span></div>
+      <i></i>
+      <div><b>Mask source</b><span>ResNet50 / SegFormer</span></div>
+      <i></i>
+      <div><b>Adaptive selection</b><span>single / fused / hybrid</span></div>
+      <i></i>
+      <div><b>Evidence</b><span>uncertainty / skeleton / morphology</span></div>
+      <i></i>
+      <div><b>Web report</b><span>可视化与风险建议</span></div>
+    </div>
+    <div class="grid g3 mt-l">
+      <div class="card"><h4>训练链路</h4><p class="dim">SegFormer B1 使用 mmsegmentation 训练 6 类分割模型。</p></div>
+      <div class="card"><h4>评估链路</h4><p class="dim">有 GT 时计算 mIoU、per-class IoU、uncertainty-error overlap。</p></div>
+      <div class="card"><h4>演示链路</h4><p class="dim">无 GT 上传时显示 Self IoU、selection mode、morphology 和 risk。</p></div>
+    </div>
+    <div class="deck-footer"><span class="mono">run_confidence_risk.py · evaluate_confidence_risk.py · web_app.py</span><span class="slide-number" data-current="4" data-total="12"></span></div>
+    <div class="notes">这里要把系统边界讲清楚：mask source 可以替换，增强模块不绑定某一个模型。因此创新点更像一个模型无关的可信后处理框架。</div>
+  </section>
+
+  <section class="slide" data-title="Backbone">
+    <p class="kicker">backbone result</p>
+    <h2 class="h2">SegFormer B1：原始分割质量明显增强。</h2>
+    <div class="grid g2 mt-l" style="align-items:start">
+      <div class="score-card">
+        <span>Final evaluation</span>
+        <b>mIoU 84.33%</b>
+        <p>Iter 160000 · mAcc 91.17% · aAcc 98.62%</p>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Class</th><th>IoU</th><th>Acc</th></tr></thead>
+          <tbody>
+            <tr><td>background</td><td>99.01</td><td>99.51</td></tr>
+            <tr><td>simple</td><td>80.23</td><td>88.40</td></tr>
+            <tr><td>blocky</td><td>53.58</td><td>75.56</td></tr>
+            <tr><td>pipeline</td><td>94.16</td><td>97.43</td></tr>
+            <tr><td>vertical</td><td>95.85</td><td>97.75</td></tr>
+            <tr><td>horizontal</td><td>83.17</td><td>88.34</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="callout mt-m">结论：pipeline、vertical、horizontal 已经较强；blocky 是当前瓶颈类别，也是后续优化重点。</div>
+    <div class="deck-footer"><span class="mono">SegFormer B1 6-class · CUDA RTX 3060 Laptop GPU</span><span class="slide-number" data-current="5" data-total="12"></span></div>
+    <div class="notes">注意不要把 SegFormer 说成创新点本身。它是强 backbone，用来提升 mask source 的质量；真正适合专利表达的是后面的可信增强流程。</div>
+  </section>
+
+  <section class="slide" data-title="Enhancement">
+    <p class="kicker">enhancement module</p>
+    <h2 class="h2">增强模块：不是盲目融合，而是自适应选择。</h2>
+    <div class="grid g2 mt-l">
+      <div class="terminal">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>decision_loop.py</span></div>
+<pre><span class="kw">input</span>: single_mask, fused_mask, uncertainty, disagreement
+
+<span class="fn">measure</span> self_iou, foreground_shrinkage, components
+<span class="fn">detect</span> harmful fusion or unstable boundary
+<span class="fn">select</span> single / fused / hybrid
+<span class="fn">measure</span> skeleton and morphology
+<span class="fn">score</span> risk with explainable reasons
+
+<span class="kw">output</span>: selected_mask + evidence report</pre>
+      </div>
+      <div class="stack">
+        <div class="card card-accent"><h4>single</h4><p class="dim">保留单次预测中可能被融合抹掉的小缺陷。</p></div>
+        <div class="card card-accent"><h4>fused</h4><p class="dim">当多次预测稳定一致时，采用更稳的融合输出。</p></div>
+        <div class="card card-accent"><h4>hybrid</h4><p class="dim">融合 mask 加回满足门控条件的可信缺陷像素。</p></div>
+      </div>
+    </div>
+    <div class="deck-footer"><span class="mono">adaptive_fusion.py · morphology_adapter.py · risk_adapter.py</span><span class="slide-number" data-current="6" data-total="12"></span></div>
+    <div class="notes">这一页讲增强模块工作方式。关键词是 harmful fusion detection、adaptive output selection、explainable review evidence。它不是简单 TTA，也不是单纯 skeleton，而是一个有顺序的决策闭环。</div>
+  </section>
+
+  <section class="slide" data-title="Innovation">
+    <p class="kicker">innovation points</p>
+    <h2 class="h2">创新点：围绕“可信输出”组织，而不是堆组件。</h2>
+    <div class="grid g2 mt-l">
+      <div class="innovation"><span>01</span><h4>有害融合识别</h4><p>通过 self IoU、前景缩减、uncertainty、disagreement 判断 TTA fused 是否正在损伤小缺陷。</p></div>
+      <div class="innovation"><span>02</span><h4>自适应 mask 选择</h4><p>在 single、fused、hybrid 之间选择输出，减少固定融合导致的前景丢失。</p></div>
+      <div class="innovation"><span>03</span><h4>形态量化复核</h4><p>对 selected mask 计算面积、连通域、骨架长度、方向等指标，支持可解释风险提示。</p></div>
+      <div class="innovation"><span>04</span><h4>GT-aware 展示边界</h4><p>有 GT 才算真实 mIoU；无 GT 上传只展示 self-consistency、morphology、risk，避免伪精度。</p></div>
+    </div>
+    <div class="callout mt-m">可申请方向：一种面向隧道病害分割的置信感知自适应输出选择与复核提示方法。</div>
+    <div class="deck-footer"><span class="mono">claim: ordered decision loop + measurable review evidence</span><span class="slide-number" data-current="7" data-total="12"></span></div>
+    <div class="notes">这一页可以直接回答“创新点是什么”。不要说发明了 SegFormer、TTA 或 entropy uncertainty，这些都是已有方法。差异化在于针对隧道病害的决策流程和证据输出。</div>
+  </section>
+
+  <section class="slide" data-title="Metrics">
+    <p class="kicker">dataset-level evidence</p>
+    <h2 class="h2">实验结果：selected 明显恢复 fixed fused 损失。</h2>
+    <div class="table-card mt-l">
+      <table>
+        <thead><tr><th>Scope</th><th>Samples</th><th>Single mIoU</th><th>Fixed fused</th><th>Selected</th><th>Selected vs fused</th></tr></thead>
+        <tbody>
+          <tr><td>Test split</td><td>150</td><td>0.3305</td><td>0.3165</td><td>0.3306</td><td class="pos">+0.0141</td></tr>
+          <tr><td>All labeled</td><td>1000</td><td>0.3725</td><td>0.3287</td><td>0.3680</td><td class="pos">+0.0393</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="bar-metrics mt-l">
+      <div><span style="width:37%"></span><b>Single 0.3725</b></div>
+      <div><span style="width:33%"></span><b>Fixed fused 0.3287</b></div>
+      <div><span style="width:36.8%"></span><b>Selected 0.3680</b></div>
+    </div>
+    <p class="dim mt-m">结论边界：selected 不承诺总是超过 single；它的主要价值是避免固定融合损伤，并保留可解释证据。</p>
+    <div class="deck-footer"><span class="mono">experiments/enhancement_evidence_all_summary.json</span><span class="slide-number" data-current="8" data-total="12"></span></div>
+    <div class="notes">这页要避免过度宣传。正确说法是 selected 相比固定 fused 明显恢复损失；相比 single 在全量上略低 0.0044，但换来了稳定输出选择和解释证据。</div>
+  </section>
+
+  <section class="slide" data-title="Evidence">
+    <p class="kicker">small-defect guard and uncertainty evidence</p>
+    <h2 class="h2">增强价值：保护小缺陷，定位高风险复核区域。</h2>
+    <div class="grid g2 mt-l">
+      <div class="card">
+        <h4>Small-defect guard</h4>
+        <div class="big-number">1,230,616</div>
+        <p class="dim">全量样本中相对 fixed fused 保护的前景像素数量。</p>
+        <div class="kv mt-m"><span>successful guard</span><b>614 / 1000</b></div>
+        <div class="kv"><span>selected recovered</span><b>699 / 1000</b></div>
+      </div>
+      <div class="card">
+        <h4>Uncertainty review</h4>
+        <div class="big-number">78.27%</div>
+        <p class="dim">全量样本中 high-uncertainty pixels 为预测错误的比例。</p>
+        <div class="kv mt-m"><span>error coverage</span><b>44.54%</b></div>
+        <div class="kv"><span>review signal</span><b>431 / 1000</b></div>
+      </div>
+    </div>
+    <div class="callout mt-l">高不确定区域不是最终安全诊断，但可以作为人工复核优先级依据。</div>
+    <div class="deck-footer"><span class="mono">pixel threshold 0.35 · review fraction threshold 0.50</span><span class="slide-number" data-current="9" data-total="12"></span></div>
+    <div class="notes">这页是专利/论文叙述最有用的数据页。小缺陷保护说明增强模块不是只做可视化；uncertainty precision 说明热力图和错误区域有相关性。</div>
+  </section>
+
+  <section class="slide" data-title="Demo">
+    <p class="kicker">web demo</p>
+    <h2 class="h2">Web 展示：拖拽图片，实时生成多视图报告。</h2>
+    <div class="image-grid mt-l">
+      <figure><img src="../../../experiments/segformer_b1/confidence_risk_smoke/t1_1_overlay.png" alt="overlay"><figcaption>Overlay</figcaption></figure>
+      <figure><img src="../../../experiments/segformer_b1/confidence_risk_smoke/t1_1_selected_mask.png" alt="selected mask"><figcaption>Selected mask</figcaption></figure>
+      <figure><img src="../../../experiments/segformer_b1/confidence_risk_smoke/t1_1_skeleton.png" alt="skeleton"><figcaption>Skeleton</figcaption></figure>
+    </div>
+    <div class="grid g3 mt-m">
+      <div class="card"><h4>可切换视图</h4><p class="dim">原图、single、fused、selected、overlay、uncertainty、disagreement、skeleton。</p></div>
+      <div class="card"><h4>自选图片规则</h4><p class="dim">没有 GT 时真实 mIoU 显示 N/A，不用推理结果冒充标注。</p></div>
+      <div class="card"><h4>SegFormer 语义</h4><p class="dim">当前单 mask 模式明确显示 uncertainty unavailable，避免把占位 0 当成高置信。</p></div>
+    </div>
+    <div class="deck-footer"><span class="mono">http://127.0.0.1:8000 · web_demo/index.html</span><span class="slide-number" data-current="10" data-total="12"></span></div>
+    <div class="notes">展示时可以现场打开网页拖图。注意解释：自选图片没有人工标注，所以 mIoU 是 N/A；这反而体现系统严谨，不会制造虚假指标。</div>
+  </section>
+
+  <section class="slide" data-title="Patent">
+    <p class="kicker">patent-oriented framing</p>
+    <h2 class="h2">专利表达：方法链条比单个组件更关键。</h2>
+    <div class="grid g2 mt-l">
+      <div class="card card-accent">
+        <h4>建议主张</h4>
+        <ul class="clean-list">
+          <li>面向隧道病害分割的置信感知 adaptive selection 方法</li>
+          <li>基于前景缩减和 self-consistency 的 harmful fusion detection</li>
+          <li>融合 morphology 与 uncertainty 的人工复核优先级输出</li>
+          <li>区分 GT accuracy 与 no-GT reliability signals 的展示机制</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>不建议过度主张</h4>
+        <ul class="clean-list dim">
+          <li>不说发明 SegFormer</li>
+          <li>不说发明 TTA / entropy uncertainty / skeletonization</li>
+          <li>不说 selected mIoU 永远超过 single</li>
+          <li>不把图像复核建议说成结构安全诊断</li>
+        </ul>
+      </div>
+    </div>
+    <div class="deck-footer"><span class="mono">defensible novelty: decision order + tunnel-defect evidence package</span><span class="slide-number" data-current="11" data-total="12"></span></div>
+    <div class="notes">老师如果关心专利，核心回答是：我们不把已知模型或已知算子包装成创新，而是把它们组织成针对隧道病害的可验证决策链条，并有数据支撑。</div>
+  </section>
+
+  <section class="slide" data-title="Conclusion">
+    <p class="kicker">current status and next work</p>
+    <h2 class="h2">当前结论与下一步。</h2>
+    <div class="grid g2 mt-l">
+      <div class="card card-accent">
+        <h4>已经完成</h4>
+        <ul class="clean-list">
+          <li>6 类数据集整理与训练评估闭环</li>
+          <li>SegFormer B1 训练到 mIoU 84.33%</li>
+          <li>confidence-risk 增强模块和 dataset-level evidence</li>
+          <li>Web 拖拽检测与多视图展示</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>下一步优化</h4>
+        <ul class="clean-list">
+          <li>接入 SegFormer softmax / TTA，补齐 probability uncertainty</li>
+          <li>针对 blocky 类继续优化数据增强和损失函数</li>
+          <li>补充代表性案例图，用于专利附图和答辩展示</li>
+          <li>整理权利要求草案和实验对比章节</li>
+        </ul>
+      </div>
+    </div>
+    <div class="summary-line mt-l">项目已达到阶段性展示状态：模型结果、增强证据、Web 演示和专利方向均已形成闭环。</div>
+    <div class="deck-footer"><span class="mono">stage complete · next: probability-aware SegFormer enhancement</span><span class="slide-number" data-current="12" data-total="12"></span></div>
+    <div class="notes">最后一页直接收束，不加感谢页。用一句话概括：现在能演示，能讲实验数据，也能讲清楚创新边界；下一步是把 SegFormer 的概率不确定性补齐。</div>
+  </section>
+
+</div>
+<script src="assets/runtime.js"></script>
+</body>
+</html>
