@@ -221,6 +221,12 @@ Start it on Windows:
 python web_app.py --host 127.0.0.1 --port 8000
 ```
 
+Or double-click:
+
+```text
+run_web_app.bat
+```
+
 Then open:
 
 ```text
