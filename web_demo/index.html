@@ -655,25 +655,28 @@
 
     .view-message {
       display: none;
-      width: min(100%, 760px);
-      min-height: 360px;
-      place-content: center;
-      padding: 36px;
+      position: absolute;
+      top: 58px;
+      left: 16px;
+      right: 16px;
+      max-width: 680px;
+      padding: 12px 14px;
       border: 2px dashed rgba(244, 185, 66, 0.72);
       background:
-        linear-gradient(135deg, rgba(9, 15, 21, 0.96), rgba(19, 31, 42, 0.96)),
-        repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0 1px, transparent 1px 24px);
+        linear-gradient(135deg, rgba(9, 15, 21, 0.92), rgba(19, 31, 42, 0.92));
       color: #eef7fb;
       text-align: left;
+      z-index: 2;
+      box-shadow: 0 14px 42px rgba(0,0,0,.28);
     }
 
-    .view-message.visible { display: grid; }
+    .view-message.visible { display: block; }
 
     .view-message b {
       display: block;
-      margin-bottom: 10px;
+      margin-bottom: 4px;
       font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
-      font-size: 18px;
+      font-size: 13px;
       color: var(--amber);
     }
 
@@ -681,7 +684,8 @@
       max-width: 520px;
       margin: 0;
       color: #b8c7d4;
-      line-height: 1.6;
+      font-size: 12px;
+      line-height: 1.45;
     }
 
     .stage-label {
@@ -719,6 +723,7 @@
     }
 
     .thumb {
+      position: relative;
       border: 2px solid transparent;
       background: #fff;
       padding: 4px;
@@ -728,16 +733,16 @@
 
     .thumb.active { border-color: var(--cyan); }
     .thumb img { width: 100%; height: 54px; object-fit: cover; display: block; border: 1px solid var(--line); }
-    .thumb-placeholder {
-      display: grid;
-      place-content: center;
-      width: 100%;
-      height: 54px;
-      border: 1px dashed var(--line);
-      background: #101923;
+    .thumb-unavailable {
+      position: absolute;
+      top: 7px;
+      right: 7px;
+      padding: 2px 5px;
+      border: 1px solid rgba(244, 185, 66, .76);
+      background: rgba(10, 16, 22, .82);
       color: var(--amber);
-      font-size: 11px;
-      font-weight: 800;
+      font-size: 10px;
+      font-weight: 900;
     }
     .thumb span { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
 
@@ -1232,12 +1237,13 @@
           <div class="glossary-item"><b>风险分</b><p>风险等级背后的连续分值。分值越高，代表病害形态或模型不确定性越需要关注。</p></div>
           <div class="glossary-item"><b>缺陷像素</b><p>融合预测 mask 中非背景类别的像素总数，反映检测到的病害区域大小。</p></div>
           <div class="glossary-item"><b>Review</b><p>当缺陷区不确定性偏高，系统会给出 YES，表示建议人工检查该图。</p></div>
-          <div class="glossary-item"><b>增强策略</b><p>TTA，即测试时增强。当前用原图和水平翻转图共同预测，再对齐融合。</p></div>
+          <div class="glossary-item"><b>增强候选</b><p>指原图、翻转图等不同输入姿态得到的候选预测；当前 SegFormer 接口只输出单个 mask。</p></div>
           <div class="glossary-item"><b>Uncertainty</b><p>由概率熵或 TTA 概率计算；当前 SegFormer 单 mask 模式未提供概率时显示 N/A。</p></div>
           <div class="glossary-item"><b>高不确定缺陷占比</b><p>缺陷像素中不确定性超过阈值的比例，是复核建议的重要依据。</p></div>
           <div class="glossary-item"><b>连通域</b><p>互相分离的缺陷块数量。数量多可能表示破碎、散裂或误检碎片。</p></div>
           <div class="glossary-item"><b>骨架长度</b><p>把缺陷区域细化成中心线后的长度，适合描述裂缝类长条形病害。</p></div>
           <div class="glossary-item"><b>mIoU</b><p>预测 mask 与人工标注 GT 的平均交并比。没有 GT 的自选图片显示 N/A。</p></div>
+          <div class="glossary-item"><b>Fused mask</b><p>多候选可用时由候选预测融合得到；当前 SegFormer 单 mask 模式下等于 single mask。</p></div>
           <div class="glossary-item"><b>Self IoU</b><p>只比较 Single mask 和 Fused mask 的一致性，可用于无 GT 图片，但不能代表真实精度。</p></div>
           <div class="glossary-item"><b>Disagreement</b><p>由多姿态预测差异计算；当前没有多组已对齐概率预测时显示 N/A。</p></div>
           <div class="glossary-item"><b>Overlay</b><p>把融合 mask 叠加到原图上，用于直观看缺陷位置和覆盖范围。</p></div>
@@ -1568,8 +1574,8 @@
         Original: "输入的隧道原图，所有 mask 和叠加图都以它为底图。",
         "GT mask": "数据集人工标注的标准 mask，只在样例或有标注数据中存在。",
         "Single mask": "模型对原图做一次推理得到的病害 mask。",
-        "Fused mask": "把增强后的候选预测对齐后融合得到的 mask；可能更稳，也可能抹掉小病害。",
-        "Selected mask": "自适应选择后的最终 mask，当前样例回退 single 以保护小缺陷。",
+        "Fused mask": "把候选预测融合后的 mask；当前 SegFormer 单 mask 模式下它等于 single mask 的拷贝。",
+        "Selected mask": "自适应选择后的最终 mask；当前 SegFormer 单 mask 模式下通常与 single mask 保持一致。",
         "GT overlay": "把人工 GT mask 半透明叠加到原图上，用来对照真实标注位置。",
         Overlay: "把 fused mask 叠加回原图，用来看固定融合结果覆盖哪里。",
         "Selected overlay": "把 selected mask 叠加回原图，是当前推荐查看的最终检测结果。",
@@ -1706,16 +1712,14 @@
       if (!view) return;
       stageLabel.textContent = viewLabel(view.label);
       stageHelp.textContent = viewDescription(view.label);
+      stageImage.classList.remove("hidden");
+      stageImage.src = view.url;
       if (view.available === false) {
-        stageImage.classList.add("hidden");
-        stageImage.removeAttribute("src");
         viewMessage.classList.add("visible");
-        viewMessage.innerHTML = `<b>${viewLabel(view.label)}当前不可用</b><p>${view.reason || "当前结果源没有提供生成该视图所需的数据。"}</p>`;
+        viewMessage.innerHTML = `<b>${viewLabel(view.label)}当前为占位图</b><p>${view.reason || "当前结果源没有提供生成该视图所需的数据。下方仍显示保存的图像文件，便于核对。"} 下方仍显示具体图像文件，便于核对导出结果。</p>`;
       } else {
         viewMessage.classList.remove("visible");
         viewMessage.replaceChildren();
-        stageImage.classList.remove("hidden");
-        stageImage.src = view.url;
       }
       document.querySelectorAll("[data-view]").forEach((node) => {
         node.classList.toggle("active", Number(node.dataset.view) === index);
@@ -1737,10 +1741,8 @@
         const thumb = document.createElement("div");
         thumb.className = "thumb";
         thumb.dataset.view = index;
-        const thumbMedia = view.available === false
-          ? `<div class="thumb-placeholder">N/A</div>`
-          : `<img src="${view.url}" alt="${viewLabel(view.label)} thumbnail">`;
-        thumb.innerHTML = `${thumbMedia}<span>${viewLabel(view.label)}</span>`;
+        const badge = view.available === false ? `<em class="thumb-unavailable">占位</em>` : "";
+        thumb.innerHTML = `<img src="${view.url}" alt="${viewLabel(view.label)} thumbnail">${badge}<span>${viewLabel(view.label)}</span>`;
         thumb.addEventListener("click", () => selectView(index));
         filmstrip.appendChild(thumb);
       });
