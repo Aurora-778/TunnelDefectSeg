@@ -10,7 +10,7 @@ Deck reviewed: `C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-p
 
 | Slide | Visual Elements | Speaking Coverage |
 |---:|---|---|
-| 1 | overlay、uncertainty heatmap、skeleton 三类结果图 | 讲清楚系统输出不只是 mask，而是检测报告。 |
+| 1 | selected overlay、selected mask、skeleton 三类结果图 | 讲清楚系统输出不只是 mask，而是检测报告。 |
 | 2 | 三个问题卡片 | 覆盖形状画歪、无 GT 不可算 mIoU、只给 mask 不够。 |
 | 3 | 数据规模卡片、6 类类别卡片 | 覆盖 1000 张、700/150/150、384x384、GT 定义。 |
 | 4 | 输入到报告的流程图、训练/评估/演示三卡片 | 覆盖系统流水线和不同阶段能不能算 mIoU。 |
@@ -33,4 +33,3 @@ Deck reviewed: `C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-p
 
 - 未进行真实浏览器截图逐像素核对；如果最终展示前页面又改版，建议重新打开 `http://127.0.0.1:8000/` 检查第 10 页引用图和 Web 实际输出是否一致。
 - 当前没有 `.pptx` 文件，所以没有生成 `<deck-stem>-with-notes.pptx`。本目录中的 Markdown 文件就是展示时使用的正式讲稿。
-
