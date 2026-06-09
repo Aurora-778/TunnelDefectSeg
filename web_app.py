@@ -95,6 +95,8 @@ def _artifact_url(job_id: str, filename: str) -> str:
 
 def _view_payload(report: dict, job_id: str, original_name: str) -> list[dict[str, str]]:
     artifacts = report.get("artifacts", {})
+    uncertainty = report.get("uncertainty_summary", {})
+    disagreement = report.get("disagreement_summary", {})
     return [
         {"label": "Original", "url": _artifact_url(job_id, original_name)},
         {"label": "Single mask", "url": _artifact_url(job_id, artifacts["single_mask"])},
@@ -102,8 +104,18 @@ def _view_payload(report: dict, job_id: str, original_name: str) -> list[dict[st
         {"label": "Selected mask", "url": _artifact_url(job_id, artifacts["selected_mask"])},
         {"label": "Overlay", "url": _artifact_url(job_id, artifacts["overlay"])},
         {"label": "Selected overlay", "url": _artifact_url(job_id, artifacts["selected_overlay"])},
-        {"label": "Uncertainty", "url": _artifact_url(job_id, artifacts["uncertainty_heatmap"])},
-        {"label": "Disagreement", "url": _artifact_url(job_id, artifacts["disagreement_heatmap"])},
+        {
+            "label": "Uncertainty",
+            "url": _artifact_url(job_id, artifacts["uncertainty_heatmap"]),
+            "available": bool(uncertainty.get("available", True)),
+            "reason": uncertainty.get("reason", ""),
+        },
+        {
+            "label": "Disagreement",
+            "url": _artifact_url(job_id, artifacts["disagreement_heatmap"]),
+            "available": bool(disagreement.get("available", True)),
+            "reason": disagreement.get("reason", ""),
+        },
         {"label": "Skeleton", "url": _artifact_url(job_id, artifacts["skeleton"])},
     ]
 
