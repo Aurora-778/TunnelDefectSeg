@@ -1238,14 +1238,14 @@
           <div class="glossary-item"><b>缺陷像素</b><p>融合预测 mask 中非背景类别的像素总数，反映检测到的病害区域大小。</p></div>
           <div class="glossary-item"><b>Review</b><p>当缺陷区不确定性偏高，系统会给出 YES，表示建议人工检查该图。</p></div>
           <div class="glossary-item"><b>增强候选</b><p>指原图、翻转图等不同输入姿态得到的候选预测；当前 SegFormer 接口只输出单个 mask。</p></div>
-          <div class="glossary-item"><b>Uncertainty</b><p>由概率熵或 TTA 概率计算；当前 SegFormer 单 mask 模式未提供概率时显示 N/A。</p></div>
+          <div class="glossary-item"><b>Uncertainty</b><p>由概率熵或 TTA 概率计算；有概率输出时显示真实热力图，当前 SegFormer 单 mask 样例显示占位图。</p></div>
           <div class="glossary-item"><b>高不确定缺陷占比</b><p>缺陷像素中不确定性超过阈值的比例，是复核建议的重要依据。</p></div>
           <div class="glossary-item"><b>连通域</b><p>互相分离的缺陷块数量。数量多可能表示破碎、散裂或误检碎片。</p></div>
           <div class="glossary-item"><b>骨架长度</b><p>把缺陷区域细化成中心线后的长度，适合描述裂缝类长条形病害。</p></div>
           <div class="glossary-item"><b>mIoU</b><p>预测 mask 与人工标注 GT 的平均交并比。没有 GT 的自选图片显示 N/A。</p></div>
           <div class="glossary-item"><b>Fused mask</b><p>多候选可用时由候选预测融合得到；当前 SegFormer 单 mask 模式下等于 single mask。</p></div>
           <div class="glossary-item"><b>Self IoU</b><p>只比较 Single mask 和 Fused mask 的一致性，可用于无 GT 图片，但不能代表真实精度。</p></div>
-          <div class="glossary-item"><b>Disagreement</b><p>由多姿态预测差异计算；当前没有多组已对齐概率预测时显示 N/A。</p></div>
+          <div class="glossary-item"><b>Disagreement</b><p>由多姿态预测差异计算；有多组对齐预测时显示真实分歧，当前 SegFormer 单 mask 样例显示占位图。</p></div>
           <div class="glossary-item"><b>Overlay</b><p>把融合 mask 叠加到原图上，用于直观看缺陷位置和覆盖范围。</p></div>
         </div>
       </div>
@@ -1579,8 +1579,8 @@
         "GT overlay": "把人工 GT mask 半透明叠加到原图上，用来对照真实标注位置。",
         Overlay: "把 fused mask 叠加回原图，用来看固定融合结果覆盖哪里。",
         "Selected overlay": "把 selected mask 叠加回原图，是当前推荐查看的最终检测结果。",
-        Uncertainty: "由概率熵或 TTA 概率生成；当前 SegFormer 单 mask 模式没有提供概率，所以显示 N/A。",
-        Disagreement: "由多组预测之间的不一致生成；当前没有多组已对齐概率预测，所以显示 N/A。",
+        Uncertainty: "由概率熵或 TTA 概率生成；有概率输出的图片会显示真实热力图，当前 SegFormer 单 mask 样例只显示占位图。",
+        Disagreement: "由多组预测之间的不一致生成；有多组对齐预测的图片会显示真实分歧，当前 SegFormer 单 mask 样例只显示占位图。",
         Skeleton: "从 selected mask 做形态学骨架提取得到，用来看方向、长度和连通结构。"
       };
       return descriptions[label] || "当前视图来自检测报告中的图像证据。";
@@ -1716,7 +1716,7 @@
       stageImage.src = view.url;
       if (view.available === false) {
         viewMessage.classList.add("visible");
-        viewMessage.innerHTML = `<b>${viewLabel(view.label)}当前为占位图</b><p>${view.reason || "当前结果源没有提供生成该视图所需的数据。下方仍显示保存的图像文件，便于核对。"} 下方仍显示具体图像文件，便于核对导出结果。</p>`;
+        viewMessage.innerHTML = `<b>${viewLabel(view.label)}在当前样例中为占位图</b><p>${view.reason || "当前结果源没有提供生成该视图所需的数据。"} 其他使用概率输出或 TTA 多候选的图片仍可显示真实热力图；下方保留当前保存的图像文件，便于核对导出结果。</p>`;
       } else {
         viewMessage.classList.remove("visible");
         viewMessage.replaceChildren();
