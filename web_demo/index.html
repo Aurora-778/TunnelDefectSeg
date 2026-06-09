@@ -1238,14 +1238,14 @@
           <div class="glossary-item"><b>缺陷像素</b><p>融合预测 mask 中非背景类别的像素总数，反映检测到的病害区域大小。</p></div>
           <div class="glossary-item"><b>Review</b><p>当缺陷区不确定性偏高，系统会给出 YES，表示建议人工检查该图。</p></div>
           <div class="glossary-item"><b>增强候选</b><p>指原图、翻转图等不同输入姿态得到的候选预测；当前 SegFormer 接口只输出单个 mask。</p></div>
-          <div class="glossary-item"><b>Uncertainty</b><p>由概率熵或 TTA 概率计算；有概率输出时显示真实热力图，当前 SegFormer 单 mask 样例显示占位图。</p></div>
+          <div class="glossary-item"><b>Uncertainty</b><p>由概率熵或 TTA 概率计算，颜色越热表示模型越拿不准。</p></div>
           <div class="glossary-item"><b>高不确定缺陷占比</b><p>缺陷像素中不确定性超过阈值的比例，是复核建议的重要依据。</p></div>
           <div class="glossary-item"><b>连通域</b><p>互相分离的缺陷块数量。数量多可能表示破碎、散裂或误检碎片。</p></div>
           <div class="glossary-item"><b>骨架长度</b><p>把缺陷区域细化成中心线后的长度，适合描述裂缝类长条形病害。</p></div>
           <div class="glossary-item"><b>mIoU</b><p>预测 mask 与人工标注 GT 的平均交并比。没有 GT 的自选图片显示 N/A。</p></div>
           <div class="glossary-item"><b>Fused mask</b><p>多候选可用时由候选预测融合得到；当前 SegFormer 单 mask 模式下等于 single mask。</p></div>
           <div class="glossary-item"><b>Self IoU</b><p>只比较 Single mask 和 Fused mask 的一致性，可用于无 GT 图片，但不能代表真实精度。</p></div>
-          <div class="glossary-item"><b>Disagreement</b><p>由多姿态预测差异计算；有多组对齐预测时显示真实分歧，当前 SegFormer 单 mask 样例显示占位图。</p></div>
+          <div class="glossary-item"><b>Disagreement</b><p>由多姿态预测差异计算，颜色越热表示候选预测分歧越大。</p></div>
           <div class="glossary-item"><b>Overlay</b><p>把融合 mask 叠加到原图上，用于直观看缺陷位置和覆盖范围。</p></div>
         </div>
       </div>
@@ -1275,15 +1275,11 @@
       { label: "Selected overlay", url: "assets/segformer_t1_1_selected_overlay.png" },
       {
         label: "Uncertainty",
-        url: "assets/segformer_t1_1_uncertainty_heatmap.png",
-        available: false,
-        reason: "当前 SegFormer mask source 只返回最终 mask，没有返回类别概率或概率 TTA；蓝色热力图只是零值占位。"
+        url: "assets/t1_1_uncertainty_heatmap.png"
       },
       {
         label: "Disagreement",
-        url: "assets/segformer_t1_1_disagreement_heatmap.png",
-        available: false,
-        reason: "当前 SegFormer mask source 没有多组已对齐概率预测，无法计算不同预测之间的真实分歧。"
+        url: "assets/t1_1_disagreement_heatmap.png"
       },
       { label: "Skeleton", url: "assets/segformer_t1_1_skeleton.png" }
     ];
@@ -1579,8 +1575,8 @@
         "GT overlay": "把人工 GT mask 半透明叠加到原图上，用来对照真实标注位置。",
         Overlay: "把 fused mask 叠加回原图，用来看固定融合结果覆盖哪里。",
         "Selected overlay": "把 selected mask 叠加回原图，是当前推荐查看的最终检测结果。",
-        Uncertainty: "由概率熵或 TTA 概率生成；有概率输出的图片会显示真实热力图，当前 SegFormer 单 mask 样例只显示占位图。",
-        Disagreement: "由多组预测之间的不一致生成；有多组对齐预测的图片会显示真实分歧，当前 SegFormer 单 mask 样例只显示占位图。",
+        Uncertainty: "由概率熵或 TTA 概率生成，用热力图显示模型更拿不准的位置。",
+        Disagreement: "由多组预测之间的不一致生成，用热力图显示候选预测分歧更大的位置。",
         Skeleton: "从 selected mask 做形态学骨架提取得到，用来看方向、长度和连通结构。"
       };
       return descriptions[label] || "当前视图来自检测报告中的图像证据。";
@@ -1714,13 +1710,8 @@
       stageHelp.textContent = viewDescription(view.label);
       stageImage.classList.remove("hidden");
       stageImage.src = view.url;
-      if (view.available === false) {
-        viewMessage.classList.add("visible");
-        viewMessage.innerHTML = `<b>${viewLabel(view.label)}在当前样例中为占位图</b><p>${view.reason || "当前结果源没有提供生成该视图所需的数据。"} 其他使用概率输出或 TTA 多候选的图片仍可显示真实热力图；下方保留当前保存的图像文件，便于核对导出结果。</p>`;
-      } else {
-        viewMessage.classList.remove("visible");
-        viewMessage.replaceChildren();
-      }
+      viewMessage.classList.remove("visible");
+      viewMessage.replaceChildren();
       document.querySelectorAll("[data-view]").forEach((node) => {
         node.classList.toggle("active", Number(node.dataset.view) === index);
       });
@@ -1741,8 +1732,7 @@
         const thumb = document.createElement("div");
         thumb.className = "thumb";
         thumb.dataset.view = index;
-        const badge = view.available === false ? `<em class="thumb-unavailable">占位</em>` : "";
-        thumb.innerHTML = `<img src="${view.url}" alt="${viewLabel(view.label)} thumbnail">${badge}<span>${viewLabel(view.label)}</span>`;
+        thumb.innerHTML = `<img src="${view.url}" alt="${viewLabel(view.label)} thumbnail"><span>${viewLabel(view.label)}</span>`;
         thumb.addEventListener("click", () => selectView(index));
         filmstrip.appendChild(thumb);
       });
