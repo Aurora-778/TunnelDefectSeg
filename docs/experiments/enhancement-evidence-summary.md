@@ -9,7 +9,7 @@ The evidence is separated into two layers:
 - **Backbone segmentation quality:** SegFormer B1 validates the raw model quality after training.
 - **Post-inference enhancement quality:** adaptive fusion, uncertainty, morphology, and review signals validate the reliability layer around a mask provider.
 
-Do not mix the two claims. SegFormer improves the mask source; the enhancement module makes output selection and review evidence more inspectable.
+Do not mix the two claims. SegFormer improves the mask source; the enhancement module makes output selection and review evidence more inspectable. Current SegFormer confidence-risk inference uses same-checkpoint identity/hflip probability maps, so `fused_mask`, uncertainty, and disagreement can be traced to the same model run.
 
 ## Backbone Evidence
 
@@ -97,6 +97,7 @@ Use examples from the generated evidence JSON instead of hand-picking images:
 - Do not claim selected output always beats single-pass mIoU.
 - Do not compute or display true mIoU for upload-only images without GT masks.
 - Do not present image-based review priority as structural safety diagnosis or final maintenance decision-making.
+- Do not mix legacy heatmaps with SegFormer masks in the Web or slide examples; same-source artifacts are part of the evidence contract.
 
 ## Suggested Reporting Sentence
 

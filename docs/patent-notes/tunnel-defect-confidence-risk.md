@@ -6,7 +6,7 @@ This note describes an image-based tunnel defect segmentation post-processing me
 
 ## Core Method Chain
 
-1. **多姿态一致性预测:** 对同一张隧道图像执行多姿态推理，例如原图、水平翻转、小角度旋转等。
+1. **多姿态一致性预测:** 对同一张隧道图像执行多姿态推理，例如原图、水平翻转等保守变换。
 2. **预测反变换与融合:** 将每个姿态下的预测结果反变换回原图坐标，再对类别概率进行融合，得到融合分割候选结果。
 3. **不确定性估计:** 基于多姿态预测的概率熵和类别分歧生成不确定性热力图，用于标出需要人工复核的区域。
 4. **自适应输出选择:** 根据 single/fused 一致性、前景面积变化、不确定性和分歧图，在 single、fused 和 hybrid 候选中选择 selected mask，避免固定融合压掉小缺陷。
@@ -24,7 +24,7 @@ This makes the method easier to demonstrate than a pure network replacement:
 - Selected prediction vs. skeleton/morphology visualization.
 - Risk report explaining why manual review is or is not recommended.
 
-SegFormer B1 is treated as a stronger segmentation backbone, while the confidence-risk module is a post-inference enhancement layer. The enhancement claim should remain model-agnostic: a backbone provides candidate masks and probabilities; the post-inference method evaluates consistency, uncertainty, morphology, and review priority.
+SegFormer B1 is treated as a stronger segmentation backbone, while the confidence-risk module is a post-inference enhancement layer. In the current implementation, SegFormer provides same-checkpoint identity/hflip probability maps for fusion, entropy uncertainty, and disagreement. The enhancement claim should remain model-agnostic: a backbone provides candidate masks and probabilities; the post-inference method evaluates consistency, uncertainty, morphology, and review priority.
 
 ## Generated Evidence
 

@@ -1237,13 +1237,13 @@
           <div class="glossary-item"><b>风险分</b><p>风险等级背后的连续分值。分值越高，代表病害形态或模型不确定性越需要关注。</p></div>
           <div class="glossary-item"><b>缺陷像素</b><p>融合预测 mask 中非背景类别的像素总数，反映检测到的病害区域大小。</p></div>
           <div class="glossary-item"><b>Review</b><p>当缺陷区不确定性偏高，系统会给出 YES，表示建议人工检查该图。</p></div>
-          <div class="glossary-item"><b>增强候选</b><p>指原图、翻转图等不同输入姿态得到的候选预测；当前 SegFormer 接口只输出单个 mask。</p></div>
+          <div class="glossary-item"><b>增强候选</b><p>指 SegFormer 对原图、水平翻转图等输入姿态输出的概率预测，先对齐再融合。</p></div>
           <div class="glossary-item"><b>Uncertainty</b><p>由概率熵或 TTA 概率计算，颜色越热表示模型越拿不准。</p></div>
           <div class="glossary-item"><b>高不确定缺陷占比</b><p>缺陷像素中不确定性超过阈值的比例，是复核建议的重要依据。</p></div>
           <div class="glossary-item"><b>连通域</b><p>互相分离的缺陷块数量。数量多可能表示破碎、散裂或误检碎片。</p></div>
           <div class="glossary-item"><b>骨架长度</b><p>把缺陷区域细化成中心线后的长度，适合描述裂缝类长条形病害。</p></div>
           <div class="glossary-item"><b>mIoU</b><p>预测 mask 与人工标注 GT 的平均交并比。没有 GT 的自选图片显示 N/A。</p></div>
-          <div class="glossary-item"><b>Fused mask</b><p>多候选可用时由候选预测融合得到；当前 SegFormer 单 mask 模式下等于 single mask。</p></div>
+          <div class="glossary-item"><b>Fused mask</b><p>由多姿态概率平均后再 argmax 得到，用来减少单次推理的偶然波动。</p></div>
           <div class="glossary-item"><b>Self IoU</b><p>只比较 Single mask 和 Fused mask 的一致性，可用于无 GT 图片，但不能代表真实精度。</p></div>
           <div class="glossary-item"><b>Disagreement</b><p>由多姿态预测差异计算，颜色越热表示候选预测分歧越大。</p></div>
           <div class="glossary-item"><b>Overlay</b><p>把融合 mask 叠加到原图上，用于直观看缺陷位置和覆盖范围。</p></div>
@@ -1255,7 +1255,7 @@
       <div class="panel-title">Patent evidence chain <span>可导出</span></div>
       <div class="panel-body">
         <div class="callout">
-          输入图像 -> 单次预测 -> 融合/选择预测 -> 可用时输出 uncertainty / disagreement -> 骨架/连通域量化 -> 风险等级与复核建议。当前样例展示的是“分割可信评估与风险分级”的完整证据链；指标上融合 mIoU 未必更高，但可解释性和复核定位明显增强。
+          输入图像 -> 单次预测 -> 概率 TTA 融合/选择预测 -> uncertainty / disagreement -> 骨架/连通域量化 -> 风险等级与复核建议。当前样例展示的是“分割可信评估与风险分级”的完整证据链；指标上融合 mIoU 未必更高，但可解释性和复核定位明显增强。
         </div>
       </div>
     </section>
@@ -1347,64 +1347,63 @@
       mask_source: {
         name: "segformer_b1",
         type: "mmsegmentation",
-        probability_tta: false,
-        uncertainty_available: false,
-        disagreement_available: false
+        probability_tta: true,
+        uncertainty_available: true,
+        disagreement_available: true
       },
-      tta_specs: ["segformer_single"],
+      tta_specs: ["segformer_identity", "segformer_hflip"],
       class_names: { "0": "background", "1": "simple", "2": "blocky", "3": "pipeline", "4": "vertical", "5": "horizontal" },
       single_prediction_stats: { "0": 146438, "1": 1018 },
-      fused_prediction_stats: { "0": 146438, "1": 1018 },
-      selected_prediction_stats: { "0": 146438, "1": 1018 },
+      fused_prediction_stats: { "0": 146453, "1": 1003 },
+      hybrid_prediction_stats: { "0": 146453, "1": 1003 },
+      selected_prediction_stats: { "0": 146453, "1": 1003 },
       adaptive_selection: {
         mode: "fused",
         reasons: [
-          "stable single/fused foreground IoU 1.000",
-          "stable fused-to-single area ratio 1.000"
+          "stable single/fused foreground IoU 0.977",
+          "stable fused-to-single area ratio 0.985"
         ],
         consistency: {
-          foreground_iou: 1.0,
-          pixel_agreement: 1.0,
+          foreground_iou: 0.9774951076320939,
+          pixel_agreement: 0.9998440212673612,
           single_foreground_pixels: 1018,
-          fused_foreground_pixels: 1018,
-          fused_to_single_area_ratio: 1.0,
-          single_to_fused_area_ratio: 1.0
+          fused_foreground_pixels: 1003,
+          fused_to_single_area_ratio: 0.9852652259332023,
+          single_to_fused_area_ratio: 1.0149551345962113
         }
       },
       self_consistency: {
-        single_fused_mIoU: 1.0,
-        foreground_iou: 1.0,
-        pixel_agreement: 1.0,
-        class_ious: { "1": 1.0, "2": null, "3": null, "4": null, "5": null },
+        single_fused_mIoU: 0.9774951076320939,
+        foreground_iou: 0.9774951076320939,
+        pixel_agreement: 0.9998440212673612,
+        class_ious: { "1": 0.9774951076320939, "2": null, "3": null, "4": null, "5": null },
         note: "Self-consistency between model outputs only; this is not ground-truth mIoU."
       },
       uncertainty_summary: {
-        available: false,
-        mean: null,
-        max: null,
-        high_fraction: null,
-        defect_mean: null,
-        defect_high_fraction: null,
-        reason: "Mask source did not provide probability/TTA uncertainty; zero-valued heatmap is a placeholder artifact."
+        available: true,
+        mean: 0.0011532915523275733,
+        max: 0.3870871365070343,
+        high_fraction: 0.0009765625,
+        defect_mean: 0.08400039374828339,
+        defect_high_fraction: 0.06779661016949153
       },
       disagreement_summary: {
-        available: false,
-        mean: null,
-        max: null,
-        high_fraction: null,
-        defect_mean: null,
-        defect_high_fraction: null,
-        reason: "Mask source did not provide multiple aligned predictions for disagreement measurement."
+        available: true,
+        mean: 0.00015597873425576836,
+        max: 0.5,
+        high_fraction: 0.00031195746527777775,
+        defect_mean: 0.009970089420676231,
+        defect_high_fraction: 0.019940179461615155
       },
       morphology: {
         image_shape: [384, 384],
         total_pixels: 147456,
-        defect_area_pixels: 1018,
-        defect_area_ratio: 0.006903754,
+        defect_area_pixels: 1003,
+        defect_area_ratio: 0.006802029079861111,
         defect_component_count: 1,
-        defect_skeleton_length: 65,
+        defect_skeleton_length: 69,
         classes: [
-          { class_id: 1, class_name: "simple", raw_area_pixels: 1018, area_pixels: 1018, area_ratio: 0.006903754, component_count: 1, largest_component_area: 1018, skeleton_length: 65, dominant_direction: "horizontal", dominant_direction_degrees: 159.99, fragmentation_index: 0, fragmented: false },
+          { class_id: 1, class_name: "simple", raw_area_pixels: 1003, area_pixels: 1003, area_ratio: 0.006802029079861111, component_count: 1, largest_component_area: 1003, skeleton_length: 69, dominant_direction: "horizontal", dominant_direction_degrees: 158.17233338861706, fragmentation_index: 0, fragmented: false },
           { class_id: 2, class_name: "blocky", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
           { class_id: 3, class_name: "pipeline", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
           { class_id: 4, class_name: "vertical", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
@@ -1416,17 +1415,16 @@
         score: 1.75,
         review_required: false,
         class_results: [
-          { class_id: 1, class_name: "simple", risk_level: "low", review_required: false, reasons: ["class severity weight 1.00", "small area ratio 0.0069", "moderate skeleton length 65"] },
+          { class_id: 1, class_name: "simple", risk_level: "low", review_required: false, reasons: ["class severity weight 1.00", "small area ratio 0.0068", "moderate skeleton length 69"] },
           { class_id: 2, class_name: "blocky", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] },
           { class_id: 3, class_name: "pipeline", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] },
           { class_id: 4, class_name: "vertical", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] },
           { class_id: 5, class_name: "horizontal", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] }
         ],
         suggestions: [
-          "Low image-based defect risk; routine review is sufficient.",
-          "Uncertainty unavailable for this mask source; review relies on morphology and selected-mask evidence."
+          "Low image-based defect risk; routine review is sufficient."
         ],
-        uncertainty_available: false
+        uncertainty_available: true
       }
     };
 
@@ -1570,8 +1568,8 @@
         Original: "输入的隧道原图，所有 mask 和叠加图都以它为底图。",
         "GT mask": "数据集人工标注的标准 mask，只在样例或有标注数据中存在。",
         "Single mask": "模型对原图做一次推理得到的病害 mask。",
-        "Fused mask": "把候选预测融合后的 mask；当前 SegFormer 单 mask 模式下它等于 single mask 的拷贝。",
-        "Selected mask": "自适应选择后的最终 mask；当前 SegFormer 单 mask 模式下通常与 single mask 保持一致。",
+        "Fused mask": "把对齐后的 SegFormer 多姿态概率平均后得到的 mask，用来稳定边界和弱缺陷区域。",
+        "Selected mask": "自适应选择后的最终 mask；当融合收缩或分歧较大时会保护更可信的缺陷证据。",
         "GT overlay": "把人工 GT mask 半透明叠加到原图上，用来对照真实标注位置。",
         Overlay: "把 fused mask 叠加回原图，用来看固定融合结果覆盖哪里。",
         "Selected overlay": "把 selected mask 叠加回原图，是当前推荐查看的最终检测结果。",

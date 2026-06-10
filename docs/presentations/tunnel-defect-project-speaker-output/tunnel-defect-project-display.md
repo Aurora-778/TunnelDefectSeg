@@ -148,9 +148,9 @@ Transition: 最后一页总结目前完成情况和下一步工作。
 
 目前项目已经形成一个能训练、能评估、能展示、能解释的完整系统。
 
-已经完成的部分包括：数据集整理成 6 类标准格式；SegFormer B1 训练到 mIoU 84.33%；实现自适应 mask selection、uncertainty 复核提示和形态学证据；做出了支持拖拽图片实时检测的 Web 展示。
+已经完成的部分包括：数据集整理成 6 类标准格式；SegFormer B1 训练到 mIoU 84.33%；实现自适应 mask selection、基于 SegFormer 概率 TTA 的 uncertainty / disagreement 复核提示和形态学证据；做出了支持拖拽图片实时检测的 Web 展示。
 
-下一步可以从三方面继续推进。第一，优化 blocky 类，因为它目前 IoU 最低。第二，把 uncertainty 和 selected 的逻辑进一步和 SegFormer 输出结合得更紧。第三，整理更适合专利附图的典型案例，比如 fixed fusion 抹掉小病害、selected 成功保留、uncertainty 提示复核区域。
+下一步可以从三方面继续推进。第一，优化 blocky 类，因为它目前 IoU 最低。第二，做更多典型案例和消融对比，让 selected、uncertainty、disagreement 的价值更直观。第三，继续整理更适合专利附图的例子，比如 fixed fusion 抹掉小病害、selected 成功保留、uncertainty 提示复核区域。
 
 最后一句话总结这个项目：它不是只告诉用户“这里可能有病害”，而是进一步告诉用户“为什么这么判断，以及哪里需要再看一眼”。
 
@@ -172,7 +172,7 @@ Transition: 最后一页总结目前完成情况和下一步工作。
 
 ### 2. SegFormer 是已有模型，那你的创新在哪里？
 
-创新不在“我发明了 SegFormer”。SegFormer 是底座。我的创新主要在模型输出之后：系统会比较 single、fused 等候选 mask，识别 fixed fusion 抹掉小病害的情况，自适应选择更可靠的输出，并生成骨架、面积、方向、连通域、风险提示等可复核证据。
+创新不在“我发明了 SegFormer”。SegFormer 是底座。我的创新主要在模型输出之后：系统会用同一个 SegFormer checkpoint 生成 single 和 probability TTA fused 结果，比较候选 mask 的稳定性，识别 fixed fusion 抹掉小病害的情况，自适应选择更可靠的输出，并生成 uncertainty、disagreement、骨架、面积、方向、连通域、风险提示等可复核证据。
 
 ### 3. mIoU 84.33 是怎么来的？
 
@@ -208,7 +208,7 @@ fusion 的初衷是让预测更稳定，但对小病害来说，多次预测取�
 
 ### 11. uncertainty 是什么？
 
-uncertainty 表示模型对某些像素不太确定。它不是直接等于错误，但可以提示哪些区域值得人工复核。在有 GT 的样本里，高 uncertainty 区域中有 78.27% 是错误像素，说明它对找风险区域有参考意义。
+uncertainty 表示模型对某些像素不太确定。当前 Web 里的 uncertainty 来自 SegFormer 多姿态概率融合后的熵，不是手工画出来的图。它不直接等于错误，但可以提示哪些区域值得人工复核。在有 GT 的样本里，高 uncertainty 区域中有 78.27% 是错误像素，说明它对找风险区域有参考意义。
 
 ### 12. 没有 GT 的上传图片为什么还显示一些指标？
 
@@ -257,9 +257,9 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 | IoU | 指标 | 5 | 预测区域和 GT 区域交集除以并集。 |
 | aAcc | 指标 | 5 | all pixel accuracy，整体像素准确率。 |
 | single mask | 候选结果 | 6, 8 | 单次模型推理得到的 mask。 |
-| fixed fused | 对照策略 | 6, 8, 9 | 固定融合多个候选预测，可能提高稳定性，也可能抹掉小病害。 |
+| fixed fused | 对照策略 | 6, 8, 9 | 固定融合多个候选概率预测，可能提高稳定性，也可能抹掉小病害。 |
 | selected mask | 增强输出 | 6-10 | 自适应选择后的最终 mask。 |
-| uncertainty | 复核信号 | 9, 10 | 模型不确定区域，用于提示人工复核。 |
+| uncertainty | 复核信号 | 9, 10 | 由 SegFormer 概率 TTA 计算出的模型不确定区域，用于提示人工复核。 |
 | skeleton | 形态证据 | 1, 10 | 从 mask 提取的骨架线，用来观察方向、长度和连通结构。 |
 | blocky | 类别 | 3, 5, 12 | 块状病害类别，当前 IoU 最低，是后续优化重点。 |
 
@@ -284,5 +284,4 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 
 ## One-Minute Backup Summary
 
-这个项目做的是隧道病害语义分割和可信增强展示。基础模型部分，我把系统切换到 SegFormer B1，在 6 类数据集上训练到 160000 iter，最终 mIoU 达到 84.33%。增强部分，我没有固定采用融合结果，而是比较 single 和 fused 等候选 mask，发现 fixed fusion 有时会抹掉小病害，所以设计 selected 策略保留更可靠的输出。系统还会从 mask 中提取骨架、面积、方向、连通域和 uncertainty 复核提示。最后做成 Web demo，支持拖拽图片实时检测。有 GT 的样本展示真实 mIoU，没有 GT 的自选图片不乱报精度，只展示可复核证据。创新点主要是病害分割后的自适应输出选择和复核证据生成流程。
-
+这个项目做的是隧道病害语义分割和可信增强展示。基础模型部分，我把系统切换到 SegFormer B1，在 6 类数据集上训练到 160000 iter，最终 mIoU 达到 84.33%。增强部分，我没有固定采用融合结果，而是用同一个 SegFormer checkpoint 生成 single 和 probability TTA fused 结果，比较候选 mask 的稳定性；当 fixed fusion 可能抹掉小病害时，selected 策略保留更可靠的输出。系统还会从模型概率里生成 uncertainty 和 disagreement，并从 mask 中提取骨架、面积、方向和连通域。最后做成 Web demo，支持拖拽图片实时检测。有 GT 的样本展示真实 mIoU，没有 GT 的自选图片不乱报精度，只展示可复核证据。创新点主要是病害分割后的自适应输出选择和复核证据生成流程。

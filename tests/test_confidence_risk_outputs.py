@@ -98,6 +98,9 @@ class _FakeSegFormerSource:
         mask = np.zeros(input_size, dtype=np.uint8)
         mask[5, 2:10] = 1
         uncertainty = np.zeros(input_size, dtype=np.float32)
+        uncertainty[5, 2:10] = 0.42
+        disagreement = np.zeros(input_size, dtype=np.float32)
+        disagreement[5, 4:6] = 0.5
         raw = np.zeros((*input_size, 3), dtype=np.uint8)
         raw[..., 1] = 80
         return {
@@ -105,14 +108,14 @@ class _FakeSegFormerSource:
             "single_mask": mask,
             "fused_mask": mask.copy(),
             "entropy_uncertainty": uncertainty,
-            "disagreement_uncertainty": uncertainty.copy(),
-            "tta_specs": ["segformer_single"],
+            "disagreement_uncertainty": disagreement,
+            "tta_specs": ["segformer_identity", "segformer_hflip"],
             "mask_source": {
                 "name": "segformer_b1",
                 "type": "mmsegmentation",
-                "probability_tta": False,
-                "uncertainty_available": False,
-                "disagreement_available": False,
+                "probability_tta": True,
+                "uncertainty_available": True,
+                "disagreement_available": True,
             },
         }
 
@@ -124,13 +127,27 @@ def test_process_image_accepts_segformer_like_mask_source(tmp_path):
     report = process_image(_FakeSegFormerSource(), _FakeSegFormerConfig, image_path, tmp_path)
 
     assert report["mask_source"]["name"] == "segformer_b1"
-    assert report["uncertainty_summary"]["available"] is False
-    assert report["disagreement_summary"]["available"] is False
-    assert report["risk"]["uncertainty_available"] is False
-    assert any("unavailable" in item for item in report["risk"]["suggestions"])
-    assert report["tta_specs"] == ["segformer_single"]
+    assert report["mask_source"]["probability_tta"] is True
+    assert report["uncertainty_summary"]["available"] is True
+    assert report["disagreement_summary"]["available"] is True
+    assert report["risk"]["uncertainty_available"] is True
+    assert all("unavailable" not in item for item in report["risk"]["suggestions"])
+    assert report["tta_specs"] == ["segformer_identity", "segformer_hflip"]
     assert report["single_prediction_stats"]["1"] == 8
     assert report["fused_prediction_stats"]["1"] == 8
+    assert report["uncertainty_summary"]["defect_mean"] == pytest.approx(0.42)
+    assert report["disagreement_summary"]["max"] == pytest.approx(0.5)
+    for section in [
+        "selected_prediction_stats",
+        "self_consistency",
+        "adaptive_selection",
+        "uncertainty_summary",
+        "disagreement_summary",
+        "morphology",
+        "risk",
+        "artifacts",
+    ]:
+        assert section in report
     assert (tmp_path / "segformer_input_report.json").exists()
 
 

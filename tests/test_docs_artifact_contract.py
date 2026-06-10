@@ -84,8 +84,22 @@ def test_readme_documents_explicit_segformer_mask_source():
     assert "mask_source" in readme
 
 
-def test_web_demo_documents_unavailable_uncertainty_for_single_mask_sources():
+def test_web_demo_documents_segformer_probability_tta_sample():
     html = (ROOT / "web_demo" / "index.html").read_text(encoding="utf-8")
 
     assert "uncertainty_summary?.available === false" in html
-    assert "未计算 uncertainty" in html
+    assert 'probability_tta: true' in html
+    assert 'tta_specs: ["segformer_identity", "segformer_hflip"]' in html
+    assert "assets/segformer_t1_1_uncertainty_heatmap.png" in html
+    assert "assets/segformer_t1_1_disagreement_heatmap.png" in html
+    assert "当前 SegFormer 接口只输出单个 mask" not in html
+    assert "当前 SegFormer 单 mask 模式" not in html
+
+
+def test_presentation_uses_same_web_demo_segformer_assets():
+    deck = (ROOT / "docs" / "presentations" / "tunnel-defect-project" / "index.html").read_text(encoding="utf-8")
+
+    assert "../../../web_demo/assets/segformer_t1_1_overlay.png" in deck
+    assert "../../../web_demo/assets/segformer_t1_1_selected_mask.png" in deck
+    assert "../../../web_demo/assets/segformer_t1_1_skeleton.png" in deck
+    assert "../../../experiments/segformer_b1/confidence_risk_smoke" not in deck

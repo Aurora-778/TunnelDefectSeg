@@ -158,7 +158,7 @@ The default mask source is the legacy ResNet50/FCN path. To run the same artifac
 & 'D:/users/anaconda3/envs/segformer-phase2/python.exe' run_confidence_risk.py <image-or-folder> --model-source segformer --segformer-config experiments/segformer_b1/configs/segformer_b1_6cls.py --segformer-checkpoint experiments/segformer_b1/runs/segformer_b1_6cls/latest.pth --output-dir experiments/segformer_b1/confidence_risk
 ```
 
-Each report includes a `mask_source` block so downstream demos can distinguish `legacy_resnet50_fcn` from `segformer_b1`. SegFormer mode currently supplies the trained mask source to the confidence-risk artifact chain; the adaptive enhancement logic remains model-agnostic.
+Each report includes a `mask_source` block so downstream demos can distinguish `legacy_resnet50_fcn` from `segformer_b1`. SegFormer mode uses the trained checkpoint as a probability source: identity and horizontal-flip probability maps are aligned, averaged, and then used for `fused_mask`, entropy uncertainty, and TTA disagreement. The adaptive enhancement logic remains model-agnostic.
 
 Main artifacts per image:
 
@@ -213,7 +213,7 @@ The stage experiment tables are collected in `docs/experiments/enhancement-evide
 
 The `web_app.py` server provides a local drag-and-drop detection UI. It serves `web_demo/index.html`, accepts image uploads, runs the confidence-risk inference pipeline, and returns the generated single/fused/selected masks, overlays, uncertainty, disagreement, skeleton, and JSON risk report.
 
-Uploaded images do not include ground-truth masks, so the UI correctly displays true mIoU as `N/A`. It can still show `Self IoU` as a model self-consistency signal.
+Uploaded images do not include ground-truth masks, so the UI correctly displays true mIoU as `N/A`. It can still show `Self IoU`, uncertainty, disagreement, morphology, and selected-mask rationale as model-derived review evidence.
 
 Start it on Windows:
 

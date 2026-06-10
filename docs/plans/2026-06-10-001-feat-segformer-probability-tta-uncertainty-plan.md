@@ -1,7 +1,7 @@
 ---
 title: SegFormer Probability TTA Uncertainty Plan
 type: feat
-status: active
+status: completed
 date: 2026-06-10
 origin: docs/brainstorms/2026-06-10-segformer-probability-tta-uncertainty-requirements.md
 ---
@@ -255,4 +255,3 @@ Out of scope:
 - Shared probability utilities: `tta_confidence.py`
 - SegFormer paper: https://arxiv.org/abs/2105.15203
 - Test-time augmentation uncertainty paper: https://arxiv.org/abs/1807.07356
-

@@ -123,18 +123,18 @@
     <div class="grid g2 mt-l">
       <div class="terminal">
         <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span>decision_loop.py</span></div>
-<pre><span class="kw">输入</span>：模型画出的几张候选 mask
+<pre><span class="kw">输入</span>：模型输出的 single mask 和多姿态概率
 
 <span class="fn">比较</span>：哪张更稳定，哪张把小病害抹掉了
 <span class="fn">选择</span>：single / fused / hybrid 中更合适的一张
-<span class="fn">提取</span>：骨架、面积、连通域、方向
+<span class="fn">提取</span>：uncertainty、分歧、骨架、面积、方向
 <span class="fn">输出</span>：风险等级和复核理由
 
 <span class="kw">结果</span>：selected mask + 可解释报告</pre>
       </div>
       <div class="stack">
         <div class="card card-accent"><h4>single</h4><p class="dim">如果融合把小病害抹掉，就保留单次预测。</p></div>
-        <div class="card card-accent"><h4>fused</h4><p class="dim">如果多次预测结果一致，就采用更稳定的融合结果。</p></div>
+        <div class="card card-accent"><h4>fused</h4><p class="dim">如果多姿态概率结果一致，就采用更稳定的融合结果。</p></div>
         <div class="card card-accent"><h4>hybrid</h4><p class="dim">如果两者各有优点，就把可信的小缺陷补回来。</p></div>
       </div>
     </div>
@@ -147,7 +147,7 @@
     <div class="innovation-bento mt-l">
       <div class="innovation wide"><span>创新点 1</span><h4>发现“融合反而变差”的情况</h4><p>有些小裂缝经过固定融合后会被抹掉。系统会检测这种情况，而不是默认相信融合结果。</p></div>
       <div class="innovation tall"><span>创新点 2</span><h4>自动选择最适合展示的 mask</h4><p>系统会在 single、fused、hybrid 中选一张更可靠的结果，而不是只输出固定一种。</p></div>
-      <div class="innovation"><span>创新点 3</span><h4>把 mask 变成可复核证据</h4><p>不仅画区域，还给出骨架长度、方向、连通域和风险原因。</p></div>
+      <div class="innovation"><span>创新点 3</span><h4>把 mask 变成可复核证据</h4><p>不仅画区域，还给出 uncertainty、分歧、骨架长度、方向和风险原因。</p></div>
       <div class="innovation"><span>创新点 4</span><h4>不乱报精度</h4><p>没有人工标注时不显示真实 mIoU，避免把模型自测结果当成准确率。</p></div>
     </div>
     <div class="callout mt-m">一句话概括：不是发明一个新模型，而是发明一套让病害分割结果更可靠、更好解释、更适合人工复核的流程。</div>
@@ -204,14 +204,14 @@
   <section class="slide" data-title="Demo">
     <h2 class="h2">最终做成了一个网页：拖图片进去就能看结果。</h2>
     <div class="image-grid mt-l">
-      <figure><img src="../../../experiments/segformer_b1/confidence_risk_smoke/t1_1_overlay.png" alt="overlay"><figcaption>Overlay</figcaption></figure>
-      <figure><img src="../../../experiments/segformer_b1/confidence_risk_smoke/t1_1_selected_mask.png" alt="selected mask"><figcaption>Selected mask</figcaption></figure>
-      <figure><img src="../../../experiments/segformer_b1/confidence_risk_smoke/t1_1_skeleton.png" alt="skeleton"><figcaption>Skeleton</figcaption></figure>
+      <figure><img src="../../../web_demo/assets/segformer_t1_1_overlay.png" alt="overlay"><figcaption>Overlay</figcaption></figure>
+      <figure><img src="../../../web_demo/assets/segformer_t1_1_selected_mask.png" alt="selected mask"><figcaption>Selected mask</figcaption></figure>
+      <figure><img src="../../../web_demo/assets/segformer_t1_1_skeleton.png" alt="skeleton"><figcaption>Skeleton</figcaption></figure>
     </div>
     <div class="grid g3 mt-m">
       <div class="card"><h4>能看多种结果</h4><p class="dim">原图、病害 mask、叠加图、骨架图、风险报告都能切换。</p></div>
       <div class="card"><h4>不乱显示准确率</h4><p class="dim">用户自己上传的图片没有人工标注，所以真实 mIoU 显示 N/A。</p></div>
-      <div class="card"><h4>结果能解释</h4><p class="dim">页面会显示骨架长度、方向、连通域、risk level 和复核建议。</p></div>
+      <div class="card"><h4>结果能解释</h4><p class="dim">页面会显示 uncertainty、分歧、骨架长度、方向、risk level 和复核建议。</p></div>
     </div>
     <div class="deck-footer"><span class="mono">双击 run_web_app.bat 后，打开 http://127.0.0.1:8000</span><span class="slide-number" data-current="10" data-total="12"></span></div>
     <div class="notes">展示时可以直接现场拖图。强调 Web 是项目成果的一部分，不只是截图。</div>
@@ -251,15 +251,15 @@
         <ul class="clean-list">
           <li>整理了 6 类隧道病害数据</li>
           <li>训练出 mIoU 84.33% 的 SegFormer 模型</li>
-          <li>实现了自适应选择和风险解释模块</li>
+          <li>实现了 probability TTA、uncertainty、分歧和风险解释模块</li>
           <li>做出了可拖拽检测的 Web 展示</li>
         </ul>
       </div>
       <div class="card">
         <h4>下一步可以继续做</h4>
         <ul class="clean-list">
-          <li>让 SegFormer 也输出更完整的不确定性</li>
           <li>重点优化 blocky 类病害</li>
+          <li>补充更多典型案例和消融对比</li>
           <li>挑选更好的典型案例做专利附图</li>
           <li>整理专利权利要求和实验对比</li>
         </ul>
