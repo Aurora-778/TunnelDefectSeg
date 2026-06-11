@@ -215,13 +215,13 @@ The `web_app.py` server provides a local drag-and-drop detection UI. It serves `
 
 Uploaded images do not include ground-truth masks, so the UI correctly displays true mIoU as `N/A`. It can still show `Self IoU`, uncertainty, disagreement, morphology, and selected-mask rationale as model-derived review evidence.
 
-Start it on Windows:
+Start it on Windows with the SegFormer runtime:
 
 ```powershell
-python web_app.py --host 127.0.0.1 --port 8000
+& 'D:/users/anaconda3/envs/segformer-phase2/python.exe' web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
 ```
 
-Or double-click:
+Or double-click the SegFormer-ready launcher:
 
 ```text
 run_web_app.bat

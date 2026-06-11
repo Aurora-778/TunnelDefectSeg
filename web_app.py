@@ -8,6 +8,7 @@ import shutil
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from email import policy
 from email.parser import BytesParser
 from http import HTTPStatus
@@ -15,7 +16,14 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from run_confidence_risk import IMAGE_SUFFIXES, load_model, process_image
+from run_confidence_risk import (
+    DEFAULT_SEGFORMER_CHECKPOINT,
+    DEFAULT_SEGFORMER_CONFIG,
+    DEFAULT_SEGFORMER_REPO_ROOT,
+    IMAGE_SUFFIXES,
+    load_model,
+    process_image,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -26,9 +34,21 @@ EVIDENCE_FILES = {
     "all": ROOT / "experiments" / "enhancement_evidence_all_summary.json",
 }
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+DEFAULT_WEB_PYTHON = Path("D:/users/anaconda3/envs/segformer-phase2/python.exe")
+
+
+@dataclass(frozen=True)
+class WebModelConfig:
+    model_source: str = "segformer"
+    python_executable: Path = DEFAULT_WEB_PYTHON
+    segformer_config: Path = DEFAULT_SEGFORMER_CONFIG
+    segformer_checkpoint: Path = DEFAULT_SEGFORMER_CHECKPOINT
+    segformer_repo_root: Path = DEFAULT_SEGFORMER_REPO_ROOT
+    segformer_device: str = "cuda:0"
 
 _MODEL = None
 _CONFIG = None
+_WEB_MODEL_CONFIG = WebModelConfig()
 _INFER_LOCK = threading.Lock()
 
 
@@ -67,7 +87,13 @@ def _load_evidence_payload() -> dict:
 def _load_model_once():
     global _MODEL, _CONFIG
     if _MODEL is None or _CONFIG is None:
-        _MODEL, _CONFIG = load_model()
+        _MODEL, _CONFIG = load_model(
+            model_source=_WEB_MODEL_CONFIG.model_source,
+            segformer_config=_WEB_MODEL_CONFIG.segformer_config,
+            segformer_checkpoint=_WEB_MODEL_CONFIG.segformer_checkpoint,
+            segformer_repo_root=_WEB_MODEL_CONFIG.segformer_repo_root,
+            segformer_device=_WEB_MODEL_CONFIG.segformer_device,
+        )
     return _MODEL, _CONFIG
 
 
@@ -176,7 +202,14 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             self._serve_file(OUTPUT_ROOT / path.removeprefix("/outputs/"))
             return
         if path == "/api/health":
-            self._send_json({"ok": True, "model_loaded": _MODEL is not None})
+            self._send_json(
+                {
+                    "ok": True,
+                    "model_loaded": _MODEL is not None,
+                    "model_source": _WEB_MODEL_CONFIG.model_source,
+                    "segformer_device": _WEB_MODEL_CONFIG.segformer_device,
+                }
+            )
             return
         if path == "/api/evidence":
             self._send_json(_load_evidence_payload())
@@ -228,14 +261,30 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the tunnel defect live detection web app.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--model-source", choices=["legacy", "segformer"], default=WebModelConfig.model_source)
+    parser.add_argument("--python-executable", type=Path, default=WebModelConfig.python_executable)
+    parser.add_argument("--segformer-config", type=Path, default=DEFAULT_SEGFORMER_CONFIG)
+    parser.add_argument("--segformer-checkpoint", type=Path, default=DEFAULT_SEGFORMER_CHECKPOINT)
+    parser.add_argument("--segformer-repo-root", type=Path, default=DEFAULT_SEGFORMER_REPO_ROOT)
+    parser.add_argument("--segformer-device", default=WebModelConfig.segformer_device)
     return parser.parse_args()
 
 
 def main() -> None:
+    global _WEB_MODEL_CONFIG
     args = parse_args()
+    _WEB_MODEL_CONFIG = WebModelConfig(
+        model_source=args.model_source,
+        python_executable=args.python_executable,
+        segformer_config=args.segformer_config,
+        segformer_checkpoint=args.segformer_checkpoint,
+        segformer_repo_root=args.segformer_repo_root,
+        segformer_device=args.segformer_device,
+    )
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer((args.host, args.port), DetectionHandler)
     print(f"Serving live detector at http://{args.host}:{args.port}")
+    print(f"Model source: {_WEB_MODEL_CONFIG.model_source}")
     server.serve_forever()
 
 

@@ -1,7 +1,13 @@
 param(
     [string]$HostAddress = '127.0.0.1',
     [int]$Port = 8000,
-    [string]$PythonExe = 'python',
+    [string]$PythonExe = 'D:/users/anaconda3/envs/segformer-phase2/python.exe',
+    [ValidateSet('legacy', 'segformer')]
+    [string]$ModelSource = 'segformer',
+    [string]$SegformerConfig = 'experiments/segformer_b1/configs/segformer_b1_6cls.py',
+    [string]$SegformerCheckpoint = 'experiments/segformer_b1/runs/segformer_b1_6cls/latest.pth',
+    [string]$SegformerRepoRoot = 'C:/Users/26822/Desktop/隧道病害检测/third_party/SegFormer-master',
+    [string]$SegformerDevice = 'cuda:0',
     [switch]$NoBrowser,
     [switch]$CheckOnly
 )
@@ -50,6 +56,7 @@ Set-Location $RepoRoot
 Write-Host "Repo root: $RepoRoot"
 Write-Host "Web URL:   $Url"
 Write-Host "Python:    $PythonExe"
+Write-Host "Model:     $ModelSource"
 Write-Host ""
 
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'web_app.py'))) {
@@ -78,5 +85,13 @@ Write-Host "Starting web app. Keep this window open while using the detector."
 Write-Host "Press Ctrl+C to stop the server."
 Write-Host ""
 
-& $PythonExe 'web_app.py' --host $HostAddress --port $Port
+& $PythonExe 'web_app.py' `
+    --host $HostAddress `
+    --port $Port `
+    --model-source $ModelSource `
+    --python-executable $PythonExe `
+    --segformer-config $SegformerConfig `
+    --segformer-checkpoint $SegformerCheckpoint `
+    --segformer-repo-root $SegformerRepoRoot `
+    --segformer-device $SegformerDevice
 exit $LASTEXITCODE
