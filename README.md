@@ -1,166 +1,190 @@
-# ResNet50 6-Class Segmentation Baseline
+# 隧道病害分割与 Web 展示项目
 
-This workspace contains a unified training and evaluation pipeline for tunnel defect segmentation with a fixed 6-class label space:
+这个仓库用于做隧道病害语义分割实验、增强模块验证和本地 Web 可视化展示。当前项目已经从早期 `ResNet50_FCN` 基线升级到 `SegFormer B1` 训练路径，并保留了单次预测、TTA 融合、adaptive selection、uncertainty、disagreement、skeleton 等结果，方便对比和向老师展示。
 
-- `0` background
-- `1` simple
-- `2` blocky
-- `3` pipeline
-- `4` vertical
-- `5` horizontal
+## 当前任务目标
 
-## Current conventions
+- 训练 6 类隧道病害分割模型。
+- 使用 SegFormer B1 提升 mask 质量。
+- 在 Web 端支持拖拽图片实时检测。
+- 展示原图、GT 标注、单次 mask、融合 mask、选择 mask、叠加图、不确定性图、分歧图、骨架图和报告指标。
+- 保留增强模块的实验数据，用于说明创新点和阶段性效果。
 
-- Input size: `384 x 384`
-- Epochs: `200`
-- Train/val/test split: `700 / 150 / 150`
-- Default label mode: `multiclass`
-- All masks are normalized to folder-level class ids during loading
-- Final report format: `Unified Baseline Evaluation Report`
+## 类别定义
 
-## Key files
+固定使用 6 类标签空间：
 
-- `train_resnet50.py`
-  - Main training and evaluation entrypoint
-  - Supports resuming from checkpoints when `AUTO_RESUME=1`
-  - Reads experiment name from the `EXP_NAME` environment variable
-- `data_adapter.py`
-  - Discovers samples
-  - Splits the dataset deterministically
-  - Loads masks and converts them to the 6-class label space
-- `metrics_adapter.py`
-  - Streaming confusion-matrix metrics for `PA`, `mIoU`, and `mDice`
-- `build_6class_labels.py`
-  - Rebuilds `multiclass_labels/`
-  - Regenerates `class_manifest.csv` and `class_summary.json`
+| ID | Class | 中文说明 |
+|---:|---|---|
+| 0 | background | 背景 |
+| 1 | simple | simple 类病害 |
+| 2 | blocky | 块状病害 |
+| 3 | pipeline | 管线类病害 |
+| 4 | vertical | 竖向病害 |
+| 5 | horizontal | 横向病害 |
 
-## Training entrypoints
+## 数据与训练约定
 
-### SegFormer B1 upgrade path
+- 输入尺寸：`384 x 384`
+- 数据划分：`train / val / test = 700 / 150 / 150`
+- 标签模式：`multiclass`
+- 训练轮次：ResNet50 基线默认 `200 epoch`
+- mmseg / SegFormer 当前训练：`160000 iter`
+- mask 会在读取时统一转换到 6 类标签空间。
+- 最终评价主要看 `mIoU`、`mAcc`、`aAcc`，以及每个类别的 `IoU / Acc`。
 
-The ResNet50 baseline can localize some defects but often predicts bent or thin masks as block-like regions. Prepare a SegFormer B1 replacement baseline with:
+## 关键文件
 
-```powershell
-python segformer_tools.py --out-dir experiments/segformer_b1 --segformer-repo-root "C:\Users\26822\Desktop\隧道病害检测\third_party\SegFormer-master"
+- `train_resnet50.py`：早期 ResNet50/FCN 训练与评估入口，支持 `AUTO_RESUME=1` 断点续训。
+- `data_adapter.py`：发现样本、固定划分数据集、读取图像和 mask。
+- `metrics_adapter.py`：流式混淆矩阵指标，计算 `PA`、`mIoU`、`mDice`。
+- `build_6class_labels.py`：重新生成 `multiclass_labels/`、`class_manifest.csv` 和 `class_summary.json`。
+- `segformer_tools.py`：生成 SegFormer/mmseg 数据配置和启动脚本。
+- `run_confidence_risk.py`：推理后增强模块，输出 mask、uncertainty、disagreement、skeleton 和 JSON 报告。
+- `web_app.py`：本地 Web 检测服务，支持拖拽上传图片并实时生成多视图结果。
+- `web_demo/index.html`：Web 前端展示界面。
+
+## 数据目录
+
+原始数据按类别目录组织：
+
+```text
+1/images    1/labels
+2/images    2/labels
+3/images    3/labels
+4/images    4/labels
+5/images    5/labels
 ```
 
-This creates:
+`build_6class_labels.py` 运行后会生成：
 
-- `experiments/segformer_b1/mmseg/`
-- `experiments/segformer_b1/configs/segformer_b1_6cls.py`
-- `experiments/segformer_b1/train_segformer_b1.ps1`
-- `experiments/segformer_b1/test_segformer_b1.ps1`
+- `multiclass_labels/`：统一后的 6 类 mask。
+- `class_manifest.csv`：图像与标签配对清单。
+- `class_summary.json`：每类图像数和像素统计。
 
-Training still requires a SegFormer/mmseg environment with `mmcv`, `mmseg`, and `timm`. The current repository can prepare the data and config without those dependencies.
+当前快照：
 
-### Resume-capable baseline run
+- 总样本数：`1000`
+- 每个病害类别：`200` 张图像
 
-- `run_train_resnet50.bat`
-- `run_train_resnet50_visible.ps1`
+## SegFormer B1 训练
 
-Default output directory:
+SegFormer 路径用于替换早期 ResNet50/FCN 基线。它更适合细长裂缝、折角和复杂边缘的分割。
 
-- `experiments/ResNet50_FCN_6cls`
+重新生成 SegFormer 配置：
 
-### Clean retrain run
+```powershell
+& 'D:/users/anaconda3/envs/segformer-phase2/python.exe' segformer_tools.py --out-dir experiments/segformer_b1 --segformer-repo-root 'C:/Users/26822/Desktop/隧道病害检测/third_party/SegFormer-master' --python-executable 'D:/users/anaconda3/envs/segformer-phase2/python.exe'
+```
 
-- `run_train_resnet50_fixed.bat`
-- `run_train_resnet50_fixed_visible.ps1`
+双击训练：
 
-This entrypoint sets:
+```text
+run_train_segformer_cuda.bat
+```
 
-- `EXP_NAME=ResNet50_FCN_6cls_fixed`
-- `AUTO_RESUME=0`
+双击从最新 checkpoint 继续训练：
 
-Output directory:
+```text
+resume_train_segformer_cuda.bat
+```
 
-- `experiments/ResNet50_FCN_6cls_fixed`
+PowerShell 等价命令：
 
-### Resume interrupted fixed run
+```powershell
+& 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1'
+& 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1' -ResumeLatest
+```
 
-- `run_train_resnet50_fixed_resume.bat`
-- `run_train_resnet50_fixed_resume_visible.ps1`
+训练入口冒烟测试：
 
-This entrypoint sets:
+```powershell
+& 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1' -SmokeTest
+```
 
-- `EXP_NAME=ResNet50_FCN_6cls_fixed`
-- `AUTO_RESUME=1`
+已有阶段结果：
 
-Use this after an interruption to continue from the latest batch or epoch checkpoint.
+| Iter | mIoU | mAcc | aAcc | 说明 |
+|---:|---:|---:|---:|---|
+| 160000 | 84.33% | 91.17% | 98.62% | SegFormer B1 已完成主干训练 |
 
-## Deep-teach entrypoints
+每类结果：
 
-These are explicit launch wrappers for teaching-oriented runs:
+| Class | IoU | Acc |
+|---|---:|---:|
+| background | 99.01 | 99.51 |
+| simple | 80.23 | 88.40 |
+| blocky | 53.58 | 75.56 |
+| pipeline | 94.16 | 97.43 |
+| vertical | 95.85 | 97.75 |
+| horizontal | 83.17 | 88.34 |
 
-- `run_deep_teach_resnet50.bat`
-- `run_deep_teach_resnet50_visible.ps1`
+当前短板主要是 `blocky` 类，后续优化可继续围绕难例、边界、小目标和类别混淆展开。
 
-## Data layout
+## ResNet50 基线
 
-Expected image/mask layout:
+保留 ResNet50/FCN 是为了做历史对比和增强模块兼容验证。
 
-- `1/images`, `1/labels`
-- `2/images`, `2/labels`
-- `3/images`, `3/labels`
-- `4/images`, `4/labels`
-- `5/images`, `5/labels`
+断点续训基线：
 
-The loader maps each folder to its fixed class id in multiclass mode.
+```text
+run_train_resnet50.bat
+run_train_resnet50_visible.ps1
+```
 
-## Current generated label snapshot
+干净重训：
 
-After running `build_6class_labels.py`:
+```text
+run_train_resnet50_fixed.bat
+run_train_resnet50_fixed_visible.ps1
+```
 
-- `multiclass_labels/` contains folder-level 6-class masks
-- `class_manifest.csv` lists all paired samples
-- `class_summary.json` stores image and pixel counts
+中断后继续：
 
-Current snapshot at the time of writing:
+```text
+run_train_resnet50_fixed_resume.bat
+run_train_resnet50_fixed_resume_visible.ps1
+```
 
-- Total pairs: `1000`
-- Each disease class: `200` images
+早期输出目录：
 
-## Final evaluation output
+```text
+experiments/ResNet50_FCN_6cls
+experiments/ResNet50_FCN_6cls_fixed
+```
 
-The final report includes:
+旧实验目录中的历史报告不能当作当前 SegFormer 的最终结果使用。
 
-- `mIoU`
-- `mDice`
-- `PA`
-- `mPA`
-- `Params(M)`
-- `GFLOPs`
-- `FPS`
-- Per-class `IoU / Dice / Accuracy`
+## 增强模块
 
-Example output file:
+`run_confidence_risk.py` 是推理后的 confidence-risk 模块。它不重新训练主干模型，而是在模型输出之后做以下处理：
 
-- `experiments/ResNet50_FCN_6cls_fixed/eval_report.txt`
+1. 对同一张图做轻量 TTA，例如原图和水平翻转。
+2. 将不同增强视角的概率图对齐。
+3. 生成 `single mask`、`fused mask` 和 `hybrid mask`。
+4. 根据小目标保护、置信度、连通区域和形态信息选择 `selected_mask`。
+5. 计算 `uncertainty`、`disagreement`、骨架、方向、面积和风险解释。
 
-## Notes
-
-- The old legacy report under `experiments/ResNet50_FCN_6cls/` belongs to the previous run and should not be used as the clean retrain result.
-- If the masks or folder structure change, regenerate `multiclass_labels/` before training.
-
-## Confidence-risk post-inference module
-
-This workspace now includes a post-inference module for confidence-aware tunnel defect review. It reuses the trained segmentation checkpoint, applies a small test-time augmentation set, fuses aligned predictions, estimates uncertainty, adaptively selects a practical output mask, measures defect morphology, and writes an explainable risk report.
-
-Run it on one image or a folder:
+单张图或文件夹推理：
 
 ```powershell
 python run_confidence_risk.py <image-or-folder> --output-dir experiments/confidence_risk --tta-mode light
 ```
 
-The default mask source is the legacy ResNet50/FCN path. To run the same artifact pipeline with the trained SegFormer checkpoint, use the SegFormer environment and select the source explicitly:
+使用 SegFormer checkpoint 推理：
 
 ```powershell
 & 'D:/users/anaconda3/envs/segformer-phase2/python.exe' run_confidence_risk.py <image-or-folder> --model-source segformer --segformer-config experiments/segformer_b1/configs/segformer_b1_6cls.py --segformer-checkpoint experiments/segformer_b1/runs/segformer_b1_6cls/latest.pth --output-dir experiments/segformer_b1/confidence_risk
 ```
 
-Each report includes a `mask_source` block so downstream demos can distinguish `legacy_resnet50_fcn` from `segformer_b1`. SegFormer mode uses the trained checkpoint as a probability source: identity and horizontal-flip probability maps are aligned, averaged, and then used for `fused_mask`, entropy uncertainty, and TTA disagreement. The adaptive enhancement logic remains model-agnostic.
+`report.json` 中会包含 `mask_source`，用于区分：
 
-Main artifacts per image:
+- `legacy_resnet50_fcn`
+- `segformer_b1`
+
+SegFormer 模式下，identity 和 horizontal-flip 的 probability maps 会对齐并平均，用来生成 `fused_mask`、entropy uncertainty 和 TTA disagreement。adaptive selection 逻辑保持模型无关。
+
+每张图的主要输出产物：
 
 - `<stem>_single_mask.png`
 - `<stem>_fused_mask.png`
@@ -173,21 +197,25 @@ Main artifacts per image:
 - `<stem>_skeleton.png`
 - `<stem>_report.json`
 
-The `selected_mask` is chosen by adaptive fusion from single, fused, and hybrid candidates. It is the default mask for morphology, skeleton, risk scoring, and the live demo overlay. The report also includes `Self IoU`, which compares single and fused model outputs only; it is not ground-truth mIoU.
+`selected_mask` 是从 single、fused、hybrid 候选中自适应选择的结果。它用于默认叠加图、形态分析、骨架提取和风险报告。
 
-Compare single-pass, fused, and selected predictions where labels are available:
+报告里的 `Self IoU` 只比较模型自己的 single 和 fused 输出是否一致；它不是 ground-truth mIoU（not ground-truth mIoU），不能代替有 GT mask 时的真实精度。
+
+## 增强模块阶段证据
+
+在有 GT 标注的 split 上，可以评估 single、fixed fused 和 selected：
 
 ```powershell
 python evaluate_confidence_risk.py --split test --limit 20 --output experiments/confidence_risk_eval.json
 ```
 
-Adaptive thresholds can be searched on the validation split only, so test/all data stay reserved for reporting:
+adaptive threshold 只应在验证集搜索，避免把 test/all 用成调参集：
 
 ```powershell
 python evaluate_confidence_risk.py --split val --limit 0 --search-config --output experiments/adaptive_fusion_config_search_val.json
 ```
 
-Latest full-run evidence with the validation-selected adaptive defaults:
+当前 full-run 证据：
 
 | Split | Samples | Single mIoU | Fixed fused mIoU | Selected mIoU | Selected vs fused |
 |---|---:|---:|---:|---:|---:|
@@ -195,42 +223,176 @@ Latest full-run evidence with the validation-selected adaptive defaults:
 | `test` | 150 | 0.3305 | 0.3165 | 0.3306 | +0.0141 |
 | `all` | 1000 | 0.3725 | 0.3287 | 0.3680 | +0.0393 |
 
-The adaptive module mainly recovers the mIoU lost by fixed TTA fusion while keeping uncertainty, disagreement, selected overlay, skeleton, morphology, and risk evidence available. It is not a retrained segmentation backbone, so `selected_mIoU` should be read as a safer post-processing output rather than a guaranteed improvement over `single_mIoU` on every split.
+这些结果说明：固定融合会损失一部分细小病害，adaptive selected 可以明显恢复 fixed fused 的损失，并保留 uncertainty、disagreement、overlay、skeleton、morphology、risk evidence。它不是保证每个 split 都超过 single 的新 backbone，而是一个更稳妥、更可解释的后处理增强模块。
 
-Additional generated evidence now includes small-defect guard counts and uncertainty-to-error overlap:
+更多实验表格见：
+
+```text
+docs/experiments/enhancement-evidence-summary.md
+```
+
+不确定性到错误区域的证据：
 
 | Split | Protected pixels vs fused | Successful guard events | Error coverage | HU error precision |
 |---|---:|---:|---:|---:|
 | `test` | 156,301 | 72 / 150 | 45.66% | 80.66% |
 | `all` | 1,230,616 | 614 / 1000 | 44.54% | 78.27% |
 
-`Error coverage` and `HU error precision` require ground-truth masks. The current pixel high-uncertainty threshold is `0.35`, while the sample-level review fraction threshold is `0.5`.
+`Error coverage` 和 `HU error precision` 需要 GT mask。当前像素级 high-uncertainty 阈值是 `0.35`，样本级 review fraction 阈值是 `0.5`。
 
-Implementation notes and patent-oriented framing are in `docs/patent-notes/tunnel-defect-confidence-risk.md`.
-The stage experiment tables are collected in `docs/experiments/enhancement-evidence-summary.md`.
+专利/创新点说明见：
 
-## Live web detector
-
-The `web_app.py` server provides a local drag-and-drop detection UI. It serves `web_demo/index.html`, accepts image uploads, runs the confidence-risk inference pipeline, and returns the generated single/fused/selected masks, overlays, uncertainty, disagreement, skeleton, and JSON risk report.
-
-Uploaded images do not include ground-truth masks, so the UI correctly displays true mIoU as `N/A`. It can still show `Self IoU`, uncertainty, disagreement, morphology, and selected-mask rationale as model-derived review evidence.
-
-Start it on Windows with the SegFormer runtime:
-
-```powershell
-& 'D:/users/anaconda3/envs/segformer-phase2/python.exe' web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
+```text
+docs/patent-notes/tunnel-defect-confidence-risk.md
 ```
 
-Or double-click the SegFormer-ready launcher:
+## Web 实时展示
+
+`web_app.py` 提供本地拖拽检测服务。上传图片后，服务会运行 confidence-risk pipeline，并返回：
+
+- 原图
+- GT 标注（仅数据集样本有）
+- 单次 mask
+- 融合 mask
+- 选择 mask
+- GT 叠加图
+- 预测叠加图
+- 选择叠加图
+- 不确定性图
+- 分歧图
+- 骨架图
+- JSON 风险报告
+
+双击启动：
 
 ```text
 run_web_app.bat
 ```
 
-Then open:
+或使用 SegFormer 环境手动启动：
+
+```powershell
+& 'D:/users/anaconda3/envs/segformer-phase2/python.exe' web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
+```
+
+打开：
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Generated live outputs are written under `experiments/web_live/`, which is intentionally ignored by git.
+检查后端是否用了 SegFormer：
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+期望看到：
+
+```json
+{
+  "model_source": "segformer"
+}
+```
+
+自选上传图片通常没有 GT mask，所以真实 `mIoU` 应显示为 `N/A`。这时界面仍可以显示 `Self IoU`、uncertainty、disagreement、形态量化、骨架和 selected-mask 选择理由。没有 GT 时，系统不能显示 true mIoU，也不应把模型自己的输出当成 GT。
+
+Web 生成结果默认写入：
+
+```text
+experiments/web_live/
+```
+
+该目录是运行时产物，已被 git 忽略。
+
+## PPT 与展示材料
+
+项目展示材料已经围绕“做什么、为什么做、创新在哪、结果如何展示”组织。PPT 里使用的 Web demo 图应与 `web_demo` 当前展示资产保持一致，避免 PPT 和网页骨架图来源不一致。
+
+常用材料目录：
+
+```text
+docs/
+experiments/
+web_demo/
+```
+
+## 环境注意事项
+
+SegFormer 训练和 Web 推理建议使用：
+
+```text
+D:/users/anaconda3/envs/segformer-phase2/python.exe
+```
+
+已验证的核心版本：
+
+- `torch==1.10.0`
+- `torchvision==0.11.1`
+- CUDA runtime `11.3`
+- `mmcv-full==1.4.0`
+- `mmsegmentation==0.11.0`
+
+本机 SegFormer 源码路径：
+
+```text
+C:/Users/26822/Desktop/隧道病害检测/third_party/SegFormer-master
+```
+
+国内镜像安装示例：
+
+```powershell
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <packages>
+pip install -i http://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com <packages>
+```
+
+CUDA PyTorch 安装示例：
+
+```powershell
+& 'D:/users/anaconda3/Scripts/conda.exe' install -n segformer-phase2 -y pytorch==1.10.0 torchvision==0.11.1 cudatoolkit=11.3 -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main --override-channels
+```
+
+mmcv wheel 安装示例：
+
+```powershell
+& 'D:/users/anaconda3/envs/segformer-phase2/python.exe' -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --force-reinstall mmcv-full==1.4.0 -f https://download.openmmlab.com/mmcv/dist/cu113/torch1.10.0/index.html
+```
+
+## 常见坑
+
+- Windows 路径在 mmseg config 中尽量使用正斜杠，例如 `C:/Users/...`，避免 `\U` 转义问题。
+- SegFormer 脚本不要依赖默认 `python`，应显式使用 `D:/users/anaconda3/envs/segformer-phase2/python.exe`。
+- Windows 单卡训练使用 `BN`，不要用 `SyncBN`。
+- 外部 SegFormer 源码已做过兼容补丁：`np.float` 改为 `np.float64`。
+- mmcv text logger 已做过兼容补丁，避免验证日志缺少 `data_time` 时崩溃。
+- `pretrained/mit_b1.pth` 位于 SegFormer 源码目录下，可作为 B1 预训练权重。
+- Web live detection 默认应使用 `--model-source segformer`。
+- `.codegraph/` 是本地代码索引，不应提交到仓库。
+
+## 推荐检查命令
+
+运行文档与展示契约测试：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+python -m pytest tests/test_docs_artifact_contract.py
+```
+
+运行 Web 相关测试：
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
+python -m pytest tests/test_web_app.py
+```
+
+检查 CUDA 环境：
+
+```powershell
+@'
+import torch, torchvision, cv2, mmcv, timm
+from mmcv.ops import CrissCrossAttention
+print(torch.__version__, torch.version.cuda, torch.cuda.is_available())
+print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')
+print(torchvision.__version__, cv2.__version__, mmcv.__version__, timm.__version__)
+'@ | & 'D:/users/anaconda3/envs/segformer-phase2/python.exe' -
+```
