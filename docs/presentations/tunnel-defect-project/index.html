@@ -87,7 +87,7 @@
       <div class="card"><h4>评估时</h4><p class="dim">有标准答案时算 mIoU，说明模型到底准不准。</p></div>
       <div class="card"><h4>演示时</h4><p class="dim">没有标准答案时，不报假分数，只展示可复核证据。</p></div>
     </div>
-    <div class="deck-footer"><span class="mono">核心思路：模型负责画区域，增强模块负责判断和解释</span><span class="slide-number" data-current="4" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">核心思路：模型负责画区域，增强模块负责判断、解释和安排复核优先级</span><span class="slide-number" data-current="4" data-total="12"></span></div>
     <div class="notes">这一页让老师明白系统不是一个脚本，而是一条完整流程：输入、模型、增强、证据、Web 报告。</div>
   </section>
 
@@ -128,9 +128,10 @@
 <span class="fn">比较</span>：哪张更稳定，哪张把小病害抹掉了
 <span class="fn">选择</span>：single / fused / hybrid 中更合适的一张
 <span class="fn">提取</span>：uncertainty、分歧、骨架、面积、方向
-<span class="fn">输出</span>：风险等级和复核理由
+<span class="fn">校准</span>：有 GT 时检查 uncertainty 是否对应错误
+<span class="fn">输出</span>：风险等级、复核优先级和复核理由
 
-<span class="kw">结果</span>：selected mask + 可解释报告</pre>
+<span class="kw">结果</span>：selected mask + review priority + 可解释报告</pre>
       </div>
       <div class="stack">
         <div class="card card-accent"><h4>single</h4><p class="dim">如果融合把小病害抹掉，就保留单次预测。</p></div>
@@ -138,8 +139,8 @@
         <div class="card card-accent"><h4>hybrid</h4><p class="dim">如果两者各有优点，就把可信的小缺陷补回来。</p></div>
       </div>
     </div>
-    <div class="deck-footer"><span class="mono">这层模块像一个“检查员”：不只看结果，还判断结果是否可靠</span><span class="slide-number" data-current="6" data-total="12"></span></div>
-    <div class="notes">这里用“检查员”来比喻增强模块。模型负责画，增强模块负责挑选、量化、解释。</div>
+    <div class="deck-footer"><span class="mono">这层模块像一个“检查员”：不只看结果，还判断谁该优先复核</span><span class="slide-number" data-current="6" data-total="12"></span></div>
+    <div class="notes">这里用“检查员”来比喻增强模块。模型负责画，增强模块负责挑选、量化、解释，并给出人工复核优先级。</div>
   </section>
 
   <section class="slide" data-title="Innovation">
@@ -147,11 +148,11 @@
     <div class="innovation-bento mt-l">
       <div class="innovation wide"><span>创新点 1</span><h4>发现“融合反而变差”的情况</h4><p>有些小裂缝经过固定融合后会被抹掉。系统会检测这种情况，而不是默认相信融合结果。</p></div>
       <div class="innovation tall"><span>创新点 2</span><h4>自动选择最适合展示的 mask</h4><p>系统会在 single、fused、hybrid 中选一张更可靠的结果，而不是只输出固定一种。</p></div>
-      <div class="innovation"><span>创新点 3</span><h4>把 mask 变成可复核证据</h4><p>不仅画区域，还给出 uncertainty、分歧、骨架长度、方向和风险原因。</p></div>
+      <div class="innovation"><span>创新点 3</span><h4>把 mask 变成可复核证据</h4><p>不仅画区域，还给出 uncertainty、分歧、骨架长度、方向、风险原因和复核优先级。</p></div>
       <div class="innovation"><span>创新点 4</span><h4>不乱报精度</h4><p>没有人工标注时不显示真实 mIoU，避免把模型自测结果当成准确率。</p></div>
     </div>
     <div class="callout mt-m">一句话概括：不是发明一个新模型，而是发明一套让病害分割结果更可靠、更好解释、更适合人工复核的流程。</div>
-    <div class="deck-footer"><span class="mono">专利方向：置信感知的自适应输出选择与复核提示方法</span><span class="slide-number" data-current="7" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">专利方向：置信校准 + 自适应输出选择 + 复核优先级生成</span><span class="slide-number" data-current="7" data-total="12"></span></div>
     <div class="notes">这一页最关键。让老师一下听懂：创新不是“用了 SegFormer”，而是“模型之后加了一层判断和解释机制”。</div>
   </section>
 
@@ -251,7 +252,7 @@
         <ul class="clean-list">
           <li>整理了 6 类隧道病害数据</li>
           <li>训练出 mIoU 84.33% 的 SegFormer 模型</li>
-          <li>实现了 probability TTA、uncertainty、分歧和风险解释模块</li>
+          <li>实现了 probability TTA、uncertainty、分歧、风险解释和 review priority 模块</li>
           <li>做出了可拖拽检测的 Web 展示</li>
         </ul>
       </div>
@@ -261,7 +262,7 @@
           <li>重点优化 blocky 类病害</li>
           <li>补充更多典型案例和消融对比</li>
           <li>挑选更好的典型案例做专利附图</li>
-          <li>整理专利权利要求和实验对比</li>
+          <li>继续做 temperature scaling 或 conformal prediction 这类更强校准方法</li>
         </ul>
       </div>
     </div>

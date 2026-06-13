@@ -1,4 +1,4 @@
-from risk_adapter import RiskConfig, score_class, score_image
+from risk_adapter import RiskConfig, score_class, score_image, score_review_priority
 
 
 def metrics(**overrides):
@@ -73,3 +73,47 @@ def test_image_score_aggregates_class_results_and_suggestions():
     assert result["risk_level"] == "high"
     assert result["review_required"] is False
     assert result["suggestions"]
+
+
+def test_review_priority_uses_uncertainty_and_self_consistency():
+    risk = {"risk_level": "low", "score": 1.2, "review_required": False}
+
+    result = score_review_priority(
+        risk,
+        uncertainty_summary={"available": True, "defect_mean": 0.5, "defect_high_fraction": 0.4},
+        disagreement_summary={"available": True, "defect_mean": 0.25},
+        self_consistency={"foreground_iou": 0.45},
+        adaptive_selection={"mode": "single", "reasons": ["low single/fused foreground IoU 0.450"]},
+        prediction_stats={
+            "single": {"0": 80, "1": 20},
+            "fused": {"0": 95, "1": 5},
+            "selected": {"0": 80, "1": 20},
+        },
+    )
+
+    assert result["priority"] == "high"
+    assert result["review_required"] is True
+    assert any("uncertainty" in reason for reason in result["reasons"])
+    assert any("foreground IoU" in reason for reason in result["reasons"])
+    assert result["evidence"]["protected_pixels_vs_fused"] == 15
+    assert "structural safety" in result["note"]
+
+
+def test_review_priority_falls_back_when_uncertainty_unavailable():
+    risk = {"risk_level": "none", "score": 0.0, "review_required": False}
+
+    result = score_review_priority(
+        risk,
+        uncertainty_summary={"available": False},
+        self_consistency={"foreground_iou": 1.0},
+        adaptive_selection={"mode": "fused", "reasons": []},
+        prediction_stats={
+            "single": {"0": 100},
+            "fused": {"0": 100},
+            "selected": {"0": 100},
+        },
+    )
+
+    assert result["priority"] == "none"
+    assert result["review_required"] is False
+    assert any("uncertainty unavailable" in reason for reason in result["reasons"])

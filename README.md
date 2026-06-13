@@ -240,6 +240,17 @@ docs/experiments/enhancement-evidence-summary.md
 
 `Error coverage` 和 `HU error precision` 需要 GT mask。当前像素级 high-uncertainty 阈值是 `0.35`，样本级 review fraction 阈值是 `0.5`。
 
+## U6 可信复核优先级
+
+当前增强模块已继续扩展到 U6：在原有 `risk` 之外新增 `review_priority`。两者含义不同：
+
+- `risk`：图像病害风险提示，主要来自类别、面积、连通域、骨架和 uncertainty。
+- `review_priority`：人工复核排序信号，综合 risk、uncertainty、disagreement、single/fused 自一致性、fixed fusion 收缩和 selected-mask 理由。
+
+有 GT 的数据集样本还会输出 `uncertainty_calibration`，按 uncertainty 分桶比较平均不确定性与真实错误率，形成 ECE-like 校准证据。自选上传图片没有 GT，因此不会显示真实 mIoU 或 error overlap，只显示无 GT 可计算的 `review_priority`、Self IoU、uncertainty、disagreement、morphology 和 selected-mask evidence。
+
+`review_priority` 只表示“建议人工优先复核这张图”，不是结构安全诊断，也不是最终养护决策。
+
 专利/创新点说明见：
 
 ```text
@@ -262,6 +273,7 @@ docs/patent-notes/tunnel-defect-confidence-risk.md
 - 分歧图
 - 骨架图
 - JSON 风险报告
+- Review priority 复核优先级
 
 双击启动：
 

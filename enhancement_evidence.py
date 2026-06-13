@@ -81,6 +81,7 @@ def sample_enhancement_evidence(sample: dict) -> dict:
     fused_vs_single = _finite_float(delta.get("mIoU"))
     uncertainty = sample.get("uncertainty_summary") or {}
     error_overlap = sample.get("uncertainty_error_overlap") or {}
+    calibration = error_overlap.get("uncertainty_calibration") or {}
     consistency = (sample.get("adaptive_selection") or {}).get("consistency") or {}
 
     return {
@@ -110,6 +111,10 @@ def sample_enhancement_evidence(sample: dict) -> dict:
         "high_uncertainty_error_pixels": int(error_overlap.get("high_uncertainty_error_pixels", 0) or 0),
         "mean_uncertainty_on_error": _finite_float(error_overlap.get("mean_uncertainty_on_error")),
         "mean_uncertainty_on_correct": _finite_float(error_overlap.get("mean_uncertainty_on_correct")),
+        "uncertainty_expected_calibration_error": _finite_float(calibration.get("expected_calibration_error")),
+        "uncertainty_mean_calibration_gap": _finite_float(calibration.get("mean_calibration_gap")),
+        "uncertainty_max_calibration_gap": _finite_float(calibration.get("max_calibration_gap")),
+        "uncertainty_calibration_bins": calibration.get("bins", []),
         "self_foreground_iou": _finite_float(consistency.get("foreground_iou")),
     }
 
@@ -146,6 +151,58 @@ def _class_iou_summary(samples: list[dict], num_classes: int) -> list[dict]:
             "num_supported": sum(value is not None for value in selected_values),
         })
     return rows
+
+
+def _aggregate_calibration_bins(evidence_rows: list[dict]) -> list[dict]:
+    rows_with_bins = [item for item in evidence_rows if item.get("uncertainty_calibration_bins")]
+    if not rows_with_bins:
+        return []
+
+    num_bins = len(rows_with_bins[0]["uncertainty_calibration_bins"])
+    accumulators = []
+    for index, source in enumerate(rows_with_bins[0]["uncertainty_calibration_bins"]):
+        accumulators.append({
+            "bin_index": index,
+            "lower": source.get("lower"),
+            "upper": source.get("upper"),
+            "count": 0,
+            "uncertainty_sum": 0.0,
+            "error_sum": 0.0,
+        })
+
+    for item in rows_with_bins:
+        bins = item.get("uncertainty_calibration_bins") or []
+        if len(bins) != num_bins:
+            continue
+        for index, row in enumerate(bins):
+            count = int(row.get("count", 0) or 0)
+            if count <= 0:
+                continue
+            accumulators[index]["count"] += count
+            accumulators[index]["uncertainty_sum"] += float(row.get("mean_uncertainty") or 0.0) * count
+            accumulators[index]["error_sum"] += float(row.get("error_rate") or 0.0) * count
+
+    result = []
+    for row in accumulators:
+        count = int(row["count"])
+        if count:
+            mean_uncertainty = float(row["uncertainty_sum"] / count)
+            error_rate = float(row["error_sum"] / count)
+            gap = abs(mean_uncertainty - error_rate)
+        else:
+            mean_uncertainty = None
+            error_rate = None
+            gap = None
+        result.append({
+            "bin_index": row["bin_index"],
+            "lower": row["lower"],
+            "upper": row["upper"],
+            "count": count,
+            "mean_uncertainty": mean_uncertainty,
+            "error_rate": error_rate,
+            "calibration_gap": gap,
+        })
+    return result
 
 
 def _example(sample: dict, evidence: dict) -> dict:
@@ -262,7 +319,9 @@ def summarize_enhancement_evidence(evaluation: dict, high_uncertainty_threshold:
     ]
     aggregate = evaluation.get("aggregate", {})
     overlap_aggregate = aggregate.get("uncertainty_error_overlap") or {}
+    calibration_aggregate = overlap_aggregate.get("uncertainty_calibration") or {}
     overlap_rows = [item for item in evidence_rows if item["error_high_uncertainty_fraction"] is not None]
+    calibration_bins = calibration_aggregate.get("bins") or _aggregate_calibration_bins(evidence_rows)
     total_error_pixels = int(sum(item["error_pixels"] for item in overlap_rows))
     total_high_uncertainty_pixels = int(sum(item["high_uncertainty_pixels"] for item in overlap_rows))
     total_high_uncertainty_error_pixels = int(sum(item["high_uncertainty_error_pixels"] for item in overlap_rows))
@@ -352,6 +411,19 @@ def summarize_enhancement_evidence(evaluation: dict, high_uncertainty_threshold:
                 _finite_float(overlap_aggregate.get("mean_uncertainty_on_correct")),
                 _mean([item["mean_uncertainty_on_correct"] for item in overlap_rows]),
             ),
+            "calibration_expected_error": _fallback(
+                _finite_float(calibration_aggregate.get("expected_calibration_error")),
+                _mean([item["uncertainty_expected_calibration_error"] for item in overlap_rows]),
+            ),
+            "calibration_mean_gap": _fallback(
+                _finite_float(calibration_aggregate.get("mean_calibration_gap")),
+                _mean([item["uncertainty_mean_calibration_gap"] for item in overlap_rows]),
+            ),
+            "calibration_max_gap": _fallback(
+                _finite_float(calibration_aggregate.get("max_calibration_gap")),
+                _mean([item["uncertainty_max_calibration_gap"] for item in overlap_rows]),
+            ),
+            "calibration_bins": calibration_bins,
         },
         "class_iou_summary": _class_iou_summary(samples, num_classes=len(CLASS_NAMES)),
         "representative_examples": representative_examples(samples, evidence_rows),

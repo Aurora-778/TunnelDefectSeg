@@ -82,6 +82,15 @@ Definitions:
 
 Interpretation: high-uncertainty regions are meaningful review targets when GT masks exist. For drag-and-drop images without GT, the system must not display true mIoU or error-overlap metrics; it should display self-consistency, uncertainty, disagreement, morphology, and selected-mask rationale.
 
+### U6 Calibration And Review Priority
+
+U6 extends the report contract with two reliability additions:
+
+- `uncertainty_calibration`: available only with GT masks. It bins uncertainty values and compares each bin's mean uncertainty with the actual pixel error rate, producing an ECE-like calibration gap.
+- `review_priority`: available for every processed image. It combines image risk, defect uncertainty, disagreement, single/fused self-consistency, foreground shrinkage, and selected-mask reasons into a manual-review priority.
+
+Interpretation: calibration evidence answers whether uncertainty is a trustworthy review signal on labeled splits. Review priority answers which image should be inspected first in Web or field-review workflows. Neither should be described as structural safety diagnosis or final maintenance decision-making.
+
 ## Representative Cases To Use In Slides Or Patent Figures
 
 Use examples from the generated evidence JSON instead of hand-picking images:

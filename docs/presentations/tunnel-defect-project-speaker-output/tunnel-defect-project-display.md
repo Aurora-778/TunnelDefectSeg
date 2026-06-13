@@ -40,7 +40,7 @@ Deck path: `C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-proje
 
 左边标题说的是“给隧道图片自动找病害”，右边几张图对应系统输出的不同视角：overlay 是把病害区域叠加回原图，mask 是模型预测出的病害区域，skeleton 是把病害区域进一步细化成骨架，方便看方向和形状。
 
-我希望老师先记住一个核心思路：模型负责把病害区域画出来，后面的增强模块负责解释这个结果。也就是说，最后给用户看的不只是一个彩色块，而是一组可复核的证据。
+我希望老师先记住一个核心思路：模型负责把病害区域画出来，后面的增强模块负责解释这个结果，并判断哪些图片更应该优先人工复核。也就是说，最后给用户看的不只是一个彩色块，而是一组可复核的证据。
 
 Transition: 接下来先看为什么这个问题不能只靠“画出 mask”来解决。
 
@@ -68,7 +68,7 @@ Transition: 数据准备好之后，系统就可以按一条完整流程运行�
 
 整套系统可以理解成一条从图片到报告的流水线。
 
-第一步输入隧道图片。第二步由分割模型输出病害 mask。第三步增强模块比较不同候选结果，判断是使用 single mask、fused mask，还是保守选择更可靠的结果。第四步从 mask 中提取证据，比如骨架长度、面积、方向、连通域和风险提示。第五步把这些内容放到 Web 页面里，让用户可以切换视图查看。
+第一步输入隧道图片。第二步由分割模型输出病害 mask。第三步增强模块比较不同候选结果，判断是使用 single mask、fused mask，还是保守选择更可靠的结果。第四步从 mask 中提取证据，比如骨架长度、面积、方向、连通域和风险提示。第五步在有人工标注的样本上检查 uncertainty 和真实错误是否对应，在没有标注的上传图片上只给出复核优先级，不乱报真实精度。最后把这些内容放到 Web 页面里，让用户可以切换视图查看。
 
 训练时，有 GT，可以学习和评估。评估时，有 GT，可以计算 mIoU。演示时，如果用户自己拖图片进来，没有 GT，就不展示真实 mIoU，而是展示 mask、overlay、skeleton、uncertainty 或自一致性信息。
 
@@ -88,9 +88,9 @@ Transition: 模型画完之后，系统还会判断哪一个输出更适合给�
 
 增强模块的作用可以理解成模型结果后面的检查员。
 
-模型可能产生 single mask，也可能通过翻转等方式得到 fused mask。传统做法可能直接固定融合，但在这个数据里，固定融合有时会把小病害抹掉。所以增强模块会比较候选 mask：哪一个更稳定，哪一个保留了小病害，哪一个更适合作为最终输出。
+模型可能产生 single mask，也可能通过翻转等方式得到 fused mask。传统做法可能直接固定融合，但在这个数据里，固定融合有时会把小病害抹掉。所以增强模块会比较候选 mask：哪一个更稳定，哪一个保留了小病害，哪一个更适合作为最终输出。现在又增加了 review priority，也就是人工复核优先级，用来回答“这张图是不是应该先让人看”。
 
-系统现在主要支持三种选择逻辑：single 表示保留单次预测结果，fused 表示采用融合结果，hybrid 或 selected 表示根据规则自适应选择。选完之后，还会把 mask 转成可解释证据，比如骨架、面积、方向、连通域和复核提示。
+系统现在主要支持三种选择逻辑：single 表示保留单次预测结果，fused 表示采用融合结果，hybrid 或 selected 表示根据规则自适应选择。选完之后，还会把 mask 转成可解释证据，比如骨架、面积、方向、连通域、复核提示和 review priority。
 
 Transition: 这也是我认为项目最适合写成创新点的地方。
 
@@ -116,7 +116,7 @@ Transition: 除了 mIoU，增强模块还提供了更适合人工复核的证据
 
 ### [Slide 9 - 具体价值]
 
-增强模块带来的价值主要有两个：保住小病害，提示复核区域。
+增强模块带来的价值主要有三个：保住小病害，提示复核区域，并给出复核优先级。
 
 从全部 1000 张有标注样本看，系统保护了 1,230,616 个相对 fixed fusion 被保留下来的前景像素。successful guard 是 614/1000，selected recovered 是 699/1000。这说明固定融合确实经常会削弱前景，而自适应选择能在很多样本上把这部分病害区域保住。
 
@@ -150,7 +150,7 @@ Transition: 最后一页总结目前完成情况和下一步工作。
 
 已经完成的部分包括：数据集整理成 6 类标准格式；SegFormer B1 训练到 mIoU 84.33%；实现自适应 mask selection、基于 SegFormer 概率 TTA 的 uncertainty / disagreement 复核提示和形态学证据；做出了支持拖拽图片实时检测的 Web 展示。
 
-下一步可以从三方面继续推进。第一，优化 blocky 类，因为它目前 IoU 最低。第二，做更多典型案例和消融对比，让 selected、uncertainty、disagreement 的价值更直观。第三，继续整理更适合专利附图的例子，比如 fixed fusion 抹掉小病害、selected 成功保留、uncertainty 提示复核区域。
+下一步可以从三方面继续推进。第一，优化 blocky 类，因为它目前 IoU 最低。第二，做更多典型案例和消融对比，让 selected、uncertainty、disagreement 和 review priority 的价值更直观。第三，继续探索 temperature scaling 或 conformal prediction 这类更强的校准方法，把当前的复核优先级进一步做成更严谨的可信输出。
 
 最后一句话总结这个项目：它不是只告诉用户“这里可能有病害”，而是进一步告诉用户“为什么这么判断，以及哪里需要再看一眼”。
 
@@ -230,6 +230,8 @@ uncertainty 表示模型对某些像素不太确定。当前 Web 里的 uncertai
 
 HU 是 high uncertainty。HU error precision 表示高不确定性像素中，有多少比例确实是预测错误。78.27% 说明高 uncertainty 区域很大程度上对应错误区域，因此适合作为人工复核提示。
 
+现在 U6 里还补了 calibration evidence，也就是把 uncertainty 分桶，比较每个桶里的平均不确定性和真实错误率差距。这个可以通俗理解成：模型说“我不确定”的地方，实际是不是更容易错。
+
 ### 17. 这个系统现在最大的不足是什么？
 
 第一，blocky 类还弱，IoU 只有 53.58%。第二，selected 的目标是减少 fixed fusion 损失，不是保证超过 single。第三，自选图片没有 GT，无法给真实精度。第四，当前风险提示还停留在图像层面，没有和工程结构安全标准直接绑定。
@@ -240,11 +242,11 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 
 ### 19. 专利可以写哪些权利要求？
 
-可以围绕四点写：候选 mask 的自适应选择方法；检测 fixed fusion 抹掉小病害的保护策略；基于 mask 的骨架、连通域、面积、方向和风险证据生成；无 GT 场景下的可信展示和复核提示机制。
+可以围绕五点写：候选 mask 的自适应选择方法；检测 fixed fusion 抹掉小病害的保护策略；基于 mask 的骨架、连通域、面积、方向和风险证据生成；置信校准和人工复核优先级生成；无 GT 场景下的可信展示和复核提示机制。
 
 ### 20. 下一步最应该做什么？
 
-优先做两件事。第一，针对 blocky 类继续优化训练和数据增强，因为它是当前短板。第二，整理 3 到 5 个典型案例，分别展示 fixed fusion 失败、selected 保留小病害、uncertainty 提示复核，这些案例可以直接用于论文、答辩和专利附图。
+优先做两件事。第一，针对 blocky 类继续优化训练和数据增强，因为它是当前短板。第二，整理 3 到 5 个典型案例，分别展示 fixed fusion 失败、selected 保留小病害、uncertainty 提示复核、review priority 排序，这些案例可以直接用于论文、答辩和专利附图。
 
 ## Key Parameters And Methods
 
@@ -272,7 +274,7 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 | 3 | 数据集和类别标准 | 0:50 |
 | 4 | 系统流程 | 0:55 |
 | 5 | SegFormer 提升基础分割质量 | 1:10 |
-| 6 | 自适应增强模块 | 1:00 |
+| 6 | 自适应增强与复核优先级模块 | 1:00 |
 | 7 | 创新点 | 1:15 |
 | 8 | 实验结果 | 1:10 |
 | 9 | 具体价值 | 1:00 |
@@ -284,4 +286,4 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 
 ## One-Minute Backup Summary
 
-这个项目做的是隧道病害语义分割和可信增强展示。基础模型部分，我把系统切换到 SegFormer B1，在 6 类数据集上训练到 160000 iter，最终 mIoU 达到 84.33%。增强部分，我没有固定采用融合结果，而是用同一个 SegFormer checkpoint 生成 single 和 probability TTA fused 结果，比较候选 mask 的稳定性；当 fixed fusion 可能抹掉小病害时，selected 策略保留更可靠的输出。系统还会从模型概率里生成 uncertainty 和 disagreement，并从 mask 中提取骨架、面积、方向和连通域。最后做成 Web demo，支持拖拽图片实时检测。有 GT 的样本展示真实 mIoU，没有 GT 的自选图片不乱报精度，只展示可复核证据。创新点主要是病害分割后的自适应输出选择和复核证据生成流程。
+这个项目做的是隧道病害语义分割和可信增强展示。基础模型部分，我把系统切换到 SegFormer B1，在 6 类数据集上训练到 160000 iter，最终 mIoU 达到 84.33%。增强部分，我没有固定采用融合结果，而是用同一个 SegFormer checkpoint 生成 single 和 probability TTA fused 结果，比较候选 mask 的稳定性；当 fixed fusion 可能抹掉小病害时，selected 策略保留更可靠的输出。系统还会从模型概率里生成 uncertainty 和 disagreement，并从 mask 中提取骨架、面积、方向和连通域。U6 又增加了 uncertainty calibration evidence 和 review priority：有 GT 时看 uncertainty 是否真的对应错误，没有 GT 时只给人工复核优先级，不乱报真实精度。最后做成 Web demo，支持拖拽图片实时检测。创新点主要是病害分割后的自适应输出选择、置信校准和复核优先级生成流程。

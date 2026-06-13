@@ -60,7 +60,43 @@ def test_write_result_artifacts_creates_expected_files(tmp_path):
     assert saved["self_consistency"]["pixel_agreement"] < 1.0
     assert saved["morphology"]["defect_area_pixels"] > 0
     assert saved["risk"]["risk_level"] in {"low", "medium", "high"}
+    assert saved["review_priority"]["priority"] in {"low", "medium", "high"}
+    assert saved["review_priority"]["review_required"] is True
+    assert any("foreground IoU" in reason or "shrinkage" in reason for reason in saved["review_priority"]["reasons"])
     assert report["artifacts"]["overlay"] == "sample_overlay.png"
+
+
+def test_write_result_artifacts_keeps_unavailable_review_priority_reason(tmp_path):
+    raw = np.zeros((8, 8, 3), dtype=np.uint8)
+    single = np.zeros((8, 8), dtype=np.uint8)
+    fused = np.zeros((8, 8), dtype=np.uint8)
+    single[2, 2:5] = 1
+    fused[2:5, 2] = 1
+    entropy = np.zeros((8, 8), dtype=np.float32)
+    disagreement = np.zeros((8, 8), dtype=np.float32)
+
+    report = write_result_artifacts(
+        stem="unavailable",
+        raw_resized=raw,
+        single_mask=single,
+        fused_mask=fused,
+        entropy_uncertainty=entropy,
+        disagreement_uncertainty=disagreement,
+        output_dir=tmp_path,
+        tta_specs=["identity"],
+        mask_source={
+            "name": "argmax_only_source",
+            "type": "synthetic",
+            "probability_tta": False,
+            "uncertainty_available": False,
+            "disagreement_available": False,
+        },
+    )
+
+    assert report["uncertainty_summary"]["available"] is False
+    assert report["disagreement_summary"]["available"] is False
+    assert any("uncertainty unavailable" in reason for reason in report["review_priority"]["reasons"])
+    assert report["review_priority"]["evidence"]["uncertainty_available"] is False
 
 
 def test_collect_images_accepts_file_and_folder(tmp_path):
@@ -131,6 +167,8 @@ def test_process_image_accepts_segformer_like_mask_source(tmp_path):
     assert report["uncertainty_summary"]["available"] is True
     assert report["disagreement_summary"]["available"] is True
     assert report["risk"]["uncertainty_available"] is True
+    assert report["review_priority"]["priority"] in {"low", "medium", "high"}
+    assert report["review_priority"]["note"].startswith("Image-based manual-review priority")
     assert all("unavailable" not in item for item in report["risk"]["suggestions"])
     assert report["tta_specs"] == ["segformer_identity", "segformer_hflip"]
     assert report["single_prediction_stats"]["1"] == 8
@@ -145,6 +183,7 @@ def test_process_image_accepts_segformer_like_mask_source(tmp_path):
         "disagreement_summary",
         "morphology",
         "risk",
+        "review_priority",
         "artifacts",
     ]:
         assert section in report

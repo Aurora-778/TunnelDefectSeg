@@ -12,7 +12,7 @@ from torchvision import transforms
 
 from adaptive_fusion import select_adaptive_mask
 from morphology_adapter import CLASS_NAMES, MorphologyConfig, measure_mask, skeleton_mask
-from risk_adapter import RiskConfig, score_image
+from risk_adapter import RiskConfig, score_image, score_review_priority
 from segformer_inference_adapter import (
     DEFAULT_SEGFORMER_CHECKPOINT,
     DEFAULT_SEGFORMER_CONFIG,
@@ -213,33 +213,54 @@ def write_result_artifacts(
             "Mask source did not provide multiple aligned predictions for disagreement measurement."
         )
 
+    risk_cfg = risk_config or RiskConfig()
     risk_uncertainty = unc_summary if uncertainty_available else None
-    risk = score_image(morphology, risk_uncertainty, config=risk_config or RiskConfig())
+    risk = score_image(morphology, risk_uncertainty, config=risk_cfg)
     risk["uncertainty_available"] = uncertainty_available
     if not uncertainty_available:
         risk["suggestions"].append(
             "Uncertainty unavailable for this mask source; review relies on morphology and selected-mask evidence."
         )
+    single_stats = prediction_stats(single_mask)
+    fused_stats = prediction_stats(fused_mask)
+    hybrid_stats = prediction_stats(hybrid_mask)
+    selected_stats = prediction_stats(selected_mask)
+    self_consistency = prediction_consistency_stats(single_mask, fused_mask)
+    adaptive_selection = {
+        "mode": selection["selection_mode"],
+        "reasons": selection["selection_reasons"],
+        "consistency": selection["consistency"],
+    }
+    review_priority = score_review_priority(
+        risk,
+        uncertainty_summary=unc_summary,
+        disagreement_summary=disagreement_summary,
+        self_consistency=self_consistency,
+        adaptive_selection=adaptive_selection,
+        prediction_stats={
+            "single": single_stats,
+            "fused": fused_stats,
+            "selected": selected_stats,
+        },
+        config=risk_cfg,
+    )
 
     report = {
         "stem": stem,
         "mask_source": source,
         "tta_specs": list(tta_specs or []),
         "class_names": {str(k): v for k, v in CLASS_NAMES.items()},
-        "single_prediction_stats": prediction_stats(single_mask),
-        "fused_prediction_stats": prediction_stats(fused_mask),
-        "hybrid_prediction_stats": prediction_stats(hybrid_mask),
-        "selected_prediction_stats": prediction_stats(selected_mask),
-        "self_consistency": prediction_consistency_stats(single_mask, fused_mask),
-        "adaptive_selection": {
-            "mode": selection["selection_mode"],
-            "reasons": selection["selection_reasons"],
-            "consistency": selection["consistency"],
-        },
+        "single_prediction_stats": single_stats,
+        "fused_prediction_stats": fused_stats,
+        "hybrid_prediction_stats": hybrid_stats,
+        "selected_prediction_stats": selected_stats,
+        "self_consistency": self_consistency,
+        "adaptive_selection": adaptive_selection,
         "uncertainty_summary": unc_summary,
         "disagreement_summary": disagreement_summary,
         "morphology": morphology,
         "risk": risk,
+        "review_priority": review_priority,
         "artifacts": {name: str(path.name) for name, path in paths.items()},
     }
     save_json(report, paths["report"])
@@ -377,11 +398,14 @@ def run_batch(
         "model_source": model_source,
         "num_images": len(reports),
         "risk_counts": {},
+        "review_priority_counts": {},
         "reports": [item["artifacts"]["report"] for item in reports],
     }
     for report in reports:
         level = report["risk"]["risk_level"]
         summary["risk_counts"][level] = summary["risk_counts"].get(level, 0) + 1
+        priority = report.get("review_priority", {}).get("priority", "unknown")
+        summary["review_priority_counts"][priority] = summary["review_priority_counts"].get(priority, 0) + 1
     save_json(summary, out_dir / "summary.json")
     return summary
 

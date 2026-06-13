@@ -1054,7 +1054,7 @@
       <section class="stat risk-medium" id="riskLevelCard"><span>Risk level</span><strong id="riskLevel">Medium</strong></section>
       <section class="stat"><span>Risk score</span><strong id="riskScore">3.25</strong></section>
       <section class="stat"><span>Defect pixels</span><strong id="defectPixels">1108</strong></section>
-      <section class="stat"><span>Review</span><strong id="reviewFlag">YES</strong></section>
+      <section class="stat"><span>Review priority</span><strong id="reviewFlag">High</strong></section>
     </header>
 
     <section class="panel upload-panel" id="detect">
@@ -1338,7 +1338,14 @@
         total_high_uncertainty_pixels: 11804118,
         total_high_uncertainty_error_pixels: 9238932,
         mean_uncertainty_on_error: 0.28029261776432396,
-        mean_uncertainty_on_correct: 0.018612491859239525
+        mean_uncertainty_on_correct: 0.018612491859239525,
+        calibration_expected_error: 0.061,
+        calibration_mean_gap: 0.084,
+        calibration_max_gap: 0.219,
+        calibration_bins: [
+          { bin_index: 0, lower: 0, upper: 0.2, count: 129330000, mean_uncertainty: 0.012, error_rate: 0.041, calibration_gap: 0.029 },
+          { bin_index: 1, lower: 0.2, upper: 0.4, count: 9840000, mean_uncertainty: 0.283, error_rate: 0.468, calibration_gap: 0.185 }
+        ]
       }
     };
 
@@ -1425,6 +1432,23 @@
           "Low image-based defect risk; routine review is sufficient."
         ],
         uncertainty_available: true
+      },
+      review_priority: {
+        priority: "low",
+        score: 0.5,
+        review_required: false,
+        reasons: [
+          "routine review priority from image-based risk evidence"
+        ],
+        evidence: {
+          risk_score: 1.75,
+          defect_uncertainty: 0.08400039374828339,
+          defect_high_uncertainty_fraction: 0.06779661016949153,
+          defect_disagreement: 0.009970089420676231,
+          foreground_iou: 0.9774951076320939,
+          fused_to_single_area_ratio: 0.9852652259332023
+        },
+        note: "Image-based manual-review priority; not a structural safety diagnosis or maintenance decision."
       }
     };
 
@@ -1484,6 +1508,8 @@
         ?? uncertaintyReview.high_uncertainty_threshold;
       const errorPixels = uncertaintyReview.total_error_pixels;
       const overlapPixels = uncertaintyReview.total_high_uncertainty_error_pixels;
+      const calibrationError = uncertaintyReview.calibration_expected_error;
+      const calibrationMaxGap = uncertaintyReview.calibration_max_gap;
       const modeCounts = summary?.selection?.mode_counts || {};
       const source = meta.source || summary?.source || "fallback-sample";
       const split = meta.split || summary?.split || "all";
@@ -1522,6 +1548,11 @@
           "HU error precision",
           pct(uncertaintyPrecision),
           `高不确定区域里实际预测错误的比例，说明 uncertainty heatmap 是否能有效指向误判区域；像素阈值同上。`
+        ],
+        [
+          "Calibration gap",
+          fmt(calibrationError, 4),
+          `按 uncertainty 分桶后，平均不确定性与真实错误率的加权差距；最大分桶差距 ${fmt(calibrationMaxGap, 4)}。`
         ]
       ].map(([title, value, help]) => `<div class="advantage-card"><b>${title}</b><strong>${value}</strong><p>${help}</p></div>`).join("");
 
@@ -1625,7 +1656,24 @@
         .replace("fallback to single mask to protect small defect evidence", "回退 single mask 以保护小缺陷证据")
         .replace("stable single/fused foreground IoU", "single/fused 前景 IoU 稳定")
         .replace("stable fused-to-single area ratio", "fused/single 面积比例稳定")
-        .replace("low single/fused foreground IoU", "single/fused 前景 IoU 偏低");
+        .replace("low single/fused foreground IoU", "single/fused 前景 IoU 偏低")
+        .replace("risk module already requests manual review", "风险模块已建议人工复核")
+        .replace("uncertainty unavailable; priority relies on morphology and selection evidence", "uncertainty 不可用，复核优先级主要依据 morphology 和 selection evidence")
+        .replace("defect uncertainty", "缺陷区 uncertainty")
+        .replace("exceeds review threshold", "超过复核阈值")
+        .replace("high-uncertainty defect fraction", "高不确定缺陷占比")
+        .replace("TTA disagreement", "TTA 分歧")
+        .replace("indicates unstable prediction", "提示预测不稳定")
+        .replace("single/fused foreground IoU", "single/fused 前景 IoU")
+        .replace("is severely unstable", "严重不稳定")
+        .replace("is below stability threshold", "低于稳定阈值")
+        .replace("may suppress small defect evidence", "可能压掉小病害证据")
+        .replace("selected mask preserves", "selected mask 相对 fused 保留")
+        .replace("pixels relative to fused mask", "个像素")
+        .replace("adaptive selection chose", "adaptive selection 选择")
+        .replace("instead of fixed fused output", "而不是固定 fused 输出")
+        .replace("routine review priority from image-based risk evidence", "基于图像风险证据，常规复核优先级")
+        .replace("no review priority trigger; no defect passed configured filters", "没有触发复核优先级；无缺陷通过测量过滤");
     }
 
     function setStatus(text, type = "") {
@@ -1773,13 +1821,14 @@
 
     function renderHeader(report) {
       const risk = report.risk || {};
+      const priority = report.review_priority || {};
       const level = String(risk.risk_level || "none").toLowerCase();
       const riskCard = document.querySelector("#riskLevelCard");
       riskCard.className = `stat risk-${level}`;
       document.querySelector("#riskLevel").textContent = riskLabel(level);
       document.querySelector("#riskScore").textContent = fmt(risk.score, 2);
       document.querySelector("#defectPixels").textContent = report.morphology?.defect_area_pixels ?? 0;
-      document.querySelector("#reviewFlag").textContent = risk.review_required ? "YES" : "NO";
+      document.querySelector("#reviewFlag").textContent = riskLabel(priority.priority || (risk.review_required ? "medium" : "low"));
     }
 
     function renderCase(report) {
@@ -1821,7 +1870,9 @@
       document.querySelector("#riskMetrics").innerHTML = riskMetrics.map(([label, value, help]) => metricCard(label, value, help)).join("");
 
       const activeResult = (report.risk?.class_results || []).find((item) => item.risk_level !== "none") || report.risk?.class_results?.[0];
-      const reasons = activeResult?.reasons || report.risk?.suggestions || ["No risk reasons available."];
+      const priority = report.review_priority || {};
+      const priorityReasons = priority.reasons || [];
+      const reasons = priorityReasons.length ? priorityReasons : (activeResult?.reasons || report.risk?.suggestions || ["No risk reasons available."]);
       document.querySelector("#reasonList").innerHTML = reasons.map((reason) => `<li>${translateReason(reason)}</li>`).join("");
     }
 
@@ -1885,6 +1936,11 @@
       const relativeGuardGain = hasGT && ev.fused_mIoU ? guardGain / ev.fused_mIoU : null;
 
       document.querySelector("#advantageGrid").innerHTML = [
+        [
+          "Review priority",
+          riskLabel(report.review_priority?.priority || "none"),
+          report.review_priority?.note || "人工复核排序信号，不等同于结构安全诊断或最终养护决策。"
+        ],
         [
           "Adaptive selection",
           hasGT ? signedDelta(guardGain, 4) : selectionMode,

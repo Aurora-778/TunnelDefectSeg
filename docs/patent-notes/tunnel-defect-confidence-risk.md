@@ -12,6 +12,7 @@ This note describes an image-based tunnel defect segmentation post-processing me
 4. **自适应输出选择:** 根据 single/fused 一致性、前景面积变化、不确定性和分歧图，在 single、fused 和 hybrid 候选中选择 selected mask，避免固定融合压掉小缺陷。
 5. **骨架与形态量化:** 从 selected mask 中提取病害区域，计算面积占比、连通域数量、骨架长度、主方向和碎片化程度。
 6. **风险分级与复核建议:** 结合病害类别、面积、连通性、骨架长度和不确定性，输出图像级风险等级、类别级解释和复核建议。
+7. **置信校准与复核优先级:** 在有 GT 的数据集样本上按 uncertainty 分桶评估真实错误率，形成 ECE-like 校准证据；在无 GT 的上传图片上综合 uncertainty、disagreement、self-consistency、形态和 selected-mask 理由输出人工复核优先级。
 
 ## Differentiation
 
@@ -22,7 +23,7 @@ This makes the method easier to demonstrate than a pure network replacement:
 - Original single-pass prediction vs. fused prediction vs. selected prediction.
 - Selected prediction vs. uncertainty heatmap.
 - Selected prediction vs. skeleton/morphology visualization.
-- Risk report explaining why manual review is or is not recommended.
+- Risk report and review priority explaining why manual review is or is not recommended.
 
 SegFormer B1 is treated as a stronger segmentation backbone, while the confidence-risk module is a post-inference enhancement layer. In the current implementation, SegFormer provides same-checkpoint identity/hflip probability maps for fusion, entropy uncertainty, and disagreement. The enhancement claim should remain model-agnostic: a backbone provides candidate masks and probabilities; the post-inference method evaluates consistency, uncertainty, morphology, and review priority.
 
@@ -45,13 +46,15 @@ The implementation can generate the following patent-friendly artifacts:
 
 For images without ground-truth labels, true mIoU is not available. The implementation may report `Self IoU` between single and fused model outputs as a consistency signal, but this is not a substitute for label-based accuracy.
 
+Each report can now include `review_priority`, an image-based manual-review ordering signal. It is derived from uncertainty, disagreement, self-consistency, foreground shrinkage, morphology, and selected-mask evidence. When GT masks are available, evaluation JSON can also include `uncertainty_calibration`, which compares binned uncertainty with true pixel error rate. This calibration evidence is not generated for unlabeled uploads.
+
 ## Non-Claim Boundary
 
 This module provides image-based defect risk guidance and manual-review suggestions. It does **not** provide structural safety diagnosis, civil-engineering load assessment, or final maintenance decisions. Those remain outside the scope of this implementation and should require expert review.
 
 ## Suggested Patent Title
 
-一种基于多姿态预测一致性与不确定性评估的隧道病害分割可信评估及风险分级方法
+一种基于多姿态预测一致性、置信校准与复核优先级的隧道病害分割可信评估方法
 
 ## Suggested Figure Set
 
@@ -59,7 +62,7 @@ This module provides image-based defect risk guidance and manual-review suggesti
 2. Effect comparison: original image, single-pass prediction, fused prediction, selected prediction.
 3. Confidence visualization: selected prediction, uncertainty heatmap, low-confidence regions.
 4. Morphology visualization: selected prediction, skeleton view, connected regions.
-5. Structured report example: morphology metrics, uncertainty summary, risk level, review suggestion.
+5. Structured report example: morphology metrics, uncertainty summary, risk level, review priority, review suggestion.
 
 ## Current Measured Evidence
 
@@ -83,6 +86,8 @@ Uncertainty-to-error overlap is reported only when GT masks are available. It su
 |---|---:|---:|---:|---:|
 | Test split | 45.66% | 80.66% | 0.35 | 0.50 |
 | All labeled samples | 44.54% | 78.27% | 0.35 | 0.50 |
+
+U6 adds an ECE-like calibration summary around these signals: uncertainty values are binned and compared with the actual pixel error rate in each bin. This supports the claim that uncertainty is used as review evidence, while keeping stronger post-hoc methods such as temperature scaling or conformal prediction as follow-up work rather than current claims.
 
 This means the patent contribution should be framed as confidence-aware adaptive output selection and explainable risk evidence, not as a newly trained segmentation backbone that universally improves raw single-pass mIoU.
 

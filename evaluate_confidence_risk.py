@@ -93,6 +93,70 @@ def uncertainty_error_overlap(
         ),
         "mean_uncertainty_on_error": float(np.mean(unc[errors])) if error_pixels else None,
         "mean_uncertainty_on_correct": float(np.mean(unc[correct])) if np.any(correct) else None,
+        "uncertainty_calibration": uncertainty_calibration_summary(pred, target, unc),
+    }
+
+
+def uncertainty_calibration_summary(
+    pred_mask: np.ndarray,
+    target_mask: np.ndarray,
+    uncertainty: np.ndarray,
+    num_bins: int = 5,
+) -> dict:
+    pred = np.asarray(pred_mask)
+    target = np.asarray(target_mask)
+    unc = np.asarray(uncertainty, dtype=np.float32)
+    if pred.shape != target.shape or pred.shape != unc.shape:
+        raise ValueError("pred_mask, target_mask, and uncertainty must have the same shape")
+    if num_bins <= 0:
+        raise ValueError("num_bins must be positive")
+
+    errors = (pred != target).astype(np.float32)
+    clipped = np.clip(unc, 0.0, 1.0)
+    flat_unc = clipped.reshape(-1)
+    flat_errors = errors.reshape(-1)
+    total = int(flat_unc.size)
+    bins = []
+    weighted_gap = 0.0
+    gap_values = []
+
+    edges = np.linspace(0.0, 1.0, num_bins + 1)
+    for index in range(num_bins):
+        lower = float(edges[index])
+        upper = float(edges[index + 1])
+        if index == num_bins - 1:
+            mask = (flat_unc >= lower) & (flat_unc <= upper)
+        else:
+            mask = (flat_unc >= lower) & (flat_unc < upper)
+        count = int(mask.sum())
+        if count:
+            mean_uncertainty = float(np.mean(flat_unc[mask]))
+            error_rate = float(np.mean(flat_errors[mask]))
+            gap = abs(mean_uncertainty - error_rate)
+            weighted_gap += gap * count / total if total else 0.0
+            gap_values.append(gap)
+        else:
+            mean_uncertainty = None
+            error_rate = None
+            gap = None
+        bins.append({
+            "bin_index": index,
+            "lower": lower,
+            "upper": upper,
+            "count": count,
+            "mean_uncertainty": mean_uncertainty,
+            "error_rate": error_rate,
+            "calibration_gap": gap,
+        })
+
+    return {
+        "num_bins": int(num_bins),
+        "total_pixels": total,
+        "expected_calibration_error": float(weighted_gap),
+        "mean_calibration_gap": float(np.mean(gap_values)) if gap_values else None,
+        "max_calibration_gap": float(max(gap_values)) if gap_values else None,
+        "bins": bins,
+        "note": "Uncertainty is compared with pixel error rate; available only when GT masks exist.",
     }
 
 
@@ -356,6 +420,13 @@ def aggregate_comparisons(comparisons: list[dict]) -> dict:
                 ])
             ) if any(item["mean_uncertainty_on_correct"] is not None for item in overlap_values) else None,
         }
+        calibration = aggregate_uncertainty_calibration([
+            item.get("uncertainty_calibration")
+            for item in overlap_values
+            if item.get("uncertainty_calibration") is not None
+        ])
+        if calibration is not None:
+            overlap_summary["uncertainty_calibration"] = calibration
 
     result = {
         "supported": True,
@@ -374,6 +445,75 @@ def aggregate_comparisons(comparisons: list[dict]) -> dict:
     if overlap_summary is not None:
         result["uncertainty_error_overlap"] = overlap_summary
     return result
+
+
+def aggregate_uncertainty_calibration(calibrations: list[dict]) -> dict | None:
+    supported = [item for item in calibrations if item and item.get("bins")]
+    if not supported:
+        return None
+
+    num_bins = int(supported[0].get("num_bins", len(supported[0]["bins"])))
+    bin_accumulators = [
+        {
+            "bin_index": index,
+            "lower": float(supported[0]["bins"][index]["lower"]),
+            "upper": float(supported[0]["bins"][index]["upper"]),
+            "count": 0,
+            "uncertainty_sum": 0.0,
+            "error_sum": 0.0,
+        }
+        for index in range(num_bins)
+    ]
+
+    for calibration in supported:
+        bins = calibration.get("bins", [])
+        if len(bins) != num_bins:
+            continue
+        for index, row in enumerate(bins):
+            count = int(row.get("count", 0) or 0)
+            if count <= 0:
+                continue
+            mean_uncertainty = row.get("mean_uncertainty")
+            error_rate = row.get("error_rate")
+            bin_accumulators[index]["count"] += count
+            bin_accumulators[index]["uncertainty_sum"] += float(mean_uncertainty or 0.0) * count
+            bin_accumulators[index]["error_sum"] += float(error_rate or 0.0) * count
+
+    total = int(sum(row["count"] for row in bin_accumulators))
+    bins = []
+    weighted_gap = 0.0
+    gap_values = []
+    for row in bin_accumulators:
+        count = int(row["count"])
+        if count:
+            mean_uncertainty = float(row["uncertainty_sum"] / count)
+            error_rate = float(row["error_sum"] / count)
+            gap = abs(mean_uncertainty - error_rate)
+            weighted_gap += gap * count / total if total else 0.0
+            gap_values.append(gap)
+        else:
+            mean_uncertainty = None
+            error_rate = None
+            gap = None
+        bins.append({
+            "bin_index": row["bin_index"],
+            "lower": row["lower"],
+            "upper": row["upper"],
+            "count": count,
+            "mean_uncertainty": mean_uncertainty,
+            "error_rate": error_rate,
+            "calibration_gap": gap,
+        })
+
+    return {
+        "num_bins": num_bins,
+        "total_pixels": total,
+        "expected_calibration_error": float(weighted_gap),
+        "mean_calibration_gap": float(np.mean(gap_values)) if gap_values else None,
+        "max_calibration_gap": float(max(gap_values)) if gap_values else None,
+        "bins": bins,
+        "note": "Aggregate uncertainty calibration uses labeled pixels only.",
+    }
 
 
 def parse_args() -> argparse.Namespace:

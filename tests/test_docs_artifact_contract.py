@@ -30,6 +30,8 @@ def test_patent_note_mentions_full_method_chain():
 
     for phrase in ["多姿态", "自适应", "selected mask", "不确定性", "骨架", "风险分级", "复核建议"]:
         assert phrase in note
+    assert "置信校准" in note
+    assert "review_priority" in note
 
 
 def test_docs_do_not_treat_self_iou_as_ground_truth_accuracy():
@@ -71,6 +73,8 @@ def test_experiment_summary_documents_gt_only_overlap_boundary():
     assert "HU error precision" in summary
     assert "pixel_high_uncertainty_threshold" in summary
     assert "review_fraction_threshold" in summary
+    assert "uncertainty_calibration" in summary
+    assert "review_priority" in summary
     assert "without GT" in summary
     assert "must not display true mIoU" in summary
 
@@ -89,6 +93,9 @@ def test_web_demo_documents_segformer_probability_tta_sample():
 
     assert "uncertainty_summary?.available === false" in html
     assert 'probability_tta: true' in html
+    assert "review_priority" in html
+    assert "Review priority" in html
+    assert "Calibration gap" in html
     assert 'tta_specs: ["segformer_identity", "segformer_hflip"]' in html
     assert "assets/segformer_t1_1_uncertainty_heatmap.png" in html
     assert "assets/segformer_t1_1_disagreement_heatmap.png" in html

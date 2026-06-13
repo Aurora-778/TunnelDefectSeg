@@ -8,6 +8,7 @@ from evaluate_confidence_risk import (
     evaluate_records,
     segmentation_report,
     summarize_class_subset,
+    uncertainty_calibration_summary,
     uncertainty_error_overlap,
 )
 
@@ -66,6 +67,24 @@ def test_uncertainty_error_overlap_reports_error_coverage_and_precision():
     assert result["high_uncertainty_error_fraction"] == 0.5
     assert np.isclose(result["mean_uncertainty_on_error"], 0.5)
     assert np.isclose(result["mean_uncertainty_on_correct"], 0.4)
+    assert result["uncertainty_calibration"]["num_bins"] == 5
+    assert result["uncertainty_calibration"]["expected_calibration_error"] >= 0.0
+
+
+def test_uncertainty_calibration_summary_bins_error_rates():
+    target = np.array([[0, 1], [1, 2]], dtype=np.uint8)
+    pred = np.array([[0, 0], [1, 2]], dtype=np.uint8)
+    uncertainty = np.array([[0.05, 0.85], [0.15, 0.95]], dtype=np.float32)
+
+    result = uncertainty_calibration_summary(pred, target, uncertainty, num_bins=2)
+
+    assert result["total_pixels"] == 4
+    assert result["num_bins"] == 2
+    assert result["bins"][0]["count"] == 2
+    assert result["bins"][0]["error_rate"] == 0.0
+    assert result["bins"][1]["count"] == 2
+    assert result["bins"][1]["error_rate"] == 0.5
+    assert result["expected_calibration_error"] > 0.0
 
 
 def test_compare_predictions_handles_missing_labels():
@@ -116,6 +135,8 @@ def test_aggregate_comparisons_summarizes_supported_samples():
     assert result["uncertainty_error_overlap"]["total_error_pixels"] == 1
     assert result["uncertainty_error_overlap"]["micro_error_high_uncertainty_fraction"] == 0.0
     assert result["uncertainty_error_overlap"]["pixel_high_uncertainty_threshold"] == 0.35
+    assert result["uncertainty_error_overlap"]["uncertainty_calibration"]["total_pixels"] == 4
+    assert result["uncertainty_error_overlap"]["uncertainty_calibration"]["expected_calibration_error"] >= 0.0
 
 
 def test_candidate_configs_are_available_for_validation_search():
