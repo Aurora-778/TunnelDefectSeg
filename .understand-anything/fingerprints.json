@@ -1,0 +1,4414 @@
+{
+  "version": "1.0.0",
+  "gitCommitHash": "-",
+  "generatedAt": "2026-06-14T04:30:18.802Z",
+  "files": {
+    "adaptive_fusion.py": {
+      "filePath": "adaptive_fusion.py",
+      "contentHash": "318e77bd230add5387c726f37e9287b956e3a189dc2e1786b345aaf198621c44",
+      "functions": [
+        {
+          "name": "foreground_stats",
+          "params": [
+            "mask"
+          ],
+          "returnType": "dict[str, float | int]",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "mask_iou",
+          "params": [
+            "a",
+            "b",
+            "class_id"
+          ],
+          "returnType": "float",
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "self_consistency",
+          "params": [
+            "single_mask",
+            "fused_mask"
+          ],
+          "returnType": "dict[str, float]",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "_component_filter",
+          "params": [
+            "mask",
+            "min_pixels"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "build_hybrid_mask",
+          "params": [
+            "single_mask",
+            "fused_mask",
+            "entropy_uncertainty",
+            "disagreement_uncertainty",
+            "config"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "select_adaptive_mask",
+          "params": [
+            "single_mask",
+            "fused_mask",
+            "entropy_uncertainty",
+            "disagreement_uncertainty",
+            "config"
+          ],
+          "returnType": "dict[str, Any]",
+          "exported": true,
+          "lineCount": 92
+        }
+      ],
+      "classes": [
+        {
+          "name": "AdaptiveFusionConfig",
+          "methods": [],
+          "properties": [
+            "stable_self_iou",
+            "stable_area_ratio",
+            "shrink_ratio",
+            "low_uncertainty",
+            "low_disagreement",
+            "min_recovered_component_pixels"
+          ],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "imports": [
+        {
+          "source": "dataclasses",
+          "specifiers": [
+            "dataclass"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Any"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        }
+      ],
+      "exports": [
+        "AdaptiveFusionConfig",
+        "foreground_stats",
+        "mask_iou",
+        "self_consistency",
+        "_component_filter",
+        "build_hybrid_mask",
+        "select_adaptive_mask"
+      ],
+      "totalLines": 198,
+      "hasStructuralAnalysis": true
+    },
+    "AGENTS.md": {
+      "filePath": "AGENTS.md",
+      "contentHash": "d9c6d57da370d745b622c940969fa21ac753dad5badab64cb3d4c58a147743a2",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 187,
+      "hasStructuralAnalysis": true
+    },
+    "analyze_masks.py": {
+      "filePath": "analyze_masks.py",
+      "contentHash": "7137522c86d6de84b42de2521c0e07c090134d885a52d9ddd7a0a9bda488ed93",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "glob",
+          "specifiers": [
+            "glob"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 20,
+      "hasStructuralAnalysis": true
+    },
+    "binary_to_multiclass.py": {
+      "filePath": "binary_to_multiclass.py",
+      "contentHash": "1e1748d90628d256471b35d602313862b1265b134f82fd683f63c7ad069467d6",
+      "functions": [
+        {
+          "name": "convert_mask",
+          "params": [
+            "mask_np"
+          ],
+          "exported": true,
+          "lineCount": 66
+        },
+        {
+          "name": "convert_all",
+          "params": [],
+          "exported": true,
+          "lineCount": 49
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "glob",
+          "specifiers": [
+            "glob"
+          ]
+        }
+      ],
+      "exports": [
+        "convert_mask",
+        "convert_all"
+      ],
+      "totalLines": 138,
+      "hasStructuralAnalysis": true
+    },
+    "build_6class_labels.py": {
+      "filePath": "build_6class_labels.py",
+      "contentHash": "a5328892d99a98bb05346f8a409aa9970c86c149829aa8d6335254fbc1cd8ea4",
+      "functions": [
+        {
+          "name": "discover_pairs",
+          "params": [],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "load_mask",
+          "params": [
+            "path"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "to_multiclass",
+          "params": [
+            "mask",
+            "class_id"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "main",
+          "params": [],
+          "exported": true,
+          "lineCount": 89
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "csv",
+          "specifiers": [
+            "csv"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        }
+      ],
+      "exports": [
+        "discover_pairs",
+        "load_mask",
+        "to_multiclass",
+        "main"
+      ],
+      "totalLines": 153,
+      "hasStructuralAnalysis": true
+    },
+    "configs/mask-rcnn_crack.py": {
+      "filePath": "configs/mask-rcnn_crack.py",
+      "contentHash": "fc5e91f18d1e6d55479570895ba044e943ae613dbda6a59777f8354c1328a6e4",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 123,
+      "hasStructuralAnalysis": true
+    },
+    "convert_to_coco.py": {
+      "filePath": "convert_to_coco.py",
+      "contentHash": "64e92e092f62a0e17dd79ad0562df16d8218c7f18cc5cfbbe48f57747bd5cba3",
+      "functions": [
+        {
+          "name": "mask_to_polygons",
+          "params": [
+            "mask"
+          ],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "collect_samples",
+          "params": [],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "split_samples",
+          "params": [
+            "samples"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "build_coco",
+          "params": [
+            "samples",
+            "start_img_id",
+            "start_ann_id"
+          ],
+          "exported": true,
+          "lineCount": 53
+        },
+        {
+          "name": "write_json",
+          "params": [
+            "obj",
+            "path"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "main",
+          "params": [],
+          "exported": true,
+          "lineCount": 26
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "random",
+          "specifiers": [
+            "random"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        }
+      ],
+      "exports": [
+        "mask_to_polygons",
+        "collect_samples",
+        "split_samples",
+        "build_coco",
+        "write_json",
+        "main"
+      ],
+      "totalLines": 164,
+      "hasStructuralAnalysis": true
+    },
+    "data_adapter.py": {
+      "filePath": "data_adapter.py",
+      "contentHash": "d5bccc4065fa7cd47b1c3abb0439a660436cde854ac0490a6d42095ed8e4801c",
+      "functions": [
+        {
+          "name": "resolve_mask_path",
+          "params": [
+            "data_root",
+            "subfolder",
+            "stem",
+            "label_mode"
+          ],
+          "returnType": "str | None",
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "discover_samples",
+          "params": [
+            "data_root",
+            "label_mode"
+          ],
+          "returnType": "list[tuple[str, str]]",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "split_dataset",
+          "params": [
+            "pairs",
+            "seed",
+            "train_n",
+            "val_n",
+            "test_n"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "load_label_mask",
+          "params": [
+            "mask_path",
+            "folder_name",
+            "num_classes",
+            "label_mode"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 21
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "random",
+          "specifiers": [
+            "random"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        }
+      ],
+      "exports": [
+        "resolve_mask_path",
+        "discover_samples",
+        "split_dataset",
+        "load_label_mask"
+      ],
+      "totalLines": 92,
+      "hasStructuralAnalysis": true
+    },
+    "docs/brainstorms/2026-06-01-tunnel-defect-confidence-risk-requirements.md": {
+      "filePath": "docs/brainstorms/2026-06-01-tunnel-defect-confidence-risk-requirements.md",
+      "contentHash": "36c3a4a5d38219d47a8a9abc93561b144cf25ae931308aa9b9cd70f9099612ba",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 142,
+      "hasStructuralAnalysis": true
+    },
+    "docs/brainstorms/2026-06-02-segformer-backbone-upgrade-requirements.md": {
+      "filePath": "docs/brainstorms/2026-06-02-segformer-backbone-upgrade-requirements.md",
+      "contentHash": "aa5221249d6746a010432cada8745ef3fc86dbcc3b5aff8dd5b5d098c4ff095b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 59,
+      "hasStructuralAnalysis": true
+    },
+    "docs/brainstorms/2026-06-10-segformer-probability-tta-uncertainty-requirements.md": {
+      "filePath": "docs/brainstorms/2026-06-10-segformer-probability-tta-uncertainty-requirements.md",
+      "contentHash": "a1db80bed5c3b58824c69c79663380b489ed6c188453fc26a8629d2cbb6fee82",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 112,
+      "hasStructuralAnalysis": true
+    },
+    "docs/patent-notes/tunnel-defect-confidence-risk.md": {
+      "filePath": "docs/patent-notes/tunnel-defect-confidence-risk.md",
+      "contentHash": "291367956b7db8594ac02033f36e404c29e0f32fb4096756509461d013ebe2bc",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 97,
+      "hasStructuralAnalysis": true
+    },
+    "docs/plans/2026-06-01-001-feat-tunnel-defect-confidence-risk-plan.md": {
+      "filePath": "docs/plans/2026-06-01-001-feat-tunnel-defect-confidence-risk-plan.md",
+      "contentHash": "ab9a7f9ba6ff0d8da48014201d7902ba79ea0c62b7592f608efdca6c93d243f8",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 258,
+      "hasStructuralAnalysis": true
+    },
+    "docs/plans/2026-06-02-001-feat-adaptive-fusion-miou-plan.md": {
+      "filePath": "docs/plans/2026-06-02-001-feat-adaptive-fusion-miou-plan.md",
+      "contentHash": "def06281fb6766a01df9c6bf9bc0997933a841f130bf437db977b775d4d0d1b3",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 263,
+      "hasStructuralAnalysis": true
+    },
+    "docs/plans/2026-06-04-001-feat-enhancement-evidence-optimization-plan.md": {
+      "filePath": "docs/plans/2026-06-04-001-feat-enhancement-evidence-optimization-plan.md",
+      "contentHash": "49d210f896eaa58725679f802cd131190045ef3bbe4804d3d22f9055247a4307",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 227,
+      "hasStructuralAnalysis": true
+    },
+    "docs/plans/2026-06-10-001-feat-segformer-probability-tta-uncertainty-plan.md": {
+      "filePath": "docs/plans/2026-06-10-001-feat-segformer-probability-tta-uncertainty-plan.md",
+      "contentHash": "1029efb26689741cdde5b4b50f8034fd57e12b32e3809ff552319da74319abb4",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 258,
+      "hasStructuralAnalysis": true
+    },
+    "docs/plans/2026-06-13-001-feat-review-priority-calibration-plan.md": {
+      "filePath": "docs/plans/2026-06-13-001-feat-review-priority-calibration-plan.md",
+      "contentHash": "0a7dc3b07f66de431fe95eb06da51bb437678ec0891c6e519a2d27babe615001",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 215,
+      "hasStructuralAnalysis": true
+    },
+    "docs/presentations/tunnel-defect-project-speaker-output/tunnel-defect-project-display.md": {
+      "filePath": "docs/presentations/tunnel-defect-project-speaker-output/tunnel-defect-project-display.md",
+      "contentHash": "bdff287d748aced68ca16020c65d85ee354fbec699d77d3dbcb43be78b17f665",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 290,
+      "hasStructuralAnalysis": true
+    },
+    "docs/presentations/tunnel-defect-project-speaker-output/tunnel-defect-project-vision-review.md": {
+      "filePath": "docs/presentations/tunnel-defect-project-speaker-output/tunnel-defect-project-vision-review.md",
+      "contentHash": "83e2f811b07b6006669425f455f5c7e73d0757616d8e58e39836ce373cace4d7",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 36,
+      "hasStructuralAnalysis": true
+    },
+    "docs/presentations/tunnel-defect-project-speaker-output/work/display_document.json": {
+      "filePath": "docs/presentations/tunnel-defect-project-speaker-output/work/display_document.json",
+      "contentHash": "ea56807ccb5e1625b6ff59f15865a6105bf005b9a043b1eb83e862419642ec9b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 56,
+      "hasStructuralAnalysis": true
+    },
+    "docs/presentations/tunnel-defect-project/assets/animations/animations.css": {
+      "filePath": "docs/presentations/tunnel-defect-project/assets/animations/animations.css",
+      "contentHash": "2e04ae6f58c57fb88fb9ba3d945fe1d99941ba1b456f9e3606e1bfb8286b9c5e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 139,
+      "hasStructuralAnalysis": false
+    },
+    "docs/presentations/tunnel-defect-project/assets/base.css": {
+      "filePath": "docs/presentations/tunnel-defect-project/assets/base.css",
+      "contentHash": "f59485066a6e8506619e4d092f8d6c0dba164bdae9fa479f1fffc2e2d1572ae0",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 151,
+      "hasStructuralAnalysis": false
+    },
+    "docs/presentations/tunnel-defect-project/assets/fonts.css": {
+      "filePath": "docs/presentations/tunnel-defect-project/assets/fonts.css",
+      "contentHash": "c3c81351bb0426b1ea41428e3460bd0aa53776f22e66a19b29fbd5ee8a475d9e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 10,
+      "hasStructuralAnalysis": false
+    },
+    "docs/presentations/tunnel-defect-project/assets/runtime.js": {
+      "filePath": "docs/presentations/tunnel-defect-project/assets/runtime.js",
+      "contentHash": "8c1316afaca2191ad2fc5571f8d2b158c035c05beb04f46cbebfec63bd44c7f4",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 961,
+      "hasStructuralAnalysis": true
+    },
+    "docs/presentations/tunnel-defect-project/index.html": {
+      "filePath": "docs/presentations/tunnel-defect-project/index.html",
+      "contentHash": "a527165fadd6d3b838c10fbe6992ae9137a31f1439b02e0b18049118f082f83f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 294,
+      "hasStructuralAnalysis": false
+    },
+    "docs/presentations/tunnel-defect-project/style.css": {
+      "filePath": "docs/presentations/tunnel-defect-project/style.css",
+      "contentHash": "801110ba10764a48d77d0475f5fc4adf35268c42fb76d383dee934a5bb729dff",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 446,
+      "hasStructuralAnalysis": false
+    },
+    "docs/solutions/best-practices/enhancement-evidence-from-evaluation-json.md": {
+      "filePath": "docs/solutions/best-practices/enhancement-evidence-from-evaluation-json.md",
+      "contentHash": "69dd2e88f445fef111a0bc63732185faaba3a8aabea497b664c8dcfc6af321ec",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 186,
+      "hasStructuralAnalysis": true
+    },
+    "docs/solutions/developer-experience/windows-double-click-segformer-cuda-training.md": {
+      "filePath": "docs/solutions/developer-experience/windows-double-click-segformer-cuda-training.md",
+      "contentHash": "cad52698ecb02de633bb49665549a938bef1e245e15643aefe80e1743d574d78",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 149,
+      "hasStructuralAnalysis": true
+    },
+    "docs/solutions/integration-issues/web-detector-segformer-source-alignment.md": {
+      "filePath": "docs/solutions/integration-issues/web-detector-segformer-source-alignment.md",
+      "contentHash": "5a37ab62b579bc9f05f2696841ecb04fbb420b8ed4d7e12a24f1841e91d38341",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 99,
+      "hasStructuralAnalysis": true
+    },
+    "enhancement_evidence.py": {
+      "filePath": "enhancement_evidence.py",
+      "contentHash": "1f54af5888e76894098ca66876267235a7abc3f81cbd31c6b706e7a7b7c7fe1c",
+      "functions": [
+        {
+          "name": "_finite_float",
+          "params": [
+            "value"
+          ],
+          "returnType": "float | None",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "_mean",
+          "params": [
+            "values"
+          ],
+          "returnType": "float | None",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "_common_float",
+          "params": [
+            "values"
+          ],
+          "returnType": "float | None",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "_rate",
+          "params": [
+            "count",
+            "total"
+          ],
+          "returnType": "float",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "_fallback",
+          "params": [
+            "value",
+            "fallback"
+          ],
+          "returnType": "float | None",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "prediction_class_pixels",
+          "params": [
+            "report",
+            "class_id"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "foreground_pixels",
+          "params": [
+            "report"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "total_pixels",
+          "params": [
+            "report"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "sample_enhancement_evidence",
+          "params": [
+            "sample"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 51
+        },
+        {
+          "name": "_mode_counts",
+          "params": [
+            "samples"
+          ],
+          "returnType": "dict[str, int]",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "_mode_rates",
+          "params": [
+            "counts",
+            "total"
+          ],
+          "returnType": "dict[str, float]",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "_class_iou_summary",
+          "params": [
+            "samples",
+            "num_classes"
+          ],
+          "returnType": "list[dict]",
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "_aggregate_calibration_bins",
+          "params": [
+            "evidence_rows"
+          ],
+          "returnType": "list[dict]",
+          "exported": true,
+          "lineCount": 50
+        },
+        {
+          "name": "_example",
+          "params": [
+            "sample",
+            "evidence"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "_best_example",
+          "params": [
+            "samples",
+            "evidence_rows",
+            "predicate",
+            "score"
+          ],
+          "returnType": "dict | None",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "representative_examples",
+          "params": [
+            "samples",
+            "evidence_rows"
+          ],
+          "returnType": "dict[str, dict | None]",
+          "exported": true,
+          "lineCount": 53
+        },
+        {
+          "name": "summarize_enhancement_evidence",
+          "params": [
+            "evaluation",
+            "high_uncertainty_threshold"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 137
+        },
+        {
+          "name": "parse_args",
+          "params": [],
+          "returnType": "argparse.Namespace",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "main",
+          "params": [],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 9
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "argparse",
+          "specifiers": [
+            "argparse"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Any"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        }
+      ],
+      "exports": [
+        "_finite_float",
+        "_mean",
+        "_common_float",
+        "_rate",
+        "_fallback",
+        "prediction_class_pixels",
+        "foreground_pixels",
+        "total_pixels",
+        "sample_enhancement_evidence",
+        "_mode_counts",
+        "_mode_rates",
+        "_class_iou_summary",
+        "_aggregate_calibration_bins",
+        "_example",
+        "_best_example",
+        "representative_examples",
+        "summarize_enhancement_evidence",
+        "parse_args",
+        "main"
+      ],
+      "totalLines": 454,
+      "hasStructuralAnalysis": true
+    },
+    "evaluate_confidence_risk.py": {
+      "filePath": "evaluate_confidence_risk.py",
+      "contentHash": "81e65724fe0abd453bf021f7e6632c89ef18c9a91d39fadc0e890e82d45eec28",
+      "functions": [
+        {
+          "name": "segmentation_report",
+          "params": [
+            "pred",
+            "target",
+            "num_classes"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "summarize_class_subset",
+          "params": [
+            "report",
+            "class_ids"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "uncertainty_error_overlap",
+          "params": [
+            "pred_mask",
+            "target_mask",
+            "uncertainty",
+            "high_threshold"
+          ],
+          "returnType": "dict | None",
+          "exported": true,
+          "lineCount": 41
+        },
+        {
+          "name": "uncertainty_calibration_summary",
+          "params": [
+            "pred_mask",
+            "target_mask",
+            "uncertainty",
+            "num_bins"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 61
+        },
+        {
+          "name": "compare_predictions",
+          "params": [
+            "single_mask",
+            "fused_mask",
+            "target_mask",
+            "selected_mask",
+            "selection_mode",
+            "uncertainty",
+            "num_classes",
+            "weak_class_ids"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 43
+        },
+        {
+          "name": "load_resized_target",
+          "params": [
+            "mask_path",
+            "image_path",
+            "input_size",
+            "num_classes"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "config_dict",
+          "params": [
+            "config"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "candidate_adaptive_configs",
+          "params": [],
+          "returnType": "list[AdaptiveFusionConfig]",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "build_prediction_records",
+          "params": [
+            "pairs",
+            "limit",
+            "tta_mode"
+          ],
+          "returnType": "tuple[list[dict], int]",
+          "exported": true,
+          "lineCount": 29
+        },
+        {
+          "name": "evaluate_records",
+          "params": [
+            "records",
+            "num_classes",
+            "fusion_config"
+          ],
+          "returnType": "list[dict]",
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "evaluate_pairs",
+          "params": [
+            "pairs",
+            "output_path",
+            "limit",
+            "tta_mode",
+            "fusion_config"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "search_adaptive_config",
+          "params": [
+            "pairs",
+            "output_path",
+            "limit",
+            "tta_mode"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "aggregate_comparisons",
+          "params": [
+            "comparisons"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 95
+        },
+        {
+          "name": "aggregate_uncertainty_calibration",
+          "params": [
+            "calibrations"
+          ],
+          "returnType": "dict | None",
+          "exported": true,
+          "lineCount": 67
+        },
+        {
+          "name": "parse_args",
+          "params": [],
+          "returnType": "argparse.Namespace",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "main",
+          "params": [],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 23
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "argparse",
+          "specifiers": [
+            "argparse"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "torch",
+          "specifiers": [
+            "torch"
+          ]
+        },
+        {
+          "source": "torch.nn.functional",
+          "specifiers": [
+            "F"
+          ]
+        },
+        {
+          "source": "adaptive_fusion",
+          "specifiers": [
+            "AdaptiveFusionConfig",
+            "select_adaptive_mask"
+          ]
+        },
+        {
+          "source": "data_adapter",
+          "specifiers": [
+            "discover_samples",
+            "load_label_mask",
+            "split_dataset"
+          ]
+        },
+        {
+          "source": "enhancement_evidence",
+          "specifiers": [
+            "summarize_enhancement_evidence"
+          ]
+        },
+        {
+          "source": "metrics_adapter",
+          "specifiers": [
+            "confusion_matrix_from_batch",
+            "metrics_from_confusion_matrix"
+          ]
+        },
+        {
+          "source": "run_confidence_risk",
+          "specifiers": [
+            "load_model",
+            "preprocess_image"
+          ]
+        },
+        {
+          "source": "tta_confidence",
+          "specifiers": [
+            "default_tta_specs",
+            "light_tta_specs",
+            "predict_single_probs",
+            "predict_tta_probs",
+            "uncertainty_summary"
+          ]
+        }
+      ],
+      "exports": [
+        "segmentation_report",
+        "summarize_class_subset",
+        "uncertainty_error_overlap",
+        "uncertainty_calibration_summary",
+        "compare_predictions",
+        "load_resized_target",
+        "config_dict",
+        "candidate_adaptive_configs",
+        "build_prediction_records",
+        "evaluate_records",
+        "evaluate_pairs",
+        "search_adaptive_config",
+        "aggregate_comparisons",
+        "aggregate_uncertainty_calibration",
+        "parse_args",
+        "main"
+      ],
+      "totalLines": 558,
+      "hasStructuralAnalysis": true
+    },
+    "infer_five_images.py": {
+      "filePath": "infer_five_images.py",
+      "contentHash": "ebf893a18e037e0095d4868c8bcf624dc2ef45769c3e2956984e87dcf55b3ce7",
+      "functions": [
+        {
+          "name": "load_model",
+          "params": [],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "preprocess_image",
+          "params": [
+            "img_path"
+          ],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "infer_one",
+          "params": [
+            "model",
+            "img_path",
+            "out_dir"
+          ],
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "main",
+          "params": [],
+          "exported": true,
+          "lineCount": 25
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "torch",
+          "specifiers": [
+            "torch"
+          ]
+        },
+        {
+          "source": "torchvision",
+          "specifiers": [
+            "transforms"
+          ]
+        },
+        {
+          "source": "train_resnet50",
+          "specifiers": [
+            "Config",
+            "ResNet50SegmentationModel",
+            "colorize_mask"
+          ]
+        }
+      ],
+      "exports": [
+        "load_model",
+        "preprocess_image",
+        "infer_one",
+        "main"
+      ],
+      "totalLines": 99,
+      "hasStructuralAnalysis": true
+    },
+    "metrics_adapter.py": {
+      "filePath": "metrics_adapter.py",
+      "contentHash": "dce62dfecf4735bacc3171ebf7624d1bf676404a418b6b44656f0efb42dc2e33",
+      "functions": [
+        {
+          "name": "confusion_matrix_from_batch",
+          "params": [
+            "pred",
+            "target",
+            "num_classes"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "metrics_from_confusion_matrix",
+          "params": [
+            "cm"
+          ],
+          "exported": true,
+          "lineCount": 23
+        }
+      ],
+      "classes": [
+        {
+          "name": "StreamingSegMetrics",
+          "methods": [
+            "__init__",
+            "update",
+            "compute"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 10
+        }
+      ],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        }
+      ],
+      "exports": [
+        "confusion_matrix_from_batch",
+        "metrics_from_confusion_matrix",
+        "StreamingSegMetrics"
+      ],
+      "totalLines": 54,
+      "hasStructuralAnalysis": true
+    },
+    "morphology_adapter.py": {
+      "filePath": "morphology_adapter.py",
+      "contentHash": "c5597084bde18e6a669c9e38b579abf1d06368be4ff482615cdb9012ac0ed5ab",
+      "functions": [
+        {
+          "name": "_dominant_direction",
+          "params": [
+            "binary"
+          ],
+          "returnType": "tuple[float | None, str | None]",
+          "exported": true,
+          "lineCount": 21
+        },
+        {
+          "name": "_component_stats",
+          "params": [
+            "binary",
+            "min_area"
+          ],
+          "returnType": "tuple[np.ndarray, list[dict]]",
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "skeletonize_binary",
+          "params": [
+            "binary"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "measure_class",
+          "params": [
+            "mask",
+            "class_id",
+            "config"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "measure_mask",
+          "params": [
+            "mask",
+            "class_ids",
+            "config"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 18
+        },
+        {
+          "name": "skeleton_mask",
+          "params": [
+            "mask",
+            "class_ids",
+            "min_component_area"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 8
+        }
+      ],
+      "classes": [
+        {
+          "name": "MorphologyConfig",
+          "methods": [],
+          "properties": [
+            "num_classes",
+            "min_component_area"
+          ],
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "imports": [
+        {
+          "source": "dataclasses",
+          "specifiers": [
+            "dataclass"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Iterable"
+          ]
+        },
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        }
+      ],
+      "exports": [
+        "MorphologyConfig",
+        "_dominant_direction",
+        "_component_stats",
+        "skeletonize_binary",
+        "measure_class",
+        "measure_mask",
+        "skeleton_mask"
+      ],
+      "totalLines": 150,
+      "hasStructuralAnalysis": true
+    },
+    "quick_verify.py": {
+      "filePath": "quick_verify.py",
+      "contentHash": "a27dd014688594e1b69cb23f6914315eef2fcb1648d8ff24d34ead059e98d0f4",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "torch",
+          "specifiers": [
+            "torch"
+          ]
+        },
+        {
+          "source": "train_resnet50",
+          "specifiers": [
+            "ResNet50SegmentationModel"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 40,
+      "hasStructuralAnalysis": true
+    },
+    "README.md": {
+      "filePath": "README.md",
+      "contentHash": "02e4444196ecd44cfc963526b04100426617f345178b3a689d915fbef1119104",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 411,
+      "hasStructuralAnalysis": true
+    },
+    "resume_train_segformer_cuda.bat": {
+      "filePath": "resume_train_segformer_cuda.bat",
+      "contentHash": "a709252bdc51acf39beba6b8b0deed6d4dbbbeb10843f1dac0fca068e1f8f2fc",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 19,
+      "hasStructuralAnalysis": false
+    },
+    "risk_adapter.py": {
+      "filePath": "risk_adapter.py",
+      "contentHash": "2bddf7b238d906166212ff69c86475ff494e2e73f6ccdda335065bed87dac35d",
+      "functions": [
+        {
+          "name": "_level_from_score",
+          "params": [
+            "score"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "score_class",
+          "params": [
+            "class_metrics",
+            "uncertainty_mean",
+            "uncertainty_high_fraction",
+            "config"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 71
+        },
+        {
+          "name": "score_image",
+          "params": [
+            "morphology",
+            "uncertainty_summary",
+            "config"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 48
+        },
+        {
+          "name": "_foreground_pixels",
+          "params": [
+            "stats"
+          ],
+          "returnType": "int",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "_priority_from_score",
+          "params": [
+            "score"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "score_review_priority",
+          "params": [
+            "risk",
+            "uncertainty_summary",
+            "disagreement_summary",
+            "self_consistency",
+            "adaptive_selection",
+            "prediction_stats",
+            "config"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 122
+        }
+      ],
+      "classes": [
+        {
+          "name": "RiskConfig",
+          "methods": [],
+          "properties": [
+            "area_medium",
+            "area_high",
+            "skeleton_medium",
+            "skeleton_high",
+            "component_medium",
+            "component_high",
+            "uncertainty_review",
+            "high_uncertainty_fraction",
+            "disagreement_review",
+            "low_self_consistency",
+            "severe_self_consistency",
+            "shrink_review_ratio",
+            "class_severity"
+          ],
+          "exported": true,
+          "lineCount": 20
+        }
+      ],
+      "imports": [
+        {
+          "source": "dataclasses",
+          "specifiers": [
+            "dataclass",
+            "field"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Any"
+          ]
+        }
+      ],
+      "exports": [
+        "RiskConfig",
+        "_level_from_score",
+        "score_class",
+        "score_image",
+        "_foreground_pixels",
+        "_priority_from_score",
+        "score_review_priority"
+      ],
+      "totalLines": 304,
+      "hasStructuralAnalysis": true
+    },
+    "run_confidence_risk.py": {
+      "filePath": "run_confidence_risk.py",
+      "contentHash": "97fd7d602c1f7d36469ef2c9a918096a3c5466db5786873145c38ec5ac014d67",
+      "functions": [
+        {
+          "name": "colorize_mask",
+          "params": [
+            "mask",
+            "palette"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "heatmap_from_uncertainty",
+          "params": [
+            "uncertainty"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "overlay_image",
+          "params": [
+            "raw_rgb",
+            "mask_rgb",
+            "alpha"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "save_json",
+          "params": [
+            "obj",
+            "path"
+          ],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "prediction_stats",
+          "params": [
+            "mask"
+          ],
+          "returnType": "dict[str, int]",
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "prediction_consistency_stats",
+          "params": [
+            "single_mask",
+            "fused_mask"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 31
+        },
+        {
+          "name": "_default_mask_source",
+          "params": [],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "_measurement_available",
+          "params": [
+            "source",
+            "field"
+          ],
+          "returnType": "bool",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "_unavailable_summary",
+          "params": [
+            "reason"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "_available_uncertainty_summary",
+          "params": [
+            "uncertainty",
+            "mask"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "write_result_artifacts",
+          "params": [
+            "stem",
+            "raw_resized",
+            "single_mask",
+            "fused_mask",
+            "entropy_uncertainty",
+            "disagreement_uncertainty",
+            "output_dir",
+            "tta_specs",
+            "mask_source",
+            "morphology_config",
+            "risk_config"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 129
+        },
+        {
+          "name": "collect_images",
+          "params": [
+            "input_path"
+          ],
+          "returnType": "list[Path]",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "preprocess_image",
+          "params": [
+            "img_path",
+            "input_size"
+          ],
+          "returnType": "tuple[torch.Tensor, np.ndarray]",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "load_model",
+          "params": [
+            "model_source",
+            "segformer_config",
+            "segformer_checkpoint",
+            "segformer_repo_root",
+            "segformer_device"
+          ],
+          "exported": true,
+          "lineCount": 33
+        },
+        {
+          "name": "_predict_confidence_inputs",
+          "params": [
+            "model",
+            "config",
+            "image_path",
+            "tta_mode"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "process_image",
+          "params": [
+            "model",
+            "config",
+            "image_path",
+            "output_dir",
+            "tta_mode"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 17
+        },
+        {
+          "name": "run_batch",
+          "params": [
+            "input_path",
+            "output_dir",
+            "tta_mode",
+            "model_source",
+            "segformer_config",
+            "segformer_checkpoint",
+            "segformer_repo_root",
+            "segformer_device"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 39
+        },
+        {
+          "name": "parse_args",
+          "params": [],
+          "returnType": "argparse.Namespace",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "main",
+          "params": [],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 13
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "argparse",
+          "specifiers": [
+            "argparse"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "cv2",
+          "specifiers": [
+            "cv2"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "torch",
+          "specifiers": [
+            "torch"
+          ]
+        },
+        {
+          "source": "torchvision",
+          "specifiers": [
+            "transforms"
+          ]
+        },
+        {
+          "source": "adaptive_fusion",
+          "specifiers": [
+            "select_adaptive_mask"
+          ]
+        },
+        {
+          "source": "morphology_adapter",
+          "specifiers": [
+            "CLASS_NAMES",
+            "MorphologyConfig",
+            "measure_mask",
+            "skeleton_mask"
+          ]
+        },
+        {
+          "source": "risk_adapter",
+          "specifiers": [
+            "RiskConfig",
+            "score_image",
+            "score_review_priority"
+          ]
+        },
+        {
+          "source": "segformer_inference_adapter",
+          "specifiers": [
+            "DEFAULT_SEGFORMER_CHECKPOINT",
+            "DEFAULT_SEGFORMER_CONFIG",
+            "DEFAULT_SEGFORMER_REPO_ROOT",
+            "load_segformer_mask_source"
+          ]
+        },
+        {
+          "source": "tta_confidence",
+          "specifiers": [
+            "default_tta_specs",
+            "light_tta_specs",
+            "predict_single_probs",
+            "predict_tta_probs",
+            "uncertainty_summary"
+          ]
+        }
+      ],
+      "exports": [
+        "colorize_mask",
+        "heatmap_from_uncertainty",
+        "overlay_image",
+        "save_json",
+        "prediction_stats",
+        "prediction_consistency_stats",
+        "_default_mask_source",
+        "_measurement_available",
+        "_unavailable_summary",
+        "_available_uncertainty_summary",
+        "write_result_artifacts",
+        "collect_images",
+        "preprocess_image",
+        "load_model",
+        "_predict_confidence_inputs",
+        "process_image",
+        "run_batch",
+        "parse_args",
+        "main"
+      ],
+      "totalLines": 443,
+      "hasStructuralAnalysis": true
+    },
+    "run_train_50.bat": {
+      "filePath": "run_train_50.bat",
+      "contentHash": "11c9518b286b1932b424a368255bff949967008be65d1c5a1e4e34fc9a31db9e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 15,
+      "hasStructuralAnalysis": false
+    },
+    "run_train_resnet50_fixed_resume_visible.ps1": {
+      "filePath": "run_train_resnet50_fixed_resume_visible.ps1",
+      "contentHash": "4c003d4317e7ad9708656f60ebafd17c795fcf01d7d427173610b9eac00e528f",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 29,
+      "hasStructuralAnalysis": false
+    },
+    "run_train_resnet50_fixed_resume.bat": {
+      "filePath": "run_train_resnet50_fixed_resume.bat",
+      "contentHash": "2b1e6507d35ff0697914db8a1ec3b08b02b31d22f55901d38d53ac737da7e88c",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 18,
+      "hasStructuralAnalysis": false
+    },
+    "run_train_resnet50_visible.ps1": {
+      "filePath": "run_train_resnet50_visible.ps1",
+      "contentHash": "3e3c01b040c9da1a0b5295a52a3848b313a3c91b5ecd78ce1894e807c367edc4",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 15,
+      "hasStructuralAnalysis": false
+    },
+    "run_train_resnet50.bat": {
+      "filePath": "run_train_resnet50.bat",
+      "contentHash": "16855d89238cba78d6822e9630b4e97d2b5e959421dd44b861ed46067d2c58ff",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 11,
+      "hasStructuralAnalysis": false
+    },
+    "run_train_segformer_cuda.bat": {
+      "filePath": "run_train_segformer_cuda.bat",
+      "contentHash": "e900a3eca0414ec03785823a88c506ed4db05aeec41835d85848e42b250a2233",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 39,
+      "hasStructuralAnalysis": false
+    },
+    "run_train_segformer_cuda.ps1": {
+      "filePath": "run_train_segformer_cuda.ps1",
+      "contentHash": "2b9fb8d168b57f67dc62d09317fd4a27a79f2c8b394793f912bf378538eee0e2",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 123,
+      "hasStructuralAnalysis": false
+    },
+    "run_train.bat": {
+      "filePath": "run_train.bat",
+      "contentHash": "d562a3688abb7e2c96e2b4049dda690aa52d12ae052956cecd5dfd0b35c0e534",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 91,
+      "hasStructuralAnalysis": false
+    },
+    "run_web_app.bat": {
+      "filePath": "run_web_app.bat",
+      "contentHash": "d05cead8fea374816097ce30fd68d6568a20e42b86a7523a3ebd21322c2d6df1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 31,
+      "hasStructuralAnalysis": false
+    },
+    "run_web_app.ps1": {
+      "filePath": "run_web_app.ps1",
+      "contentHash": "aee62fb25958985a4cf6a68e0d1b53774d3dfbbcee50bec0c23d6d937b04c5a1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 98,
+      "hasStructuralAnalysis": false
+    },
+    "segformer_inference_adapter.py": {
+      "filePath": "segformer_inference_adapter.py",
+      "contentHash": "da3e00e4cf244a8026e00de17682864629d66e9d388db4642c67d417a3ecd9aa",
+      "functions": [
+        {
+          "name": "_resolve_existing",
+          "params": [
+            "path",
+            "label"
+          ],
+          "returnType": "Path",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "_resize_mask",
+          "params": [
+            "mask",
+            "input_size"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "_normalize_probabilities",
+          "params": [
+            "probabilities",
+            "eps"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "_coerce_probability_output",
+          "params": [
+            "output"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "_resize_probabilities",
+          "params": [
+            "probabilities",
+            "input_size"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "_mask_from_probabilities",
+          "params": [
+            "probabilities"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "_entropy_from_probabilities",
+          "params": [
+            "probabilities",
+            "eps"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "_normalize_aligned_probabilities",
+          "params": [
+            "aligned_probabilities"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "_disagreement_from_aligned_probabilities",
+          "params": [
+            "aligned_probabilities"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "_confidence_inputs_from_aligned_probabilities",
+          "params": [
+            "raw_resized",
+            "aligned_probabilities",
+            "tta_specs",
+            "mask_source"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "_segformer_tta_specs",
+          "params": [
+            "tta_mode"
+          ],
+          "returnType": "list[SegFormerTTASpec]",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "_prepare_mmseg_data",
+          "params": [
+            "model",
+            "image_input"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "_predict_segformer_probabilities",
+          "params": [
+            "model",
+            "image_input",
+            "input_size"
+          ],
+          "returnType": "np.ndarray",
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "_flipped_temp_image_path",
+          "params": [
+            "image"
+          ],
+          "returnType": "Path",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "load_segformer_mask_source",
+          "params": [
+            "config_path",
+            "checkpoint_path",
+            "repo_root",
+            "device"
+          ],
+          "returnType": "tuple[SegFormerMaskSource, SegFormerRuntimeConfig]",
+          "exported": true,
+          "lineCount": 24
+        }
+      ],
+      "classes": [
+        {
+          "name": "SegFormerRuntimeConfig",
+          "methods": [],
+          "properties": [
+            "INPUT_SIZE",
+            "NUM_CLASSES",
+            "DEVICE",
+            "SAVE_DIR"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "SegFormerTTASpec",
+          "methods": [],
+          "properties": [
+            "name",
+            "hflip"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "SegFormerMaskSource",
+          "methods": [
+            "__init__",
+            "metadata",
+            "predict_confidence_inputs"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 52
+        }
+      ],
+      "imports": [
+        {
+          "source": "math",
+          "specifiers": [
+            "math"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "dataclasses",
+          "specifiers": [
+            "dataclass"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "tempfile",
+          "specifiers": [
+            "tempfile"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        }
+      ],
+      "exports": [
+        "SegFormerRuntimeConfig",
+        "SegFormerTTASpec",
+        "_resolve_existing",
+        "_resize_mask",
+        "_normalize_probabilities",
+        "_coerce_probability_output",
+        "_resize_probabilities",
+        "_mask_from_probabilities",
+        "_entropy_from_probabilities",
+        "_normalize_aligned_probabilities",
+        "_disagreement_from_aligned_probabilities",
+        "_confidence_inputs_from_aligned_probabilities",
+        "_segformer_tta_specs",
+        "_prepare_mmseg_data",
+        "_predict_segformer_probabilities",
+        "_flipped_temp_image_path",
+        "SegFormerMaskSource",
+        "load_segformer_mask_source"
+      ],
+      "totalLines": 265,
+      "hasStructuralAnalysis": true
+    },
+    "segformer_tools.py": {
+      "filePath": "segformer_tools.py",
+      "contentHash": "362fef4c79301b8e1a80f34a6085cd34d489a03d27ab0421068ea2d38003dbac",
+      "functions": [
+        {
+          "name": "_portable_path",
+          "params": [
+            "path"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "_portable_optional_path",
+          "params": [
+            "path"
+          ],
+          "returnType": "str | None",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "export_mmseg_dataset",
+          "params": [
+            "config"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 49
+        },
+        {
+          "name": "write_segformer_config",
+          "params": [
+            "config",
+            "mmseg_root"
+          ],
+          "returnType": "Path",
+          "exported": true,
+          "lineCount": 130
+        },
+        {
+          "name": "write_launchers",
+          "params": [
+            "config",
+            "segformer_config",
+            "segformer_repo_root"
+          ],
+          "returnType": "dict[str, Path]",
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "prepare_segformer",
+          "params": [
+            "config",
+            "segformer_repo_root"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "parse_args",
+          "params": [],
+          "returnType": "argparse.Namespace",
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "main",
+          "params": [],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 16
+        }
+      ],
+      "classes": [
+        {
+          "name": "SegFormerExportConfig",
+          "methods": [],
+          "properties": [
+            "data_root",
+            "out_dir",
+            "train_n",
+            "val_n",
+            "test_n",
+            "seed",
+            "label_mode",
+            "crop_size",
+            "samples_per_gpu",
+            "workers_per_gpu",
+            "max_iters",
+            "eval_interval",
+            "python_executable",
+            "pretrained"
+          ],
+          "exported": true,
+          "lineCount": 15
+        }
+      ],
+      "imports": [
+        {
+          "source": "argparse",
+          "specifiers": [
+            "argparse"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "shutil",
+          "specifiers": [
+            "shutil"
+          ]
+        },
+        {
+          "source": "dataclasses",
+          "specifiers": [
+            "dataclass"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Optional"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "data_adapter",
+          "specifiers": [
+            "discover_samples",
+            "load_label_mask",
+            "split_dataset"
+          ]
+        }
+      ],
+      "exports": [
+        "_portable_path",
+        "_portable_optional_path",
+        "SegFormerExportConfig",
+        "export_mmseg_dataset",
+        "write_segformer_config",
+        "write_launchers",
+        "prepare_segformer",
+        "parse_args",
+        "main"
+      ],
+      "totalLines": 322,
+      "hasStructuralAnalysis": true
+    },
+    "tests/conftest.py": {
+      "filePath": "tests/conftest.py",
+      "contentHash": "ad3f05c57239b5feed4721b4867bc92816ac2ac9ccafabdf0e5dbf6e9043da75",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 10,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_adaptive_fusion.py": {
+      "filePath": "tests/test_adaptive_fusion.py",
+      "contentHash": "347cfed30acc4266ad0c4625fc41399b0b60b6dbce4129441667ed57c2bda07d",
+      "functions": [
+        {
+          "name": "test_mask_iou_returns_one_for_two_empty_foregrounds",
+          "params": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "test_identical_masks_select_fused_with_stable_reason",
+          "params": [],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "test_fused_shrinkage_preserves_low_uncertainty_single_pixels_as_hybrid",
+          "params": [],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "test_high_uncertainty_removed_pixels_fall_back_to_single_not_hybrid",
+          "params": [],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "test_fused_only_defect_evidence_is_preserved",
+          "params": [],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "test_tiny_removed_fragment_is_not_recovered_by_hybrid_filter",
+          "params": [],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "test_low_self_iou_emits_review_or_instability_reason",
+          "params": [],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "test_self_consistency_reports_area_ratios_and_agreement",
+          "params": [],
+          "exported": true,
+          "lineCount": 11
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "adaptive_fusion",
+          "specifiers": [
+            "AdaptiveFusionConfig",
+            "build_hybrid_mask",
+            "mask_iou",
+            "select_adaptive_mask",
+            "self_consistency"
+          ]
+        }
+      ],
+      "exports": [
+        "test_mask_iou_returns_one_for_two_empty_foregrounds",
+        "test_identical_masks_select_fused_with_stable_reason",
+        "test_fused_shrinkage_preserves_low_uncertainty_single_pixels_as_hybrid",
+        "test_high_uncertainty_removed_pixels_fall_back_to_single_not_hybrid",
+        "test_fused_only_defect_evidence_is_preserved",
+        "test_tiny_removed_fragment_is_not_recovered_by_hybrid_filter",
+        "test_low_self_iou_emits_review_or_instability_reason",
+        "test_self_consistency_reports_area_ratios_and_agreement"
+      ],
+      "totalLines": 112,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_confidence_risk_eval.py": {
+      "filePath": "tests/test_confidence_risk_eval.py",
+      "contentHash": "1e5f88d18ce4950ee74e1023452786c5f70743fa4bfc0f1370958f160fc9e63f",
+      "functions": [
+        {
+          "name": "test_segmentation_report_returns_per_class_metrics",
+          "params": [],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "test_compare_predictions_reports_single_and_fused_delta",
+          "params": [],
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "test_uncertainty_error_overlap_reports_error_coverage_and_precision",
+          "params": [],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "test_uncertainty_calibration_summary_bins_error_rates",
+          "params": [],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "test_compare_predictions_handles_missing_labels",
+          "params": [],
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "test_weak_class_subset_summary",
+          "params": [],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "test_aggregate_comparisons_summarizes_supported_samples",
+          "params": [],
+          "exported": true,
+          "lineCount": 26
+        },
+        {
+          "name": "test_candidate_configs_are_available_for_validation_search",
+          "params": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "test_evaluate_records_applies_supplied_adaptive_config",
+          "params": [],
+          "exported": true,
+          "lineCount": 28
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "adaptive_fusion",
+          "specifiers": [
+            "AdaptiveFusionConfig"
+          ]
+        },
+        {
+          "source": "evaluate_confidence_risk",
+          "specifiers": [
+            "aggregate_comparisons",
+            "candidate_adaptive_configs",
+            "compare_predictions",
+            "evaluate_records",
+            "segmentation_report",
+            "summarize_class_subset",
+            "uncertainty_calibration_summary",
+            "uncertainty_error_overlap"
+          ]
+        }
+      ],
+      "exports": [
+        "test_segmentation_report_returns_per_class_metrics",
+        "test_compare_predictions_reports_single_and_fused_delta",
+        "test_uncertainty_error_overlap_reports_error_coverage_and_precision",
+        "test_uncertainty_calibration_summary_bins_error_rates",
+        "test_compare_predictions_handles_missing_labels",
+        "test_weak_class_subset_summary",
+        "test_aggregate_comparisons_summarizes_supported_samples",
+        "test_candidate_configs_are_available_for_validation_search",
+        "test_evaluate_records_applies_supplied_adaptive_config"
+      ],
+      "totalLines": 177,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_confidence_risk_outputs.py": {
+      "filePath": "tests/test_confidence_risk_outputs.py",
+      "contentHash": "86bd4626f2d3420143c7db9a0bb58bad3fd96fa80aba6aa8d1d8cca48eec1278",
+      "functions": [
+        {
+          "name": "test_write_result_artifacts_creates_expected_files",
+          "params": [
+            "tmp_path"
+          ],
+          "exported": true,
+          "lineCount": 56
+        },
+        {
+          "name": "test_write_result_artifacts_keeps_unavailable_review_priority_reason",
+          "params": [
+            "tmp_path"
+          ],
+          "exported": true,
+          "lineCount": 31
+        },
+        {
+          "name": "test_collect_images_accepts_file_and_folder",
+          "params": [
+            "tmp_path"
+          ],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "test_collect_images_rejects_missing_input",
+          "params": [
+            "tmp_path"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "test_collect_images_rejects_folder_without_images",
+          "params": [
+            "tmp_path"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "test_process_image_accepts_segformer_like_mask_source",
+          "params": [
+            "tmp_path"
+          ],
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "test_segformer_source_missing_checkpoint_fails_before_mmseg_import",
+          "params": [
+            "tmp_path"
+          ],
+          "exported": true,
+          "lineCount": 13
+        }
+      ],
+      "classes": [
+        {
+          "name": "_FakeSegFormerConfig",
+          "methods": [],
+          "properties": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "_FakeSegFormerSource",
+          "methods": [
+            "predict_confidence_inputs"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 25
+        }
+      ],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "run_confidence_risk",
+          "specifiers": [
+            "collect_images",
+            "load_model",
+            "process_image",
+            "write_result_artifacts"
+          ]
+        }
+      ],
+      "exports": [
+        "test_write_result_artifacts_creates_expected_files",
+        "test_write_result_artifacts_keeps_unavailable_review_priority_reason",
+        "test_collect_images_accepts_file_and_folder",
+        "test_collect_images_rejects_missing_input",
+        "test_collect_images_rejects_folder_without_images",
+        "_FakeSegFormerConfig",
+        "_FakeSegFormerSource",
+        "test_process_image_accepts_segformer_like_mask_source",
+        "test_segformer_source_missing_checkpoint_fails_before_mmseg_import"
+      ],
+      "totalLines": 206,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_docs_artifact_contract.py": {
+      "filePath": "tests/test_docs_artifact_contract.py",
+      "contentHash": "3613c57051263fb6dcd1fd897cef212610097646b9c4cb34e72c482bf02c0f16",
+      "functions": [
+        {
+          "name": "test_readme_lists_runner_artifacts",
+          "params": [],
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "test_patent_note_mentions_full_method_chain",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "test_docs_do_not_treat_self_iou_as_ground_truth_accuracy",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "test_patent_note_does_not_claim_structural_safety_diagnosis",
+          "params": [],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "test_patent_note_includes_aggregate_evidence_and_threshold_semantics",
+          "params": [],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "test_experiment_summary_documents_gt_only_overlap_boundary",
+          "params": [],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "test_readme_documents_explicit_segformer_mask_source",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "test_web_demo_documents_segformer_probability_tta_sample",
+          "params": [],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "test_presentation_uses_same_web_demo_segformer_assets",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        }
+      ],
+      "exports": [
+        "test_readme_lists_runner_artifacts",
+        "test_patent_note_mentions_full_method_chain",
+        "test_docs_do_not_treat_self_iou_as_ground_truth_accuracy",
+        "test_patent_note_does_not_claim_structural_safety_diagnosis",
+        "test_patent_note_includes_aggregate_evidence_and_threshold_semantics",
+        "test_experiment_summary_documents_gt_only_overlap_boundary",
+        "test_readme_documents_explicit_segformer_mask_source",
+        "test_web_demo_documents_segformer_probability_tta_sample",
+        "test_presentation_uses_same_web_demo_segformer_assets"
+      ],
+      "totalLines": 114,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_enhancement_evidence.py": {
+      "filePath": "tests/test_enhancement_evidence.py",
+      "contentHash": "7cfac7c0bf17eaa774d6ca2ed21c621085f283140c05f682cf0ab771f3fa1774",
+      "functions": [
+        {
+          "name": "_comparison",
+          "params": [
+            "image",
+            "single",
+            "fused",
+            "selected",
+            "target",
+            "mode",
+            "uncertainty"
+          ],
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "test_foreground_pixels_are_recovered_from_prediction_columns",
+          "params": [],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "test_sample_enhancement_evidence_reports_shrinkage_and_protection",
+          "params": [],
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "test_summarize_enhancement_evidence_aggregates_modes_and_examples",
+          "params": [],
+          "exported": true,
+          "lineCount": 60
+        },
+        {
+          "name": "test_stable_fused_example_prefers_non_empty_defect_over_empty_background",
+          "params": [],
+          "exported": true,
+          "lineCount": 23
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "enhancement_evidence",
+          "specifiers": [
+            "foreground_pixels",
+            "prediction_class_pixels",
+            "sample_enhancement_evidence",
+            "summarize_enhancement_evidence"
+          ]
+        },
+        {
+          "source": "evaluate_confidence_risk",
+          "specifiers": [
+            "compare_predictions"
+          ]
+        }
+      ],
+      "exports": [
+        "_comparison",
+        "test_foreground_pixels_are_recovered_from_prediction_columns",
+        "test_sample_enhancement_evidence_reports_shrinkage_and_protection",
+        "test_summarize_enhancement_evidence_aggregates_modes_and_examples",
+        "test_stable_fused_example_prefers_non_empty_defect_over_empty_background"
+      ],
+      "totalLines": 150,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_morphology_adapter.py": {
+      "filePath": "tests/test_morphology_adapter.py",
+      "contentHash": "38e2fc82252c62117c8354e7b87ce5339fe866a6af3e54bca4bfcfa0e91218b0",
+      "functions": [
+        {
+          "name": "test_empty_mask_returns_zero_measurements",
+          "params": [],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "test_horizontal_defect_reports_direction_and_length",
+          "params": [],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "test_two_components_report_fragmentation",
+          "params": [],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "test_measure_mask_excludes_background_from_defect_totals",
+          "params": [],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "test_small_components_are_filtered_by_min_area",
+          "params": [],
+          "exported": true,
+          "lineCount": 10
+        },
+        {
+          "name": "test_skeleton_mask_preserves_class_id_on_skeleton",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "morphology_adapter",
+          "specifiers": [
+            "MorphologyConfig",
+            "measure_class",
+            "measure_mask",
+            "skeleton_mask"
+          ]
+        }
+      ],
+      "exports": [
+        "test_empty_mask_returns_zero_measurements",
+        "test_horizontal_defect_reports_direction_and_length",
+        "test_two_components_report_fragmentation",
+        "test_measure_mask_excludes_background_from_defect_totals",
+        "test_small_components_are_filtered_by_min_area",
+        "test_skeleton_mask_preserves_class_id_on_skeleton"
+      ],
+      "totalLines": 70,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_risk_adapter.py": {
+      "filePath": "tests/test_risk_adapter.py",
+      "contentHash": "9a40a2cc188e652db7d0c7b9c1cafd5c7794bace939abaac7436cbf4a61a393a",
+      "functions": [
+        {
+          "name": "metrics",
+          "params": [
+            "**overrides"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "test_no_detected_defect_returns_none_risk",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "test_large_area_increases_risk",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "test_high_uncertainty_requests_manual_review",
+          "params": [],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "test_fragmented_long_skeleton_increases_risk",
+          "params": [],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "test_class_severity_can_rank_same_geometry_differently",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "test_image_score_aggregates_class_results_and_suggestions",
+          "params": [],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "test_review_priority_uses_uncertainty_and_self_consistency",
+          "params": [],
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "test_review_priority_surfaces_high_risk_reason_when_probability_signals_are_stable",
+          "params": [],
+          "exported": true,
+          "lineCount": 24
+        },
+        {
+          "name": "test_review_priority_falls_back_when_uncertainty_unavailable",
+          "params": [],
+          "exported": true,
+          "lineCount": 18
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "risk_adapter",
+          "specifiers": [
+            "RiskConfig",
+            "score_class",
+            "score_image",
+            "score_review_priority"
+          ]
+        }
+      ],
+      "exports": [
+        "metrics",
+        "test_no_detected_defect_returns_none_risk",
+        "test_large_area_increases_risk",
+        "test_high_uncertainty_requests_manual_review",
+        "test_fragmented_long_skeleton_increases_risk",
+        "test_class_severity_can_rank_same_geometry_differently",
+        "test_image_score_aggregates_class_results_and_suggestions",
+        "test_review_priority_uses_uncertainty_and_self_consistency",
+        "test_review_priority_surfaces_high_risk_reason_when_probability_signals_are_stable",
+        "test_review_priority_falls_back_when_uncertainty_unavailable"
+      ],
+      "totalLines": 146,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_segformer_inference_adapter.py": {
+      "filePath": "tests/test_segformer_inference_adapter.py",
+      "contentHash": "c7b75c055cf932bddf45b3fbc53e039da40781ac14651b9cbd61a321b8d71bc9",
+      "functions": [
+        {
+          "name": "test_normalize_probabilities_preserves_simplex_and_fills_zero_pixels",
+          "params": [],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "test_resize_probabilities_keeps_channel_sum_one",
+          "params": [],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "test_coerce_probability_output_rejects_malformed_probability_maps",
+          "params": [],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "test_entropy_and_mask_come_from_fused_probabilities",
+          "params": [],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "test_disagreement_detects_conflicting_tta_predictions",
+          "params": [],
+          "exported": true,
+          "lineCount": 13
+        },
+        {
+          "name": "test_confidence_inputs_from_aligned_probabilities_reports_available_probability_tta",
+          "params": [],
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "test_segformer_tta_specs_support_identity_only_and_light_modes",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "segformer_inference_adapter",
+          "specifiers": [
+            "_coerce_probability_output",
+            "_confidence_inputs_from_aligned_probabilities",
+            "_disagreement_from_aligned_probabilities",
+            "_entropy_from_probabilities",
+            "_mask_from_probabilities",
+            "_normalize_probabilities",
+            "_resize_probabilities",
+            "_segformer_tta_specs"
+          ]
+        }
+      ],
+      "exports": [
+        "test_normalize_probabilities_preserves_simplex_and_fills_zero_pixels",
+        "test_resize_probabilities_keeps_channel_sum_one",
+        "test_coerce_probability_output_rejects_malformed_probability_maps",
+        "test_entropy_and_mask_come_from_fused_probabilities",
+        "test_disagreement_detects_conflicting_tta_predictions",
+        "test_confidence_inputs_from_aligned_probabilities_reports_available_probability_tta",
+        "test_segformer_tta_specs_support_identity_only_and_light_modes"
+      ],
+      "totalLines": 118,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_segformer_tools.py": {
+      "filePath": "tests/test_segformer_tools.py",
+      "contentHash": "1b3961a5e8b66c1f017d816f4d0e0aa70a00cc4a812b8c891db91fe6790ffb99",
+      "functions": [
+        {
+          "name": "_make_sample",
+          "params": [
+            "root",
+            "folder",
+            "stem"
+          ],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "test_prepare_segformer_exports_mmseg_dataset_and_config",
+          "params": [
+            "tmp_path"
+          ],
+          "exported": true,
+          "lineCount": 31
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "segformer_tools",
+          "specifiers": [
+            "SegFormerExportConfig",
+            "prepare_segformer"
+          ]
+        }
+      ],
+      "exports": [
+        "_make_sample",
+        "test_prepare_segformer_exports_mmseg_dataset_and_config"
+      ],
+      "totalLines": 56,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_tta_confidence.py": {
+      "filePath": "tests/test_tta_confidence.py",
+      "contentHash": "fd3f18b208243f1ef9088cdb5117db8b39e58dfb248ec6582d7098d6b44610e4",
+      "functions": [
+        {
+          "name": "test_identity_only_tta_returns_expected_mask_shape",
+          "params": [],
+          "exported": true,
+          "lineCount": 9
+        },
+        {
+          "name": "test_horizontal_flip_inverse_restores_tensor",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "test_fuse_probabilities_preserves_probability_simplex",
+          "params": [],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "test_entropy_uncertainty_low_for_confident_high_for_ambiguous",
+          "params": [],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "test_disagreement_uncertainty_increases_when_predictions_disagree",
+          "params": [],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "test_uncertainty_summary_separates_defect_pixels",
+          "params": [],
+          "exported": true,
+          "lineCount": 9
+        }
+      ],
+      "classes": [
+        {
+          "name": "ConstantModel",
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 10
+        }
+      ],
+      "imports": [
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "torch",
+          "specifiers": [
+            "torch"
+          ]
+        },
+        {
+          "source": "tta_confidence",
+          "specifiers": [
+            "TTASpec",
+            "apply_tta_transform",
+            "disagreement_uncertainty",
+            "entropy_uncertainty",
+            "fuse_probabilities",
+            "invert_tta_transform",
+            "predict_tta_probs",
+            "uncertainty_summary"
+          ]
+        }
+      ],
+      "exports": [
+        "ConstantModel",
+        "test_identity_only_tta_returns_expected_mask_shape",
+        "test_horizontal_flip_inverse_restores_tensor",
+        "test_fuse_probabilities_preserves_probability_simplex",
+        "test_entropy_uncertainty_low_for_confident_high_for_ambiguous",
+        "test_disagreement_uncertainty_increases_when_predictions_disagree",
+        "test_uncertainty_summary_separates_defect_pixels"
+      ],
+      "totalLines": 92,
+      "hasStructuralAnalysis": true
+    },
+    "tests/test_web_app.py": {
+      "filePath": "tests/test_web_app.py",
+      "contentHash": "b2575f66e5904ea3faeed68bea0efdb36d9e9facfbe71576ca7e1fc57cba1672",
+      "functions": [
+        {
+          "name": "test_load_evidence_payload_reads_available_summaries",
+          "params": [
+            "tmp_path",
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "test_load_evidence_payload_falls_back_when_all_summaries_missing",
+          "params": [
+            "tmp_path",
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "test_load_evidence_payload_reports_invalid_json_without_failing",
+          "params": [
+            "tmp_path",
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "test_default_web_config_uses_segformer_probability_source",
+          "params": [],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "test_load_model_once_passes_web_segformer_config",
+          "params": [
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "test_parse_args_applies_web_model_config",
+          "params": [
+            "monkeypatch"
+          ],
+          "exported": true,
+          "lineCount": 20
+        },
+        {
+          "name": "test_windows_web_launcher_defaults_to_segformer_runtime",
+          "params": [],
+          "exported": true,
+          "lineCount": 8
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "web_app",
+          "specifiers": [
+            "web_app"
+          ]
+        }
+      ],
+      "exports": [
+        "test_load_evidence_payload_reads_available_summaries",
+        "test_load_evidence_payload_falls_back_when_all_summaries_missing",
+        "test_load_evidence_payload_reports_invalid_json_without_failing",
+        "test_default_web_config_uses_segformer_probability_source",
+        "test_load_model_once_passes_web_segformer_config",
+        "test_parse_args_applies_web_model_config",
+        "test_windows_web_launcher_defaults_to_segformer_runtime"
+      ],
+      "totalLines": 122,
+      "hasStructuralAnalysis": true
+    },
+    "train_resnet50_v2.py": {
+      "filePath": "train_resnet50_v2.py",
+      "contentHash": "6adc1545e940f3a5b8755e770d6d150a41cd50d8b2d99cade3b75ea1eddd82b9",
+      "functions": [
+        {
+          "name": "main",
+          "params": [],
+          "exported": true,
+          "lineCount": 2
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "train_resnet50",
+          "specifiers": [
+            "Config",
+            "CrackDataset",
+            "compute_metrics",
+            "compute_model_stats",
+            "measure_fps",
+            "train_one_epoch",
+            "validate",
+            "save_predictions",
+            "ResNet50FCN",
+            "discover",
+            "split",
+            "_main"
+          ]
+        }
+      ],
+      "exports": [
+        "main"
+      ],
+      "totalLines": 50,
+      "hasStructuralAnalysis": true
+    },
+    "train_resnet50.py": {
+      "filePath": "train_resnet50.py",
+      "contentHash": "a2ae1bfede41948f2bea2d8d8738fffa9014d6de39798c64afc851bcbf26271f",
+      "functions": [
+        {
+          "name": "seed_everything",
+          "params": [
+            "seed"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "compute_confusion_matrix",
+          "params": [
+            "pred",
+            "target",
+            "num_classes"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "metrics_from_confusion_matrix",
+          "params": [
+            "cm"
+          ],
+          "exported": true,
+          "lineCount": 23
+        },
+        {
+          "name": "class_accuracy_from_confusion_matrix",
+          "params": [
+            "cm"
+          ],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "compute_model_stats",
+          "params": [
+            "model",
+            "input_size",
+            "device"
+          ],
+          "exported": true,
+          "lineCount": 48
+        },
+        {
+          "name": "measure_fps",
+          "params": [
+            "model",
+            "input_size",
+            "device",
+            "warmup",
+            "n_iter"
+          ],
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "train_one_epoch",
+          "params": [
+            "model",
+            "dataset",
+            "optimizer",
+            "criterion",
+            "device",
+            "epoch",
+            "start_batch"
+          ],
+          "exported": true,
+          "lineCount": 58
+        },
+        {
+          "name": "validate",
+          "params": [
+            "model",
+            "loader",
+            "criterion",
+            "device"
+          ],
+          "exported": true,
+          "lineCount": 30
+        },
+        {
+          "name": "colorize_mask",
+          "params": [
+            "mask",
+            "palette"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "save_predictions",
+          "params": [
+            "model",
+            "loader",
+            "save_dir",
+            "device",
+            "max_save"
+          ],
+          "exported": true,
+          "lineCount": 28
+        },
+        {
+          "name": "cleanup_old_periodic_checkpoints",
+          "params": [
+            "save_dir",
+            "keep_name"
+          ],
+          "exported": true,
+          "lineCount": 12
+        },
+        {
+          "name": "find_latest_checkpoint",
+          "params": [
+            "save_dir"
+          ],
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "make_epoch_order",
+          "params": [
+            "num_samples",
+            "seed",
+            "epoch"
+          ],
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "save_training_checkpoint",
+          "params": [
+            "path",
+            "model",
+            "optimizer",
+            "scheduler",
+            "epoch",
+            "batch_idx",
+            "best_epoch",
+            "best_val_miou",
+            "epoch_complete",
+            "include_optimizer"
+          ],
+          "exported": true,
+          "lineCount": 15
+        },
+        {
+          "name": "load_training_checkpoint",
+          "params": [
+            "path",
+            "model",
+            "optimizer",
+            "scheduler",
+            "device"
+          ],
+          "exported": true,
+          "lineCount": 22
+        },
+        {
+          "name": "main",
+          "params": [],
+          "exported": true,
+          "lineCount": 251
+        }
+      ],
+      "classes": [
+        {
+          "name": "Config",
+          "methods": [],
+          "properties": [],
+          "exported": true,
+          "lineCount": 40
+        },
+        {
+          "name": "CrackDataset",
+          "methods": [
+            "__init__",
+            "__len__",
+            "__getitem__"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 39
+        },
+        {
+          "name": "ResNet50SegmentationModel",
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 53
+        },
+        {
+          "name": "DeepLabV3Head",
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "ASPP",
+          "methods": [
+            "__init__",
+            "forward"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 24
+        }
+      ],
+      "imports": [
+        {
+          "source": "os",
+          "specifiers": [
+            "os"
+          ]
+        },
+        {
+          "source": "sys",
+          "specifiers": [
+            "sys"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "math",
+          "specifiers": [
+            "math"
+          ]
+        },
+        {
+          "source": "random",
+          "specifiers": [
+            "random"
+          ]
+        },
+        {
+          "source": "shutil",
+          "specifiers": [
+            "shutil"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "PIL",
+          "specifiers": [
+            "Image"
+          ]
+        },
+        {
+          "source": "glob",
+          "specifiers": [
+            "glob"
+          ]
+        },
+        {
+          "source": "torch",
+          "specifiers": [
+            "torch"
+          ]
+        },
+        {
+          "source": "torch.nn",
+          "specifiers": [
+            "nn"
+          ]
+        },
+        {
+          "source": "torch.nn.functional",
+          "specifiers": [
+            "F"
+          ]
+        },
+        {
+          "source": "torch.utils.data",
+          "specifiers": [
+            "Dataset",
+            "DataLoader"
+          ]
+        },
+        {
+          "source": "torch.optim",
+          "specifiers": [
+            "AdamW"
+          ]
+        },
+        {
+          "source": "torch.optim.lr_scheduler",
+          "specifiers": [
+            "CosineAnnealingLR"
+          ]
+        },
+        {
+          "source": "torchvision",
+          "specifiers": [
+            "torchvision"
+          ]
+        },
+        {
+          "source": "torchvision.models.resnet",
+          "specifiers": [
+            "resnet50",
+            "ResNet50_Weights"
+          ]
+        },
+        {
+          "source": "torchvision",
+          "specifiers": [
+            "transforms"
+          ]
+        },
+        {
+          "source": "data_adapter",
+          "specifiers": [
+            "discover_samples",
+            "split_dataset",
+            "load_label_mask"
+          ]
+        },
+        {
+          "source": "metrics_adapter",
+          "specifiers": [
+            "StreamingSegMetrics"
+          ]
+        }
+      ],
+      "exports": [
+        "Config",
+        "seed_everything",
+        "CrackDataset",
+        "ResNet50SegmentationModel",
+        "DeepLabV3Head",
+        "ASPP",
+        "compute_confusion_matrix",
+        "metrics_from_confusion_matrix",
+        "class_accuracy_from_confusion_matrix",
+        "compute_model_stats",
+        "measure_fps",
+        "train_one_epoch",
+        "validate",
+        "colorize_mask",
+        "save_predictions",
+        "cleanup_old_periodic_checkpoints",
+        "find_latest_checkpoint",
+        "make_epoch_order",
+        "save_training_checkpoint",
+        "load_training_checkpoint",
+        "main"
+      ],
+      "totalLines": 843,
+      "hasStructuralAnalysis": true
+    },
+    "tta_confidence.py": {
+      "filePath": "tta_confidence.py",
+      "contentHash": "0a5cf53fcf2749856ce31c3299d43ec46dab7838d3637f047af53c944071e7c2",
+      "functions": [
+        {
+          "name": "default_tta_specs",
+          "params": [],
+          "returnType": "list[TTASpec]",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "light_tta_specs",
+          "params": [],
+          "returnType": "list[TTASpec]",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "apply_tta_transform",
+          "params": [
+            "tensor",
+            "spec"
+          ],
+          "returnType": "torch.Tensor",
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "invert_tta_transform",
+          "params": [
+            "tensor",
+            "spec"
+          ],
+          "returnType": "torch.Tensor",
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "normalize_probabilities",
+          "params": [
+            "probs",
+            "eps"
+          ],
+          "returnType": "torch.Tensor",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "fuse_probabilities",
+          "params": [
+            "aligned_probs"
+          ],
+          "returnType": "torch.Tensor",
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "entropy_uncertainty",
+          "params": [
+            "mean_probs",
+            "eps"
+          ],
+          "returnType": "torch.Tensor",
+          "exported": true,
+          "lineCount": 8
+        },
+        {
+          "name": "disagreement_uncertainty",
+          "params": [
+            "aligned_probs"
+          ],
+          "returnType": "torch.Tensor",
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "predict_single_probs",
+          "params": [
+            "model",
+            "image_tensor",
+            "device"
+          ],
+          "returnType": "torch.Tensor",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "predict_tta_probs",
+          "params": [
+            "model",
+            "image_tensor",
+            "specs",
+            "device"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 27
+        },
+        {
+          "name": "uncertainty_summary",
+          "params": [
+            "uncertainty",
+            "mask",
+            "defect_class_ids",
+            "high_threshold"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 34
+        }
+      ],
+      "classes": [
+        {
+          "name": "TTASpec",
+          "methods": [],
+          "properties": [
+            "name",
+            "hflip",
+            "vflip",
+            "rotate_degrees"
+          ],
+          "exported": true,
+          "lineCount": 5
+        }
+      ],
+      "imports": [
+        {
+          "source": "dataclasses",
+          "specifiers": [
+            "dataclass"
+          ]
+        },
+        {
+          "source": "typing",
+          "specifiers": [
+            "Iterable"
+          ]
+        },
+        {
+          "source": "math",
+          "specifiers": [
+            "math"
+          ]
+        },
+        {
+          "source": "numpy",
+          "specifiers": [
+            "np"
+          ]
+        },
+        {
+          "source": "torch",
+          "specifiers": [
+            "torch"
+          ]
+        },
+        {
+          "source": "torch.nn.functional",
+          "specifiers": [
+            "F"
+          ]
+        },
+        {
+          "source": "torchvision.transforms",
+          "specifiers": [
+            "InterpolationMode"
+          ]
+        },
+        {
+          "source": "torchvision.transforms",
+          "specifiers": [
+            "TF"
+          ]
+        }
+      ],
+      "exports": [
+        "TTASpec",
+        "default_tta_specs",
+        "light_tta_specs",
+        "apply_tta_transform",
+        "invert_tta_transform",
+        "normalize_probabilities",
+        "fuse_probabilities",
+        "entropy_uncertainty",
+        "disagreement_uncertainty",
+        "predict_single_probs",
+        "predict_tta_probs",
+        "uncertainty_summary"
+      ],
+      "totalLines": 170,
+      "hasStructuralAnalysis": true
+    },
+    "verify_coco.py": {
+      "filePath": "verify_coco.py",
+      "contentHash": "57219f162ce679298d6a43f94c754ec6544cf0a3f351e47fc2f614b0b77e6cc0",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 22,
+      "hasStructuralAnalysis": true
+    },
+    "web_app.py": {
+      "filePath": "web_app.py",
+      "contentHash": "31f54734ce9336d6e1694a7327d8ab834a9833c13b1725b0fc872dc0f1955dde",
+      "functions": [
+        {
+          "name": "_safe_filename",
+          "params": [
+            "filename"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 5
+        },
+        {
+          "name": "_json_bytes",
+          "params": [
+            "payload",
+            "status"
+          ],
+          "returnType": "tuple[int, bytes, str]",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "_load_evidence_payload",
+          "params": [],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 19
+        },
+        {
+          "name": "_load_model_once",
+          "params": [],
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "_parse_upload",
+          "params": [
+            "body",
+            "content_type"
+          ],
+          "returnType": "tuple[str, bytes]",
+          "exported": true,
+          "lineCount": 16
+        },
+        {
+          "name": "_artifact_url",
+          "params": [
+            "job_id",
+            "filename"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 2
+        },
+        {
+          "name": "_view_payload",
+          "params": [
+            "report",
+            "job_id",
+            "original_name"
+          ],
+          "returnType": "list[dict[str, str]]",
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "_detect_image",
+          "params": [
+            "filename",
+            "data",
+            "tta_mode"
+          ],
+          "returnType": "dict",
+          "exported": true,
+          "lineCount": 25
+        },
+        {
+          "name": "parse_args",
+          "params": [],
+          "returnType": "argparse.Namespace",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
+          "name": "main",
+          "params": [],
+          "returnType": "None",
+          "exported": true,
+          "lineCount": 16
+        }
+      ],
+      "classes": [
+        {
+          "name": "WebModelConfig",
+          "methods": [],
+          "properties": [
+            "model_source",
+            "python_executable",
+            "segformer_config",
+            "segformer_checkpoint",
+            "segformer_repo_root",
+            "segformer_device"
+          ],
+          "exported": true,
+          "lineCount": 7
+        },
+        {
+          "name": "DetectionHandler",
+          "methods": [
+            "log_message",
+            "_send",
+            "_send_json",
+            "do_GET",
+            "do_POST",
+            "_serve_file"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 82
+        }
+      ],
+      "imports": [
+        {
+          "source": "argparse",
+          "specifiers": [
+            "argparse"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "mimetypes",
+          "specifiers": [
+            "mimetypes"
+          ]
+        },
+        {
+          "source": "re",
+          "specifiers": [
+            "re"
+          ]
+        },
+        {
+          "source": "shutil",
+          "specifiers": [
+            "shutil"
+          ]
+        },
+        {
+          "source": "threading",
+          "specifiers": [
+            "threading"
+          ]
+        },
+        {
+          "source": "time",
+          "specifiers": [
+            "time"
+          ]
+        },
+        {
+          "source": "uuid",
+          "specifiers": [
+            "uuid"
+          ]
+        },
+        {
+          "source": "dataclasses",
+          "specifiers": [
+            "dataclass"
+          ]
+        },
+        {
+          "source": "email",
+          "specifiers": [
+            "policy"
+          ]
+        },
+        {
+          "source": "email.parser",
+          "specifiers": [
+            "BytesParser"
+          ]
+        },
+        {
+          "source": "http",
+          "specifiers": [
+            "HTTPStatus"
+          ]
+        },
+        {
+          "source": "http.server",
+          "specifiers": [
+            "SimpleHTTPRequestHandler",
+            "ThreadingHTTPServer"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "urllib.parse",
+          "specifiers": [
+            "unquote",
+            "urlparse"
+          ]
+        },
+        {
+          "source": "run_confidence_risk",
+          "specifiers": [
+            "DEFAULT_SEGFORMER_CHECKPOINT",
+            "DEFAULT_SEGFORMER_CONFIG",
+            "DEFAULT_SEGFORMER_REPO_ROOT",
+            "IMAGE_SUFFIXES",
+            "load_model",
+            "process_image"
+          ]
+        }
+      ],
+      "exports": [
+        "WebModelConfig",
+        "_safe_filename",
+        "_json_bytes",
+        "_load_evidence_payload",
+        "_load_model_once",
+        "_parse_upload",
+        "_artifact_url",
+        "_view_payload",
+        "_detect_image",
+        "DetectionHandler",
+        "parse_args",
+        "main"
+      ],
+      "totalLines": 293,
+      "hasStructuralAnalysis": true
+    },
+    "web_demo/index.html": {
+      "filePath": "web_demo/index.html",
+      "contentHash": "cb2a806986c3b1c3743b8da462ea6d130e06dc927dc51c6ef9ead1dc95cf21c8",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 2061,
+      "hasStructuralAnalysis": false
+    }
+  }
+}

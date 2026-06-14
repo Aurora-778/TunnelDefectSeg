@@ -1,0 +1,581 @@
+{
+  "projectName": "Tunnel Defect Segmentation Workspace",
+  "projectDescription": "隧道病害语义分割与可信复核展示工作区，包含 SegFormer/ResNet 推理训练脚本、TTA uncertainty、adaptive selection、morphology/risk/report 生成和 Web demo。",
+  "rawDescription": "Tunnel defect segmentation, confidence-risk evidence, and live web detection workspace.",
+  "readmeHead": "# 隧道病害分割与 Web 展示项目\n\n这个仓库用于做隧道病害语义分割实验、增强模块验证和本地 Web 可视化展示。当前项目已经从早期 `ResNet50_FCN` 基线升级到 `SegFormer B1` 训练路径，并保留了单次预测、TTA 融合、adaptive selection、uncertainty、disagreement、skeleton 等结果，方便对比和向老师展示。\n\n## 当前任务目标\n\n- 训练 6 类隧道病害分割模型。\n- 使用 SegFormer B1 提升 mask 质量。\n- 在 Web 端支持拖拽图片实时检测。\n- 展示原图、GT 标注、单次 mask、融合 mask、选择 mask、叠加图、不确定性图、分歧图、骨架图和报告指标。\n- 保留增强模块的实验数据，用于说明创新点和阶段性效果。\n\n## 类别定义\n\n固定使用 6 类标签空间：\n\n| ID | Class | 中文说明 |\n|---:|---|---|\n| 0 | background | 背景 |\n| 1 | simple | simple 类病害 |\n| 2 | blocky | 块状病害 |\n| 3 | pipeline | 管线类病害 |\n| 4 | vertical | 竖向病害 |\n| 5 | horizontal | 横向病害 |\n\n## 数据与训练约定\n\n- 输入尺寸：`384 x 384`\n- 数据划分：`train / val / test = 700 / 150 / 150`\n- 标签模式：`multiclass`\n- 训练轮次：ResNet50 基线默认 `200 epoch`\n- mmseg / SegFormer 当前训练：`160000 iter`\n- mask 会在读取时统一转换到 6 类标签空间。\n- 最终评价主要看 `mIoU`、`mAcc`、`aAcc`，以及每个类别的 `IoU / Acc`。\n\n## 关键文件\n\n- `train_resnet50.py`：早期 ResNet50/FCN 训练与评估入口，支持 `AUTO_RESUME=1` 断点续训。\n- `data_adapter.py`：发现样本、固定划分数据集、读取图像和 mask。\n- `metrics_adapter.py`：流式混淆矩阵指标，计算 `PA`、`mIoU`、`mDice`。\n- `build_6class_labels.py`：重新生成 `multiclass_labels/`、`class_manifest.csv` 和 `class_summary.json`。\n- `segformer_tools.py`：生成 SegFormer/mmseg 数据配置和启动脚本。\n- `run_confidence_risk.py`：推理后增强模块，输出 mask、uncertainty、disagreement、skeleton 和 JSON 报告。\n- `web_app.py`：本地 Web 检测服务，支持拖拽上传图片并实时生成多视图结果。\n- `web_demo/index.html`：Web 前端展示界面。\n\n## 数据目录\n\n原始数据按类别目录组织：\n\n```text\n1/images    1/labels\n2/images    2/labels\n3/images    3/labels\n4/images    4/labels\n5/images    5/labels\n```\n\n`build_6class_labels.py` 运行后会生成：\n\n- `multiclass_labels/`：统一后的 6 类 mask。\n- `class_manifest.csv`：图像与标签配对清单。\n- `class_summary.json`：每类图像数和像素统计。\n\n当前快照：\n\n- 总样本数：`1000`\n- 每个病害类别：`200` 张图像\n\n## SegFormer B1 训练\n\nSegFormer 路径用于替换早期 ResNet50/FCN 基线。它更适合细长裂缝、折角和复杂边缘的分割。\n\n重新生成 SegFormer 配置：\n\n```powershell\n& 'D:/users/anaconda3/envs/segformer-phase2/python.exe' segformer_tools.py --out-dir experiments/segformer_b1 --segformer-repo-root 'C:/Users/26822/Desktop/隧道病害检测/third_party/SegFormer-master' --python-executable 'D:/users/anaconda3/envs/segformer-phase2/python.exe'\n```\n\n双击训练：\n\n```text\nrun_train_segformer_cuda.bat\n```\n\n双击从最新 checkpoint 继续训练：\n\n```text\nresume_train_segformer_cuda.bat\n```\n\nPowerShell 等价命令：\n\n```powershell\n& 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1'\n& 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1' -ResumeLatest\n```\n\n训练入口冒烟测试：\n\n```powershell\n& 'C:/Users/26822/Downloads/data/run_train_segformer_cuda.ps1' -SmokeTest\n```\n\n已有阶段结果：\n\n| Iter | mIoU | mAcc | aAcc | 说明 |\n|---:|---:|---:|---:|---|\n| 160000 | 84.33% | 91.17% | 98.62% | SegFormer B1 已完成主干训练 |\n\n每类结果：\n\n| Class | IoU | Acc |\n|---|---:|---:|\n| background | 99.01 | 99.51 |\n| simple | 80.23 | 88.40 |\n| blocky | 53.58 | 75.56 |\n| pipeline | 94.16 | 97.43 |\n| vertical | 95.85 | 97.75 |\n| horizontal | 83.17 | 88.34 |\n\n当前短板主要是 `blocky` 类，后续优化可继续围绕难例、边界、小目标和类别混淆展开。\n\n## ResNet50 基线\n\n保留 ResNet50/FCN 是为了做历史对比和增强模块兼容验证。\n\n断点续训基线：\n\n```text\nrun_train_resnet50.bat\nrun_train_resnet50_visible.ps1\n```\n\n干净重训：\n\n```text\nrun_train_resnet50_fix",
+  "languages": [
+    "batch",
+    "css",
+    "html",
+    "javascript",
+    "json",
+    "markdown",
+    "powershell",
+    "python"
+  ],
+  "frameworks": [
+    "Python",
+    "Python HTTP server",
+    "Vanilla HTML/JavaScript",
+    "SegFormer/mmsegmentation integration",
+    "PyTorch training"
+  ],
+  "files": [
+    {
+      "path": "adaptive_fusion.py",
+      "language": "python",
+      "sizeLines": 197,
+      "fileCategory": "code"
+    },
+    {
+      "path": "AGENTS.md",
+      "language": "markdown",
+      "sizeLines": 186,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "analyze_masks.py",
+      "language": "python",
+      "sizeLines": 19,
+      "fileCategory": "code"
+    },
+    {
+      "path": "binary_to_multiclass.py",
+      "language": "python",
+      "sizeLines": 137,
+      "fileCategory": "code"
+    },
+    {
+      "path": "build_6class_labels.py",
+      "language": "python",
+      "sizeLines": 152,
+      "fileCategory": "code"
+    },
+    {
+      "path": "configs/mask-rcnn_crack.py",
+      "language": "python",
+      "sizeLines": 122,
+      "fileCategory": "code"
+    },
+    {
+      "path": "convert_to_coco.py",
+      "language": "python",
+      "sizeLines": 163,
+      "fileCategory": "code"
+    },
+    {
+      "path": "data_adapter.py",
+      "language": "python",
+      "sizeLines": 91,
+      "fileCategory": "code"
+    },
+    {
+      "path": "docs/brainstorms/2026-06-01-tunnel-defect-confidence-risk-requirements.md",
+      "language": "markdown",
+      "sizeLines": 141,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/brainstorms/2026-06-02-segformer-backbone-upgrade-requirements.md",
+      "language": "markdown",
+      "sizeLines": 58,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/brainstorms/2026-06-10-segformer-probability-tta-uncertainty-requirements.md",
+      "language": "markdown",
+      "sizeLines": 111,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/patent-notes/tunnel-defect-confidence-risk.md",
+      "language": "markdown",
+      "sizeLines": 96,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/plans/2026-06-01-001-feat-tunnel-defect-confidence-risk-plan.md",
+      "language": "markdown",
+      "sizeLines": 257,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/plans/2026-06-02-001-feat-adaptive-fusion-miou-plan.md",
+      "language": "markdown",
+      "sizeLines": 262,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/plans/2026-06-04-001-feat-enhancement-evidence-optimization-plan.md",
+      "language": "markdown",
+      "sizeLines": 226,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/plans/2026-06-10-001-feat-segformer-probability-tta-uncertainty-plan.md",
+      "language": "markdown",
+      "sizeLines": 257,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/plans/2026-06-13-001-feat-review-priority-calibration-plan.md",
+      "language": "markdown",
+      "sizeLines": 214,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/presentations/tunnel-defect-project-speaker-output/tunnel-defect-project-display.md",
+      "language": "markdown",
+      "sizeLines": 289,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/presentations/tunnel-defect-project-speaker-output/tunnel-defect-project-vision-review.md",
+      "language": "markdown",
+      "sizeLines": 35,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/presentations/tunnel-defect-project-speaker-output/work/display_document.json",
+      "language": "json",
+      "sizeLines": 55,
+      "fileCategory": "config"
+    },
+    {
+      "path": "docs/presentations/tunnel-defect-project/assets/animations/animations.css",
+      "language": "css",
+      "sizeLines": 138,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "docs/presentations/tunnel-defect-project/assets/base.css",
+      "language": "css",
+      "sizeLines": 150,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "docs/presentations/tunnel-defect-project/assets/fonts.css",
+      "language": "css",
+      "sizeLines": 9,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "docs/presentations/tunnel-defect-project/assets/runtime.js",
+      "language": "javascript",
+      "sizeLines": 960,
+      "fileCategory": "code"
+    },
+    {
+      "path": "docs/presentations/tunnel-defect-project/index.html",
+      "language": "html",
+      "sizeLines": 293,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "docs/presentations/tunnel-defect-project/style.css",
+      "language": "css",
+      "sizeLines": 445,
+      "fileCategory": "markup"
+    },
+    {
+      "path": "docs/solutions/best-practices/enhancement-evidence-from-evaluation-json.md",
+      "language": "markdown",
+      "sizeLines": 185,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/solutions/developer-experience/windows-double-click-segformer-cuda-training.md",
+      "language": "markdown",
+      "sizeLines": 148,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "docs/solutions/integration-issues/web-detector-segformer-source-alignment.md",
+      "language": "markdown",
+      "sizeLines": 98,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "enhancement_evidence.py",
+      "language": "python",
+      "sizeLines": 453,
+      "fileCategory": "code"
+    },
+    {
+      "path": "evaluate_confidence_risk.py",
+      "language": "python",
+      "sizeLines": 557,
+      "fileCategory": "code"
+    },
+    {
+      "path": "infer_five_images.py",
+      "language": "python",
+      "sizeLines": 98,
+      "fileCategory": "code"
+    },
+    {
+      "path": "metrics_adapter.py",
+      "language": "python",
+      "sizeLines": 53,
+      "fileCategory": "code"
+    },
+    {
+      "path": "morphology_adapter.py",
+      "language": "python",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "quick_verify.py",
+      "language": "python",
+      "sizeLines": 39,
+      "fileCategory": "code"
+    },
+    {
+      "path": "README.md",
+      "language": "markdown",
+      "sizeLines": 410,
+      "fileCategory": "docs"
+    },
+    {
+      "path": "resume_train_segformer_cuda.bat",
+      "language": "batch",
+      "sizeLines": 18,
+      "fileCategory": "script"
+    },
+    {
+      "path": "risk_adapter.py",
+      "language": "python",
+      "sizeLines": 303,
+      "fileCategory": "code"
+    },
+    {
+      "path": "run_confidence_risk.py",
+      "language": "python",
+      "sizeLines": 442,
+      "fileCategory": "code"
+    },
+    {
+      "path": "run_train_50.bat",
+      "language": "batch",
+      "sizeLines": 14,
+      "fileCategory": "script"
+    },
+    {
+      "path": "run_train_resnet50_fixed_resume_visible.ps1",
+      "language": "powershell",
+      "sizeLines": 28,
+      "fileCategory": "script"
+    },
+    {
+      "path": "run_train_resnet50_fixed_resume.bat",
+      "language": "batch",
+      "sizeLines": 17,
+      "fileCategory": "script"
+    },
+    {
+      "path": "run_train_resnet50_visible.ps1",
+      "language": "powershell",
+      "sizeLines": 14,
+      "fileCategory": "script"
+    },
+    {
+      "path": "run_train_resnet50.bat",
+      "language": "batch",
+      "sizeLines": 10,
+      "fileCategory": "script"
+    },
+    {
+      "path": "run_train_segformer_cuda.bat",
+      "language": "batch",
+      "sizeLines": 38,
+      "fileCategory": "script"
+    },
+    {
+      "path": "run_train_segformer_cuda.ps1",
+      "language": "powershell",
+      "sizeLines": 122,
+      "fileCategory": "script"
+    },
+    {
+      "path": "run_train.bat",
+      "language": "batch",
+      "sizeLines": 90,
+      "fileCategory": "script"
+    },
+    {
+      "path": "run_web_app.bat",
+      "language": "batch",
+      "sizeLines": 30,
+      "fileCategory": "script"
+    },
+    {
+      "path": "run_web_app.ps1",
+      "language": "powershell",
+      "sizeLines": 97,
+      "fileCategory": "script"
+    },
+    {
+      "path": "segformer_inference_adapter.py",
+      "language": "python",
+      "sizeLines": 264,
+      "fileCategory": "code"
+    },
+    {
+      "path": "segformer_tools.py",
+      "language": "python",
+      "sizeLines": 321,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/conftest.py",
+      "language": "python",
+      "sizeLines": 9,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_adaptive_fusion.py",
+      "language": "python",
+      "sizeLines": 111,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_confidence_risk_eval.py",
+      "language": "python",
+      "sizeLines": 176,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_confidence_risk_outputs.py",
+      "language": "python",
+      "sizeLines": 205,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_docs_artifact_contract.py",
+      "language": "python",
+      "sizeLines": 113,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_enhancement_evidence.py",
+      "language": "python",
+      "sizeLines": 149,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_morphology_adapter.py",
+      "language": "python",
+      "sizeLines": 69,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_risk_adapter.py",
+      "language": "python",
+      "sizeLines": 145,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_segformer_inference_adapter.py",
+      "language": "python",
+      "sizeLines": 117,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_segformer_tools.py",
+      "language": "python",
+      "sizeLines": 55,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_tta_confidence.py",
+      "language": "python",
+      "sizeLines": 91,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tests/test_web_app.py",
+      "language": "python",
+      "sizeLines": 121,
+      "fileCategory": "code"
+    },
+    {
+      "path": "train_resnet50_v2.py",
+      "language": "python",
+      "sizeLines": 49,
+      "fileCategory": "code"
+    },
+    {
+      "path": "train_resnet50.py",
+      "language": "python",
+      "sizeLines": 842,
+      "fileCategory": "code"
+    },
+    {
+      "path": "tta_confidence.py",
+      "language": "python",
+      "sizeLines": 169,
+      "fileCategory": "code"
+    },
+    {
+      "path": "verify_coco.py",
+      "language": "python",
+      "sizeLines": 21,
+      "fileCategory": "code"
+    },
+    {
+      "path": "web_app.py",
+      "language": "python",
+      "sizeLines": 292,
+      "fileCategory": "code"
+    },
+    {
+      "path": "web_demo/index.html",
+      "language": "html",
+      "sizeLines": 2060,
+      "fileCategory": "markup"
+    }
+  ],
+  "totalFiles": 69,
+  "filteredByIgnore": 9,
+  "estimatedComplexity": "moderate",
+  "stats": {
+    "filesScanned": 69,
+    "byCategory": {
+      "code": 35,
+      "docs": 16,
+      "config": 1,
+      "markup": 6,
+      "script": 11
+    },
+    "byLanguage": {
+      "python": 34,
+      "markdown": 16,
+      "json": 1,
+      "css": 4,
+      "javascript": 1,
+      "html": 2,
+      "batch": 7,
+      "powershell": 4
+    }
+  },
+  "importMap": {
+    "adaptive_fusion.py": [],
+    "AGENTS.md": [],
+    "analyze_masks.py": [],
+    "binary_to_multiclass.py": [],
+    "build_6class_labels.py": [],
+    "configs/mask-rcnn_crack.py": [],
+    "convert_to_coco.py": [],
+    "data_adapter.py": [],
+    "docs/brainstorms/2026-06-01-tunnel-defect-confidence-risk-requirements.md": [],
+    "docs/brainstorms/2026-06-02-segformer-backbone-upgrade-requirements.md": [],
+    "docs/brainstorms/2026-06-10-segformer-probability-tta-uncertainty-requirements.md": [],
+    "docs/patent-notes/tunnel-defect-confidence-risk.md": [],
+    "docs/plans/2026-06-01-001-feat-tunnel-defect-confidence-risk-plan.md": [],
+    "docs/plans/2026-06-02-001-feat-adaptive-fusion-miou-plan.md": [],
+    "docs/plans/2026-06-04-001-feat-enhancement-evidence-optimization-plan.md": [],
+    "docs/plans/2026-06-10-001-feat-segformer-probability-tta-uncertainty-plan.md": [],
+    "docs/plans/2026-06-13-001-feat-review-priority-calibration-plan.md": [],
+    "docs/presentations/tunnel-defect-project-speaker-output/tunnel-defect-project-display.md": [],
+    "docs/presentations/tunnel-defect-project-speaker-output/tunnel-defect-project-vision-review.md": [],
+    "docs/presentations/tunnel-defect-project-speaker-output/work/display_document.json": [],
+    "docs/presentations/tunnel-defect-project/assets/animations/animations.css": [],
+    "docs/presentations/tunnel-defect-project/assets/base.css": [],
+    "docs/presentations/tunnel-defect-project/assets/fonts.css": [],
+    "docs/presentations/tunnel-defect-project/assets/runtime.js": [],
+    "docs/presentations/tunnel-defect-project/index.html": [],
+    "docs/presentations/tunnel-defect-project/style.css": [],
+    "docs/solutions/best-practices/enhancement-evidence-from-evaluation-json.md": [],
+    "docs/solutions/developer-experience/windows-double-click-segformer-cuda-training.md": [],
+    "docs/solutions/integration-issues/web-detector-segformer-source-alignment.md": [],
+    "enhancement_evidence.py": [],
+    "evaluate_confidence_risk.py": [
+      "adaptive_fusion.py",
+      "data_adapter.py",
+      "enhancement_evidence.py",
+      "metrics_adapter.py",
+      "run_confidence_risk.py",
+      "tta_confidence.py"
+    ],
+    "infer_five_images.py": [
+      "train_resnet50.py"
+    ],
+    "metrics_adapter.py": [],
+    "morphology_adapter.py": [],
+    "quick_verify.py": [
+      "train_resnet50.py"
+    ],
+    "README.md": [],
+    "resume_train_segformer_cuda.bat": [],
+    "risk_adapter.py": [],
+    "run_confidence_risk.py": [
+      "adaptive_fusion.py",
+      "morphology_adapter.py",
+      "risk_adapter.py",
+      "segformer_inference_adapter.py",
+      "tta_confidence.py"
+    ],
+    "run_train_50.bat": [],
+    "run_train_resnet50_fixed_resume_visible.ps1": [],
+    "run_train_resnet50_fixed_resume.bat": [],
+    "run_train_resnet50_visible.ps1": [],
+    "run_train_resnet50.bat": [],
+    "run_train_segformer_cuda.bat": [],
+    "run_train_segformer_cuda.ps1": [],
+    "run_train.bat": [],
+    "run_web_app.bat": [],
+    "run_web_app.ps1": [],
+    "segformer_inference_adapter.py": [],
+    "segformer_tools.py": [
+      "data_adapter.py"
+    ],
+    "tests/conftest.py": [],
+    "tests/test_adaptive_fusion.py": [
+      "adaptive_fusion.py"
+    ],
+    "tests/test_confidence_risk_eval.py": [
+      "adaptive_fusion.py",
+      "evaluate_confidence_risk.py"
+    ],
+    "tests/test_confidence_risk_outputs.py": [
+      "run_confidence_risk.py"
+    ],
+    "tests/test_docs_artifact_contract.py": [],
+    "tests/test_enhancement_evidence.py": [
+      "enhancement_evidence.py",
+      "evaluate_confidence_risk.py"
+    ],
+    "tests/test_morphology_adapter.py": [
+      "morphology_adapter.py"
+    ],
+    "tests/test_risk_adapter.py": [
+      "risk_adapter.py"
+    ],
+    "tests/test_segformer_inference_adapter.py": [
+      "segformer_inference_adapter.py"
+    ],
+    "tests/test_segformer_tools.py": [
+      "segformer_tools.py"
+    ],
+    "tests/test_tta_confidence.py": [
+      "tta_confidence.py"
+    ],
+    "tests/test_web_app.py": [
+      "web_app.py"
+    ],
+    "train_resnet50_v2.py": [
+      "train_resnet50.py"
+    ],
+    "train_resnet50.py": [
+      "data_adapter.py",
+      "metrics_adapter.py"
+    ],
+    "tta_confidence.py": [],
+    "verify_coco.py": [],
+    "web_app.py": [
+      "run_confidence_risk.py"
+    ],
+    "web_demo/index.html": []
+  }
+}

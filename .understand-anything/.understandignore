@@ -1,0 +1,45 @@
+# .understandignore - patterns for files/dirs to exclude from analysis
+# Syntax: same as .gitignore (globs, # comments, ! negation, trailing / for dirs)
+# Lines below are suggestions. Uncomment or add patterns before continuing if needed.
+#
+# Built-in defaults are already excluded by understand-anything:
+#   node_modules/, .git/, dist/, build/, obj/, *.lock, *.min.js, media files, etc.
+
+# --- Recommended for this repository ---
+# These are local datasets, generated labels, model weights, logs, and training artifacts.
+# Keeping them excluded makes the architecture graph focus on source code, launchers, docs, and tests.
+.codegraph/
+.understand-anything/
+1/
+2/
+3/
+4/
+5/
+annotations/
+multiclass_labels/
+experiments/
+save/
+work_dirs/
+*.pth
+*.pt
+*.onnx
+*.log
+*.err.log
+class_manifest.csv
+class_summary.json
+
+# --- Python cache ---
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.pyo
+
+# --- Local OS/editor files ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Optional: exclude docs/tests if you only want runtime code ---
+# docs/
+# tests/
