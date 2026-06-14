@@ -199,13 +199,22 @@ def score_review_priority(
 
     risk_score = float(risk.get("score", 0.0) or 0.0)
     risk_level = str(risk.get("risk_level", "none"))
+    risk_suggestions = risk.get("suggestions") or []
     score = 0.0
     if risk_level == "low":
         score += 0.5
     elif risk_level == "medium":
         score += 1.0
+        reasons.append(
+            str(risk_suggestions[0])
+            if risk_suggestions else "medium image-based defect risk contributes to review priority"
+        )
     elif risk_level == "high":
         score += 1.5
+        reasons.append(
+            str(risk_suggestions[0])
+            if risk_suggestions else "high image-based defect risk contributes to review priority"
+        )
     if risk.get("review_required"):
         score += 0.75
         reasons.append("risk module already requests manual review")

@@ -96,6 +96,7 @@ def test_web_demo_documents_segformer_probability_tta_sample():
     assert "review_priority" in html
     assert "Review priority" in html
     assert "Calibration gap" in html
+    assert 'priority.priority || (risk.review_required ? "medium" : level)' in html
     assert 'tta_specs: ["segformer_identity", "segformer_hflip"]' in html
     assert "assets/segformer_t1_1_uncertainty_heatmap.png" in html
     assert "assets/segformer_t1_1_disagreement_heatmap.png" in html

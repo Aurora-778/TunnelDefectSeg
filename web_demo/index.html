@@ -1828,7 +1828,7 @@
       document.querySelector("#riskLevel").textContent = riskLabel(level);
       document.querySelector("#riskScore").textContent = fmt(risk.score, 2);
       document.querySelector("#defectPixels").textContent = report.morphology?.defect_area_pixels ?? 0;
-      document.querySelector("#reviewFlag").textContent = riskLabel(priority.priority || (risk.review_required ? "medium" : "low"));
+      document.querySelector("#reviewFlag").textContent = riskLabel(priority.priority || (risk.review_required ? "medium" : level));
     }
 
     function renderCase(report) {

@@ -99,6 +99,32 @@ def test_review_priority_uses_uncertainty_and_self_consistency():
     assert "structural safety" in result["note"]
 
 
+def test_review_priority_surfaces_high_risk_reason_when_probability_signals_are_stable():
+    risk = {
+        "risk_level": "high",
+        "score": 5.0,
+        "review_required": False,
+        "suggestions": ["High image-based defect risk; prioritize manual review and field confirmation."],
+    }
+
+    result = score_review_priority(
+        risk,
+        uncertainty_summary={"available": True, "defect_mean": 0.01, "defect_high_fraction": 0.0},
+        disagreement_summary={"available": True, "defect_mean": 0.0},
+        self_consistency={"foreground_iou": 0.99},
+        adaptive_selection={"mode": "fused", "reasons": []},
+        prediction_stats={
+            "single": {"0": 10, "1": 90},
+            "fused": {"0": 10, "1": 90},
+            "selected": {"0": 10, "1": 90},
+        },
+    )
+
+    assert result["priority"] == "medium"
+    assert result["review_required"] is True
+    assert result["reasons"] == ["High image-based defect risk; prioritize manual review and field confirmation."]
+
+
 def test_review_priority_falls_back_when_uncertainty_unavailable():
     risk = {"risk_level": "none", "score": 0.0, "review_required": False}
 
