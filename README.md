@@ -329,6 +329,23 @@ experiments/
 web_demo/
 ```
 
+## 软著材料草稿
+
+项目已补充软著说明材料草稿，便于后续整理申请文档：
+
+```text
+docs/software-copyright/tunnel-defect-review-system.md
+docs/software-copyright/source-material-checklist.md
+```
+
+建议软件名称为：
+
+```text
+隧道病害智能分割与可信复核分析系统 V1.0
+```
+
+软著材料应重点描述本仓库自研的软件表达：数据适配、训练配置生成、可信推理流程、自适应 mask 选择、形态量化、风险/复核优先级、证据汇总和 Web 展示。第三方框架、公开模型结构、模型权重、数据集图片和本地索引文件不应作为自研源码主张。
+
 ## 环境注意事项
 
 SegFormer 训练和 Web 推理建议使用：

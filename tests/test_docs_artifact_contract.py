@@ -114,3 +114,17 @@ def test_presentation_uses_same_web_demo_segformer_assets():
     assert "../../../web_demo/assets/segformer_t1_1_selected_mask.png" in deck
     assert "../../../web_demo/assets/segformer_t1_1_skeleton.png" in deck
     assert "../../../experiments/segformer_b1/confidence_risk_smoke" not in deck
+
+
+def test_software_copyright_materials_document_scope_and_boundaries():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    guide = (ROOT / "docs" / "software-copyright" / "tunnel-defect-review-system.md").read_text(encoding="utf-8")
+    checklist = (ROOT / "docs" / "software-copyright" / "source-material-checklist.md").read_text(encoding="utf-8")
+
+    assert "docs/software-copyright/tunnel-defect-review-system.md" in readme
+    assert "隧道病害智能分割与可信复核分析系统 V1.0" in guide
+    assert "不提供结构安全诊断" in guide
+    assert "第三方依赖" in guide
+    assert "web_app.py" in checklist
+    assert "third_party/" in checklist
+    assert "模型权重" in checklist
