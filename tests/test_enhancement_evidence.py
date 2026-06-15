@@ -1,6 +1,7 @@
 import numpy as np
 
 from enhancement_evidence import (
+    build_patent_evidence_pack,
     foreground_pixels,
     prediction_class_pixels,
     sample_enhancement_evidence,
@@ -147,3 +148,57 @@ def test_stable_fused_example_prefers_non_empty_defect_over_empty_background():
     result = summarize_enhancement_evidence({"samples": [empty, defect]})
 
     assert result["representative_examples"]["stable_fused"]["image"] == "defect.jpg"
+
+
+def test_build_patent_evidence_pack_separates_backbone_and_enhancement_evidence():
+    guard = _comparison(
+        "guard.jpg",
+        single=[[0, 1], [1, 1]],
+        fused=[[0, 1], [0, 0]],
+        selected=[[0, 1], [1, 1]],
+        target=[[0, 1], [1, 1]],
+        mode="single",
+        uncertainty=[[0.0, 0.8], [0.9, 0.9]],
+    )
+    stable = _comparison(
+        "stable.jpg",
+        single=[[0, 1], [0, 1]],
+        fused=[[0, 1], [0, 1]],
+        selected=[[0, 1], [0, 1]],
+        target=[[0, 1], [0, 1]],
+        mode="fused",
+        uncertainty=[[0.0, 0.1], [0.0, 0.1]],
+    )
+    evaluation = {
+        "aggregate": {
+            "single_mIoU": 0.6,
+            "fused_mIoU": 0.5,
+            "selected_mIoU": 0.62,
+            "delta_selected_vs_fused_mIoU": 0.12,
+            "delta_selected_vs_single_mIoU": 0.02,
+        },
+        "samples": [guard, stable],
+    }
+
+    result = build_patent_evidence_pack(evaluation, artifact_root="experiments/patent_cases")
+
+    assert result["supported"] is True
+    assert result["backbone_evidence"]["model"] == "SegFormer B1 6-class"
+    assert "enhancement gain" in result["backbone_evidence"]["note"]
+    assert result["enhancement_evidence"]["metric_summary"]["selected_vs_fused_mIoU"] == 0.12
+    assert "true_mIoU" in result["gt_boundary"]["gt_required_metrics"]
+    assert "self_consistency" in result["gt_boundary"]["no_gt_allowed_metrics"]
+    assert any("not structural safety diagnosis" in item for item in result["claim_boundaries"])
+    stable_example = result["representative_examples"]["stable_fused"]
+    assert stable_example["image"] == "stable.jpg"
+    assert stable_example["artifacts"]["selected_mask"] == "experiments/patent_cases/stable_selected_mask.png"
+    assert stable_example["artifacts"]["report"] == "experiments/patent_cases/stable_report.json"
+
+
+def test_build_patent_evidence_pack_marks_unsupported_without_gt_metrics():
+    result = build_patent_evidence_pack({"samples": []})
+
+    assert result["supported"] is False
+    assert result["enhancement_evidence"] == {"supported": False, "gt_required": True}
+    assert result["representative_examples"] == {}
+    assert "true_mIoU" in result["gt_boundary"]["gt_required_metrics"]

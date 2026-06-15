@@ -17,6 +17,36 @@ CLASS_NAMES = {
     5: "horizontal",
 }
 
+ARTIFACT_SUFFIXES = {
+    "single_mask": "_single_mask.png",
+    "fused_mask": "_fused_mask.png",
+    "hybrid_mask": "_hybrid_mask.png",
+    "selected_mask": "_selected_mask.png",
+    "overlay": "_overlay.png",
+    "selected_overlay": "_selected_overlay.png",
+    "uncertainty_heatmap": "_uncertainty_heatmap.png",
+    "disagreement_heatmap": "_disagreement_heatmap.png",
+    "skeleton": "_skeleton.png",
+    "report": "_report.json",
+}
+
+DEFAULT_BACKBONE_EVIDENCE = {
+    "model": "SegFormer B1 6-class",
+    "iteration": 160000,
+    "mIoU": 84.33,
+    "mAcc": 91.17,
+    "aAcc": 98.62,
+    "note": "Backbone evidence only; this is not the post-inference enhancement gain.",
+}
+
+CLAIM_BOUNDARIES = [
+    "The enhancement module is a post-inference reliability layer, not a new segmentation backbone.",
+    "Selected mask is not claimed to universally beat single-pass mIoU.",
+    "True mIoU, error overlap, and calibration evidence require GT masks.",
+    "Self IoU is a model-consistency signal, not ground-truth accuracy.",
+    "Review priority is an image-based manual-review ordering signal, not structural safety diagnosis.",
+]
+
 
 def _finite_float(value: Any) -> float | None:
     if value is None:
@@ -291,6 +321,91 @@ def representative_examples(samples: list[dict], evidence_rows: list[dict]) -> d
     }
 
 
+def _artifact_paths(image: str | None, artifact_root: str) -> dict[str, str]:
+    if not image:
+        return {}
+    stem = Path(str(image)).stem
+    root = artifact_root.rstrip("/\\")
+    return {
+        name: f"{root}/{stem}{suffix}"
+        for name, suffix in ARTIFACT_SUFFIXES.items()
+    }
+
+
+def _examples_with_artifacts(examples: dict[str, dict | None], artifact_root: str) -> dict[str, dict | None]:
+    result: dict[str, dict | None] = {}
+    for name, example in examples.items():
+        if example is None:
+            result[name] = None
+            continue
+        enriched = dict(example)
+        enriched["artifacts"] = _artifact_paths(example.get("image"), artifact_root)
+        result[name] = enriched
+    return result
+
+
+def build_patent_evidence_pack(
+    evaluation: dict,
+    high_uncertainty_threshold: float = 0.5,
+    artifact_root: str = "experiments/confidence_risk",
+    backbone_evidence: dict | None = None,
+) -> dict:
+    summary = summarize_enhancement_evidence(
+        evaluation,
+        high_uncertainty_threshold=high_uncertainty_threshold,
+    )
+    pack = {
+        "supported": bool(summary.get("supported")),
+        "gt_boundary": {
+            "gt_required_metrics": [
+                "true_mIoU",
+                "class_IoU",
+                "error_overlap",
+                "uncertainty_calibration",
+            ],
+            "no_gt_allowed_metrics": [
+                "self_consistency",
+                "uncertainty",
+                "disagreement",
+                "morphology",
+                "review_priority",
+                "selected_mask_rationale",
+            ],
+        },
+        "backbone_evidence": backbone_evidence or DEFAULT_BACKBONE_EVIDENCE,
+        "claim_boundaries": CLAIM_BOUNDARIES,
+        "artifact_suffixes": ARTIFACT_SUFFIXES,
+    }
+
+    if not summary.get("supported"):
+        pack.update({
+            "reason": summary.get("reason", "no supported labeled samples"),
+            "enhancement_evidence": {
+                "supported": False,
+                "gt_required": True,
+            },
+            "representative_examples": {},
+        })
+        return pack
+
+    representative = summary.get("representative_examples", {})
+    pack.update({
+        "num_samples": summary.get("num_samples"),
+        "enhancement_evidence": {
+            "supported": True,
+            "metric_summary": summary.get("metric_summary", {}),
+            "selection": summary.get("selection", {}),
+            "foreground_shrinkage": summary.get("foreground_shrinkage", {}),
+            "small_defect_guard": summary.get("small_defect_guard", {}),
+            "miou_recovery": summary.get("miou_recovery", {}),
+            "uncertainty_review": summary.get("uncertainty_review", {}),
+            "class_iou_summary": summary.get("class_iou_summary", []),
+        },
+        "representative_examples": _examples_with_artifacts(representative, artifact_root),
+    })
+    return pack
+
+
 def summarize_enhancement_evidence(evaluation: dict, high_uncertainty_threshold: float = 0.5) -> dict:
     samples = [item for item in evaluation.get("samples", []) if item.get("supported")]
     total = len(samples)
@@ -434,6 +549,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Summarize adaptive enhancement evidence from an evaluation JSON file.")
     parser.add_argument("input", type=Path, help="Evaluation JSON produced by evaluate_confidence_risk.py")
     parser.add_argument("--output", type=Path, default=None, help="Where to write the compact evidence JSON.")
+    parser.add_argument("--patent-pack-output", type=Path, default=None, help="Optional patent-ready evidence pack JSON.")
+    parser.add_argument("--artifact-root", default="experiments/confidence_risk", help="Repo-relative root used for artifact paths in the patent pack.")
+    parser.add_argument("--as-patent-pack", action="store_true", help="Print the patent-ready evidence pack instead of the compact summary.")
     parser.add_argument("--high-uncertainty-threshold", type=float, default=0.5)
     return parser.parse_args()
 
@@ -442,10 +560,18 @@ def main() -> None:
     args = parse_args()
     data = json.loads(args.input.read_text(encoding="utf-8"))
     summary = summarize_enhancement_evidence(data, high_uncertainty_threshold=args.high_uncertainty_threshold)
-    text = json.dumps(summary, indent=2, ensure_ascii=False)
+    pack = build_patent_evidence_pack(
+        data,
+        high_uncertainty_threshold=args.high_uncertainty_threshold,
+        artifact_root=args.artifact_root,
+    )
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(text, encoding="utf-8")
+        args.output.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    if args.patent_pack_output:
+        args.patent_pack_output.parent.mkdir(parents=True, exist_ok=True)
+        args.patent_pack_output.write_text(json.dumps(pack, indent=2, ensure_ascii=False), encoding="utf-8")
+    text = json.dumps(pack if args.as_patent_pack else summary, indent=2, ensure_ascii=False)
     print(text)
 
 

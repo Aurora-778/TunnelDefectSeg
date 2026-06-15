@@ -60,7 +60,11 @@
     "total_high_uncertainty_pixels": 1830519,
     "total_high_uncertainty_error_pixels": 1476492,
     "mean_uncertainty_on_error": 0.2821328968554735,
-    "mean_uncertainty_on_correct": 0.017776550946291537
+    "mean_uncertainty_on_correct": 0.017776550946291537,
+    "calibration_expected_error": null,
+    "calibration_mean_gap": null,
+    "calibration_max_gap": null,
+    "calibration_bins": []
   },
   "class_iou_summary": [
     {
