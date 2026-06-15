@@ -7,7 +7,15 @@ import web_app
 
 def test_load_evidence_payload_reads_available_summaries(tmp_path, monkeypatch):
     summary_path = tmp_path / "summary.json"
-    summary_path.write_text(json.dumps({"num_samples": 3, "metric_summary": {"selected_vs_fused_mIoU": 0.12}}), encoding="utf-8")
+    summary_path.write_text(json.dumps({
+        "num_samples": 3,
+        "metric_summary": {"selected_vs_fused_mIoU": 0.12},
+        "review_queue_summary": {
+            "supported": True,
+            "priority_counts": {"high": 1, "medium": 1, "low": 1, "none": 0},
+            "top_k": [{"image": "case.jpg", "priority": "high", "score": 3.2}],
+        },
+    }), encoding="utf-8")
     monkeypatch.setattr(web_app, "EVIDENCE_FILES", {"test": summary_path, "all": tmp_path / "missing.json"})
 
     payload = web_app._load_evidence_payload()
@@ -15,6 +23,7 @@ def test_load_evidence_payload_reads_available_summaries(tmp_path, monkeypatch):
     assert payload["ok"] is True
     assert payload["source"] == "generated-json"
     assert payload["summaries"]["test"]["num_samples"] == 3
+    assert payload["summaries"]["test"]["review_queue_summary"]["top_k"][0]["image"] == "case.jpg"
     assert payload["missing"] == ["all"]
     assert payload["errors"] == {}
 

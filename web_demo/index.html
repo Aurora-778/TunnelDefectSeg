@@ -903,6 +903,22 @@
       overflow-wrap: anywhere;
     }
 
+    .queue-panel {
+      border: 1px dashed rgba(23,33,43,.28);
+      background: #fbfdff;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    #reviewQueueGrid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    #reviewQueueGrid .advantage-card {
+      min-height: 132px;
+    }
+
     .evidence-source {
       display: flex;
       align-items: center;
@@ -983,6 +999,7 @@
       .dashboard, .lower, .experiment-grid { grid-template-columns: 1fr; }
       .stage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       #aggregateEvidenceGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #reviewQueueGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       #aggregateEvidenceGrid .advantage-card { grid-column: span 1 !important; }
     }
 
@@ -1006,7 +1023,7 @@
       .image-stage img { width: 100%; }
       .filmstrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric-grid { grid-template-columns: 1fr; }
-      .stage-metrics, .experiment-notes, .advantage-grid { grid-template-columns: 1fr; }
+      .stage-metrics, .experiment-notes, .advantage-grid, #reviewQueueGrid { grid-template-columns: 1fr; }
       .evidence-source { display: grid; grid-template-columns: 1fr; }
       .score-head { display: grid; grid-template-columns: 1fr; }
       .score-badge { width: 100%; }
@@ -1216,6 +1233,18 @@
           <div class="advantage-note" id="aggregateEvidenceNote">
             正在读取 experiments/enhancement_evidence_all_summary.json；若文件缺失，会显示内置阶段性样例值。
           </div>
+          <div class="queue-panel">
+            <div class="evidence-source">
+              <span>Review queue</span>
+              <b id="reviewQueueSummary">等待加载 top cases</b>
+            </div>
+            <div class="advantage-grid" id="reviewQueueGrid">
+              <div class="advantage-card"><b>Top case</b><strong>-</strong><p>等待 review_queue_summary。</p></div>
+            </div>
+            <div class="advantage-note" id="reviewQueueNote">
+              Review queue 只用模型内部证据排序；GT 只用于评估队列是否覆盖真实错误或融合损伤。
+            </div>
+          </div>
         </div>
         <div class="advantage-grid" id="advantageGrid">
           <div class="advantage-card"><b>Adaptive selection</b><strong>+0.0489</strong><p>Selected mIoU 相比 Fused mIoU 的保护收益。</p></div>
@@ -1346,6 +1375,31 @@
           { bin_index: 0, lower: 0, upper: 0.2, count: 129330000, mean_uncertainty: 0.012, error_rate: 0.041, calibration_gap: 0.029 },
           { bin_index: 1, lower: 0.2, upper: 0.4, count: 9840000, mean_uncertainty: 0.283, error_rate: 0.468, calibration_gap: 0.185 }
         ]
+      },
+      review_queue_summary: {
+        supported: true,
+        ranking_signal: "model-internal uncertainty, self-consistency, shrinkage, protected pixels, and selection mode",
+        gt_usage: "GT-derived flags are used only for bucket evaluation, not for ranking.",
+        priority_counts: { high: 27, medium: 86, low: 35, none: 2 },
+        top_k: [
+          {
+            image: "neg_-5_t2_18.jpg",
+            priority: "high",
+            score: 4.75,
+            reasons: [
+              "defect high-uncertainty fraction 0.812",
+              "single/fused foreground IoU 0.421 is severely unstable",
+              "selected preserves 591 pixels versus fused"
+            ],
+            gt_flags: { selected_recovers_over_fused: true, fixed_fusion_harmed_mIoU: true }
+          }
+        ],
+        bucket_metrics: {
+          high: { count: 27, selected_recovers_over_fused_count: 18, fixed_fusion_harmed_count: 24, total_protected_pixels_vs_fused: 52610 },
+          medium: { count: 86, selected_recovers_over_fused_count: 46, fixed_fusion_harmed_count: 63, total_protected_pixels_vs_fused: 89742 },
+          low: { count: 35, selected_recovers_over_fused_count: 8, fixed_fusion_harmed_count: 12, total_protected_pixels_vs_fused: 13949 },
+          none: { count: 2, selected_recovers_over_fused_count: 0, fixed_fusion_harmed_count: 0, total_protected_pixels_vs_fused: 0 }
+        }
       }
     };
 
@@ -1561,6 +1615,37 @@
         : `selected vs single mIoU ${signedDelta(selectedVsSingle, 4)}`;
       document.querySelector("#aggregateEvidenceNote").textContent =
         `全量证据来自 ${sourceLabel}。Selection modes: single ${intFmt(modeCounts.single || 0)}, fused ${intFmt(modeCounts.fused || 0)}；${singleText}。像素高不确定阈值 ${fmt(pixelHighThreshold, 2)}，复核比例阈值 ${pct(reviewFractionThreshold)}；高不确定区域命中错误 ${pct(uncertaintyPrecision)}，可作为人工复核优先级证据。这个面板描述增强模块相对 fixed fusion 的可靠性收益，单图上传仍只刷新下方 per-image evidence。`;
+
+      renderReviewQueue(summary?.review_queue_summary);
+    }
+
+    function renderReviewQueue(queueSummary = {}) {
+      const counts = queueSummary?.priority_counts || {};
+      const topCases = queueSummary?.top_k || [];
+      const buckets = queueSummary?.bucket_metrics || {};
+      const supported = Boolean(queueSummary?.supported && topCases.length);
+
+      document.querySelector("#reviewQueueSummary").textContent = supported
+        ? `High ${intFmt(counts.high || 0)} / Medium ${intFmt(counts.medium || 0)} / Low ${intFmt(counts.low || 0)}`
+        : "暂无 review queue 数据";
+
+      const cards = supported ? topCases.slice(0, 3).map((item, index) => {
+        const reasons = (item.reasons || []).slice(0, 2).join("；") || "No reasons available";
+        const gt = item.gt_flags || {};
+        const flags = [
+          gt.fixed_fusion_harmed_mIoU ? "fixed fusion harmed" : null,
+          gt.selected_recovers_over_fused ? "selected recovered" : null
+        ].filter(Boolean).join(" / ") || "GT flags pending";
+        return `<div class="advantage-card"><b>${index + 1}. ${item.image || "case"}</b><strong>${riskLabel(item.priority || "none")}</strong><p>score ${fmt(item.score, 2)}；${flags}。${reasons}</p></div>`;
+      }) : [
+        `<div class="advantage-card"><b>Review queue</b><strong>N/A</strong><p>当前 evidence JSON 尚未包含 review_queue_summary。</p></div>`
+      ];
+
+      document.querySelector("#reviewQueueGrid").innerHTML = cards.join("");
+      const highBucket = buckets.high || {};
+      document.querySelector("#reviewQueueNote").textContent = supported
+        ? `排序信号：${queueSummary.ranking_signal || "model-internal evidence"}。${queueSummary.gt_usage || "GT 只用于评估，不用于排序。"} High bucket 中 selected recovered ${intFmt(highBucket.selected_recovers_over_fused_count || 0)}，fixed fusion harmed ${intFmt(highBucket.fixed_fusion_harmed_count || 0)}，protected pixels ${intFmt(highBucket.total_protected_pixels_vs_fused || 0)}。`
+        : "Review queue 只用模型内部证据排序；GT 只用于评估队列是否覆盖真实错误或融合损伤。";
     }
 
     async function loadAggregateEvidence() {
