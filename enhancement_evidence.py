@@ -161,6 +161,16 @@ def _mode_rates(counts: dict[str, int], total: int) -> dict[str, float]:
     return {mode: _rate(count, total) for mode, count in counts.items()}
 
 
+def _review_priority_from_score(score: float) -> str:
+    if score <= 0:
+        return "none"
+    if score < 1.5:
+        return "low"
+    if score < 3.0:
+        return "medium"
+    return "high"
+
+
 def _class_iou_summary(samples: list[dict], num_classes: int) -> list[dict]:
     rows = []
     for class_id in range(num_classes):
@@ -321,6 +331,116 @@ def representative_examples(samples: list[dict], evidence_rows: list[dict]) -> d
     }
 
 
+def _review_queue_item(sample: dict, evidence: dict, high_uncertainty_threshold: float) -> dict:
+    score = 0.0
+    reasons: list[str] = []
+    defect_high = evidence.get("defect_high_uncertainty_fraction")
+    defect_mean = evidence.get("defect_mean_uncertainty")
+    self_iou = evidence.get("self_foreground_iou")
+    shrink_fraction = evidence.get("foreground_shrink_fraction") or 0.0
+    protected_pixels = int(evidence.get("protected_pixels_vs_fused", 0) or 0)
+    mode = evidence.get("selection_mode") or "unknown"
+
+    if defect_high is not None and float(defect_high) >= high_uncertainty_threshold:
+        score += 1.25
+        reasons.append(f"defect high-uncertainty fraction {float(defect_high):.3f}")
+    elif defect_mean is not None and float(defect_mean) >= 0.35:
+        score += 0.75
+        reasons.append(f"defect mean uncertainty {float(defect_mean):.3f}")
+
+    if self_iou is not None:
+        if float(self_iou) < 0.5:
+            score += 1.25
+            reasons.append(f"single/fused foreground IoU {float(self_iou):.3f} is severely unstable")
+        elif float(self_iou) < 0.85:
+            score += 0.75
+            reasons.append(f"single/fused foreground IoU {float(self_iou):.3f} is below stability threshold")
+
+    if shrink_fraction >= 0.25:
+        score += 1.0
+        reasons.append(f"fused foreground shrink fraction {shrink_fraction:.3f}")
+    elif shrink_fraction > 0:
+        score += 0.5
+        reasons.append(f"fused foreground shrink fraction {shrink_fraction:.3f}")
+
+    if protected_pixels > 0:
+        score += 0.5
+        reasons.append(f"selected preserves {protected_pixels} pixels versus fused")
+
+    if mode in {"single", "hybrid"}:
+        score += 0.5
+        reasons.append(f"adaptive selection chose {mode} instead of fixed fused output")
+
+    if not reasons:
+        reasons.append("no review priority trigger from model-internal evidence")
+
+    return {
+        "image": sample.get("image") or evidence.get("image"),
+        "priority": _review_priority_from_score(score),
+        "score": float(round(score, 4)),
+        "reasons": reasons,
+        "selection_mode": mode,
+        "self_foreground_iou": self_iou,
+        "defect_high_uncertainty_fraction": defect_high,
+        "foreground_shrink_fraction": evidence.get("foreground_shrink_fraction"),
+        "protected_pixels_vs_fused": protected_pixels,
+        "gt_flags": {
+            "fixed_fusion_harmed_mIoU": bool(evidence.get("fixed_fusion_harmed_mIoU")),
+            "selected_recovers_over_fused": bool(evidence.get("selected_recovers_over_fused")),
+            "selected_matches_or_beats_single": bool(evidence.get("selected_matches_or_beats_single")),
+            "error_high_uncertainty_fraction": evidence.get("error_high_uncertainty_fraction"),
+            "high_uncertainty_error_fraction": evidence.get("high_uncertainty_error_fraction"),
+        },
+    }
+
+
+def _bucket_review_queue(queue: list[dict]) -> dict[str, dict]:
+    buckets: dict[str, list[dict]] = {}
+    for item in queue:
+        buckets.setdefault(item["priority"], []).append(item)
+
+    result: dict[str, dict] = {}
+    for priority in ["high", "medium", "low", "none"]:
+        items = buckets.get(priority, [])
+        result[priority] = {
+            "count": len(items),
+            "fixed_fusion_harmed_count": sum(1 for item in items if item["gt_flags"]["fixed_fusion_harmed_mIoU"]),
+            "selected_recovers_over_fused_count": sum(1 for item in items if item["gt_flags"]["selected_recovers_over_fused"]),
+            "selected_matches_or_beats_single_count": sum(1 for item in items if item["gt_flags"]["selected_matches_or_beats_single"]),
+            "total_protected_pixels_vs_fused": int(sum(item["protected_pixels_vs_fused"] for item in items)),
+            "mean_error_high_uncertainty_fraction": _mean([
+                item["gt_flags"]["error_high_uncertainty_fraction"]
+                for item in items
+            ]),
+            "mean_high_uncertainty_error_fraction": _mean([
+                item["gt_flags"]["high_uncertainty_error_fraction"]
+                for item in items
+            ]),
+        }
+    return result
+
+
+def build_review_queue_summary(
+    samples: list[dict],
+    evidence_rows: list[dict],
+    high_uncertainty_threshold: float = 0.5,
+    top_k: int = 10,
+) -> dict:
+    queue = [
+        _review_queue_item(sample, evidence, high_uncertainty_threshold)
+        for sample, evidence in zip(samples, evidence_rows)
+    ]
+    queue.sort(key=lambda item: (item["score"], item.get("protected_pixels_vs_fused", 0)), reverse=True)
+    return {
+        "supported": bool(queue),
+        "ranking_signal": "model-internal uncertainty, self-consistency, shrinkage, protected pixels, and selection mode",
+        "gt_usage": "GT-derived flags are used only for bucket evaluation, not for ranking.",
+        "top_k": queue[:top_k],
+        "priority_counts": {priority: sum(1 for item in queue if item["priority"] == priority) for priority in ["high", "medium", "low", "none"]},
+        "bucket_metrics": _bucket_review_queue(queue),
+    }
+
+
 def _artifact_paths(image: str | None, artifact_root: str) -> dict[str, str]:
     if not image:
         return {}
@@ -399,6 +519,7 @@ def build_patent_evidence_pack(
             "small_defect_guard": summary.get("small_defect_guard", {}),
             "miou_recovery": summary.get("miou_recovery", {}),
             "uncertainty_review": summary.get("uncertainty_review", {}),
+            "review_queue_summary": summary.get("review_queue_summary", {}),
             "class_iou_summary": summary.get("class_iou_summary", []),
         },
         "representative_examples": _examples_with_artifacts(representative, artifact_root),
@@ -540,6 +661,11 @@ def summarize_enhancement_evidence(evaluation: dict, high_uncertainty_threshold:
             ),
             "calibration_bins": calibration_bins,
         },
+        "review_queue_summary": build_review_queue_summary(
+            samples,
+            evidence_rows,
+            high_uncertainty_threshold=high_uncertainty_threshold,
+        ),
         "class_iou_summary": _class_iou_summary(samples, num_classes=len(CLASS_NAMES)),
         "representative_examples": representative_examples(samples, evidence_rows),
     }

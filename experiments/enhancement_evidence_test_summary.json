@@ -66,6 +66,297 @@
     "calibration_max_gap": null,
     "calibration_bins": []
   },
+  "review_queue_summary": {
+    "supported": true,
+    "ranking_signal": "model-internal uncertainty, self-consistency, shrinkage, protected pixels, and selection mode",
+    "gt_usage": "GT-derived flags are used only for bucket evaluation, not for ranking.",
+    "top_k": [
+      {
+        "image": "neg_-5_t2_18.jpg",
+        "priority": "high",
+        "score": 4.5,
+        "reasons": [
+          "defect high-uncertainty fraction 0.980",
+          "single/fused foreground IoU 0.340 is severely unstable",
+          "fused foreground shrink fraction 0.654",
+          "selected preserves 2523 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.33961290322580645,
+        "defect_high_uncertainty_fraction": 0.9800362976406534,
+        "foreground_shrink_fraction": 0.6541353383458647,
+        "protected_pixels_vs_fused": 2523,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": true,
+          "selected_recovers_over_fused": true,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.6008097165991902,
+          "high_uncertainty_error_fraction": 0.30547550432276654
+        }
+      },
+      {
+        "image": "neg_-10_t2_25.jpg",
+        "priority": "high",
+        "score": 4.5,
+        "reasons": [
+          "defect high-uncertainty fraction 0.866",
+          "single/fused foreground IoU 0.282 is severely unstable",
+          "fused foreground shrink fraction 0.717",
+          "selected preserves 1088 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.28194993412384717,
+        "defect_high_uncertainty_fraction": 0.8661832564271589,
+        "foreground_shrink_fraction": 0.7172050098879367,
+        "protected_pixels_vs_fused": 1088,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": false,
+          "selected_recovers_over_fused": false,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.41859229747675963,
+          "high_uncertainty_error_fraction": 0.42931081449196407
+        }
+      },
+      {
+        "image": "pos_10_t1_1.jpg",
+        "priority": "high",
+        "score": 4.5,
+        "reasons": [
+          "defect high-uncertainty fraction 1.000",
+          "single/fused foreground IoU 0.000 is severely unstable",
+          "fused foreground shrink fraction 1.000",
+          "selected preserves 178 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.0,
+        "defect_high_uncertainty_fraction": 1.0,
+        "foreground_shrink_fraction": 1.0,
+        "protected_pixels_vs_fused": 178,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": true,
+          "selected_recovers_over_fused": true,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.6214728148657949,
+          "high_uncertainty_error_fraction": 0.7575503355704698
+        }
+      },
+      {
+        "image": "neg_-5_t3_31.jpg",
+        "priority": "high",
+        "score": 4.0,
+        "reasons": [
+          "defect high-uncertainty fraction 0.701",
+          "single/fused foreground IoU 0.704 is below stability threshold",
+          "fused foreground shrink fraction 0.260",
+          "selected preserves 4659 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.7036693746251568,
+        "defect_high_uncertainty_fraction": 0.7010527488442043,
+        "foreground_shrink_fraction": 0.2595109452459199,
+        "protected_pixels_vs_fused": 4659,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": true,
+          "selected_recovers_over_fused": true,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.5900990099009901,
+          "high_uncertainty_error_fraction": 0.9232696110744891
+        }
+      },
+      {
+        "image": "neg_-10_t1_34.jpg",
+        "priority": "high",
+        "score": 4.0,
+        "reasons": [
+          "defect high-uncertainty fraction 0.565",
+          "single/fused foreground IoU 0.597 is below stability threshold",
+          "fused foreground shrink fraction 0.347",
+          "selected preserves 3337 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.5971663987138264,
+        "defect_high_uncertainty_fraction": 0.5648918469217971,
+        "foreground_shrink_fraction": 0.34702579034941766,
+        "protected_pixels_vs_fused": 3337,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": false,
+          "selected_recovers_over_fused": false,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.5126177926848746,
+          "high_uncertainty_error_fraction": 0.8274039700953854
+        }
+      },
+      {
+        "image": "neg_-10_t1_32.jpg",
+        "priority": "high",
+        "score": 4.0,
+        "reasons": [
+          "defect high-uncertainty fraction 0.802",
+          "single/fused foreground IoU 0.517 is below stability threshold",
+          "fused foreground shrink fraction 0.441",
+          "selected preserves 3095 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.5169879350991541,
+        "defect_high_uncertainty_fraction": 0.8023371811315377,
+        "foreground_shrink_fraction": 0.4410716830554368,
+        "protected_pixels_vs_fused": 3095,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": false,
+          "selected_recovers_over_fused": false,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.6984441581607372,
+          "high_uncertainty_error_fraction": 0.963104673408035
+        }
+      },
+      {
+        "image": "t2_17.jpg",
+        "priority": "high",
+        "score": 4.0,
+        "reasons": [
+          "defect high-uncertainty fraction 0.988",
+          "single/fused foreground IoU 0.608 is below stability threshold",
+          "fused foreground shrink fraction 0.370",
+          "selected preserves 1280 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.60776477305167,
+        "defect_high_uncertainty_fraction": 0.9884259259259259,
+        "foreground_shrink_fraction": 0.37037037037037035,
+        "protected_pixels_vs_fused": 1280,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": true,
+          "selected_recovers_over_fused": true,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.5592387968078576,
+          "high_uncertainty_error_fraction": 0.7107470255510044
+        }
+      },
+      {
+        "image": "pos_5_t1_3.jpg",
+        "priority": "high",
+        "score": 4.0,
+        "reasons": [
+          "defect high-uncertainty fraction 0.999",
+          "single/fused foreground IoU 0.704 is below stability threshold",
+          "fused foreground shrink fraction 0.296",
+          "selected preserves 907 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.7036916040509638,
+        "defect_high_uncertainty_fraction": 0.9993466187520418,
+        "foreground_shrink_fraction": 0.29630839594903624,
+        "protected_pixels_vs_fused": 907,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": true,
+          "selected_recovers_over_fused": true,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.8537794299876085,
+          "high_uncertainty_error_fraction": 0.9092108735814199
+        }
+      },
+      {
+        "image": "neg_-5_t2_6.jpg",
+        "priority": "high",
+        "score": 4.0,
+        "reasons": [
+          "defect high-uncertainty fraction 1.000",
+          "single/fused foreground IoU 0.729 is below stability threshold",
+          "fused foreground shrink fraction 0.268",
+          "selected preserves 682 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.7289463376419898,
+        "defect_high_uncertainty_fraction": 1.0,
+        "foreground_shrink_fraction": 0.26766091051805335,
+        "protected_pixels_vs_fused": 682,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": true,
+          "selected_recovers_over_fused": true,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.9116740842177337,
+          "high_uncertainty_error_fraction": 0.8823724320742213
+        }
+      },
+      {
+        "image": "neg_-5_t2_7.jpg",
+        "priority": "high",
+        "score": 4.0,
+        "reasons": [
+          "defect high-uncertainty fraction 0.990",
+          "single/fused foreground IoU 0.492 is severely unstable",
+          "fused foreground shrink fraction 0.182",
+          "selected preserves 424 pixels versus fused",
+          "adaptive selection chose single instead of fixed fused output"
+        ],
+        "selection_mode": "single",
+        "self_foreground_iou": 0.4919071076706545,
+        "defect_high_uncertainty_fraction": 0.9897084048027445,
+        "foreground_shrink_fraction": 0.18181818181818182,
+        "protected_pixels_vs_fused": 424,
+        "gt_flags": {
+          "fixed_fusion_harmed_mIoU": false,
+          "selected_recovers_over_fused": false,
+          "selected_matches_or_beats_single": true,
+          "error_high_uncertainty_fraction": 0.6719987073840685,
+          "high_uncertainty_error_fraction": 0.7523516642547033
+        }
+      }
+    ],
+    "priority_counts": {
+      "high": 27,
+      "medium": 86,
+      "low": 30,
+      "none": 7
+    },
+    "bucket_metrics": {
+      "high": {
+        "count": 27,
+        "fixed_fusion_harmed_count": 20,
+        "selected_recovers_over_fused_count": 20,
+        "selected_matches_or_beats_single_count": 27,
+        "total_protected_pixels_vs_fused": 62285,
+        "mean_error_high_uncertainty_fraction": 0.6739508917442913,
+        "mean_high_uncertainty_error_fraction": 0.7431133972914371
+      },
+      "medium": {
+        "count": 86,
+        "fixed_fusion_harmed_count": 59,
+        "selected_recovers_over_fused_count": 56,
+        "selected_matches_or_beats_single_count": 83,
+        "total_protected_pixels_vs_fused": 94016,
+        "mean_error_high_uncertainty_fraction": 0.5007219598718664,
+        "mean_high_uncertainty_error_fraction": 0.7457741830832199
+      },
+      "low": {
+        "count": 30,
+        "fixed_fusion_harmed_count": 17,
+        "selected_recovers_over_fused_count": 5,
+        "selected_matches_or_beats_single_count": 18,
+        "total_protected_pixels_vs_fused": 0,
+        "mean_error_high_uncertainty_fraction": 0.28209656704628494,
+        "mean_high_uncertainty_error_fraction": 0.7646320594786863
+      },
+      "none": {
+        "count": 7,
+        "fixed_fusion_harmed_count": 3,
+        "selected_recovers_over_fused_count": 0,
+        "selected_matches_or_beats_single_count": 4,
+        "total_protected_pixels_vs_fused": 0,
+        "mean_error_high_uncertainty_fraction": 0.19300163357784575,
+        "mean_high_uncertainty_error_fraction": 0.6937425793827863
+      }
+    }
+  },
   "class_iou_summary": [
     {
       "class_id": 0,

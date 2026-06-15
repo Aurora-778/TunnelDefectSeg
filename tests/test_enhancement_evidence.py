@@ -2,6 +2,7 @@ import numpy as np
 
 from enhancement_evidence import (
     build_patent_evidence_pack,
+    build_review_queue_summary,
     foreground_pixels,
     prediction_class_pixels,
     sample_enhancement_evidence,
@@ -122,6 +123,10 @@ def test_summarize_enhancement_evidence_aggregates_modes_and_examples():
     assert result["representative_examples"]["stable_fused"]["image"] == "stable.jpg"
     assert result["representative_examples"]["high_uncertainty_review"]["image"] == "guard.jpg"
     assert result["representative_examples"]["limitation_case"]["image"] == "limitation.jpg"
+    assert result["review_queue_summary"]["supported"] is True
+    assert result["review_queue_summary"]["top_k"][0]["image"] == "guard.jpg"
+    assert "GT-derived flags" in result["review_queue_summary"]["gt_usage"]
+    assert result["review_queue_summary"]["bucket_metrics"]["high"]["count"] >= 1
     assert result["class_iou_summary"][1]["class_name"] == "simple"
 
 
@@ -186,6 +191,7 @@ def test_build_patent_evidence_pack_separates_backbone_and_enhancement_evidence(
     assert result["backbone_evidence"]["model"] == "SegFormer B1 6-class"
     assert "enhancement gain" in result["backbone_evidence"]["note"]
     assert result["enhancement_evidence"]["metric_summary"]["selected_vs_fused_mIoU"] == 0.12
+    assert result["enhancement_evidence"]["review_queue_summary"]["supported"] is True
     assert "true_mIoU" in result["gt_boundary"]["gt_required_metrics"]
     assert "self_consistency" in result["gt_boundary"]["no_gt_allowed_metrics"]
     assert any("not structural safety diagnosis" in item for item in result["claim_boundaries"])
@@ -202,3 +208,44 @@ def test_build_patent_evidence_pack_marks_unsupported_without_gt_metrics():
     assert result["enhancement_evidence"] == {"supported": False, "gt_required": True}
     assert result["representative_examples"] == {}
     assert "true_mIoU" in result["gt_boundary"]["gt_required_metrics"]
+
+
+def test_build_review_queue_summary_ranks_without_gt_flags_but_evaluates_buckets():
+    samples = [{"image": "stable.jpg"}, {"image": "needs_review.jpg"}]
+    stable = {
+        "image": "stable.jpg",
+        "selection_mode": "fused",
+        "foreground_shrink_fraction": 0.0,
+        "protected_pixels_vs_fused": 0,
+        "defect_high_uncertainty_fraction": 0.0,
+        "defect_mean_uncertainty": 0.01,
+        "self_foreground_iou": 0.99,
+        "fixed_fusion_harmed_mIoU": True,
+        "selected_recovers_over_fused": False,
+        "selected_matches_or_beats_single": False,
+        "error_high_uncertainty_fraction": 0.1,
+        "high_uncertainty_error_fraction": 0.2,
+    }
+    needs_review = {
+        "image": "needs_review.jpg",
+        "selection_mode": "single",
+        "foreground_shrink_fraction": 0.5,
+        "protected_pixels_vs_fused": 12,
+        "defect_high_uncertainty_fraction": 0.8,
+        "defect_mean_uncertainty": 0.6,
+        "self_foreground_iou": 0.3,
+        "fixed_fusion_harmed_mIoU": False,
+        "selected_recovers_over_fused": True,
+        "selected_matches_or_beats_single": True,
+        "error_high_uncertainty_fraction": 0.9,
+        "high_uncertainty_error_fraction": 0.7,
+    }
+
+    result = build_review_queue_summary(samples, [stable, needs_review], high_uncertainty_threshold=0.5)
+
+    assert result["top_k"][0]["image"] == "needs_review.jpg"
+    assert result["top_k"][0]["priority"] == "high"
+    assert any("uncertainty" in reason for reason in result["top_k"][0]["reasons"])
+    assert result["top_k"][0]["gt_flags"]["selected_recovers_over_fused"] is True
+    assert result["bucket_metrics"]["high"]["selected_recovers_over_fused_count"] == 1
+    assert result["bucket_metrics"]["none"]["fixed_fusion_harmed_count"] == 1

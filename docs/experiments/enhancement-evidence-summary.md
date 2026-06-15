@@ -108,6 +108,12 @@ python enhancement_evidence.py experiments/adaptive_fusion_eval_test_full.json -
 
 Use the pack when preparing patent figures or teacher-review materials, because it preserves deterministic case selection instead of relying on hand-picked screenshots.
 
+### Review Queue Evidence
+
+The compact summary also includes `review_queue_summary`. The queue is ranked from model-internal evidence only: uncertainty, single/fused self-consistency, foreground shrinkage, protected pixels, and selected-mask mode. GT-derived flags are used only after ranking to evaluate whether high-priority buckets cover real error, fixed-fusion harm, or selected recovery events.
+
+On the current test summary, the queue is supported and produces high/medium/low/none buckets. Use `top_k` for demo case browsing, and use `bucket_metrics` for patent or report language about whether review priority concentrates problematic samples.
+
 ## Claim Boundaries
 
 - Do not claim the enhancement module invents SegFormer, TTA, entropy uncertainty, or skeletonization.
