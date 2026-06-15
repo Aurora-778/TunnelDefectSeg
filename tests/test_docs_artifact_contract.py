@@ -55,6 +55,9 @@ def test_patent_note_includes_aggregate_evidence_and_threshold_semantics():
     for phrase in [
         "SegFormer B1",
         "post-inference enhancement layer",
+        "morphology_delta",
+        "review_queue_summary",
+        "experiments/patent_evidence_test_pack.json",
         "Protected pixels vs fused",
         "HU error precision",
         "Pixel high-uncertainty threshold",
@@ -75,6 +78,7 @@ def test_experiment_summary_documents_gt_only_overlap_boundary():
     assert "review_fraction_threshold" in summary
     assert "uncertainty_calibration" in summary
     assert "review_priority" in summary
+    assert "review_queue_summary" in summary
     assert "without GT" in summary
     assert "must not display true mIoU" in summary
 

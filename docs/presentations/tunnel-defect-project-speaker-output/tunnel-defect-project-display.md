@@ -148,9 +148,9 @@ Transition: 最后一页总结目前完成情况和下一步工作。
 
 目前项目已经形成一个能训练、能评估、能展示、能解释的完整系统。
 
-已经完成的部分包括：数据集整理成 6 类标准格式；SegFormer B1 训练到 mIoU 84.33%；实现自适应 mask selection、基于 SegFormer 概率 TTA 的 uncertainty / disagreement 复核提示和形态学证据；做出了支持拖拽图片实时检测的 Web 展示。
+已经完成的部分包括：数据集整理成 6 类标准格式；SegFormer B1 训练到 mIoU 84.33%；实现自适应 mask selection、基于 SegFormer 概率 TTA 的 uncertainty / disagreement 复核提示和形态学证据；做出了支持拖拽图片实时检测的 Web 展示。现在又补充了 U7 证据闭环：patent evidence pack、morphology delta、review queue 和软著说明材料，让结果更适合给老师检查、整理专利交底和准备软著。
 
-下一步可以从三方面继续推进。第一，优化 blocky 类，因为它目前 IoU 最低。第二，做更多典型案例和消融对比，让 selected、uncertainty、disagreement 和 review priority 的价值更直观。第三，继续探索 temperature scaling 或 conformal prediction 这类更强的校准方法，把当前的复核优先级进一步做成更严谨的可信输出。
+下一步可以从三方面继续推进。第一，优化 blocky 类，因为它目前 IoU 最低。第二，继续积累跨场景典型案例，让 review queue 里的高优先级样本覆盖更多真实巡检情况。第三，继续探索 temperature scaling 或 conformal prediction 这类更强的校准方法，把当前的复核优先级进一步做成更严谨的可信输出。
 
 最后一句话总结这个项目：它不是只告诉用户“这里可能有病害”，而是进一步告诉用户“为什么这么判断，以及哪里需要再看一眼”。
 
@@ -246,7 +246,7 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 
 ### 20. 下一步最应该做什么？
 
-优先做两件事。第一，针对 blocky 类继续优化训练和数据增强，因为它是当前短板。第二，整理 3 到 5 个典型案例，分别展示 fixed fusion 失败、selected 保留小病害、uncertainty 提示复核、review priority 排序，这些案例可以直接用于论文、答辩和专利附图。
+优先做两件事。第一，针对 blocky 类继续优化训练和数据增强，因为它是当前短板。第二，围绕 `experiments/patent_evidence_test_pack.json` 继续整理 3 到 5 个典型案例，分别展示 fixed fusion 失败、selected 保留小病害、uncertainty 提示复核、review queue 排序和 morphology delta 解释，这些案例可以直接用于论文、答辩和专利附图。
 
 ## Key Parameters And Methods
 

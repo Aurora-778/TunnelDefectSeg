@@ -48,6 +48,8 @@ For images without ground-truth labels, true mIoU is not available. The implemen
 
 Each report can now include `review_priority`, an image-based manual-review ordering signal. It is derived from uncertainty, disagreement, self-consistency, foreground shrinkage, morphology, and selected-mask evidence. When GT masks are available, evaluation JSON can also include `uncertainty_calibration`, which compares binned uncertainty with true pixel error rate. This calibration evidence is not generated for unlabeled uploads.
 
+The U7 evidence layer adds `morphology_delta`, `review_queue_summary`, and a patent-ready evidence pack. `morphology_delta` compares single, fused, and selected masks by area, connected components, skeleton length, and dominant direction. `review_queue_summary` ranks samples using model-internal evidence only, then uses GT-derived flags only to evaluate whether high-priority buckets concentrate fixed-fusion harm, selected recovery, or true error overlap. The evidence pack keeps SegFormer backbone quality separate from post-inference enhancement quality and attaches artifact path templates to representative cases.
+
 ## Non-Claim Boundary
 
 This module provides image-based defect risk guidance and manual-review suggestions. It does **not** provide structural safety diagnosis, civil-engineering load assessment, or final maintenance decisions. Those remain outside the scope of this implementation and should require expert review.
@@ -63,6 +65,7 @@ This module provides image-based defect risk guidance and manual-review suggesti
 3. Confidence visualization: selected prediction, uncertainty heatmap, low-confidence regions.
 4. Morphology visualization: selected prediction, skeleton view, connected regions.
 5. Structured report example: morphology metrics, uncertainty summary, risk level, review priority, review suggestion.
+6. Review queue example: top-priority samples, trigger reasons, and bucket evidence showing fixed-fusion harm or selected recovery.
 
 ## Current Measured Evidence
 
@@ -94,3 +97,5 @@ This means the patent contribution should be framed as confidence-aware adaptive
 The trained SegFormer B1 checkpoint separately validates backbone segmentation quality. Its final logged evaluation reached `mIoU 84.33`, `mAcc 91.17`, and `aAcc 98.62`, with strong `pipeline`, `vertical`, and `horizontal` classes. This should be presented as backbone evidence, not as proof that the post-inference enhancement itself changes raw segmentation training quality.
 
 For a fuller experiment-ready table, see `docs/experiments/enhancement-evidence-summary.md`.
+
+The current compact patent evidence artifact is `experiments/patent_evidence_test_pack.json`. It is intentionally small enough to commit and can be regenerated from `experiments/adaptive_fusion_eval_test_full.json` with `enhancement_evidence.py`.

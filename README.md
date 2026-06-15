@@ -257,6 +257,21 @@ docs/experiments/enhancement-evidence-summary.md
 docs/patent-notes/tunnel-defect-confidence-risk.md
 ```
 
+## U7 专利/软著证据闭环
+
+当前项目已进一步补充 U7 证据闭环，用于让老师检查、专利交底和软著材料更容易复用：
+
+- `patent evidence pack`：把 backbone evidence、enhancement evidence、代表案例、artifact 路径和 claim boundaries 放在同一份 JSON。
+- `morphology_delta`：解释 single/fused/selected mask 之间的面积、连通域、骨架长度和方向变化。
+- `review_queue_summary`：按模型内部证据生成批量复核队列，GT 只用于事后评估队列是否覆盖真实错误或 fixed fusion 损伤。
+- `software-copyright`：补充软著说明书草稿和源代码材料清单。
+
+当前 test split evidence pack：
+
+```text
+experiments/patent_evidence_test_pack.json
+```
+
 ## Web 实时展示
 
 `web_app.py` 提供本地拖拽检测服务。上传图片后，服务会运行 confidence-risk pipeline，并返回：
@@ -274,6 +289,7 @@ docs/patent-notes/tunnel-defect-confidence-risk.md
 - 骨架图
 - JSON 风险报告
 - Review priority 复核优先级
+- Review queue / 典型案例证据
 
 双击启动：
 
