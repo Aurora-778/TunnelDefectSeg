@@ -11,7 +11,7 @@ import torch
 from torchvision import transforms
 
 from adaptive_fusion import select_adaptive_mask
-from morphology_adapter import CLASS_NAMES, MorphologyConfig, measure_mask, skeleton_mask
+from morphology_adapter import CLASS_NAMES, MorphologyConfig, compare_mask_morphology, measure_mask, skeleton_mask
 from risk_adapter import RiskConfig, score_image, score_review_priority
 from segformer_inference_adapter import (
     DEFAULT_SEGFORMER_CHECKPOINT,
@@ -199,7 +199,31 @@ def write_result_artifacts(
     Image.fromarray(disagreement_rgb).save(paths["disagreement_heatmap"])
     Image.fromarray(skeleton_rgb).save(paths["skeleton"])
 
-    morphology = measure_mask(selected_mask, config=morphology_config or MorphologyConfig())
+    morphology_cfg = morphology_config or MorphologyConfig()
+    morphology = measure_mask(selected_mask, config=morphology_cfg)
+    morphology_delta = {
+        "single_to_fused": compare_mask_morphology(
+            single_mask,
+            fused_mask,
+            "single",
+            "fused",
+            config=morphology_cfg,
+        ),
+        "fused_to_selected": compare_mask_morphology(
+            fused_mask,
+            selected_mask,
+            "fused",
+            "selected",
+            config=morphology_cfg,
+        ),
+        "single_to_selected": compare_mask_morphology(
+            single_mask,
+            selected_mask,
+            "single",
+            "selected",
+            config=morphology_cfg,
+        ),
+    }
     if uncertainty_available:
         unc_summary = _available_uncertainty_summary(entropy_uncertainty, mask=selected_mask)
     else:
@@ -259,6 +283,7 @@ def write_result_artifacts(
         "uncertainty_summary": unc_summary,
         "disagreement_summary": disagreement_summary,
         "morphology": morphology,
+        "morphology_delta": morphology_delta,
         "risk": risk,
         "review_priority": review_priority,
         "artifacts": {name: str(path.name) for name, path in paths.items()},

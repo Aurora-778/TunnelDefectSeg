@@ -59,6 +59,9 @@ def test_write_result_artifacts_creates_expected_files(tmp_path):
     assert saved["self_consistency"]["foreground_iou"] == 0.0
     assert saved["self_consistency"]["pixel_agreement"] < 1.0
     assert saved["morphology"]["defect_area_pixels"] > 0
+    assert "morphology_delta" in saved
+    assert saved["morphology_delta"]["single_to_fused"]["defect_area_delta_pixels"] == 8
+    assert saved["morphology_delta"]["fused_to_selected"]["explanations"]
     assert saved["risk"]["risk_level"] in {"low", "medium", "high"}
     assert saved["review_priority"]["priority"] in {"low", "medium", "high"}
     assert saved["review_priority"]["review_required"] is True
@@ -182,6 +185,7 @@ def test_process_image_accepts_segformer_like_mask_source(tmp_path):
         "uncertainty_summary",
         "disagreement_summary",
         "morphology",
+        "morphology_delta",
         "risk",
         "review_priority",
         "artifacts",

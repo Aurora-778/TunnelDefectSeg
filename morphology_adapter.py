@@ -139,6 +139,131 @@ def measure_mask(
     }
 
 
+def _class_measurement_map(measurement: dict) -> dict[int, dict]:
+    return {
+        int(item["class_id"]): item
+        for item in measurement.get("classes", [])
+    }
+
+
+def _area_ratio(target: int, source: int) -> float | None:
+    if source == 0:
+        return 1.0 if target == 0 else None
+    return float(target / source)
+
+
+def _direction_changed(source: str | None, target: str | None) -> bool:
+    if source is None or target is None:
+        return False
+    return source != target
+
+
+def _delta_explanations(result: dict) -> list[str]:
+    source = result["source"]
+    target = result["target"]
+    source_area = int(result["source_defect_area_pixels"])
+    target_area = int(result["target_defect_area_pixels"])
+    explanations: list[str] = []
+
+    if source_area == 0 and target_area == 0:
+        return [f"{source} and {target} contain no measured defect foreground"]
+    if source_area == 0 and target_area > 0:
+        return [f"{target} introduces {target_area} defect pixels not present in {source}"]
+
+    area_ratio = result["defect_area_ratio_target_over_source"]
+    if area_ratio is not None and area_ratio < 0.75:
+        explanations.append(
+            f"{target} reduces measured defect area to {area_ratio:.3f} of {source}, which may suppress small defect evidence"
+        )
+    elif area_ratio is not None and area_ratio > 1.25:
+        explanations.append(
+            f"{target} expands measured defect area to {area_ratio:.3f} of {source}"
+        )
+
+    component_delta = int(result["defect_component_delta"])
+    if component_delta > 0:
+        explanations.append(f"{target} has {component_delta} more connected components than {source}")
+    elif component_delta < 0:
+        explanations.append(f"{target} has {-component_delta} fewer connected components than {source}")
+
+    skeleton_delta = int(result["defect_skeleton_length_delta"])
+    if source_area > 0 and skeleton_delta < 0:
+        explanations.append(f"{target} shortens the defect skeleton by {-skeleton_delta} pixels versus {source}")
+    elif skeleton_delta > 0:
+        explanations.append(f"{target} lengthens the defect skeleton by {skeleton_delta} pixels versus {source}")
+
+    changed_directions = [
+        item for item in result["class_deltas"]
+        if item["direction_changed"]
+    ]
+    if changed_directions:
+        names = ", ".join(item["class_name"] for item in changed_directions[:3])
+        explanations.append(f"{target} changes dominant direction for {names}")
+
+    return explanations or [f"{target} preserves morphology close to {source}"]
+
+
+def compare_mask_morphology(
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+    source_name: str,
+    target_name: str,
+    class_ids: Iterable[int] | None = None,
+    config: MorphologyConfig | None = None,
+) -> dict:
+    source_measurement = measure_mask(source_mask, class_ids=class_ids, config=config)
+    target_measurement = measure_mask(target_mask, class_ids=class_ids, config=config)
+    source_classes = _class_measurement_map(source_measurement)
+    target_classes = _class_measurement_map(target_measurement)
+    ids = sorted(set(source_classes) | set(target_classes))
+
+    class_deltas = []
+    for class_id in ids:
+        source_item = source_classes.get(class_id, {})
+        target_item = target_classes.get(class_id, {})
+        source_area = int(source_item.get("area_pixels", 0) or 0)
+        target_area = int(target_item.get("area_pixels", 0) or 0)
+        source_components = int(source_item.get("component_count", 0) or 0)
+        target_components = int(target_item.get("component_count", 0) or 0)
+        source_skeleton = int(source_item.get("skeleton_length", 0) or 0)
+        target_skeleton = int(target_item.get("skeleton_length", 0) or 0)
+        source_direction = source_item.get("dominant_direction")
+        target_direction = target_item.get("dominant_direction")
+        class_deltas.append({
+            "class_id": int(class_id),
+            "class_name": CLASS_NAMES.get(int(class_id), f"class_{class_id}"),
+            "source_area_pixels": source_area,
+            "target_area_pixels": target_area,
+            "area_delta_pixels": int(target_area - source_area),
+            "area_ratio_target_over_source": _area_ratio(target_area, source_area),
+            "component_delta": int(target_components - source_components),
+            "skeleton_length_delta": int(target_skeleton - source_skeleton),
+            "source_dominant_direction": source_direction,
+            "target_dominant_direction": target_direction,
+            "direction_changed": _direction_changed(source_direction, target_direction),
+        })
+
+    source_area = int(source_measurement["defect_area_pixels"])
+    target_area = int(target_measurement["defect_area_pixels"])
+    result = {
+        "source": source_name,
+        "target": target_name,
+        "source_defect_area_pixels": source_area,
+        "target_defect_area_pixels": target_area,
+        "defect_area_delta_pixels": int(target_area - source_area),
+        "defect_area_ratio_target_over_source": _area_ratio(target_area, source_area),
+        "source_defect_component_count": int(source_measurement["defect_component_count"]),
+        "target_defect_component_count": int(target_measurement["defect_component_count"]),
+        "defect_component_delta": int(target_measurement["defect_component_count"] - source_measurement["defect_component_count"]),
+        "source_defect_skeleton_length": int(source_measurement["defect_skeleton_length"]),
+        "target_defect_skeleton_length": int(target_measurement["defect_skeleton_length"]),
+        "defect_skeleton_length_delta": int(target_measurement["defect_skeleton_length"] - source_measurement["defect_skeleton_length"]),
+        "class_deltas": class_deltas,
+    }
+    result["explanations"] = _delta_explanations(result)
+    return result
+
+
 def skeleton_mask(mask: np.ndarray, class_ids: Iterable[int] | None = None, min_component_area: int = 8) -> np.ndarray:
     mask = np.asarray(mask)
     out = np.zeros_like(mask, dtype=np.uint8)
