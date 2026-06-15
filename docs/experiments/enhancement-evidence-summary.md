@@ -100,11 +100,13 @@ Use examples from the generated evidence JSON instead of hand-picking images:
 - `high_uncertainty_review`: demonstrates uncertainty-based review prioritization.
 - `limitation_case`: demonstrates honest boundaries where selected output may not beat single-pass output.
 
-The same evaluation JSON can now be wrapped into a patent-ready evidence pack. The pack keeps backbone evidence separate from post-inference enhancement evidence, attaches artifact path templates to representative cases, and carries the GT/no-GT claim boundary used by the Web demo and patent notes:
+The same evaluation JSON can now be wrapped into a patent-ready evidence pack. The pack keeps backbone evidence separate from post-inference enhancement evidence, attaches artifact path templates plus current-repo availability flags to representative cases, and carries the GT/no-GT claim boundary used by the Web demo and patent notes:
 
 ```powershell
 python enhancement_evidence.py experiments/adaptive_fusion_eval_test_full.json --output experiments/enhancement_evidence_test_summary.json --patent-pack-output experiments/patent_evidence_test_pack.json
 ```
+
+The committed pack is intentionally compact. Its artifact fields are templates unless `artifact_exists` and `artifact_paths_verified` say the corresponding images are present in the current checkout.
 
 Use the pack when preparing patent figures or teacher-review materials, because it preserves deterministic case selection instead of relying on hand-picked screenshots.
 

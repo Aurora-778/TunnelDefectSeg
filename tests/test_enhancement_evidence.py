@@ -192,11 +192,16 @@ def test_build_patent_evidence_pack_separates_backbone_and_enhancement_evidence(
     assert "enhancement gain" in result["backbone_evidence"]["note"]
     assert result["enhancement_evidence"]["metric_summary"]["selected_vs_fused_mIoU"] == 0.12
     assert result["enhancement_evidence"]["review_queue_summary"]["supported"] is True
+    assert result["artifact_contract"]["artifacts_are_path_templates"] is True
     assert "true_mIoU" in result["gt_boundary"]["gt_required_metrics"]
     assert "self_consistency" in result["gt_boundary"]["no_gt_allowed_metrics"]
     assert any("not structural safety diagnosis" in item for item in result["claim_boundaries"])
     stable_example = result["representative_examples"]["stable_fused"]
     assert stable_example["image"] == "stable.jpg"
+    assert stable_example["artifact_stem"] == "stable"
+    assert stable_example["artifact_path_templates"]["selected_mask"] == "experiments/patent_cases/stable_selected_mask.png"
+    assert stable_example["artifact_exists"]["selected_mask"] is False
+    assert stable_example["artifact_paths_verified"] is False
     assert stable_example["artifacts"]["selected_mask"] == "experiments/patent_cases/stable_selected_mask.png"
     assert stable_example["artifacts"]["report"] == "experiments/patent_cases/stable_report.json"
 
@@ -244,6 +249,8 @@ def test_build_review_queue_summary_ranks_without_gt_flags_but_evaluates_buckets
     result = build_review_queue_summary(samples, [stable, needs_review], high_uncertainty_threshold=0.5)
 
     assert result["top_k"][0]["image"] == "needs_review.jpg"
+    assert result["top_k"][0]["artifact_stem"] == "needs_review"
+    assert result["top_k"][0]["gt_available"] is True
     assert result["top_k"][0]["priority"] == "high"
     assert any("uncertainty" in reason for reason in result["top_k"][0]["reasons"])
     assert result["top_k"][0]["gt_flags"]["selected_recovers_over_fused"] is True

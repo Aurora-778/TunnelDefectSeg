@@ -98,4 +98,4 @@ The trained SegFormer B1 checkpoint separately validates backbone segmentation q
 
 For a fuller experiment-ready table, see `docs/experiments/enhancement-evidence-summary.md`.
 
-The current compact patent evidence artifact is `experiments/patent_evidence_test_pack.json`. It is intentionally small enough to commit and can be regenerated from `experiments/adaptive_fusion_eval_test_full.json` with `enhancement_evidence.py`.
+The current compact patent evidence artifact is `experiments/patent_evidence_test_pack.json`. It is intentionally small enough to commit and can be regenerated from `experiments/adaptive_fusion_eval_test_full.json` with `enhancement_evidence.py`. Representative-case artifact paths are templates unless `artifact_exists` and `artifact_paths_verified` confirm the images are present in the current checkout.

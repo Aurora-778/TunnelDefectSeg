@@ -73,6 +73,8 @@
     "top_k": [
       {
         "image": "neg_-5_t2_18.jpg",
+        "artifact_stem": "neg_-5_t2_18",
+        "gt_available": true,
         "priority": "high",
         "score": 4.5,
         "reasons": [
@@ -97,6 +99,8 @@
       },
       {
         "image": "neg_-10_t2_25.jpg",
+        "artifact_stem": "neg_-10_t2_25",
+        "gt_available": true,
         "priority": "high",
         "score": 4.5,
         "reasons": [
@@ -121,6 +125,8 @@
       },
       {
         "image": "pos_10_t1_1.jpg",
+        "artifact_stem": "pos_10_t1_1",
+        "gt_available": true,
         "priority": "high",
         "score": 4.5,
         "reasons": [
@@ -145,6 +151,8 @@
       },
       {
         "image": "neg_-5_t3_31.jpg",
+        "artifact_stem": "neg_-5_t3_31",
+        "gt_available": true,
         "priority": "high",
         "score": 4.0,
         "reasons": [
@@ -169,6 +177,8 @@
       },
       {
         "image": "neg_-10_t1_34.jpg",
+        "artifact_stem": "neg_-10_t1_34",
+        "gt_available": true,
         "priority": "high",
         "score": 4.0,
         "reasons": [
@@ -193,6 +203,8 @@
       },
       {
         "image": "neg_-10_t1_32.jpg",
+        "artifact_stem": "neg_-10_t1_32",
+        "gt_available": true,
         "priority": "high",
         "score": 4.0,
         "reasons": [
@@ -217,6 +229,8 @@
       },
       {
         "image": "t2_17.jpg",
+        "artifact_stem": "t2_17",
+        "gt_available": true,
         "priority": "high",
         "score": 4.0,
         "reasons": [
@@ -241,6 +255,8 @@
       },
       {
         "image": "pos_5_t1_3.jpg",
+        "artifact_stem": "pos_5_t1_3",
+        "gt_available": true,
         "priority": "high",
         "score": 4.0,
         "reasons": [
@@ -265,6 +281,8 @@
       },
       {
         "image": "neg_-5_t2_6.jpg",
+        "artifact_stem": "neg_-5_t2_6",
+        "gt_available": true,
         "priority": "high",
         "score": 4.0,
         "reasons": [
@@ -289,6 +307,8 @@
       },
       {
         "image": "neg_-5_t2_7.jpg",
+        "artifact_stem": "neg_-5_t2_7",
+        "gt_available": true,
         "priority": "high",
         "score": 4.0,
         "reasons": [

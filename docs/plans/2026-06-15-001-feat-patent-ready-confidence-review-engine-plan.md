@@ -26,14 +26,14 @@ origin: docs/brainstorms/2026-06-01-tunnel-defect-confidence-risk-requirements.m
 
 **Patent-grade evidence**
 
-- R1. 系统应能从已标注 split 生成一份稳定的 patent evidence pack，包含 aggregate 指标、典型案例、图像 artifact 路径、关键阈值和非主张边界。
+- R1. 系统应能从已标注 split 生成一份稳定的 patent evidence pack，包含 aggregate 指标、典型案例、图像 artifact 路径模板、当前仓库 artifact 可用性标记、关键阈值和非主张边界。
 - R2. evidence pack 应区分 backbone 证据和 post-inference enhancement 证据，不能把 SegFormer `84.33` mIoU 描述成增强模块本身的收益。
 - R3. evidence pack 应优先选择非空缺陷案例作为专利/展示图例，避免用全背景稳定样本证明 `stable_fused`。
 - R4. 输出应保留 GT 边界：没有 GT 的上传图片不能生成 true mIoU、error overlap 或 calibration 结论。
 
 **Review queue and explainability**
 
-- R5. 系统应在批量样本上生成 review queue，按 `review_priority.score` 或等级排序，并输出触发理由、相关 artifact 和 GT 可用性。
+- R5. 系统应在批量样本上生成 review queue，按 `review_priority.score` 或等级排序，并输出触发理由、`artifact_stem` 和 GT 可用性。
 - R6. 批量评估应验证高优先级样本是否更集中地覆盖真实错误、fixed fusion 损伤、小病害保护或高 uncertainty 区域。
 - R7. 单图报告应增加 mask 形态变化解释，说明 single/fused/selected 之间的面积、连通域、骨架长度和主方向变化。
 - R8. Web 端应把复核队列和形态变化解释展示成“为什么这张图优先看”的证据，不只显示分数。
@@ -80,7 +80,7 @@ U7 保持现有推理链路不变，在输出后增加两个薄层。第一层�
 
 ### U1. Patent evidence pack exporter
 
-- **Goal:** 生成一份可复用的 `patent_evidence_pack.json` 和 markdown 摘要，用于专利交底、PPT 图例和老师检查。
+- **Goal:** 生成一份可复用的 `experiments/patent_evidence_test_pack.json` 样例和 markdown 摘要，用于专利交底、PPT 图例和老师检查。
 - **Files:**
   - `enhancement_evidence.py`
   - `evaluate_confidence_risk.py`
@@ -124,7 +124,7 @@ U7 保持现有推理链路不变，在输出后增加两个薄层。第一层�
   - `tests/test_enhancement_evidence.py`
 - **Patterns to follow:** 继续沿用 evaluation JSON 的 `samples` + `aggregate` 结构，新增 `review_queue_summary` 而不是改变已有字段。
 - **Test scenarios:**
-  - 输出 top-k review queue，每项包含 image、priority、score、reasons、selection mode、artifact stems 和 GT availability。
+  - 输出 top-k review queue，每项包含 image、priority、score、reasons、selection mode、artifact_stem 和 gt_available。
   - 对 high/medium/low priority 分桶统计 error coverage、fixed fusion harmed、selected recovered、protected pixels。
   - 空 split 或全部 unsupported 样本时输出可解释 reason，不写入 NaN。
   - 阈值字段保留 `pixel_high_uncertainty_threshold` 与 `review_fraction_threshold` 的独立语义。
@@ -184,7 +184,7 @@ U7 保持现有推理链路不变，在输出后增加两个薄层。第一层�
 
 ## Acceptance Examples
 
-- AE1. **Patent evidence pack:** 给定已有 full evaluation JSON，系统导出 aggregate evidence、top cases 和 artifact 路径；老师可以不打开代码就看到增强模块的主要证据。
+- AE1. **Patent evidence pack:** 给定已有 full evaluation JSON，系统导出 aggregate evidence、top cases、artifact 路径模板和 artifact 可用性标记；老师可以不打开代码就看到增强模块的主要证据边界。
 - AE2. **Fusion shrink explanation:** 某样本 fused mask 明显小于 single mask；报告说明 fixed fusion 可能抑制小病害，并展示 selected 如何恢复前景。
 - AE3. **Review queue works:** 在 test split 上，高优先级队列中的样本更集中地包含 high uncertainty、fixed fusion harmed 或 selected recovered 事件。
 - AE4. **Upload without GT:** 用户拖入自选图片；页面显示 review priority、morphology delta、uncertainty、disagreement 和 selected-mask 理由，但 true mIoU 仍为 `N/A`。
@@ -240,7 +240,7 @@ U7 会扩展报告 JSON、实验汇总、Web 展示和项目文档，但不应�
 ## Documentation / Operational Notes
 
 - 新文档建议放在 `docs/software-copyright/` 和 `docs/experiments/`，避免混入运行时 `experiments/web_live/`。
-- evidence pack 里的 artifact path 使用 repo-relative path，便于仓库分享和老师检查。
+- evidence pack 里的 artifact path 当前按 repo-relative template 输出，并用 `artifact_exists` / `artifact_paths_verified` 标记当前仓库是否已有对应图片；若要直接给老师点开图片，需要先生成这些代表案例 artifact。
 - 如果仓库准备发给老师，可以保留 README、PPT、Web 和软著说明；不要提交大 checkpoint、运行时 web_live 输出或本地 `.codegraph/`。
 
 ---

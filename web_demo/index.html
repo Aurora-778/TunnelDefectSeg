@@ -1207,6 +1207,10 @@
               <tr><td>horizontal</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
             </tbody>
           </table>
+          <h3>形态变化解释</h3>
+          <div class="metric-grid" id="morphologyDeltaGrid">
+            <div class="metric"><span>single -> fused</span><b>N/A</b><small>等待 morphology_delta。</small></div>
+          </div>
         </div>
       </section>
 
@@ -1384,6 +1388,8 @@
         top_k: [
           {
             image: "neg_-5_t2_18.jpg",
+            artifact_stem: "neg_-5_t2_18",
+            gt_available: true,
             priority: "high",
             score: 4.75,
             reasons: [
@@ -1470,6 +1476,32 @@
           { class_id: 4, class_name: "vertical", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
           { class_id: 5, class_name: "horizontal", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null }
         ]
+      },
+      morphology_delta: {
+        single_to_fused: {
+          source: "single",
+          target: "fused",
+          defect_area_delta_pixels: -15,
+          defect_component_delta: 0,
+          defect_skeleton_length_delta: -2,
+          explanations: ["fused preserves morphology close to single"]
+        },
+        fused_to_selected: {
+          source: "fused",
+          target: "selected",
+          defect_area_delta_pixels: 0,
+          defect_component_delta: 0,
+          defect_skeleton_length_delta: 0,
+          explanations: ["selected preserves morphology close to fused"]
+        },
+        single_to_selected: {
+          source: "single",
+          target: "selected",
+          defect_area_delta_pixels: -15,
+          defect_component_delta: 0,
+          defect_skeleton_length_delta: -2,
+          explanations: ["selected preserves morphology close to single"]
+        }
       },
       risk: {
         risk_level: "low",
@@ -1630,13 +1662,15 @@
         : "暂无 review queue 数据";
 
       const cards = supported ? topCases.slice(0, 3).map((item, index) => {
-        const reasons = (item.reasons || []).slice(0, 2).join("；") || "No reasons available";
+        const reasons = (item.reasons || []).slice(0, 2).map(escapeHtml).join("；") || "No reasons available";
         const gt = item.gt_flags || {};
         const flags = [
           gt.fixed_fusion_harmed_mIoU ? "fixed fusion harmed" : null,
           gt.selected_recovers_over_fused ? "selected recovered" : null
         ].filter(Boolean).join(" / ") || "GT flags pending";
-        return `<div class="advantage-card"><b>${index + 1}. ${item.image || "case"}</b><strong>${riskLabel(item.priority || "none")}</strong><p>score ${fmt(item.score, 2)}；${flags}。${reasons}</p></div>`;
+        const stem = item.artifact_stem ? ` / ${escapeHtml(item.artifact_stem)}` : "";
+        const gtText = item.gt_available === false ? "GT unavailable" : flags;
+        return `<div class="advantage-card"><b>${index + 1}. ${escapeHtml(item.image || "case")}${stem}</b><strong>${riskLabel(item.priority || "none")}</strong><p>score ${fmt(item.score, 2)}；${gtText}。${reasons}</p></div>`;
       }) : [
         `<div class="advantage-card"><b>Review queue</b><strong>N/A</strong><p>当前 evidence JSON 尚未包含 review_queue_summary。</p></div>`
       ];
@@ -1759,6 +1793,48 @@
         .replace("instead of fixed fused output", "而不是固定 fused 输出")
         .replace("routine review priority from image-based risk evidence", "基于图像风险证据，常规复核优先级")
         .replace("no review priority trigger; no defect passed configured filters", "没有触发复核优先级；无缺陷通过测量过滤");
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function translateMorphologyDelta(text) {
+      return translateReason(text)
+        .replace("single and fused contain no measured defect foreground", "single 和 fused 都没有测得缺陷前景")
+        .replace("fused and selected contain no measured defect foreground", "fused 和 selected 都没有测得缺陷前景")
+        .replace("single and selected contain no measured defect foreground", "single 和 selected 都没有测得缺陷前景")
+        .replace("fused introduces", "fused 新增")
+        .replace("selected introduces", "selected 新增")
+        .replace("defect pixels not present in single", "个 single 中不存在的缺陷像素")
+        .replace("defect pixels not present in fused", "个 fused 中不存在的缺陷像素")
+        .replace("fused reduces measured defect area to", "fused 将测得缺陷面积压缩到 single 的")
+        .replace("selected reduces measured defect area to", "selected 将测得缺陷面积压缩到 fused 的")
+        .replace("fused expands measured defect area to", "fused 将测得缺陷面积扩展到 single 的")
+        .replace("selected expands measured defect area to", "selected 将测得缺陷面积扩展到 fused 的")
+        .replace("of single, which may suppress small defect evidence", "，可能压掉小病害证据")
+        .replace("of fused", "")
+        .replace("fused has", "fused 有")
+        .replace("selected has", "selected 有")
+        .replace("more connected components than single", "个比 single 更多的连通域")
+        .replace("fewer connected components than single", "个比 single 更少的连通域")
+        .replace("more connected components than fused", "个比 fused 更多的连通域")
+        .replace("fewer connected components than fused", "个比 fused 更少的连通域")
+        .replace("fused shortens the defect skeleton by", "fused 将缺陷骨架缩短")
+        .replace("selected shortens the defect skeleton by", "selected 将缺陷骨架缩短")
+        .replace("fused lengthens the defect skeleton by", "fused 将缺陷骨架拉长")
+        .replace("selected lengthens the defect skeleton by", "selected 将缺陷骨架拉长")
+        .replace("pixels versus single", "像素，相对 single")
+        .replace("pixels versus fused", "像素，相对 fused")
+        .replace("fused preserves morphology close to single", "fused 与 single 的形态接近")
+        .replace("selected preserves morphology close to fused", "selected 与 fused 的形态接近")
+        .replace("selected preserves morphology close to single", "selected 与 single 的形态接近")
+        .replace("changes dominant direction for", "改变主方向类别：");
     }
 
     function setStatus(text, type = "") {
@@ -2065,9 +2141,29 @@
         const risk = riskByClass.get(Number(item.class_id));
         const direction = item.dominant_direction ? `${item.dominant_direction} ${fmt(item.dominant_direction_degrees, 2)} deg` : "-";
         const review = risk?.review_required ? " / 需复核" : "";
-        return `<tr><td>${rawClassLabel(item.class_name)}</td><td>${item.area_pixels}</td><td>${fmt(item.area_ratio, 6)}</td><td>${item.component_count}</td><td>${item.skeleton_length}</td><td>${direction}</td><td>${riskLabel(risk?.risk_level || "none")}${review}</td></tr>`;
+        return `<tr><td>${escapeHtml(rawClassLabel(item.class_name))}</td><td>${item.area_pixels}</td><td>${fmt(item.area_ratio, 6)}</td><td>${item.component_count}</td><td>${item.skeleton_length}</td><td>${escapeHtml(direction)}</td><td>${riskLabel(risk?.risk_level || "none")}${review}</td></tr>`;
       });
       document.querySelector("#morphologyRows").innerHTML = rows.join("");
+      renderMorphologyDelta(report.morphology_delta);
+    }
+
+    function renderMorphologyDelta(delta = {}) {
+      const pairs = [
+        ["single -> fused", delta.single_to_fused],
+        ["fused -> selected", delta.fused_to_selected],
+        ["single -> selected", delta.single_to_selected]
+      ];
+      const cards = pairs.map(([label, item]) => {
+        if (!item) {
+          return `<div class="metric"><span>${label}</span><b>N/A</b><small>当前报告未包含 morphology_delta。</small></div>`;
+        }
+        const area = Number(item.defect_area_delta_pixels || 0);
+        const components = Number(item.defect_component_delta || 0);
+        const skeleton = Number(item.defect_skeleton_length_delta || 0);
+        const explanation = (item.explanations || []).slice(0, 2).map(translateMorphologyDelta).join("；");
+        return `<div class="metric"><span>${label}</span><b>${signedDelta(area, 0)} px</b><small>连通域 ${signedDelta(components, 0)}，骨架 ${signedDelta(skeleton, 0)}。${escapeHtml(explanation || "形态变化较小。")}</small></div>`;
+      });
+      document.querySelector("#morphologyDeltaGrid").innerHTML = cards.join("");
     }
 
     function renderReport(report, views) {

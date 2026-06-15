@@ -43,6 +43,11 @@
     "skeleton": "_skeleton.png",
     "report": "_report.json"
   },
+  "artifact_contract": {
+    "artifact_root": "experiments/confidence_risk",
+    "artifacts_are_path_templates": true,
+    "artifact_exists_maps_record_current_repo_availability": true
+  },
   "num_samples": 150,
   "enhancement_evidence": {
     "supported": true,
@@ -118,6 +123,8 @@
       "top_k": [
         {
           "image": "neg_-5_t2_18.jpg",
+          "artifact_stem": "neg_-5_t2_18",
+          "gt_available": true,
           "priority": "high",
           "score": 4.5,
           "reasons": [
@@ -142,6 +149,8 @@
         },
         {
           "image": "neg_-10_t2_25.jpg",
+          "artifact_stem": "neg_-10_t2_25",
+          "gt_available": true,
           "priority": "high",
           "score": 4.5,
           "reasons": [
@@ -166,6 +175,8 @@
         },
         {
           "image": "pos_10_t1_1.jpg",
+          "artifact_stem": "pos_10_t1_1",
+          "gt_available": true,
           "priority": "high",
           "score": 4.5,
           "reasons": [
@@ -190,6 +201,8 @@
         },
         {
           "image": "neg_-5_t3_31.jpg",
+          "artifact_stem": "neg_-5_t3_31",
+          "gt_available": true,
           "priority": "high",
           "score": 4.0,
           "reasons": [
@@ -214,6 +227,8 @@
         },
         {
           "image": "neg_-10_t1_34.jpg",
+          "artifact_stem": "neg_-10_t1_34",
+          "gt_available": true,
           "priority": "high",
           "score": 4.0,
           "reasons": [
@@ -238,6 +253,8 @@
         },
         {
           "image": "neg_-10_t1_32.jpg",
+          "artifact_stem": "neg_-10_t1_32",
+          "gt_available": true,
           "priority": "high",
           "score": 4.0,
           "reasons": [
@@ -262,6 +279,8 @@
         },
         {
           "image": "t2_17.jpg",
+          "artifact_stem": "t2_17",
+          "gt_available": true,
           "priority": "high",
           "score": 4.0,
           "reasons": [
@@ -286,6 +305,8 @@
         },
         {
           "image": "pos_5_t1_3.jpg",
+          "artifact_stem": "pos_5_t1_3",
+          "gt_available": true,
           "priority": "high",
           "score": 4.0,
           "reasons": [
@@ -310,6 +331,8 @@
         },
         {
           "image": "neg_-5_t2_6.jpg",
+          "artifact_stem": "neg_-5_t2_6",
+          "gt_available": true,
           "priority": "high",
           "score": 4.0,
           "reasons": [
@@ -334,6 +357,8 @@
         },
         {
           "image": "neg_-5_t2_7.jpg",
+          "artifact_stem": "neg_-5_t2_7",
+          "gt_available": true,
           "priority": "high",
           "score": 4.0,
           "reasons": [
@@ -484,6 +509,32 @@
         "low single/fused foreground IoU 0.900",
         "fallback to single mask because fused evidence is not stable enough"
       ],
+      "artifact_stem": "pos_10_t1_30",
+      "artifact_path_templates": {
+        "single_mask": "experiments/confidence_risk/pos_10_t1_30_single_mask.png",
+        "fused_mask": "experiments/confidence_risk/pos_10_t1_30_fused_mask.png",
+        "hybrid_mask": "experiments/confidence_risk/pos_10_t1_30_hybrid_mask.png",
+        "selected_mask": "experiments/confidence_risk/pos_10_t1_30_selected_mask.png",
+        "overlay": "experiments/confidence_risk/pos_10_t1_30_overlay.png",
+        "selected_overlay": "experiments/confidence_risk/pos_10_t1_30_selected_overlay.png",
+        "uncertainty_heatmap": "experiments/confidence_risk/pos_10_t1_30_uncertainty_heatmap.png",
+        "disagreement_heatmap": "experiments/confidence_risk/pos_10_t1_30_disagreement_heatmap.png",
+        "skeleton": "experiments/confidence_risk/pos_10_t1_30_skeleton.png",
+        "report": "experiments/confidence_risk/pos_10_t1_30_report.json"
+      },
+      "artifact_exists": {
+        "single_mask": false,
+        "fused_mask": false,
+        "hybrid_mask": false,
+        "selected_mask": false,
+        "overlay": false,
+        "selected_overlay": false,
+        "uncertainty_heatmap": false,
+        "disagreement_heatmap": false,
+        "skeleton": false,
+        "report": false
+      },
+      "artifact_paths_verified": false,
       "artifacts": {
         "single_mask": "experiments/confidence_risk/pos_10_t1_30_single_mask.png",
         "fused_mask": "experiments/confidence_risk/pos_10_t1_30_fused_mask.png",
@@ -515,6 +566,32 @@
         "stable single/fused foreground IoU 0.978",
         "stable fused-to-single area ratio 0.995"
       ],
+      "artifact_stem": "pos_10_t4_40",
+      "artifact_path_templates": {
+        "single_mask": "experiments/confidence_risk/pos_10_t4_40_single_mask.png",
+        "fused_mask": "experiments/confidence_risk/pos_10_t4_40_fused_mask.png",
+        "hybrid_mask": "experiments/confidence_risk/pos_10_t4_40_hybrid_mask.png",
+        "selected_mask": "experiments/confidence_risk/pos_10_t4_40_selected_mask.png",
+        "overlay": "experiments/confidence_risk/pos_10_t4_40_overlay.png",
+        "selected_overlay": "experiments/confidence_risk/pos_10_t4_40_selected_overlay.png",
+        "uncertainty_heatmap": "experiments/confidence_risk/pos_10_t4_40_uncertainty_heatmap.png",
+        "disagreement_heatmap": "experiments/confidence_risk/pos_10_t4_40_disagreement_heatmap.png",
+        "skeleton": "experiments/confidence_risk/pos_10_t4_40_skeleton.png",
+        "report": "experiments/confidence_risk/pos_10_t4_40_report.json"
+      },
+      "artifact_exists": {
+        "single_mask": false,
+        "fused_mask": false,
+        "hybrid_mask": false,
+        "selected_mask": false,
+        "overlay": false,
+        "selected_overlay": false,
+        "uncertainty_heatmap": false,
+        "disagreement_heatmap": false,
+        "skeleton": false,
+        "report": false
+      },
+      "artifact_paths_verified": false,
       "artifacts": {
         "single_mask": "experiments/confidence_risk/pos_10_t4_40_single_mask.png",
         "fused_mask": "experiments/confidence_risk/pos_10_t4_40_fused_mask.png",
@@ -546,6 +623,32 @@
         "low single/fused foreground IoU 0.923",
         "fallback to single mask because fused evidence is not stable enough"
       ],
+      "artifact_stem": "pos_5_t4_21",
+      "artifact_path_templates": {
+        "single_mask": "experiments/confidence_risk/pos_5_t4_21_single_mask.png",
+        "fused_mask": "experiments/confidence_risk/pos_5_t4_21_fused_mask.png",
+        "hybrid_mask": "experiments/confidence_risk/pos_5_t4_21_hybrid_mask.png",
+        "selected_mask": "experiments/confidence_risk/pos_5_t4_21_selected_mask.png",
+        "overlay": "experiments/confidence_risk/pos_5_t4_21_overlay.png",
+        "selected_overlay": "experiments/confidence_risk/pos_5_t4_21_selected_overlay.png",
+        "uncertainty_heatmap": "experiments/confidence_risk/pos_5_t4_21_uncertainty_heatmap.png",
+        "disagreement_heatmap": "experiments/confidence_risk/pos_5_t4_21_disagreement_heatmap.png",
+        "skeleton": "experiments/confidence_risk/pos_5_t4_21_skeleton.png",
+        "report": "experiments/confidence_risk/pos_5_t4_21_report.json"
+      },
+      "artifact_exists": {
+        "single_mask": false,
+        "fused_mask": false,
+        "hybrid_mask": false,
+        "selected_mask": false,
+        "overlay": false,
+        "selected_overlay": false,
+        "uncertainty_heatmap": false,
+        "disagreement_heatmap": false,
+        "skeleton": false,
+        "report": false
+      },
+      "artifact_paths_verified": false,
       "artifacts": {
         "single_mask": "experiments/confidence_risk/pos_5_t4_21_single_mask.png",
         "fused_mask": "experiments/confidence_risk/pos_5_t4_21_fused_mask.png",
@@ -577,6 +680,32 @@
         "stable single/fused foreground IoU 0.955",
         "stable fused-to-single area ratio 0.967"
       ],
+      "artifact_stem": "t4_25",
+      "artifact_path_templates": {
+        "single_mask": "experiments/confidence_risk/t4_25_single_mask.png",
+        "fused_mask": "experiments/confidence_risk/t4_25_fused_mask.png",
+        "hybrid_mask": "experiments/confidence_risk/t4_25_hybrid_mask.png",
+        "selected_mask": "experiments/confidence_risk/t4_25_selected_mask.png",
+        "overlay": "experiments/confidence_risk/t4_25_overlay.png",
+        "selected_overlay": "experiments/confidence_risk/t4_25_selected_overlay.png",
+        "uncertainty_heatmap": "experiments/confidence_risk/t4_25_uncertainty_heatmap.png",
+        "disagreement_heatmap": "experiments/confidence_risk/t4_25_disagreement_heatmap.png",
+        "skeleton": "experiments/confidence_risk/t4_25_skeleton.png",
+        "report": "experiments/confidence_risk/t4_25_report.json"
+      },
+      "artifact_exists": {
+        "single_mask": false,
+        "fused_mask": false,
+        "hybrid_mask": false,
+        "selected_mask": false,
+        "overlay": false,
+        "selected_overlay": false,
+        "uncertainty_heatmap": false,
+        "disagreement_heatmap": false,
+        "skeleton": false,
+        "report": false
+      },
+      "artifact_paths_verified": false,
       "artifacts": {
         "single_mask": "experiments/confidence_risk/t4_25_single_mask.png",
         "fused_mask": "experiments/confidence_risk/t4_25_fused_mask.png",

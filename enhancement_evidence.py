@@ -334,6 +334,7 @@ def representative_examples(samples: list[dict], evidence_rows: list[dict]) -> d
 def _review_queue_item(sample: dict, evidence: dict, high_uncertainty_threshold: float) -> dict:
     score = 0.0
     reasons: list[str] = []
+    image = sample.get("image") or evidence.get("image")
     defect_high = evidence.get("defect_high_uncertainty_fraction")
     defect_mean = evidence.get("defect_mean_uncertainty")
     self_iou = evidence.get("self_foreground_iou")
@@ -375,7 +376,18 @@ def _review_queue_item(sample: dict, evidence: dict, high_uncertainty_threshold:
         reasons.append("no review priority trigger from model-internal evidence")
 
     return {
-        "image": sample.get("image") or evidence.get("image"),
+        "image": image,
+        "artifact_stem": Path(str(image)).stem if image else None,
+        "gt_available": any(
+            evidence.get(key) is not None
+            for key in [
+                "selected_vs_fused_mIoU",
+                "selected_vs_single_mIoU",
+                "fused_vs_single_mIoU",
+                "error_high_uncertainty_fraction",
+                "high_uncertainty_error_fraction",
+            ]
+        ),
         "priority": _review_priority_from_score(score),
         "score": float(round(score, 4)),
         "reasons": reasons,
@@ -452,6 +464,10 @@ def _artifact_paths(image: str | None, artifact_root: str) -> dict[str, str]:
     }
 
 
+def _artifact_exists(artifacts: dict[str, str]) -> dict[str, bool]:
+    return {name: Path(path).exists() for name, path in artifacts.items()}
+
+
 def _examples_with_artifacts(examples: dict[str, dict | None], artifact_root: str) -> dict[str, dict | None]:
     result: dict[str, dict | None] = {}
     for name, example in examples.items():
@@ -459,7 +475,13 @@ def _examples_with_artifacts(examples: dict[str, dict | None], artifact_root: st
             result[name] = None
             continue
         enriched = dict(example)
-        enriched["artifacts"] = _artifact_paths(example.get("image"), artifact_root)
+        artifacts = _artifact_paths(example.get("image"), artifact_root)
+        exists = _artifact_exists(artifacts)
+        enriched["artifact_stem"] = Path(str(example.get("image"))).stem if example.get("image") else None
+        enriched["artifact_path_templates"] = artifacts
+        enriched["artifact_exists"] = exists
+        enriched["artifact_paths_verified"] = bool(artifacts) and all(exists.values())
+        enriched["artifacts"] = artifacts
         result[name] = enriched
     return result
 
@@ -495,6 +517,11 @@ def build_patent_evidence_pack(
         "backbone_evidence": backbone_evidence or DEFAULT_BACKBONE_EVIDENCE,
         "claim_boundaries": CLAIM_BOUNDARIES,
         "artifact_suffixes": ARTIFACT_SUFFIXES,
+        "artifact_contract": {
+            "artifact_root": artifact_root,
+            "artifacts_are_path_templates": True,
+            "artifact_exists_maps_record_current_repo_availability": True,
+        },
     }
 
     if not summary.get("supported"):

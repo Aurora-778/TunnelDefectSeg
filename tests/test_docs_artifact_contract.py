@@ -102,6 +102,9 @@ def test_web_demo_documents_segformer_probability_tta_sample():
     assert "review_queue_summary" in html
     assert "Review queue" in html
     assert "renderReviewQueue" in html
+    assert "renderMorphologyDelta" in html
+    assert "morphologyDeltaGrid" in html
+    assert "escapeHtml" in html
     assert "Calibration gap" in html
     assert 'priority.priority || (risk.review_required ? "medium" : level)' in html
     assert 'tta_specs: ["segformer_identity", "segformer_hflip"]' in html
