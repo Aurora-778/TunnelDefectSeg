@@ -46,6 +46,8 @@ def test_patent_disclosure_formalizes_method_steps_and_boundaries():
         "SegFormer B1 作为 `mask source`",
         "融合损伤识别",
         "morphology_delta",
+        "evidence_flags.area_shrinkage",
+        "algorithmic_evidence",
         "review priority",
         "review_priority.formula.components",
         "defect_uncertainty",

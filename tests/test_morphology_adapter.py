@@ -92,6 +92,14 @@ def test_compare_mask_morphology_reports_area_component_and_skeleton_delta():
     assert result["defect_skeleton_length_delta"] < 0
     assert any("reduces measured defect area" in item for item in result["explanations"])
     assert any("more connected components" in item for item in result["explanations"])
+    assert result["evidence_flags"]["area_shrinkage"] is True
+    assert result["evidence_flags"]["component_fragmentation"] is True
+    assert result["evidence_flags"]["skeleton_shortening"] is True
+    assert {
+        "area_shrinkage",
+        "component_fragmentation",
+        "skeleton_shortening",
+    }.issubset(set(result["algorithmic_evidence"]))
     class_delta = result["class_deltas"][0]
     assert class_delta["class_name"] == "simple"
     assert class_delta["area_delta_pixels"] == -6
@@ -106,3 +114,5 @@ def test_compare_mask_morphology_handles_empty_masks_without_false_degradation()
     assert result["defect_area_ratio_target_over_source"] == 1.0
     assert result["defect_component_delta"] == 0
     assert result["explanations"] == ["single and fused contain no measured defect foreground"]
+    assert result["evidence_flags"]["empty_stable"] is True
+    assert result["algorithmic_evidence"] == []

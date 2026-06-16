@@ -203,6 +203,32 @@ def _delta_explanations(result: dict) -> list[str]:
     return explanations or [f"{target} preserves morphology close to {source}"]
 
 
+def _delta_evidence_flags(result: dict) -> dict[str, bool]:
+    source_area = int(result["source_defect_area_pixels"])
+    target_area = int(result["target_defect_area_pixels"])
+    area_ratio = result["defect_area_ratio_target_over_source"]
+    component_delta = int(result["defect_component_delta"])
+    skeleton_delta = int(result["defect_skeleton_length_delta"])
+    direction_shift = any(item["direction_changed"] for item in result["class_deltas"])
+
+    empty_stable = source_area == 0 and target_area == 0
+    return {
+        "empty_stable": bool(empty_stable),
+        "introduced_foreground": bool(source_area == 0 and target_area > 0),
+        "area_shrinkage": bool(not empty_stable and area_ratio is not None and area_ratio < 0.75),
+        "area_expansion": bool(not empty_stable and area_ratio is not None and area_ratio > 1.25),
+        "component_fragmentation": bool(component_delta > 0),
+        "component_simplification": bool(component_delta < 0),
+        "skeleton_shortening": bool(source_area > 0 and skeleton_delta < 0),
+        "skeleton_lengthening": bool(skeleton_delta > 0),
+        "direction_shift": bool(direction_shift),
+    }
+
+
+def _algorithmic_evidence(flags: dict[str, bool]) -> list[str]:
+    return [name for name, active in flags.items() if active and name != "empty_stable"]
+
+
 def compare_mask_morphology(
     source_mask: np.ndarray,
     target_mask: np.ndarray,
@@ -261,6 +287,8 @@ def compare_mask_morphology(
         "class_deltas": class_deltas,
     }
     result["explanations"] = _delta_explanations(result)
+    result["evidence_flags"] = _delta_evidence_flags(result)
+    result["algorithmic_evidence"] = _algorithmic_evidence(result["evidence_flags"])
     return result
 
 

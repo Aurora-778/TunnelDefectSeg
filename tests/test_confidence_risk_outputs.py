@@ -62,6 +62,8 @@ def test_write_result_artifacts_creates_expected_files(tmp_path):
     assert "morphology_delta" in saved
     assert saved["morphology_delta"]["single_to_fused"]["defect_area_delta_pixels"] == 8
     assert saved["morphology_delta"]["fused_to_selected"]["explanations"]
+    assert "evidence_flags" in saved["morphology_delta"]["single_to_fused"]
+    assert "algorithmic_evidence" in saved["morphology_delta"]["single_to_fused"]
     assert saved["risk"]["risk_level"] in {"low", "medium", "high"}
     assert saved["review_priority"]["priority"] in {"low", "medium", "high"}
     assert saved["review_priority"]["review_required"] is True

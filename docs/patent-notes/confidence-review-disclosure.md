@@ -60,6 +60,20 @@
 
 该步骤用于解释候选 mask 是否出现缩小、断裂、方向漂移或 selected 恢复。
 
+当前实施例中，`morphology_delta` 同时输出自然语言解释和机器可读证据字段：
+
+- `evidence_flags.empty_stable`：source 与 target 均无测量到的病害前景。
+- `evidence_flags.introduced_foreground`：target 引入 source 中不存在的前景。
+- `evidence_flags.area_shrinkage`：target 面积显著小于 source。
+- `evidence_flags.area_expansion`：target 面积显著大于 source。
+- `evidence_flags.component_fragmentation`：target 连通域数量增加。
+- `evidence_flags.component_simplification`：target 连通域数量减少。
+- `evidence_flags.skeleton_shortening`：target 骨架长度缩短。
+- `evidence_flags.skeleton_lengthening`：target 骨架长度增加。
+- `evidence_flags.direction_shift`：主方向发生变化。
+
+`algorithmic_evidence` 列出实际触发的非空证据标签，使形态变化能作为专利实施例、消融实验和 review queue 分析中的结构化算法证据，而不是只靠图片说明。
+
 ### S8. 复核优先级生成与证据输出
 
 综合 risk、uncertainty、disagreement、self-consistency、融合损伤、形态变化和 selected-mask reason，生成 `review priority` 和 review queue。系统输出多视图 artifact、结构化 report、evidence summary 和 patent evidence pack。
