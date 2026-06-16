@@ -6,11 +6,11 @@
 
 Alternative English title:
 
-Confidence-Aware Review Prioritization for Tunnel Defect Segmentation Outputs
+Confidence-Aware Review Prioritisation for Tunnel Defect Segmentation Outputs
 
 ## One-Sentence Summary
 
-本项目研究的不是重新发明一个 segmentation backbone，而是在已有隧道病害分割模型之后，利用 candidate masks、uncertainty、disagreement、morphology_delta 和 review priority 判断哪些结果更可信、哪些需要人工优先复核。
+本项目重点并非重新设计 segmentation backbone，而是在已有隧道病害分割模型基础上，利用 candidate masks、uncertainty、disagreement、morphology_delta 及 review priority 判断哪些结果可信度更高、哪些需要人工优先复核。
 
 ## Research Question
 
@@ -25,23 +25,23 @@ RQ4. 在无 GT 上传图片中，系统能否输出可信复核信号，同时�
 ## Contribution Claims
 
 1. 提出一条 model-agnostic post-inference confidence review chain：candidate mask generation -> fusion harm detection -> adaptive selected mask -> uncertainty/disagreement -> morphology_delta -> review priority。
-2. 证明 fixed fusion 会在部分样本上压缩病害前景，而 adaptive selection 能恢复 fixed fused 的一部分损失。
+2. 表明 fixed fusion 在部分样本上会压缩病害前景，而 adaptive selection 能够部分恢复 fixed fused 带来的损失。
 3. 将 morphology_delta 从可视化解释提升为结构化算法证据，输出 area shrinkage、component fragmentation、skeleton change 和 direction shift 等 flags。
-4. 提供 review queue，用模型内部证据进行排序，再用 GT-derived flags 评估高优先级 bucket 是否覆盖 fixed fusion harm 或真实错误。
-5. 明确 GT/no-GT 边界：无 GT 上传图片只输出 self-consistency、uncertainty、disagreement、morphology_delta 和 review priority，不输出 true mIoU。
+4. 提供 review queue，以模型内部证据进行排序；在此基础上以 GT-derived flags 评估高优先级 bucket 对 fixed fusion harm 及真实错误的覆盖情况。
+5. 明确 GT/no-GT 边界：无 GT 上传图片仅输出 self-consistency、uncertainty、disagreement、morphology_delta 及 review priority，不提供 true mIoU。
 
 ## Paper Structure
 
 ### 1. Introduction
 
-- 隧道病害图像分割可以帮助巡检人员定位病害区域。
-- 仅输出 mask 不足以说明结果是否稳定、是否需要人工复核。
+- 隧道病害图像分割能够辅助巡检人员识别与定位病害区域。
+- 仅输出分割掩码不足以判断输出结果的稳定性及人工复核必要性。
 - TTA fusion 虽然常用于提高稳定性，但在小病害或细长病害上可能产生前景收缩。
-- 本文关注 post-inference confidence review，而不是重新设计分割主干。
+- 本文关注 post-inference confidence review，而非重新设计分割主干。
 
 ### 2. Related Work
 
-需要后续补充正式引用，当前只列主题方向：
+需要后续补充正式引用，目前仅列出主题方向：
 
 - semantic segmentation for tunnel defect or crack inspection
 - SegFormer and transformer-based segmentation
@@ -86,7 +86,7 @@ Compute:
 
 - entropy uncertainty from probability maps
 - TTA disagreement from candidate prediction differences
-- GT-based error overlap only on labeled data
+- GT-based error overlap only on labelled data
 
 #### 3.5 Morphology Delta
 
@@ -164,17 +164,17 @@ No-GT signals:
 Current measured results:
 
 - Test split: selected vs fixed fused mIoU `+0.0141`.
-- All labeled samples: selected vs fixed fused mIoU `+0.0393`.
+- All labelled samples: selected vs fixed fused mIoU `+0.0393`.
 - Test split protected pixels vs fused: `156,301`.
-- All labeled samples protected pixels vs fused: `1,230,616`.
+- All labelled samples protected pixels vs fused: `1,230,616`.
 - Test split HU error precision: `80.66%`.
-- All labeled samples HU error precision: `78.27%`.
+- All labelled samples HU error precision: `78.27%`.
 - Review-priority baseline comparison is available in `review_queue_summary.baseline_comparison`.
 
 Interpretation:
 
-- adaptive selection recovers fixed fused loss.
-- high uncertainty is a useful review signal on labeled data.
+- adaptive selection partially recovers fixed fused loss.
+- high uncertainty is a useful review signal on labelled data.
 - full review priority is a multi-objective queue; it should be compared against single-signal queues rather than claimed as universally dominant.
 - selected does not universally beat single; this is a limitation and should be stated.
 
@@ -199,7 +199,7 @@ Use `docs/experiments/patent-case-pack.md`:
 
 ### 8. Conclusion
 
-The project should conclude that a trained segmentation backbone can be wrapped by an explainable confidence-review layer. The strongest defensible claim is not raw mIoU dominance, but fixed-fusion harm detection, selected-mask recovery, structured morphology evidence, and review prioritization.
+The project should conclude that a trained segmentation backbone can be wrapped by an explainable confidence-review layer. The strongest defensible claim is not raw mIoU dominance, but fixed-fusion harm detection, selected-mask recovery, structured morphology evidence, and review prioritisation.
 
 ## Figure Plan
 

@@ -12,7 +12,7 @@ Important boundary:
 
 - `artifact_path_templates` show where images should exist after case artifacts are generated.
 - `artifact_paths_verified: false` means the current checkout does not yet contain those generated images.
-- `gt_available: true` means GT-derived evaluation fields are meaningful for that labeled case.
+- `gt_available: true` means GT-derived evaluation fields are meaningful for that labelled case.
 
 ## Case Manifest
 
@@ -53,7 +53,7 @@ Use this case to show the method does not always reject fixed fusion based on mo
 
 ### C3. High Uncertainty / Error Overlap
 
-Use this case to show uncertainty as a GT-evaluated review signal on labeled samples.
+Use this case to show uncertainty as a GT-evaluated review signal on labelled samples.
 
 - Image: `pos_5_t4_21.jpg`
 - Defect high-uncertainty fraction: `0.9978`
@@ -85,7 +85,7 @@ Use this case to state that selected is not guaranteed to beat single-pass outpu
 - Selection mode: `fused`
 - Selected vs single mIoU: `-0.0838`
 - Selected vs fixed fused mIoU: `0.0000`
-- Boundary message: the method should be claimed as fixed-fusion recovery and review prioritization, not universal raw mIoU improvement over single.
+- Boundary message: the method should be claimed as fixed-fusion recovery and review prioritisation, not universal raw mIoU improvement over single.
 - Artifact template stem: `experiments/confidence_risk/t4_25_*`
 
 ### C6. High Disagreement Case

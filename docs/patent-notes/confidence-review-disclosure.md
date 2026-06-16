@@ -2,13 +2,13 @@
 
 ## 1. 技术领域
 
-本草稿涉及隧道巡检图像处理、语义分割结果可信评估和人工复核排序。更具体地说，本文描述一种围绕已有分割模型输出的 post-inference confidence review 方法：输入隧道图像和模型候选结果，输出 `selected mask`、uncertainty、disagreement、morphology_delta、review priority 和可复核证据。
+本草稿涉及隧道巡检图像处理、语义分割结果可信评估和人工复核排序。具体而言，本文描述一种围绕已有分割模型输出的 post-inference confidence review 方法，其输入为隧道图像和模型候选结果，输出包括 `selected mask`、uncertainty、disagreement、morphology_delta、review priority 以及可复核证据。
 
 本方法不限定具体分割 backbone。当前实施例使用 SegFormer B1 作为 `mask source`，但方法也可以接入其他能够输出类别概率或候选 mask 的语义分割模型。
 
 ## 2. 背景技术问题
 
-隧道病害分割系统通常输出一张最终 `mask`。这个输出能告诉使用者模型画出了哪里，但不能充分回答以下问题：
+隧道病害分割系统通常输出单一的最终 `mask`。这个输出能告诉使用者模型画出了哪里，但不能充分回答以下问题：
 
 - 该 `mask` 在轻量扰动或候选融合后是否稳定。
 - fixed fusion 是否把小病害或细长病害压小、压断或误删。
@@ -16,7 +16,7 @@
 - 哪些图像或区域应该优先交给人工复核。
 - 无 GT 上传图片无法计算 true mIoU 时，系统还能给出哪些可信信号。
 
-因此，本方法的技术目标不是重新发明 SegFormer 或单纯追求 raw mIoU，而是在分割结果之后增加一条可解释、可复现的可信复核链条。
+因此，本方法的技术目标并非重新设计 SegFormer 或单纯追求 raw mIoU，而是在分割结果之后增加一条可解释、可复现的可信复核链条。
 
 ## 3. 方法步骤
 
@@ -183,4 +183,4 @@ review_priority_score = sum(active score components)
 
 ## 10. 交底书使用说明
 
-本文是研发侧草稿，用于向老师、专利代理人或论文写作材料说明技术路线。正式提交前应进一步完成查新、权利要求法律化表达和数字来源复核。
+本文为研发侧草稿，用于向专利代理人说明技术路线，亦可作为论文写作的技术素材。正式提交前应进一步完成查新、权利要求法律化表达和数字来源复核。

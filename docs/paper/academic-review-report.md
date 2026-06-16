@@ -84,13 +84,13 @@ Problem: `review_priority` is an explainable additive score, but the paper has n
 
 Why it matters: reviewers may challenge the score as heuristic unless threshold robustness is shown.
 
-Suggestion: add a small sensitivity table over high-uncertainty threshold, self-IoU threshold, and shrinkage threshold. The goal is not to find perfect weights, but to show the queue behavior is stable.
+Suggestion: add a small sensitivity table over high-uncertainty threshold, self-IoU threshold, and shrinkage threshold. The goal is not to find perfect weights, but to show the queue behaviour is stable.
 
 Severity: Major.
 
 W3. Calibration language must remain conditional.
 
-Problem: the outline lists uncertainty calibration as a GT-required metric, but the current presentation should not imply calibration has been fully demonstrated unless the binned calibration table exists for the cited experiment.
+Problem: the outline lists uncertainty calibration as a GT-required metric. The current presentation should not imply that calibration has been fully demonstrated unless the binned calibration table exists for the cited experiment.
 
 Why it matters: uncertainty/error overlap and uncertainty calibration are different claims. High HU error precision supports review usefulness; calibration requires a bin-wise uncertainty-vs-error-rate analysis.
 
@@ -112,7 +112,7 @@ Required revision:
 
 1. Build a related-work table with columns: topic, representative papers, what they solve, what they do not solve, relation to this work.
 2. Make sure the gap is specific: "few works evaluate harmful fixed TTA fusion and convert disagreement/morphology signals into review priority for tunnel defect masks."
-3. Avoid claiming "few works" until the search is actually done. Before search, use "the current project targets the following gap" rather than "no one has done this."
+3. Avoid claiming "few works" until the search is done. Before search, use "the current project targets the following gap" rather than "no one has done this."
 4. Add a domain-validity section explaining whether the dataset covers different tunnel surfaces, lighting, camera distance, and defect types.
 
 ## Reviewer 3: Practical Reliability and Human Review
@@ -129,7 +129,7 @@ The paper should make the review workflow more concrete:
 2. What action follows a high-priority result: relabel, re-run model, manual check, field reinspection, or just mark uncertain?
 3. What is the expected benefit: fewer missed unstable masks, faster case selection, better annotation QA, or safer reporting?
 
-The system currently has enough evidence to claim "review assistance" but not enough to claim "maintenance decision support." Keep that boundary.
+The system has enough evidence to claim "review assistance" but not enough to claim "maintenance decision support." Keep that boundary.
 
 ## Devil's Advocate Review
 
@@ -139,7 +139,7 @@ Confidence: 4/5
 
 Strongest counterargument:
 
-The method may be seen as a carefully engineered post-processing and reporting wrapper around standard segmentation outputs rather than a new scientific method. SegFormer, TTA, entropy uncertainty, disagreement maps, skeletonization, and human review queues are all known ideas. The manuscript must therefore prove that the specific combination solves a real failure mode that standard reporting misses. The strongest current evidence is fixed-fusion harm and selected recovery. The weakest point is the review-priority formula: if it is mostly heuristic and not compared with simpler baselines, reviewers may ask why the queue is not just "sort by uncertainty" or "sort by foreground shrinkage."
+The method may be seen as a carefully engineered post-processing and reporting wrapper around standard segmentation outputs rather than a new scientific method. SegFormer, TTA, entropy uncertainty, disagreement maps, skeletonization, and human review queues are all known ideas. The manuscript must therefore prove that the specific combination solves a real failure mode that standard reporting misses. The strongest current evidence is fixed-fusion harm and selected recovery. The weakest point is the review-priority formula. If it is mostly heuristic and not compared with simpler baselines, reviewers may ask why the queue is not simply "sort by uncertainty" or "sort by foreground shrinkage."
 
 Critical issues:
 
@@ -218,7 +218,7 @@ Editorial decision mapping: Minor Revision by score alone, but Major Revision by
 Safe now:
 
 - The trained SegFormer B1 is the current mask source, not the invention.
-- Fixed fused output can reduce foreground quality on labeled samples.
+- Fixed fused output can reduce foreground quality on labelled samples.
 - Adaptive selected mask recovers fixed-fused loss in the current evaluation.
 - Review priority can be computed without GT and evaluated afterward with GT.
 - No-GT uploaded images must not display true mIoU, true error overlap, or GT calibration.
@@ -227,6 +227,6 @@ Not safe yet:
 
 - Morphology_delta independently improves review-priority ranking.
 - The review-priority score outperforms simpler uncertainty-only or shrinkage-only baselines.
-- The method generalizes to other tunnel datasets or inspection environments.
+- The method generalises to other tunnel datasets or inspection environments.
 - Uncertainty is fully calibrated unless calibration bins are generated and reported.
 

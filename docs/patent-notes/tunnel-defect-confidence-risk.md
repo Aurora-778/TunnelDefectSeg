@@ -7,7 +7,7 @@ Formalized follow-up drafts:
 
 ## Technical Field
 
-This note describes an image-based tunnel defect segmentation post-processing method. The method is intended for inspection-image analysis, confidence estimation, morphology measurement, and review prioritization.
+This note describes an image-based tunnel defect segmentation post-processing method. The method is intended for inspection-image analysis, confidence estimation, morphology measurement, and review prioritisation.
 
 ## Core Method Chain
 
@@ -34,7 +34,7 @@ SegFormer B1 is treated as a stronger segmentation backbone, while the confidenc
 
 ## Generated Evidence
 
-The implementation can generate the following patent-friendly artifacts:
+The implementation generates the following patent-friendly artifacts:
 
 - `<stem>_single_mask.png`
 - `<stem>_fused_mask.png`
@@ -51,13 +51,13 @@ The implementation can generate the following patent-friendly artifacts:
 
 For images without ground-truth labels, true mIoU is not available. The implementation may report `Self IoU` between single and fused model outputs as a consistency signal, but this is not a substitute for label-based accuracy.
 
-Each report can now include `review_priority`, an image-based manual-review ordering signal. It is derived from uncertainty, disagreement, self-consistency, foreground shrinkage, morphology, and selected-mask evidence. When GT masks are available, evaluation JSON can also include `uncertainty_calibration`, which compares binned uncertainty with true pixel error rate. This calibration evidence is not generated for unlabeled uploads.
+Each report includes `review_priority`, an image-based manual-review ordering signal. It is derived from uncertainty, disagreement, self-consistency, foreground shrinkage, morphology, and selected-mask evidence. When GT masks are available, the evaluation JSON also includes `uncertainty_calibration`, which compares binned uncertainty with true pixel error rate. This calibration evidence is not generated for unlabelled uploads.
 
-The U7 evidence layer adds `morphology_delta`, `review_queue_summary`, and a patent-ready evidence pack. `morphology_delta` compares single, fused, and selected masks by area, connected components, skeleton length, and dominant direction. `review_queue_summary` ranks samples using model-internal evidence only, then uses GT-derived flags only to evaluate whether high-priority buckets concentrate fixed-fusion harm, selected recovery, or true error overlap. The evidence pack keeps SegFormer backbone quality separate from post-inference enhancement quality and attaches artifact path templates to representative cases.
+The U7 evidence layer adds `morphology_delta`, `review_queue_summary`, and a patent-ready evidence pack. `morphology_delta` compares single, fused, and selected masks by area, connected components, skeleton length, and dominant direction. `review_queue_summary` ranks samples using model-internal evidence only. It then uses GT-derived flags to evaluate whether high-priority buckets concentrate fixed-fusion harm, selected recovery, or true error overlap. The evidence pack keeps SegFormer backbone quality separate from post-inference enhancement quality and attaches artifact path templates to representative cases.
 
 ## Non-Claim Boundary
 
-This module provides image-based defect risk guidance and manual-review suggestions. It does **not** provide structural safety diagnosis, civil-engineering load assessment, or final maintenance decisions. Those remain outside the scope of this implementation and should require expert review.
+This module provides image-based defect risk guidance and manual-review suggestions. It does **not** provide structural safety diagnosis, civil-engineering load assessment, or final maintenance decisions. Those remain outside the scope of this implementation and require expert review.
 
 ## Suggested Patent Title
 
@@ -74,33 +74,33 @@ This module provides image-based defect risk guidance and manual-review suggesti
 
 ## Current Measured Evidence
 
-Using the validation-selected adaptive defaults, the selected output recovers most of the accuracy lost by fixed TTA fusion. On the 150-image test split, `selected_mIoU` is 0.3306 versus 0.3165 for fixed fused output and 0.3305 for the single-pass baseline. On all 1000 labeled samples, `selected_mIoU` is 0.3680 versus 0.3287 for fixed fused output and 0.3725 for single-pass output.
+Using the validation-selected adaptive defaults, the selected output recovered most of the accuracy lost by fixed TTA fusion. On the 150-image test split, `selected_mIoU` was 0.3306 versus 0.3165 for fixed fused output and 0.3305 for the single-pass baseline. On all 1000 labelled samples, `selected_mIoU` was 0.3680 versus 0.3287 for fixed fused output and 0.3725 for single-pass output.
 
 | Scope | Samples | Single mIoU | Fixed fused mIoU | Selected mIoU | Selected vs fused | Selected vs single |
 |---|---:|---:|---:|---:|---:|---:|
 | Test split | 150 | 0.3305 | 0.3165 | 0.3306 | +0.0141 | +0.0001 |
-| All labeled samples | 1000 | 0.3725 | 0.3287 | 0.3680 | +0.0393 | -0.0044 |
+| All labelled samples | 1000 | 0.3725 | 0.3287 | 0.3680 | +0.0393 | -0.0044 |
 
-The small-defect guard evidence is stronger than a single selected example because it is measured over labeled splits:
+The small-defect guard evidence is stronger than a single selected example because it is measured over labelled splits:
 
 | Scope | Protected events | Successful guard events | Fixed fusion harmed | Selected recovered | Protected pixels vs fused |
 |---|---:|---:|---:|---:|---:|
 | Test split | 99 / 150 | 72 / 150 | 99 / 150 | 81 / 150 | 156,301 |
-| All labeled samples | 721 / 1000 | 614 / 1000 | 817 / 1000 | 699 / 1000 | 1,230,616 |
+| All labelled samples | 721 / 1000 | 614 / 1000 | 817 / 1000 | 699 / 1000 | 1,230,616 |
 
-Uncertainty-to-error overlap is reported only when GT masks are available. It supports review prioritization by checking whether high-uncertainty regions coincide with prediction errors:
+Uncertainty-to-error overlap is reported only when GT masks are available. It supports review prioritisation by checking whether high-uncertainty regions coincide with prediction errors:
 
 | Scope | Error coverage | HU error precision | Pixel high-uncertainty threshold | Review fraction threshold |
 |---|---:|---:|---:|---:|
 | Test split | 45.66% | 80.66% | 0.35 | 0.50 |
-| All labeled samples | 44.54% | 78.27% | 0.35 | 0.50 |
+| All labelled samples | 44.54% | 78.27% | 0.35 | 0.50 |
 
-U6 adds an ECE-like calibration summary around these signals: uncertainty values are binned and compared with the actual pixel error rate in each bin. This supports the claim that uncertainty is used as review evidence, while keeping stronger post-hoc methods such as temperature scaling or conformal prediction as follow-up work rather than current claims.
+U6 adds an ECE-like calibration summary around these signals. Uncertainty values are binned and compared with the actual pixel error rate in each bin. This supports the claim that uncertainty is used as review evidence. It keeps stronger post-hoc methods such as temperature scaling or conformal prediction as follow-up work rather than current claims.
 
-This means the patent contribution should be framed as confidence-aware adaptive output selection and explainable risk evidence, not as a newly trained segmentation backbone that universally improves raw single-pass mIoU.
+The patent contribution is thus framed as confidence-aware adaptive output selection and explainable risk evidence, not as a newly trained segmentation backbone that universally improves raw single-pass mIoU.
 
-The trained SegFormer B1 checkpoint separately validates backbone segmentation quality. Its final logged evaluation reached `mIoU 84.33`, `mAcc 91.17`, and `aAcc 98.62`, with strong `pipeline`, `vertical`, and `horizontal` classes. This should be presented as backbone evidence, not as proof that the post-inference enhancement itself changes raw segmentation training quality.
+The trained SegFormer B1 checkpoint separately validated backbone segmentation quality. Its final logged evaluation reached `mIoU 84.33`, `mAcc 91.17`, and `aAcc 98.62`, with strong `pipeline`, `vertical`, and `horizontal` classes. This is presented as backbone evidence, not as proof that the post-inference enhancement itself changes raw segmentation training quality.
 
 For a fuller experiment-ready table, see `docs/experiments/enhancement-evidence-summary.md`.
 
-The current compact patent evidence artifact is `experiments/patent_evidence_test_pack.json`. It is intentionally small enough to commit and can be regenerated from `experiments/adaptive_fusion_eval_test_full.json` with `enhancement_evidence.py`. Representative-case artifact paths are templates unless `artifact_exists` and `artifact_paths_verified` confirm the images are present in the current checkout.
+The current compact patent evidence artifact is `experiments/patent_evidence_test_pack.json`. It is intentionally small enough to commit and is regenerated from `experiments/adaptive_fusion_eval_test_full.json` with `enhancement_evidence.py`. Representative-case artifact paths are templates unless `artifact_exists` and `artifact_paths_verified` confirm the images are present in the current checkout.

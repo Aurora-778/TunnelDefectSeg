@@ -13,7 +13,7 @@ The core claim is not that `selected mask` universally beats `single mask`. The 
 | Source | Role | GT required |
 |---|---|---|
 | `experiments/enhancement_evidence_test_summary.json` | test split aggregate evidence, 150 samples | yes |
-| `experiments/enhancement_evidence_all_summary.json` | all labeled samples aggregate evidence, 1000 samples | yes |
+| `experiments/enhancement_evidence_all_summary.json` | all labelled samples aggregate evidence, 1000 samples | yes |
 | `experiments/patent_evidence_test_pack.json` | compact patent pack with backbone/enhancement boundaries and representative cases | mixed |
 | `docs/experiments/enhancement-evidence-summary.md` | narrative summary of current stage evidence | mixed |
 
@@ -29,21 +29,21 @@ The core claim is not that `selected mask` universally beats `single mask`. The 
 
 ## Measured mIoU Comparison
 
-These values require GT masks and should only be used for labeled split analysis.
+These values require GT masks and should only be used for labelled split analysis.
 
 | Scope | Samples | Single mIoU | Fixed fused mIoU | Selected mIoU | Selected vs fixed fused | Selected vs single | Source |
 |---|---:|---:|---:|---:|---:|---:|---|
 | Test split | 150 | 0.3305 | 0.3165 | 0.3306 | +0.0141 | +0.0001 | `experiments/enhancement_evidence_test_summary.json` |
-| All labeled samples | 1000 | 0.3725 | 0.3287 | 0.3680 | +0.0393 | -0.0044 | `experiments/enhancement_evidence_all_summary.json` |
+| All labelled samples | 1000 | 0.3725 | 0.3287 | 0.3680 | +0.0393 | -0.0044 | `experiments/enhancement_evidence_all_summary.json` |
 
-Interpretation: `selected` recovers the loss introduced by `fixed_fused`. On all labeled samples it remains slightly below `single`, so the patent/report wording should emphasize recovery from harmful fusion and review evidence, not universal mIoU improvement over single-pass prediction.
+Interpretation: `selected` recovers the loss introduced by `fixed_fused`. On all labelled samples, it remains slightly below `single`. The patent/report wording should therefore emphasise recovery from harmful fusion and review evidence rather than universal mIoU improvement over single-pass prediction.
 
 ## Fixed Fusion Harm And Small-Defect Guard
 
 | Scope | Fixed fusion harmed | Selected recovered | Protected events | Successful guard events | Protected pixels vs fused |
 |---|---:|---:|---:|---:|---:|
 | Test split | 99 / 150 | 81 / 150 | 99 / 150 | 72 / 150 | 156,301 |
-| All labeled samples | 817 / 1000 | 699 / 1000 | 721 / 1000 | 614 / 1000 | 1,230,616 |
+| All labelled samples | 817 / 1000 | 699 / 1000 | 721 / 1000 | 614 / 1000 | 1,230,616 |
 
 Interpretation: this is the strongest current evidence for the adaptive selection module. The system identifies cases where fixed fusion suppresses defect foreground and preserves pixels that would otherwise be lost.
 
@@ -76,10 +76,10 @@ Current top-10 comparison:
 | Test split | uncertainty only | 8 / 10 | 8 / 10 | 6,464 | 0.8389 |
 | Test split | shrinkage only | 6 / 10 | 6 / 10 | 26,239 | 0.7576 |
 | Test split | self-IoU instability only | 4 / 10 | 4 / 10 | 12,772 | 0.6312 |
-| All labeled samples | full priority | 8 / 10 | 8 / 10 | 28,388 | 0.4273 |
-| All labeled samples | uncertainty only | 8 / 10 | 8 / 10 | 11,051 | 0.6899 |
-| All labeled samples | shrinkage only | 6 / 10 | 6 / 10 | 9,424 | 0.3495 |
-| All labeled samples | self-IoU instability only | 5 / 10 | 5 / 10 | 7,883 | 0.2854 |
+| All labelled samples | full priority | 8 / 10 | 8 / 10 | 28,388 | 0.4273 |
+| All labelled samples | uncertainty only | 8 / 10 | 8 / 10 | 11,051 | 0.6899 |
+| All labelled samples | shrinkage only | 6 / 10 | 6 / 10 | 9,424 | 0.3495 |
+| All labelled samples | self-IoU instability only | 5 / 10 | 5 / 10 | 7,883 | 0.2854 |
 
 Interpretation: the full priority is not framed as dominating every single metric. Instead, it gives a multi-objective review queue that balances uncertainty, fusion instability, shrinkage, protected pixels and adaptive-selection evidence. `uncertainty_only` is stronger when the target is high-uncertainty error precision, while full priority better surfaces protected foreground pixels on the all-sample top-10 list.
 
@@ -98,7 +98,7 @@ These rows are intentionally marked pending. They should not be described as mea
 Use:
 
 - "selected recovers fixed-fused mIoU loss"
-- "fixed fusion harmed many labeled samples"
+- "fixed fusion harmed many labelled samples"
 - "adaptive selection protects foreground pixels relative to fixed fusion"
 - "review priority ranks samples using model-internal evidence, and GT is used afterward to evaluate the queue"
 - "morphology_delta provides structured evidence flags for area shrinkage, fragmentation, skeleton change and direction shift"
