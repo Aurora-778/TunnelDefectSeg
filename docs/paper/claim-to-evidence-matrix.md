@@ -20,6 +20,7 @@ This matrix maps each paper/patent claim to evidence sources, current status, an
 | C10 | Removing morphology_delta would reduce review-priority quality. | pending | no generated ablation JSON yet | Must remain pending until `selected_without_morphology` or `review_priority_without_morphology_delta` is evaluated. |
 | C11 | Removing uncertainty/disagreement would reduce review-priority quality. | pending | no generated ablation JSON yet | Must remain pending until `selected_without_uncertainty_disagreement` is evaluated. |
 | C12 | High-disagreement and morphology-degradation visual cases are available as generated artifacts. | pending | C6/C7 in `docs/experiments/patent-case-pack.md` | Current checkout has pending case rows; do not present as measured figures. |
+| C13 | Review priority can be compared against simpler single-signal review rankings. | supported | `review_queue_summary.baseline_comparison` in enhancement evidence JSON; `docs/experiments/patent-ablation-summary.md` | This supports baseline comparison, not a claim that full priority dominates every baseline on every metric. |
 
 ## Evidence Source Rules
 
@@ -33,7 +34,7 @@ This matrix maps each paper/patent claim to evidence sources, current status, an
 
 The following claims are currently safe to present:
 
-- C1 through C9, with their limitations stated.
+- C1 through C9 and C13, with their limitations stated.
 
 The following claims need more work:
 

@@ -268,3 +268,10 @@ def test_build_review_queue_summary_ranks_without_gt_flags_but_evaluates_buckets
     assert result["top_k"][0]["gt_flags"]["selected_recovers_over_fused"] is True
     assert result["bucket_metrics"]["high"]["selected_recovers_over_fused_count"] == 1
     assert result["bucket_metrics"]["none"]["fixed_fusion_harmed_count"] == 1
+    baseline = result["baseline_comparison"]
+    assert baseline["supported"] is True
+    assert baseline["gt_usage"].startswith("GT-derived flags evaluate")
+    assert baseline["baselines"]["full_priority"]["ranking_uses_gt"] is False
+    assert baseline["baselines"]["full_priority"]["top_images"][0] == "needs_review.jpg"
+    assert baseline["baselines"]["uncertainty_only"]["metrics"]["selected_recovers_over_fused_count"] == 1
+    assert baseline["baselines"]["self_iou_instability_only"]["description"].startswith("rank by 1")

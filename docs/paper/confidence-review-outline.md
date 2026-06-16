@@ -134,6 +134,7 @@ Measured variants:
 - `fixed_fused`
 - `selected`
 - `full_review_priority`
+- review-priority baselines: `uncertainty_only`, `shrinkage_only`, `self_iou_instability_only`
 
 Pending variants:
 
@@ -168,11 +169,13 @@ Current measured results:
 - All labeled samples protected pixels vs fused: `1,230,616`.
 - Test split HU error precision: `80.66%`.
 - All labeled samples HU error precision: `78.27%`.
+- Review-priority baseline comparison is available in `review_queue_summary.baseline_comparison`.
 
 Interpretation:
 
 - adaptive selection recovers fixed fused loss.
 - high uncertainty is a useful review signal on labeled data.
+- full review priority is a multi-objective queue; it should be compared against single-signal queues rather than claimed as universally dominant.
 - selected does not universally beat single; this is a limitation and should be stated.
 
 ### 6. Case Study

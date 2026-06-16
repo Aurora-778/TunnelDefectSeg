@@ -375,6 +375,128 @@
         "mean_error_high_uncertainty_fraction": 0.19300163357784575,
         "mean_high_uncertainty_error_fraction": 0.6937425793827863
       }
+    },
+    "baseline_comparison": {
+      "supported": true,
+      "gt_usage": "GT-derived flags evaluate each baseline after ranking; they are not used to rank samples.",
+      "baselines": {
+        "full_priority": {
+          "description": "full explainable review-priority score",
+          "ranking_uses_gt": false,
+          "top_k": 10,
+          "top_images": [
+            "neg_-5_t2_18.jpg",
+            "neg_-10_t2_25.jpg",
+            "pos_10_t1_1.jpg",
+            "neg_-5_t3_31.jpg",
+            "neg_-10_t1_34.jpg",
+            "neg_-10_t1_32.jpg",
+            "t2_17.jpg",
+            "pos_5_t1_3.jpg",
+            "neg_-5_t2_6.jpg",
+            "neg_-5_t2_7.jpg"
+          ],
+          "metrics": {
+            "count": 10,
+            "fixed_fusion_harmed_count": 6,
+            "fixed_fusion_harmed_rate": 0.6,
+            "selected_recovers_over_fused_count": 6,
+            "selected_recovers_over_fused_rate": 0.6,
+            "selected_matches_or_beats_single_count": 10,
+            "selected_matches_or_beats_single_rate": 1.0,
+            "total_protected_pixels_vs_fused": 18173,
+            "mean_error_high_uncertainty_fraction": 0.6438726808085615,
+            "mean_high_uncertainty_error_fraction": 0.7460796904424458
+          }
+        },
+        "uncertainty_only": {
+          "description": "rank by defect high-uncertainty fraction",
+          "ranking_uses_gt": false,
+          "top_k": 10,
+          "top_images": [
+            "neg_-5_t2_6.jpg",
+            "pos_10_t1_1.jpg",
+            "neg_-5_t5_10.jpg",
+            "pos_5_t1_3.jpg",
+            "t2_36.jpg",
+            "pos_5_t4_21.jpg",
+            "neg_-5_t4_38.jpg",
+            "neg_-10_t2_7.jpg",
+            "neg_-5_t2_7.jpg",
+            "t2_17.jpg"
+          ],
+          "metrics": {
+            "count": 10,
+            "fixed_fusion_harmed_count": 8,
+            "fixed_fusion_harmed_rate": 0.8,
+            "selected_recovers_over_fused_count": 8,
+            "selected_recovers_over_fused_rate": 0.8,
+            "selected_matches_or_beats_single_count": 10,
+            "selected_matches_or_beats_single_rate": 1.0,
+            "total_protected_pixels_vs_fused": 6464,
+            "mean_error_high_uncertainty_fraction": 0.8177517097607498,
+            "mean_high_uncertainty_error_fraction": 0.8389213861876726
+          }
+        },
+        "shrinkage_only": {
+          "description": "rank by fused foreground shrink fraction",
+          "ranking_uses_gt": false,
+          "top_k": 10,
+          "top_images": [
+            "pos_10_t1_1.jpg",
+            "neg_-10_t2_25.jpg",
+            "neg_-5_t2_18.jpg",
+            "neg_-10_t1_32.jpg",
+            "t2_17.jpg",
+            "neg_-10_t1_34.jpg",
+            "neg_-10_t1_37.jpg",
+            "pos_5_t1_3.jpg",
+            "neg_-5_t2_6.jpg",
+            "neg_-5_t3_31.jpg"
+          ],
+          "metrics": {
+            "count": 10,
+            "fixed_fusion_harmed_count": 6,
+            "fixed_fusion_harmed_rate": 0.6,
+            "selected_recovers_over_fused_count": 6,
+            "selected_recovers_over_fused_rate": 0.6,
+            "selected_matches_or_beats_single_count": 10,
+            "selected_matches_or_beats_single_rate": 1.0,
+            "total_protected_pixels_vs_fused": 26239,
+            "mean_error_high_uncertainty_fraction": 0.6198851015664024,
+            "mean_high_uncertainty_error_fraction": 0.7575621030620117
+          }
+        },
+        "self_iou_instability_only": {
+          "description": "rank by 1 - single/fused foreground IoU",
+          "ranking_uses_gt": false,
+          "top_k": 10,
+          "top_images": [
+            "pos_10_t1_1.jpg",
+            "neg_-10_t2_25.jpg",
+            "neg_-5_t2_18.jpg",
+            "neg_-5_t1_4.jpg",
+            "neg_-5_t2_7.jpg",
+            "neg_-10_t1_32.jpg",
+            "neg_-10_t2_35.jpg",
+            "neg_-10_t2_7.jpg",
+            "neg_-10_t1_34.jpg",
+            "t2_17.jpg"
+          ],
+          "metrics": {
+            "count": 10,
+            "fixed_fusion_harmed_count": 4,
+            "fixed_fusion_harmed_rate": 0.4,
+            "selected_recovers_over_fused_count": 4,
+            "selected_recovers_over_fused_rate": 0.4,
+            "selected_matches_or_beats_single_count": 10,
+            "selected_matches_or_beats_single_rate": 1.0,
+            "total_protected_pixels_vs_fused": 12772,
+            "mean_error_high_uncertainty_fraction": 0.5387174131398087,
+            "mean_high_uncertainty_error_fraction": 0.6312092257484272
+          }
+        }
+      }
     }
   },
   "class_iou_summary": [

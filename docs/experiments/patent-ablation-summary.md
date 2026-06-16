@@ -58,6 +58,31 @@ Interpretation: this is the strongest current evidence for the adaptive selectio
 
 The current test summary records high/medium/low/none priority buckets. Use `top_k` for representative review cases and `bucket_metrics` for report language about whether high-priority buckets concentrate fixed fusion harm or selected recovery.
 
+### Review Priority Baseline Comparison
+
+The evidence JSON now includes `review_queue_summary.baseline_comparison`. This compares the full explainable priority score with simpler single-signal rankings:
+
+- `uncertainty_only`: defect high-uncertainty fraction.
+- `shrinkage_only`: fused foreground shrink fraction.
+- `self_iou_instability_only`: `1 - single/fused foreground IoU`.
+
+All baseline rankings use model-internal signals only. GT-derived flags are applied afterward to evaluate each top-k list.
+
+Current top-10 comparison:
+
+| Scope | Baseline | Fixed fusion harmed | Selected recovered | Protected pixels vs fused | Mean HU error precision |
+|---|---|---:|---:|---:|---:|
+| Test split | full priority | 6 / 10 | 6 / 10 | 18,173 | 0.7461 |
+| Test split | uncertainty only | 8 / 10 | 8 / 10 | 6,464 | 0.8389 |
+| Test split | shrinkage only | 6 / 10 | 6 / 10 | 26,239 | 0.7576 |
+| Test split | self-IoU instability only | 4 / 10 | 4 / 10 | 12,772 | 0.6312 |
+| All labeled samples | full priority | 8 / 10 | 8 / 10 | 28,388 | 0.4273 |
+| All labeled samples | uncertainty only | 8 / 10 | 8 / 10 | 11,051 | 0.6899 |
+| All labeled samples | shrinkage only | 6 / 10 | 6 / 10 | 9,424 | 0.3495 |
+| All labeled samples | self-IoU instability only | 5 / 10 | 5 / 10 | 7,883 | 0.2854 |
+
+Interpretation: the full priority is not framed as dominating every single metric. Instead, it gives a multi-objective review queue that balances uncertainty, fusion instability, shrinkage, protected pixels and adaptive-selection evidence. `uncertainty_only` is stronger when the target is high-uncertainty error precision, while full priority better surfaces protected foreground pixels on the all-sample top-10 list.
+
 ## Pending Ablations
 
 | Pending variant | Why it matters | Required implementation |

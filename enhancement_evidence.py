@@ -441,6 +441,77 @@ def _bucket_review_queue(queue: list[dict]) -> dict[str, dict]:
     return result
 
 
+def _baseline_signal(item: dict, baseline: str) -> float:
+    if baseline == "full_priority":
+        return float(item.get("score") or 0.0)
+    if baseline == "uncertainty_only":
+        defect_high = item.get("defect_high_uncertainty_fraction")
+        return float(defect_high) if defect_high is not None else 0.0
+    if baseline == "shrinkage_only":
+        return float(item.get("foreground_shrink_fraction") or 0.0)
+    if baseline == "self_iou_instability_only":
+        self_iou = item.get("self_foreground_iou")
+        return float(1.0 - float(self_iou)) if self_iou is not None else 0.0
+    raise ValueError(f"unknown review queue baseline: {baseline}")
+
+
+def _top_k_review_metrics(items: list[dict]) -> dict:
+    count = len(items)
+    fixed_fusion_harmed = sum(1 for item in items if item["gt_flags"]["fixed_fusion_harmed_mIoU"])
+    selected_recovers = sum(1 for item in items if item["gt_flags"]["selected_recovers_over_fused"])
+    selected_matches_single = sum(1 for item in items if item["gt_flags"]["selected_matches_or_beats_single"])
+    return {
+        "count": count,
+        "fixed_fusion_harmed_count": fixed_fusion_harmed,
+        "fixed_fusion_harmed_rate": _rate(fixed_fusion_harmed, count),
+        "selected_recovers_over_fused_count": selected_recovers,
+        "selected_recovers_over_fused_rate": _rate(selected_recovers, count),
+        "selected_matches_or_beats_single_count": selected_matches_single,
+        "selected_matches_or_beats_single_rate": _rate(selected_matches_single, count),
+        "total_protected_pixels_vs_fused": int(sum(item["protected_pixels_vs_fused"] for item in items)),
+        "mean_error_high_uncertainty_fraction": _mean([
+            item["gt_flags"]["error_high_uncertainty_fraction"]
+            for item in items
+        ]),
+        "mean_high_uncertainty_error_fraction": _mean([
+            item["gt_flags"]["high_uncertainty_error_fraction"]
+            for item in items
+        ]),
+    }
+
+
+def build_review_queue_baseline_comparison(queue: list[dict], top_k: int = 10) -> dict:
+    baselines = {
+        "full_priority": "full explainable review-priority score",
+        "uncertainty_only": "rank by defect high-uncertainty fraction",
+        "shrinkage_only": "rank by fused foreground shrink fraction",
+        "self_iou_instability_only": "rank by 1 - single/fused foreground IoU",
+    }
+    comparison: dict[str, dict] = {}
+    for name, description in baselines.items():
+        ranked = sorted(
+            queue,
+            key=lambda item: (
+                _baseline_signal(item, name),
+                item.get("protected_pixels_vs_fused", 0),
+            ),
+            reverse=True,
+        )
+        top_items = ranked[:top_k]
+        comparison[name] = {
+            "description": description,
+            "ranking_uses_gt": False,
+            "top_k": top_k,
+            "top_images": [item.get("image") for item in top_items],
+            "metrics": _top_k_review_metrics(top_items),
+        }
+    return {
+        "supported": bool(queue),
+        "gt_usage": "GT-derived flags evaluate each baseline after ranking; they are not used to rank samples.",
+        "baselines": comparison,
+    }
+
+
 def build_review_queue_summary(
     samples: list[dict],
     evidence_rows: list[dict],
@@ -459,6 +530,7 @@ def build_review_queue_summary(
         "top_k": queue[:top_k],
         "priority_counts": {priority: sum(1 for item in queue if item["priority"] == priority) for priority in ["high", "medium", "low", "none"]},
         "bucket_metrics": _bucket_review_queue(queue),
+        "baseline_comparison": build_review_queue_baseline_comparison(queue, top_k=top_k),
     }
 
 
