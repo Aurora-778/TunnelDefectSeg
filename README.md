@@ -285,6 +285,13 @@ docs/experiments/patent-ablation-summary.md
 docs/experiments/patent-case-pack.md
 ```
 
+论文/报告大纲与 claim-to-evidence matrix：
+
+```text
+docs/paper/confidence-review-outline.md
+docs/paper/claim-to-evidence-matrix.md
+```
+
 ## Web 实时展示
 
 `web_app.py` 提供本地拖拽检测服务。上传图片后，服务会运行 confidence-risk pipeline，并返回：

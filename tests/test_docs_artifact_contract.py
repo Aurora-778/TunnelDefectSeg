@@ -156,6 +156,33 @@ def test_experiment_summary_documents_gt_only_overlap_boundary():
     assert manifest[-1]["status"] == "pending"
 
 
+def test_paper_outline_and_claim_matrix_keep_claims_grounded():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    outline = (ROOT / "docs" / "paper" / "confidence-review-outline.md").read_text(encoding="utf-8")
+    matrix = (ROOT / "docs" / "paper" / "claim-to-evidence-matrix.md").read_text(encoding="utf-8")
+
+    assert "docs/paper/confidence-review-outline.md" in readme
+    assert "docs/paper/claim-to-evidence-matrix.md" in readme
+    for phrase in [
+        "Research Question",
+        "candidate mask generation -> fusion harm detection",
+        "selected does not universally beat single",
+        "Do not write fabricated citations",
+        "Fig. 3",
+        "C6 and C7 pending",
+    ]:
+        assert phrase in outline
+    for phrase in [
+        "C1 | The project uses SegFormer B1",
+        "C10 | Removing morphology_delta would reduce review-priority quality. | pending",
+        "C11 | Removing uncertainty/disagreement would reduce review-priority quality. | pending",
+        "C12 | High-disagreement and morphology-degradation visual cases are available as generated artifacts. | pending",
+        "Do not cite Web screenshots as the only evidence for algorithm claims.",
+        "C1 through C9",
+    ]:
+        assert phrase in matrix
+
+
 def test_readme_documents_explicit_segformer_mask_source():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
