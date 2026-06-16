@@ -1,5 +1,10 @@
 # Tunnel Defect Confidence Risk Patent Notes
 
+Formalized follow-up drafts:
+
+- `docs/patent-notes/confidence-review-disclosure.md`
+- `docs/patent-notes/confidence-review-claims-draft.md`
+
 ## Technical Field
 
 This note describes an image-based tunnel defect segmentation post-processing method. The method is intended for inspection-image analysis, confidence estimation, morphology measurement, and review prioritization.

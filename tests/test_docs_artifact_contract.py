@@ -32,6 +32,43 @@ def test_patent_note_mentions_full_method_chain():
         assert phrase in note
     assert "置信校准" in note
     assert "review_priority" in note
+    assert "docs/patent-notes/confidence-review-disclosure.md" in note
+    assert "docs/patent-notes/confidence-review-claims-draft.md" in note
+
+
+def test_patent_disclosure_formalizes_method_steps_and_boundaries():
+    disclosure = (ROOT / "docs" / "patent-notes" / "confidence-review-disclosure.md").read_text(encoding="utf-8")
+
+    for step in [f"S{index}." for index in range(1, 9)]:
+        assert step in disclosure
+    for phrase in [
+        "post-inference confidence review",
+        "SegFormer B1 作为 `mask source`",
+        "融合损伤识别",
+        "morphology_delta",
+        "review priority",
+        "不提供结构安全诊断",
+        "不替代人工验收或专家复核",
+        "不能输出或暗示",
+        "true mIoU",
+    ]:
+        assert phrase in disclosure
+
+
+def test_patent_claims_draft_has_method_system_and_storage_claims():
+    claims = (ROOT / "docs" / "patent-notes" / "confidence-review-claims-draft.md").read_text(encoding="utf-8")
+
+    for phrase in [
+        "独立权利要求 1：方法",
+        "独立权利要求 11：系统",
+        "独立权利要求 15：计算机可读存储介质",
+        "候选预测生成模块",
+        "融合损伤识别模块",
+        "形态变化分析模块",
+        "SegFormer、FCN 或其他语义分割模型作为 mask source",
+        "不应作为独立发明点主张",
+    ]:
+        assert phrase in claims
 
 
 def test_docs_do_not_treat_self_iou_as_ground_truth_accuracy():
