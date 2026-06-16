@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 
@@ -112,11 +113,15 @@ def test_patent_note_includes_aggregate_evidence_and_threshold_semantics():
 def test_experiment_summary_documents_gt_only_overlap_boundary():
     summary = (ROOT / "docs" / "experiments" / "enhancement-evidence-summary.md").read_text(encoding="utf-8")
     ablation = (ROOT / "docs" / "experiments" / "patent-ablation-summary.md").read_text(encoding="utf-8")
+    case_pack = (ROOT / "docs" / "experiments" / "patent-case-pack.md").read_text(encoding="utf-8")
+    patent_pack = json.loads((ROOT / "experiments" / "patent_evidence_test_pack.json").read_text(encoding="utf-8"))
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "docs/experiments/enhancement-evidence-summary.md" in readme
     assert "docs/experiments/patent-ablation-summary.md" in readme
+    assert "docs/experiments/patent-case-pack.md" in readme
     assert "docs/experiments/patent-ablation-summary.md" in summary
+    assert "docs/experiments/patent-case-pack.md" in summary
     assert "Error coverage" in summary
     assert "HU error precision" in summary
     assert "pixel_high_uncertainty_threshold" in summary
@@ -135,6 +140,20 @@ def test_experiment_summary_documents_gt_only_overlap_boundary():
         "pending ablations are already measured",
     ]:
         assert phrase in ablation
+    for phrase in [
+        "C1 | fixed fusion harmed / selected recovered | measured",
+        "C4 | top review queue sample | measured",
+        "C6 | high disagreement case | pending",
+        "C7 | morphology degradation case | pending",
+        "artifact_paths_verified: false",
+        "experiments/confidence_risk/pos_10_t1_30_*",
+    ]:
+        assert phrase in case_pack
+    manifest = patent_pack["case_manifest"]
+    assert [item["case_id"] for item in manifest] == ["C1", "C2", "C3", "C4", "C5", "C6", "C7"]
+    assert manifest[0]["gt_available"] is True
+    assert manifest[0]["status"] == "measured"
+    assert manifest[-1]["status"] == "pending"
 
 
 def test_readme_documents_explicit_segformer_mask_source():

@@ -199,11 +199,23 @@ def test_build_patent_evidence_pack_separates_backbone_and_enhancement_evidence(
     stable_example = result["representative_examples"]["stable_fused"]
     assert stable_example["image"] == "stable.jpg"
     assert stable_example["artifact_stem"] == "stable"
+    assert stable_example["gt_available"] is True
+    assert stable_example["fixed_fusion_harmed_mIoU"] is False
     assert stable_example["artifact_path_templates"]["selected_mask"] == "experiments/patent_cases/stable_selected_mask.png"
     assert stable_example["artifact_exists"]["selected_mask"] is False
     assert stable_example["artifact_paths_verified"] is False
     assert stable_example["artifacts"]["selected_mask"] == "experiments/patent_cases/stable_selected_mask.png"
     assert stable_example["artifacts"]["report"] == "experiments/patent_cases/stable_report.json"
+    manifest = result["case_manifest"]
+    assert [item["case_id"] for item in manifest] == ["C1", "C2", "C3", "C4", "C5", "C6", "C7"]
+    assert manifest[0]["category"] == "fixed fusion harmed / selected recovered"
+    assert manifest[0]["status"] == "measured"
+    assert manifest[0]["gt_available"] is True
+    assert manifest[0]["artifact_paths_verified"] is False
+    assert manifest[-2]["category"] == "high disagreement case"
+    assert manifest[-2]["status"] == "pending"
+    assert manifest[-1]["category"] == "morphology degradation case"
+    assert manifest[-1]["status"] == "pending"
 
 
 def test_build_patent_evidence_pack_marks_unsupported_without_gt_metrics():

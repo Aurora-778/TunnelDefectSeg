@@ -248,12 +248,17 @@ def _aggregate_calibration_bins(evidence_rows: list[dict]) -> list[dict]:
 def _example(sample: dict, evidence: dict) -> dict:
     return {
         "image": sample.get("image"),
+        "gt_available": _has_gt_metrics(evidence),
         "selection_mode": evidence.get("selection_mode"),
         "single_foreground_pixels": evidence.get("single_foreground_pixels"),
         "fused_foreground_pixels": evidence.get("fused_foreground_pixels"),
         "selected_foreground_pixels": evidence.get("selected_foreground_pixels"),
         "foreground_shrink_pixels": evidence.get("foreground_shrink_pixels"),
         "protected_pixels_vs_fused": evidence.get("protected_pixels_vs_fused"),
+        "fixed_fusion_harmed_mIoU": evidence.get("fixed_fusion_harmed_mIoU"),
+        "selected_recovers_over_fused": evidence.get("selected_recovers_over_fused"),
+        "selected_matches_or_beats_single": evidence.get("selected_matches_or_beats_single"),
+        "fused_vs_single_mIoU": evidence.get("fused_vs_single_mIoU"),
         "selected_vs_fused_mIoU": evidence.get("selected_vs_fused_mIoU"),
         "selected_vs_single_mIoU": evidence.get("selected_vs_single_mIoU"),
         "defect_high_uncertainty_fraction": evidence.get("defect_high_uncertainty_fraction"),
@@ -274,6 +279,19 @@ def _best_example(samples: list[dict], evidence_rows: list[dict], predicate, sco
         return None
     sample, evidence = max(candidates, key=lambda pair: score(pair[1]))
     return _example(sample, evidence)
+
+
+def _has_gt_metrics(evidence: dict) -> bool:
+    return any(
+        evidence.get(key) is not None
+        for key in [
+            "selected_vs_fused_mIoU",
+            "selected_vs_single_mIoU",
+            "fused_vs_single_mIoU",
+            "error_high_uncertainty_fraction",
+            "high_uncertainty_error_fraction",
+        ]
+    )
 
 
 def representative_examples(samples: list[dict], evidence_rows: list[dict]) -> dict[str, dict | None]:
@@ -378,16 +396,7 @@ def _review_queue_item(sample: dict, evidence: dict, high_uncertainty_threshold:
     return {
         "image": image,
         "artifact_stem": Path(str(image)).stem if image else None,
-        "gt_available": any(
-            evidence.get(key) is not None
-            for key in [
-                "selected_vs_fused_mIoU",
-                "selected_vs_single_mIoU",
-                "fused_vs_single_mIoU",
-                "error_high_uncertainty_fraction",
-                "high_uncertainty_error_fraction",
-            ]
-        ),
+        "gt_available": _has_gt_metrics(evidence),
         "priority": _review_priority_from_score(score),
         "score": float(round(score, 4)),
         "reasons": reasons,
@@ -486,6 +495,116 @@ def _examples_with_artifacts(examples: dict[str, dict | None], artifact_root: st
     return result
 
 
+def _manifest_case(
+    case_id: str,
+    category: str,
+    status: str,
+    source: str,
+    example: dict | None = None,
+    rationale: str | None = None,
+    artifact_root: str = "experiments/confidence_risk",
+) -> dict:
+    if example is None:
+        return {
+            "case_id": case_id,
+            "category": category,
+            "status": status,
+            "source": source,
+            "image": None,
+            "artifact_stem": None,
+            "gt_available": False,
+            "artifact_paths_verified": False,
+            "rationale": rationale,
+        }
+
+    enriched = dict(example)
+    image = enriched.get("image")
+    artifacts = enriched.get("artifact_path_templates") or _artifact_paths(image, artifact_root)
+    exists = enriched.get("artifact_exists") or _artifact_exists(artifacts)
+    return {
+        "case_id": case_id,
+        "category": category,
+        "status": status,
+        "source": source,
+        "image": image,
+        "artifact_stem": enriched.get("artifact_stem") or (Path(str(image)).stem if image else None),
+        "gt_available": bool(enriched.get("gt_available")),
+        "artifact_path_templates": artifacts,
+        "artifact_exists": exists,
+        "artifact_paths_verified": bool(artifacts) and all(exists.values()),
+        "rationale": rationale,
+    }
+
+
+def build_patent_case_manifest(pack_examples: dict[str, dict | None], review_queue_summary: dict, artifact_root: str) -> list[dict]:
+    top_queue = (review_queue_summary or {}).get("top_k") or []
+    return [
+        _manifest_case(
+            "C1",
+            "fixed fusion harmed / selected recovered",
+            "measured",
+            "representative_examples.small_defect_guard",
+            pack_examples.get("small_defect_guard"),
+            "Use this case to show fixed fusion shrinkage and selected-mask foreground protection.",
+            artifact_root,
+        ),
+        _manifest_case(
+            "C2",
+            "stable fused accepted",
+            "measured",
+            "representative_examples.stable_fused",
+            pack_examples.get("stable_fused"),
+            "Use this case to show the method does not always reject fixed fusion.",
+            artifact_root,
+        ),
+        _manifest_case(
+            "C3",
+            "high uncertainty / error overlap",
+            "measured",
+            "representative_examples.high_uncertainty_review",
+            pack_examples.get("high_uncertainty_review"),
+            "Use this case to show uncertainty as a GT-evaluated review signal on labeled samples.",
+            artifact_root,
+        ),
+        _manifest_case(
+            "C4",
+            "top review queue sample",
+            "measured",
+            "review_queue_summary.top_k[0]",
+            top_queue[0] if top_queue else None,
+            "Use this case to show model-internal review ranking before GT-derived bucket evaluation.",
+            artifact_root,
+        ),
+        _manifest_case(
+            "C5",
+            "limitation case",
+            "measured",
+            "representative_examples.limitation_case",
+            pack_examples.get("limitation_case"),
+            "Use this case to state that selected is not guaranteed to beat single-pass output.",
+            artifact_root,
+        ),
+        _manifest_case(
+            "C6",
+            "high disagreement case",
+            "pending",
+            "per-image report disagreement_summary",
+            None,
+            "Pending until per-image reports are generated and a deterministic high-disagreement selector is added.",
+            artifact_root,
+        ),
+        _manifest_case(
+            "C7",
+            "morphology degradation case",
+            "pending",
+            "per-image report morphology_delta.algorithmic_evidence",
+            None,
+            "Pending until generated artifacts include morphology_delta evidence flags for representative cases.",
+            artifact_root,
+        ),
+    ]
+
+
 def build_patent_evidence_pack(
     evaluation: dict,
     high_uncertainty_threshold: float = 0.5,
@@ -536,6 +655,8 @@ def build_patent_evidence_pack(
         return pack
 
     representative = summary.get("representative_examples", {})
+    representative_with_artifacts = _examples_with_artifacts(representative, artifact_root)
+    review_queue_summary = summary.get("review_queue_summary", {})
     pack.update({
         "num_samples": summary.get("num_samples"),
         "enhancement_evidence": {
@@ -546,10 +667,15 @@ def build_patent_evidence_pack(
             "small_defect_guard": summary.get("small_defect_guard", {}),
             "miou_recovery": summary.get("miou_recovery", {}),
             "uncertainty_review": summary.get("uncertainty_review", {}),
-            "review_queue_summary": summary.get("review_queue_summary", {}),
+            "review_queue_summary": review_queue_summary,
             "class_iou_summary": summary.get("class_iou_summary", []),
         },
-        "representative_examples": _examples_with_artifacts(representative, artifact_root),
+        "representative_examples": representative_with_artifacts,
+        "case_manifest": build_patent_case_manifest(
+            representative_with_artifacts,
+            review_queue_summary,
+            artifact_root,
+        ),
     })
     return pack
 

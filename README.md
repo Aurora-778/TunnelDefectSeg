@@ -279,6 +279,12 @@ experiments/patent_evidence_test_pack.json
 docs/experiments/patent-ablation-summary.md
 ```
 
+专利/论文/PPT 可用代表案例清单：
+
+```text
+docs/experiments/patent-case-pack.md
+```
+
 ## Web 实时展示
 
 `web_app.py` 提供本地拖拽检测服务。上传图片后，服务会运行 confidence-risk pipeline，并返回：

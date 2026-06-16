@@ -110,6 +110,8 @@ The committed pack is intentionally compact. Its artifact fields are templates u
 
 Use the pack when preparing patent figures or teacher-review materials, because it preserves deterministic case selection instead of relying on hand-picked screenshots.
 
+The current case manifest for patent/PPT figures is summarized in `docs/experiments/patent-case-pack.md`. It distinguishes measured cases from pending disagreement or morphology-degradation cases and records whether artifact paths are verified in the current checkout.
+
 ### Review Queue Evidence
 
 The compact summary also includes `review_queue_summary`. The queue is ranked from model-internal evidence only: uncertainty, single/fused self-consistency, foreground shrinkage, protected pixels, and selected-mask mode. GT-derived flags are used only after ranking to evaluate whether high-priority buckets cover real error, fixed-fusion harm, or selected recovery events.
