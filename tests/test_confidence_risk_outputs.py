@@ -66,6 +66,8 @@ def test_write_result_artifacts_creates_expected_files(tmp_path):
     assert saved["review_priority"]["priority"] in {"low", "medium", "high"}
     assert saved["review_priority"]["review_required"] is True
     assert any("foreground IoU" in reason or "shrinkage" in reason for reason in saved["review_priority"]["reasons"])
+    assert saved["review_priority"]["formula"]["score_rule"].startswith("score is the sum")
+    assert saved["review_priority"]["formula"]["components"]
     assert report["artifacts"]["overlay"] == "sample_overlay.png"
 
 
@@ -172,6 +174,7 @@ def test_process_image_accepts_segformer_like_mask_source(tmp_path):
     assert report["risk"]["uncertainty_available"] is True
     assert report["review_priority"]["priority"] in {"low", "medium", "high"}
     assert report["review_priority"]["note"].startswith("Image-based manual-review priority")
+    assert "formula" in report["review_priority"]
     assert all("unavailable" not in item for item in report["risk"]["suggestions"])
     assert report["tta_specs"] == ["segformer_identity", "segformer_hflip"]
     assert report["single_prediction_stats"]["1"] == 8

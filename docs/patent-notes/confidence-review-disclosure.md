@@ -66,6 +66,25 @@
 
 `review priority` 表示建议人工优先复核的排序信号，不表示结构安全诊断，也不替代人工验收或养护决策。
 
+当前实施例中，`review priority` 使用可解释加和规则：
+
+```text
+review_priority_score = sum(active score components)
+```
+
+其中 active score components 包括：
+
+- `image_risk_low / image_risk_medium / image_risk_high`：图像级 risk 对复核排序的贡献。
+- `risk_review_required`：risk 模块已明确建议人工复核。
+- `defect_uncertainty`：缺陷区域平均 uncertainty 超过阈值。
+- `defect_high_uncertainty_fraction`：缺陷区域中高 uncertainty 像素比例超过阈值。
+- `defect_disagreement`：多候选预测的 disagreement 超过阈值。
+- `low_self_consistency / severe_self_consistency_drop`：single/fused 前景一致性较低。
+- `fused_foreground_shrinkage`：fixed fused 相比 single 出现前景收缩。
+- `adaptive_selection_non_fused`：adaptive selection 放弃 fixed fused，选择 single 或 hybrid。
+
+结构化报告中的 `review_priority.formula.components` 记录实际触发的分数组件，`review_priority.formula.thresholds` 记录阈值，`review_priority.formula.priority_bins` 记录分桶规则。这样可以从最终分数追溯到具体算法因素。
+
 ## 4. 系统模块
 
 | 模块 | 输入 | 输出 | 对应步骤 |

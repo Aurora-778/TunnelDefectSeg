@@ -96,6 +96,18 @@ def test_review_priority_uses_uncertainty_and_self_consistency():
     assert any("uncertainty" in reason for reason in result["reasons"])
     assert any("foreground IoU" in reason for reason in result["reasons"])
     assert result["evidence"]["protected_pixels_vs_fused"] == 15
+    component_names = {component["name"] for component in result["formula"]["components"]}
+    assert {
+        "image_risk_low",
+        "defect_uncertainty",
+        "defect_high_uncertainty_fraction",
+        "defect_disagreement",
+        "severe_self_consistency_drop",
+        "fused_foreground_shrinkage",
+        "adaptive_selection_non_fused",
+    }.issubset(component_names)
+    assert result["formula"]["thresholds"]["uncertainty_review"] == 0.35
+    assert result["formula"]["priority_bins"]["high"] == "score >= 3.0"
     assert "structural safety" in result["note"]
 
 
@@ -143,3 +155,4 @@ def test_review_priority_falls_back_when_uncertainty_unavailable():
     assert result["priority"] == "none"
     assert result["review_required"] is False
     assert any("uncertainty unavailable" in reason for reason in result["reasons"])
+    assert result["formula"]["components"] == []
