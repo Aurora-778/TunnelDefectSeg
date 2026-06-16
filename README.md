@@ -229,6 +229,7 @@ python evaluate_confidence_risk.py --split val --limit 0 --search-config --outpu
 
 ```text
 docs/experiments/enhancement-evidence-summary.md
+docs/experiments/patent-ablation-summary.md
 ```
 
 不确定性到错误区域的证据：
@@ -270,6 +271,12 @@ docs/patent-notes/tunnel-defect-confidence-risk.md
 
 ```text
 experiments/patent_evidence_test_pack.json
+```
+
+专利消融矩阵当前单独整理在：
+
+```text
+docs/experiments/patent-ablation-summary.md
 ```
 
 ## Web 实时展示

@@ -111,9 +111,12 @@ def test_patent_note_includes_aggregate_evidence_and_threshold_semantics():
 
 def test_experiment_summary_documents_gt_only_overlap_boundary():
     summary = (ROOT / "docs" / "experiments" / "enhancement-evidence-summary.md").read_text(encoding="utf-8")
+    ablation = (ROOT / "docs" / "experiments" / "patent-ablation-summary.md").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "docs/experiments/enhancement-evidence-summary.md" in readme
+    assert "docs/experiments/patent-ablation-summary.md" in readme
+    assert "docs/experiments/patent-ablation-summary.md" in summary
     assert "Error coverage" in summary
     assert "HU error precision" in summary
     assert "pixel_high_uncertainty_threshold" in summary
@@ -123,6 +126,15 @@ def test_experiment_summary_documents_gt_only_overlap_boundary():
     assert "review_queue_summary" in summary
     assert "without GT" in summary
     assert "must not display true mIoU" in summary
+    for phrase in [
+        "`single` | measured",
+        "`fixed_fused` | measured",
+        "`selected` | measured",
+        "`selected_without_morphology` | pending",
+        "`full_review_priority` | measured as review evidence",
+        "pending ablations are already measured",
+    ]:
+        assert phrase in ablation
 
 
 def test_readme_documents_explicit_segformer_mask_source():

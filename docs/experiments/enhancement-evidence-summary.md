@@ -116,6 +116,8 @@ The compact summary also includes `review_queue_summary`. The queue is ranked fr
 
 On the current test summary, the queue is supported and produces high/medium/low/none buckets. Use `top_k` for demo case browsing, and use `bucket_metrics` for patent or report language about whether review priority concentrates problematic samples.
 
+For a patent-oriented ablation matrix, see `docs/experiments/patent-ablation-summary.md`. That document marks `selected_without_morphology` and related ablations as pending when no generated JSON exists, instead of filling in estimated values.
+
 ## Claim Boundaries
 
 - Do not claim the enhancement module invents SegFormer, TTA, entropy uncertainty, or skeletonization.
