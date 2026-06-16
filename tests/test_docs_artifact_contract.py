@@ -142,11 +142,13 @@ def test_experiment_summary_documents_gt_only_overlap_boundary():
         assert phrase in ablation
     for phrase in [
         "C1 | fixed fusion harmed / selected recovered | measured",
+        "C2 | model-internal stable fused / GT caution | measured",
         "C4 | top review queue sample | measured",
         "C6 | high disagreement case | pending",
         "C7 | morphology degradation case | pending",
         "artifact_paths_verified: false",
         "experiments/confidence_risk/pos_10_t1_30_*",
+        "Selected vs single mIoU: `-0.0776`",
     ]:
         assert phrase in case_pack
     manifest = patent_pack["case_manifest"]
@@ -169,11 +171,12 @@ def test_paper_outline_and_claim_matrix_keep_claims_grounded():
         "selected does not universally beat single",
         "Do not write fabricated citations",
         "Fig. 3",
+        "C2 model-internal stable fused / GT caution",
         "C6 and C7 pending",
     ]:
         assert phrase in outline
     for phrase in [
-        "C1 | The project uses SegFormer B1",
+        "C1 | The project uses SegFormer B1 as the current trained 6-class",
         "C10 | Removing morphology_delta would reduce review-priority quality. | pending",
         "C11 | Removing uncertainty/disagreement would reduce review-priority quality. | pending",
         "C12 | High-disagreement and morphology-degradation visual cases are available as generated artifacts. | pending",

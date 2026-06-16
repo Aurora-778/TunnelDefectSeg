@@ -778,7 +778,7 @@
     },
     {
       "case_id": "C2",
-      "category": "stable fused accepted",
+      "category": "model-internal stable fused / GT caution",
       "status": "measured",
       "source": "representative_examples.stable_fused",
       "image": "pos_10_t4_40.jpg",
@@ -809,7 +809,7 @@
         "report": false
       },
       "artifact_paths_verified": false,
-      "rationale": "Use this case to show the method does not always reject fixed fusion."
+      "rationale": "Use this case to show model-internal fused acceptance, while noting GT may still expose a limitation."
     },
     {
       "case_id": "C3",

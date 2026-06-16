@@ -19,7 +19,7 @@ Important boundary:
 | Case | Category | Status | Image | GT available | Artifact verified | Source |
 |---|---|---|---|---|---|---|
 | C1 | fixed fusion harmed / selected recovered | measured | `pos_10_t1_30.jpg` | true | false | `representative_examples.small_defect_guard` |
-| C2 | stable fused accepted | measured | `pos_10_t4_40.jpg` | true | false | `representative_examples.stable_fused` |
+| C2 | model-internal stable fused / GT caution | measured | `pos_10_t4_40.jpg` | true | false | `representative_examples.stable_fused` |
 | C3 | high uncertainty / error overlap | measured | `pos_5_t4_21.jpg` | true | false | `representative_examples.high_uncertainty_review` |
 | C4 | top review queue sample | measured | `neg_-5_t2_18.jpg` | true | false | `review_queue_summary.top_k[0]` |
 | C5 | limitation case | measured | `t4_25.jpg` | true | false | `representative_examples.limitation_case` |
@@ -40,14 +40,15 @@ Use this case to show fixed fusion shrinkage and selected-mask foreground protec
 - Protected pixels vs fused: `1107`
 - Artifact template stem: `experiments/confidence_risk/pos_10_t1_30_*`
 
-### C2. Stable Fused Accepted
+### C2. Model-Internal Stable Fused / GT Caution
 
-Use this case to show the method does not always reject fixed fusion.
+Use this case to show the method does not always reject fixed fusion based on model-internal stability. It should be presented with caution because the GT evaluation still shows a selected-vs-single loss, so this is a conservatism-and-boundary example rather than a positive accuracy-gain example.
 
 - Image: `pos_10_t4_40.jpg`
 - Selection mode: `fused`
 - Self foreground IoU: `0.9776`
 - Selected vs fixed fused mIoU: `0.0000`
+- Selected vs single mIoU: `-0.0776`
 - Artifact template stem: `experiments/confidence_risk/pos_10_t4_40_*`
 
 ### C3. High Uncertainty / Error Overlap
@@ -119,7 +120,7 @@ For the current checkout, `artifact_paths_verified` is false for the measured ca
 ## Recommended Figure Usage
 
 - Patent effect comparison: C1.
-- Method conservatism / not always rejecting fusion: C2.
+- Method conservatism with GT caution: C2.
 - Uncertainty review signal: C3.
 - Review queue / triage explanation: C4.
 - Limitation and claim boundary: C5.

@@ -180,7 +180,7 @@ Interpretation:
 Use `docs/experiments/patent-case-pack.md`:
 
 - C1 fixed fusion harmed / selected recovered.
-- C2 stable fused accepted.
+- C2 model-internal stable fused / GT caution.
 - C3 high uncertainty / error overlap.
 - C4 top review queue sample.
 - C5 limitation case.

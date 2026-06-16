@@ -8,7 +8,7 @@ This matrix maps each paper/patent claim to evidence sources, current status, an
 
 | Claim ID | Claim | Status | Evidence source | Limitation / boundary |
 |---|---|---|---|---|
-| C1 | The project uses SegFormer B1 as a stronger 6-class tunnel defect mask source. | supported | `docs/experiments/enhancement-evidence-summary.md`; final training log values copied into README | Backbone evidence only, not enhancement gain. |
+| C1 | The project uses SegFormer B1 as the current trained 6-class tunnel defect mask source with logged evaluation quality. | supported | `docs/experiments/enhancement-evidence-summary.md`; final training log values copied into README | Backbone evidence only, not enhancement gain or a claim that the post-inference method improved training quality. |
 | C2 | Fixed fusion can reduce or harm defect foreground on labeled samples. | supported | `experiments/enhancement_evidence_test_summary.json`; `experiments/enhancement_evidence_all_summary.json` | GT-required aggregate evidence. |
 | C3 | Adaptive selected mask recovers mIoU relative to fixed fused output. | supported | `docs/experiments/patent-ablation-summary.md`; `experiments/patent_evidence_test_pack.json` | Does not imply selected universally beats single. |
 | C4 | Adaptive selection protects foreground pixels relative to fixed fused output. | supported | `small_defect_guard` in evidence summaries; C1 in `docs/experiments/patent-case-pack.md` | Depends on current thresholds and labeled evaluation. |

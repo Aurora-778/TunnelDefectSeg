@@ -550,11 +550,11 @@ def build_patent_case_manifest(pack_examples: dict[str, dict | None], review_que
         ),
         _manifest_case(
             "C2",
-            "stable fused accepted",
+            "model-internal stable fused / GT caution",
             "measured",
             "representative_examples.stable_fused",
             pack_examples.get("stable_fused"),
-            "Use this case to show the method does not always reject fixed fusion.",
+            "Use this case to show model-internal fused acceptance, while noting GT may still expose a limitation.",
             artifact_root,
         ),
         _manifest_case(
