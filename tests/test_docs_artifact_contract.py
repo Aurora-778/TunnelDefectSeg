@@ -246,6 +246,8 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     civil = (ROOT / "docs" / "competition" / "civil-defect-evaluation.md").read_text(encoding="utf-8")
     multidomain = (ROOT / "docs" / "competition" / "multidomain-detector-notes.md").read_text(encoding="utf-8")
     report_template = (ROOT / "docs" / "competition" / "report-template.md").read_text(encoding="utf-8")
+    report_outline = (ROOT / "docs" / "competition" / "technical-report-outline.md").read_text(encoding="utf-8")
+    demo_script = (ROOT / "docs" / "competition" / "demo-script.md").read_text(encoding="utf-8")
     summary = (ROOT / "docs" / "competition" / "experiment-summary.md").read_text(encoding="utf-8")
     case_pack = (ROOT / "docs" / "competition" / "demo-case-pack.md").read_text(encoding="utf-8")
     local_setup = (ROOT / "docs" / "local-setup-windows.md").read_text(encoding="utf-8")
@@ -254,6 +256,8 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     assert "docs/competition/cs-202613-requirements-matrix.md" in readme
     assert "docs/competition/civil-defect-evaluation.md" in readme
     assert "docs/competition/multidomain-detector-notes.md" in readme
+    assert "docs/competition/technical-report-outline.md" in readme
+    assert "docs/competition/demo-script.md" in readme
     assert "docs/competition/experiment-summary.md" in readme
     assert "docs/competition/demo-case-pack.md" in readme
     assert "docs/competition/report-template.md" in readme
@@ -281,6 +285,10 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     assert "multidomainPanel" in html
     assert "renderMultidomain" in html
     assert "multidomain_results" in html
+    assert "Technical Report Outline" in report_outline
+    assert "Multidomain Extension" in report_outline
+    assert "Demo Script" in demo_script
+    assert "track / equipment" in demo_script
     assert "Internal labeled dataset" in summary
     assert "Official competition samples" in summary
     assert "Demo cases" in summary

@@ -28,7 +28,7 @@
         <figure><img src="../../../web_demo/assets/segformer_t1_1_skeleton.png" alt="skeleton"></figure>
       </div>
     </div>
-    <div class="deck-footer"><span class="mono">图片输入 -> 病害 mask -> 骨架/风险/报告 -> Web 展示</span><span class="slide-number" data-current="1" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">图片输入 -> 病害 mask -> 骨架/风险/报告 -> Web 展示</span><span class="slide-number" data-current="1" data-total="13"></span></div>
     <div class="notes">开场直接说：这个项目不是只训练一个模型，而是做了一个能演示、能解释、能给出复核依据的隧道病害检测系统。</div>
   </section>
 
@@ -40,7 +40,7 @@
       <div class="card card-accent"><h4>只给 mask 不够</h4><p class="dim">还要说明为什么这么判断：面积多大、骨架多长、是否建议人工复核。</p></div>
     </div>
     <div class="callout mt-l">所以这个项目做两件事：先让模型画得更准，再让检测结果更容易被人检查和理解。</div>
-    <div class="deck-footer"><span class="mono">目标：更准的 mask + 更清楚的复核依据</span><span class="slide-number" data-current="2" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">目标：更准的 mask + 更清楚的复核依据</span><span class="slide-number" data-current="2" data-total="13"></span></div>
     <div class="notes">这一页用来解释为什么不是单纯换模型。换模型解决“画得准”，增强模块解决“看得懂、敢不敢用”。</div>
   </section>
 
@@ -65,7 +65,7 @@
         <p class="dim mt-m">每张标注 mask 都转成同一套 6 类编号，这样训练、评估、网页展示才不会混乱。</p>
       </div>
     </div>
-    <div class="deck-footer"><span class="mono">数据统一后，后面的 mIoU、类别 IoU、Web 展示才有意义</span><span class="slide-number" data-current="3" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">数据统一后，后面的 mIoU、类别 IoU、Web 展示才有意义</span><span class="slide-number" data-current="3" data-total="13"></span></div>
     <div class="notes">强调数据整理的重要性：很多项目不是模型问题，而是标签标准不统一。这里已经统一成 6 类。</div>
   </section>
 
@@ -87,7 +87,7 @@
       <div class="card"><h4>评估时</h4><p class="dim">有标准答案时算 mIoU，说明模型到底准不准。</p></div>
       <div class="card"><h4>演示时</h4><p class="dim">没有标准答案时，不报假分数，只展示可复核证据。</p></div>
     </div>
-    <div class="deck-footer"><span class="mono">核心思路：模型负责画区域，增强模块负责判断、解释和安排复核优先级</span><span class="slide-number" data-current="4" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">核心思路：模型负责画区域，增强模块负责判断、解释和安排复核优先级</span><span class="slide-number" data-current="4" data-total="13"></span></div>
     <div class="notes">这一页让老师明白系统不是一个脚本，而是一条完整流程：输入、模型、增强、证据、Web 报告。</div>
   </section>
 
@@ -114,7 +114,7 @@
       </div>
     </div>
     <div class="callout mt-m">这一步解决“画得准”的问题。管线类、竖向类、横向类效果已经比较好；块状类还需要继续优化。</div>
-    <div class="deck-footer"><span class="mono">SegFormer 是更强的模型底座，不是本文最核心的创新点</span><span class="slide-number" data-current="5" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">SegFormer 是更强的模型底座，不是本文最核心的创新点</span><span class="slide-number" data-current="5" data-total="13"></span></div>
     <div class="notes">这一页要讲清楚：SegFormer 的作用是提高基础分割质量。创新点不要放在“我用了 SegFormer”，而是后面那层会判断、会解释的增强模块。</div>
   </section>
 
@@ -139,7 +139,7 @@
         <div class="card card-accent"><h4>hybrid</h4><p class="dim">如果两者各有优点，就把可信的小缺陷补回来。</p></div>
       </div>
     </div>
-    <div class="deck-footer"><span class="mono">这层模块像一个“检查员”：不只看结果，还判断谁该优先复核</span><span class="slide-number" data-current="6" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">这层模块像一个“检查员”：不只看结果，还判断谁该优先复核</span><span class="slide-number" data-current="6" data-total="13"></span></div>
     <div class="notes">这里用“检查员”来比喻增强模块。模型负责画，增强模块负责挑选、量化、解释，并给出人工复核优先级。</div>
   </section>
 
@@ -152,7 +152,7 @@
       <div class="innovation"><span>创新点 4</span><h4>不乱报精度</h4><p>没有人工标注时不显示真实 mIoU，避免把模型自测结果当成准确率。</p></div>
     </div>
     <div class="callout mt-m">一句话概括：不是发明一个新模型，而是发明一套让病害分割结果更可靠、更好解释、更适合人工复核的流程。</div>
-    <div class="deck-footer"><span class="mono">专利方向：置信校准 + 自适应输出选择 + 复核优先级生成</span><span class="slide-number" data-current="7" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">专利方向：置信校准 + 自适应输出选择 + 复核优先级生成</span><span class="slide-number" data-current="7" data-total="13"></span></div>
     <div class="notes">这一页最关键。让老师一下听懂：创新不是“用了 SegFormer”，而是“模型之后加了一层判断和解释机制”。</div>
   </section>
 
@@ -175,7 +175,7 @@
       </div>
     </div>
     <p class="dim mt-m">这里的结论不是“永远超过单次预测”，而是：当固定融合把小病害抹掉时，我们的方法能减少这种损失。</p>
-    <div class="deck-footer"><span class="mono">单次预测 = 原始结果；固定融合 = 直接平均；自适应选择 = 判断后再选</span><span class="slide-number" data-current="8" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">单次预测 = 原始结果；固定融合 = 直接平均；自适应选择 = 判断后再选</span><span class="slide-number" data-current="8" data-total="13"></span></div>
     <div class="notes">这页解释清楚三个词：单次预测、固定融合、自适应选择。不要只念英文术语，要说固定融合会更保守，可能抹掉小病害。</div>
   </section>
 
@@ -198,7 +198,7 @@
       </div>
     </div>
     <div class="callout mt-l">通俗理解：系统不只告诉你“这里有病害”，还告诉你“这块结果更值得人工看一眼”。</div>
-    <div class="deck-footer"><span class="mono">价值：保护小目标 + 给出复核优先级</span><span class="slide-number" data-current="9" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">价值：保护小目标 + 给出复核优先级</span><span class="slide-number" data-current="9" data-total="13"></span></div>
     <div class="notes">这页用来讲增强模块不是只为了好看，而是有数据证据：能保护像素，也能让不确定区域更接近错误区域。</div>
   </section>
 
@@ -214,8 +214,39 @@
       <div class="card"><h4>不乱显示准确率</h4><p class="dim">用户自己上传的图片没有人工标注，所以真实 mIoU 显示 N/A。</p></div>
       <div class="card"><h4>结果能解释</h4><p class="dim">页面会显示 uncertainty、分歧、骨架长度、方向、risk level 和复核建议。</p></div>
     </div>
-    <div class="deck-footer"><span class="mono">双击 run_web_app.bat 后，打开 http://127.0.0.1:8000</span><span class="slide-number" data-current="10" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">双击 run_web_app.bat 后，打开 http://127.0.0.1:8000</span><span class="slide-number" data-current="10" data-total="13"></span></div>
     <div class="notes">展示时可以直接现场拖图。强调 Web 是项目成果的一部分，不只是截图。</div>
+  </section>
+
+  <section class="slide" data-title="Multidomain">
+    <h2 class="h2">比赛扩展：把土建主线继续扩到轨道和设备。</h2>
+    <div class="grid g3 mt-l">
+      <div class="card card-accent">
+        <h4>Civil / 土建</h4>
+        <p class="dim">当前主线已经跑通。SegFormer B1、adaptive selection、review priority、report export 都已经接好。</p>
+      </div>
+      <div class="card">
+        <h4>Track / 轨道</h4>
+        <p class="dim">先用 demo adapter 接入扣件缺失等示例结果，结果统一到 multidomain schema 里，便于后续替换真实模型。</p>
+      </div>
+      <div class="card">
+        <h4>Equipment / 设备</h4>
+        <p class="dim">先用设备支架松脱等示例结果演示，多领域结果和 civil 共用一套报告和 Web 展示合同。</p>
+      </div>
+    </div>
+    <div class="grid g2 mt-l">
+      <div class="card">
+        <h4>空间定位</h4>
+        <p class="dim">当前按 planned / prototype 讲，不夸大成外业级定位。没有真实传感器数据时只展示仿真或标定边界。</p>
+      </div>
+      <div class="card">
+        <h4>为什么这样讲</h4>
+        <p class="dim">老师一眼就能看懂：现在已经完成的是土建主线，比赛扩展是多领域接入和统一报告，不是另起一个项目。</p>
+      </div>
+    </div>
+    <div class="callout mt-m">一句话：主线是土建病害可信增强，扩展线是把同一套报告合同继续接到轨道和设备巡检上。</div>
+    <div class="deck-footer"><span class="mono">civil 已完成；track / equipment 为 demo adapter；spatial mapping 作为 planned / prototype</span><span class="slide-number" data-current="11" data-total="13"></span></div>
+    <div class="notes">这一页要让老师明白比赛方向：不是把系统撕成几个模型，而是把同一套结果合同扩展到多领域巡检。</div>
   </section>
 
   <section class="slide" data-title="Patent">
@@ -240,7 +271,7 @@
         </ul>
       </div>
     </div>
-    <div class="deck-footer"><span class="mono">核心创新：病害分割后的可靠性判断和复核证据生成</span><span class="slide-number" data-current="11" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">核心创新：病害分割后的可靠性判断和复核证据生成</span><span class="slide-number" data-current="12" data-total="13"></span></div>
     <div class="notes">这页要让老师放心：专利方向不是硬说已有模型是创新，而是把创新落在流程和应用场景上。</div>
   </section>
 
@@ -267,7 +298,7 @@
       </div>
     </div>
     <div class="summary-line mt-l">一句话总结：这个项目把“自动画病害”升级成了“自动画病害，并给出可复核依据”。</div>
-    <div class="deck-footer"><span class="mono">阶段成果：模型 + 增强模块 + Web 展示 + 专利方向</span><span class="slide-number" data-current="12" data-total="12"></span></div>
+    <div class="deck-footer"><span class="mono">阶段成果：模型 + 增强模块 + Web 展示 + 多领域扩展 + 专利方向</span><span class="slide-number" data-current="13" data-total="13"></span></div>
     <div class="notes">最后用一句话收住：不仅能画，还能解释为什么这样画、哪里值得复核。</div>
 </section>
 

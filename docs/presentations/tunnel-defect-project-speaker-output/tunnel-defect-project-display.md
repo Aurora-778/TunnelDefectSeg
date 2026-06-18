@@ -134,7 +134,17 @@ Web demo 的作用是把训练结果和增强模块变成一个能现场演示�
 
 Transition: 有了模型、增强模块和 Web 展示，就可以进一步整理专利表达。
 
-### [Slide 11 - 专利方向]
+### [Slide 11 - 多领域扩展]
+
+这一页要把比赛方向说清楚：主线已经是 civil 病害可信增强，扩展线则是把同一套结果合同继续接到 track 和 equipment 上。
+
+左边先说 civil 已经完成，SegFormer B1、adaptive selection、review priority 和 report export 都已经接上。中间和右边分别说 track / equipment 先用 demo adapter 接入示例结果，统一到 multidomain schema 里，后续可以替换成真实训练模型。
+
+这一页还要明确 spatial mapping 的边界：当前只能按 planned / prototype 讲，不把仿真定位说成外业级精确定位。
+
+Transition: 接下来再回到专利表达，把“模型之后的判断流程”收束一下。
+
+### [Slide 12 - 专利方向]
 
 专利表达的重点应该放在“检测后的判断流程”，而不是把 SegFormer 当成创新。
 
@@ -144,11 +154,11 @@ Transition: 有了模型、增强模块和 Web 展示，就可以进一步整理
 
 Transition: 最后一页总结目前完成情况和下一步工作。
 
-### [Slide 12 - 总结和下一步]
+### [Slide 13 - 总结和下一步]
 
 目前项目已经形成一个能训练、能评估、能展示、能解释的完整系统。
 
-已经完成的部分包括：数据集整理成 6 类标准格式；SegFormer B1 训练到 mIoU 84.33%；实现自适应 mask selection、基于 SegFormer 概率 TTA 的 uncertainty / disagreement 复核提示和形态学证据；做出了支持拖拽图片实时检测的 Web 展示。现在又补充了 U7 证据闭环：patent evidence pack、morphology delta、review queue 和软著说明材料，让结果更适合给老师检查、整理专利交底和准备软著。
+已经完成的部分包括：数据集整理成 6 类标准格式；SegFormer B1 训练到 mIoU 84.33%；实现自适应 mask selection、基于 SegFormer 概率 TTA 的 uncertainty / disagreement 复核提示和形态学证据；做出了支持拖拽图片实时检测的 Web 展示。现在又补充了 U7 证据闭环：patent evidence pack、morphology delta、review queue 和软著说明材料；同时把 civil / track / equipment 的多领域结果合同接上了 demo adapter，让结果更适合给老师检查、整理专利交底和准备软著。
 
 下一步可以从三方面继续推进。第一，优化 blocky 类，因为它目前 IoU 最低。第二，继续积累跨场景典型案例，让 review queue 里的高优先级样本覆盖更多真实巡检情况。第三，继续探索 temperature scaling 或 conformal prediction 这类更强的校准方法，把当前的复核优先级进一步做成更严谨的可信输出。
 
@@ -246,14 +256,18 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 
 ### 20. 下一步最应该做什么？
 
-优先做两件事。第一，针对 blocky 类继续优化训练和数据增强，因为它是当前短板。第二，围绕 `experiments/patent_evidence_test_pack.json` 继续整理 3 到 5 个典型案例，分别展示 fixed fusion 失败、selected 保留小病害、uncertainty 提示复核、review queue 排序和 morphology delta 解释，这些案例可以直接用于论文、答辩和专利附图。
+ 优先做两件事。第一，针对 blocky 类继续优化训练和数据增强，因为它是当前短板。第二，围绕 `experiments/patent_evidence_test_pack.json` 继续整理 3 到 5 个典型案例，分别展示 fixed fusion 失败、selected 保留小病害、uncertainty 提示复核、review queue 排序和 morphology delta 解释，这些案例可以直接用于论文、答辩和专利附图。
+
+### 21. 多领域扩展现在到什么程度？
+
+civil 主线已经完成，能跑 SegFormer、enhancement、report export 和 Web 展示。track 和 equipment 目前先用 demo adapter 接入，统一到同一份 multidomain schema 里，目的是先让比赛展示能看懂、能扩展，再逐步替换成真实训练模型。spatial mapping 目前还应该按 planned / prototype 讲，不能夸大成外业级定位。
 
 ## Key Parameters And Methods
 
 | Term | Type | Slide(s) | Definition |
 |---|---|---:|---|
 | GT | 数据标注 | 3, 4, 10 | Ground Truth，人工标注的标准 mask；训练和真实 mIoU 评估都需要它。 |
-| mask | 输出形式 | 1-12 | 每个像素的类别预测图，用来表示病害区域。 |
+| mask | 输出形式 | 1-13 | 每个像素的类别预测图，用来表示病害区域。 |
 | SegFormer B1 | 模型 | 5 | 基础语义分割模型，用来提高病害 mask 的质量。 |
 | mIoU | 指标 | 5, 8, 10 | mean Intersection over Union，各类别 IoU 的平均值，需要预测 mask 和 GT 对比。 |
 | IoU | 指标 | 5 | 预测区域和 GT 区域交集除以并集。 |
@@ -263,7 +277,7 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 | selected mask | 增强输出 | 6-10 | 自适应选择后的最终 mask。 |
 | uncertainty | 复核信号 | 9, 10 | 由 SegFormer 概率 TTA 计算出的模型不确定区域，用于提示人工复核。 |
 | skeleton | 形态证据 | 1, 10 | 从 mask 提取的骨架线，用来观察方向、长度和连通结构。 |
-| blocky | 类别 | 3, 5, 12 | 块状病害类别，当前 IoU 最低，是后续优化重点。 |
+| blocky | 类别 | 3, 5, 13 | 块状病害类别，当前 IoU 最低，是后续优化重点。 |
 
 ## Timing Table
 
@@ -279,11 +293,12 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 | 8 | 实验结果 | 1:10 |
 | 9 | 具体价值 | 1:00 |
 | 10 | Web 展示 | 1:00 |
-| 11 | 专利方向 | 1:00 |
-| 12 | 总结和下一步 | 0:50 |
+| 11 | 多领域扩展 | 0:55 |
+| 12 | 专利方向 | 1:00 |
+| 13 | 总结和下一步 | 0:50 |
 
-总时长约 11-12 分钟。时间紧时，可以压缩第 3、4 页，把重点留给第 5、7、8、10、11 页。
+总时长约 12-13 分钟。时间紧时，可以压缩第 3、4 页，把重点留给第 5、7、8、10、11、12 页。
 
 ## One-Minute Backup Summary
 
-这个项目做的是隧道病害语义分割和可信增强展示。基础模型部分，我把系统切换到 SegFormer B1，在 6 类数据集上训练到 160000 iter，最终 mIoU 达到 84.33%。增强部分，我没有固定采用融合结果，而是用同一个 SegFormer checkpoint 生成 single 和 probability TTA fused 结果，比较候选 mask 的稳定性；当 fixed fusion 可能抹掉小病害时，selected 策略保留更可靠的输出。系统还会从模型概率里生成 uncertainty 和 disagreement，并从 mask 中提取骨架、面积、方向和连通域。U6 又增加了 uncertainty calibration evidence 和 review priority：有 GT 时看 uncertainty 是否真的对应错误，没有 GT 时只给人工复核优先级，不乱报真实精度。最后做成 Web demo，支持拖拽图片实时检测。创新点主要是病害分割后的自适应输出选择、置信校准和复核优先级生成流程。
+这个项目做的是隧道病害语义分割和可信增强展示。基础模型部分，我把系统切换到 SegFormer B1，在 6 类数据集上训练到 160000 iter，最终 mIoU 达到 84.33%。增强部分，我没有固定采用融合结果，而是用同一个 SegFormer checkpoint 生成 single 和 probability TTA fused 结果，比较候选 mask 的稳定性；当 fixed fusion 可能抹掉小病害时，selected 策略保留更可靠的输出。系统还会从模型概率里生成 uncertainty 和 disagreement，并从 mask 中提取骨架、面积、方向和连通域。U6 又增加了 uncertainty calibration evidence 和 review priority：有 GT 时看 uncertainty 是否真的对应错误，没有 GT 时只给人工复核优先级，不乱报真实精度。后面又补上了多领域扩展，把 civil 主线和 track / equipment 的 demo adapter 接到同一份结果合同里，方便比赛展示、专利表达和后续软著整理。最后做成 Web demo，支持拖拽图片实时检测。创新点主要是病害分割后的自适应输出选择、置信校准和复核优先级生成流程。

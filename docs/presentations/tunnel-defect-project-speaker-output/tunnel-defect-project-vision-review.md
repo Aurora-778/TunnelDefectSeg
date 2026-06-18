@@ -20,14 +20,16 @@ Deck reviewed: `C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-p
 | 8 | mIoU 对比表和提升条形图 | 覆盖 selected 相比 fixed fused 的提升，以及不声称总是超过 single。 |
 | 9 | 小病害保护和 uncertainty 两组证据 | 覆盖 1,230,616 pixels、78.27% HU error precision。 |
 | 10 | Web demo overlay、selected mask、skeleton 截图 | 覆盖拖拽检测、多视图、无 GT 时不报真实 mIoU。 |
-| 11 | 专利方向卡片 | 覆盖可写权利要求和不可主张项。 |
-| 12 | 完成情况和下一步 | 覆盖当前成果、blocky 优化和专利案例整理。 |
+| 11 | Civil / Track / Equipment 三领域卡片 | 覆盖 multidomain schema、demo adapter 和 spatial mapping 边界。 |
+| 12 | 专利方向卡片 | 覆盖可写权利要求和不可主张项。 |
+| 13 | 完成情况和下一步 | 覆盖当前成果、blocky 优化和专利案例整理。 |
 
 ## Visual Consistency Notes
 
 - Web 和 PPT 的 skeleton 应尽量使用同一套 selected mask 生成逻辑，否则老师会问为什么骨架形状不同。讲稿中已把 skeleton 定义为“从最终选择的 mask 提取的形态证据”。
 - 第 8 页的增强模块数据和第 5 页 SegFormer mIoU 属于两层实验，不要混着讲。第 5 页讲模型能力，第 8 页讲 fixed fusion 与 selected 的相对对比。
 - 第 10 页自选图片没有 GT 时，不能显示真实 mIoU。讲稿已准备标准解释。
+- 第 11 页是多领域扩展页，重点是 civil 主线已经完成，track / equipment 是 demo adapter，spatial mapping 仍是 planned / prototype 边界。
 
 ## Uncertain Or Limited Elements
 
