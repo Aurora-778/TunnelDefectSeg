@@ -555,6 +555,31 @@
 
     .panel-body { padding: 16px; color: #17212b; }
 
+    .report-export {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 10px 16px 0;
+      padding: 10px 12px;
+      border: 1px solid rgba(23,33,43,.16);
+      background: #f8fbfd;
+      color: #17212b;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .report-export a {
+      flex: none;
+      color: #0d6b6b;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .report-export a:hover {
+      text-decoration: underline;
+    }
+
     .case-id {
       font-family: "Cascadia Mono", "Consolas", monospace;
       font-size: 35px;
@@ -1216,6 +1241,10 @@
 
       <section class="panel">
         <div class="panel-title">Structured report <span>JSON excerpt</span></div>
+        <div class="report-export" id="reportExport" hidden>
+          <span id="reportExportHint">结构化报告会在本地输出目录生成。</span>
+          <a id="reportExportLink" href="#" target="_blank" rel="noopener">下载结构化报告</a>
+        </div>
         <pre id="jsonBlock"></pre>
       </section>
     </section>
@@ -2175,6 +2204,20 @@
       renderAdvantages(report);
       renderMorphology(report);
       renderViews(views);
+      const exportBox = document.querySelector("#reportExport");
+      const exportHint = document.querySelector("#reportExportHint");
+      const exportLink = document.querySelector("#reportExportLink");
+      const structuredUrl = report.inspection_report_url || report.report_url || "";
+      if (structuredUrl) {
+        exportBox.hidden = false;
+        exportLink.href = structuredUrl;
+        exportLink.textContent = report.inspection_report_url ? "下载结构化报告" : "下载原始报告";
+        exportHint.textContent = report.inspection_report_url
+          ? "结构化报告已生成，包含摘要、证据和导出友好的字段。"
+          : "当前结果只包含原始报告，可直接下载 JSON。";
+      } else {
+        exportBox.hidden = true;
+      }
       document.querySelector("#jsonBlock").textContent = JSON.stringify(report, null, 2);
     }
 

@@ -2,6 +2,9 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+from PIL import Image
+
 import web_app
 
 
@@ -128,3 +131,67 @@ def test_windows_web_launcher_defaults_to_segformer_runtime():
     assert "--model-source $ModelSource" in launcher
     assert "--segformer-config $SegformerConfig" in launcher
     assert "--segformer-checkpoint $SegformerCheckpoint" in launcher
+
+
+def test_detect_image_exports_structured_report(tmp_path, monkeypatch):
+    image = tmp_path / "demo.png"
+    Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8)).save(image)
+    image_bytes = image.read_bytes()
+
+    monkeypatch.setattr(web_app, "OUTPUT_ROOT", tmp_path)
+    monkeypatch.setattr(web_app, "_load_model_once", lambda: ("model", "config"))
+
+    def fake_process_image(model, config, image_path, output_dir, tta_mode="light"):
+        artifacts = {
+            "single_mask": "demo_single_mask.png",
+            "fused_mask": "demo_fused_mask.png",
+            "selected_mask": "demo_selected_mask.png",
+            "overlay": "demo_overlay.png",
+            "selected_overlay": "demo_selected_overlay.png",
+            "uncertainty_heatmap": "demo_uncertainty_heatmap.png",
+            "disagreement_heatmap": "demo_disagreement_heatmap.png",
+            "skeleton": "demo_skeleton.png",
+            "report": "demo_report.json",
+        }
+        return {
+            "stem": image_path.stem,
+            "mask_source": {
+                "name": "segformer_b1",
+                "type": "mmsegmentation",
+                "probability_tta": True,
+            },
+            "tta_specs": ["identity", "hflip"],
+            "single_prediction_stats": {"0": 56, "1": 8},
+            "fused_prediction_stats": {"0": 56, "1": 8},
+            "selected_prediction_stats": {"0": 56, "1": 8},
+            "self_consistency": {"foreground_iou": 1.0},
+            "adaptive_selection": {"mode": "fused", "reasons": ["stable"], "consistency": {"foreground_iou": 1.0}},
+            "uncertainty_summary": {"available": True, "mean": 0.1, "defect_mean": 0.2},
+            "disagreement_summary": {"available": True, "mean": 0.05, "defect_mean": 0.1},
+            "morphology": {"defect_area_pixels": 8},
+            "morphology_delta": {"fused_to_selected": {"explanations": ["selected preserves morphology close to fused"]}},
+            "risk": {"risk_level": "low", "score": 1.0, "review_required": False, "suggestions": ["routine review"]},
+            "review_priority": {"priority": "low", "score": 0.5, "review_required": False, "reasons": ["routine"], "note": "manual review only"},
+            "views": web_app._view_payload(
+                {
+                    "artifacts": artifacts,
+                    "uncertainty_summary": {"available": True},
+                    "disagreement_summary": {"available": True},
+                },
+                "job",
+                image_path.name,
+            ),
+            "artifacts": artifacts,
+        }
+
+    monkeypatch.setattr(web_app, "process_image", fake_process_image)
+
+    report = web_app._detect_image("demo.png", image_bytes, "light")
+
+    assert report["inspection_report_url"].endswith("demo_inspection_report.json")
+    assert report["inspection_report"]["schema_version"] == "inspection-report.v1"
+    exported = list(tmp_path.rglob("demo_inspection_report.json"))
+    assert len(exported) == 1
+    saved = json.loads(exported[0].read_text(encoding="utf-8"))
+    assert saved["source_image"]["name"] == "demo.png"
+    assert saved["artifacts"]["inspection_report"] == "demo_inspection_report.json"

@@ -24,6 +24,7 @@ from run_confidence_risk import (
     load_model,
     process_image,
 )
+from inspection_report import build_inspection_report
 
 
 ROOT = Path(__file__).resolve().parent
@@ -170,6 +171,14 @@ def _detect_image(filename: str, data: bytes, tta_mode: str) -> dict:
     report["original_artifact"] = safe_name
     report["views"] = _view_payload(report, job_id, safe_name)
     report["report_url"] = _artifact_url(job_id, report["artifacts"]["report"])
+    inspection_report = build_inspection_report(
+        report,
+        job_id=job_id,
+        original_name=safe_name,
+        output_dir=job_dir,
+    )
+    report["inspection_report"] = inspection_report
+    report["inspection_report_url"] = inspection_report["inspection_report_url"]
     return report
 
 

@@ -8,6 +8,7 @@
 - 使用 SegFormer B1 提升 mask 质量
 - 后处理增强模块：TTA 融合、自适应选择、不确定性估计、骨架提取
 - Web 端支持拖拽图片实时检测与多视图展示
+- 结构化巡检报告导出（`inspection_report.py` / `docs/competition/report-template.md`）
 - 输出复核优先级（review priority）和专利证据包
 
 ## 类别定义
@@ -175,8 +176,21 @@ python web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
 - mmseg 配置中的路径使用正斜杠（Windows 兼容）
 - 单卡训练使用 `BN`，不使用 `SyncBN`
 - 默认使用 `--model-source segformer`
+- 兼容旧基线：`legacy_resnet50_fcn`
 - 自选上传图片无 GT mask，true mIoU 显示为 N/A
 - `.codegraph/` 为本地代码索引，不应提交
+
+## 文档索引
+
+- `docs/experiments/enhancement-evidence-summary.md`
+- `docs/experiments/patent-ablation-summary.md`
+- `docs/experiments/patent-case-pack.md`
+- `docs/paper/confidence-review-outline.md`
+- `docs/paper/claim-to-evidence-matrix.md`
+- `docs/software-copyright/tunnel-defect-review-system.md`
+- `docs/software-copyright/source-material-checklist.md`
+- `not ground-truth mIoU` 只表示自一致指标，不是人工标注准确率
+- `mask_source` 会显式记录当前使用的是 `segformer_b1` 还是 `legacy_resnet50_fcn`
 
 ## 目录结构
 
