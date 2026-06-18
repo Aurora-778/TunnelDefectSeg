@@ -16,7 +16,7 @@
 | Internal labeled dataset | Measured | Current backbone and enhancement metrics all come from the internal train/val/test splits. |
 | Demo cases | Measured + pending | C1-C5 are measured evidence cases; C6-C7 are pending future additions. |
 | Official competition samples | Planned | Not yet integrated into the current repo evidence pack. |
-| Simulation / calibration | Partially available | Spatial mapping supports simulation or calibration mode; use it only with explicit source labels. |
+| Simulation / calibration | Planned / prototype evidence only | The current main evidence pack does not include spatial-mapping artifacts yet; any future simulation or calibration output must carry explicit source labels. |
 
 ## Backbone Result
 
@@ -65,11 +65,11 @@ Interpretation:
 1. The backbone provides a strong six-class SegFormer mask source.
 2. The enhancement layer detects when fixed fusion harms small or unstable defects.
 3. The review queue ranks images by model-internal evidence and is suitable for human triage.
-4. Spatial mapping can be presented as calibrated or simulation-only when real sensor data is absent.
+4. Spatial mapping should be presented as planned or prototype-only until concrete calibrated or simulation artifacts are included.
 
 ## Suggested Slide Narrative
 
 - First show backbone accuracy and the defect class bottleneck.
 - Then show selected-vs-fused recovery on test/all labeled data.
 - Then show review queue and uncertainty overlap as the human-in-the-loop innovation.
-- Finally show spatial mapping and report export as the system-level engineering closure.
+- Finally show report export as the current system-level engineering closure, and present spatial mapping as the next competition-oriented extension.
