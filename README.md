@@ -174,6 +174,7 @@ python web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
 - CUDA runtime `11.3`
 - `mmcv-full == 1.4.0`
 - `mmsegmentation == 0.11.0`
+- Windows 本地训练/推理细节见 `docs/local-setup-windows.md`
 
 ## 注意事项
 

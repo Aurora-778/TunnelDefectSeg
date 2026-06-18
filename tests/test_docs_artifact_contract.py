@@ -245,16 +245,25 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     matrix = (ROOT / "docs" / "competition" / "cs-202613-requirements-matrix.md").read_text(encoding="utf-8")
     summary = (ROOT / "docs" / "competition" / "experiment-summary.md").read_text(encoding="utf-8")
     case_pack = (ROOT / "docs" / "competition" / "demo-case-pack.md").read_text(encoding="utf-8")
+    local_setup = (ROOT / "docs" / "local-setup-windows.md").read_text(encoding="utf-8")
 
     assert "docs/competition/cs-202613-requirements-matrix.md" in readme
     assert "docs/competition/experiment-summary.md" in readme
     assert "docs/competition/demo-case-pack.md" in readme
     assert "docs/competition/report-template.md" in readme
+    assert "docs/local-setup-windows.md" in readme
+    assert "C:/Users/26822" not in readme
+    assert "D:/users/anaconda3" not in readme
+    assert "third_party/SegFormer-master" not in readme
     assert "CS-202613 Requirements Matrix" in matrix
     for req_id in [f"R{index}" for index in range(1, 16)]:
         assert req_id in matrix
     for status in ["supported", "planned", "simulation-only", "out-of-scope"]:
         assert status in matrix
+    assert "Windows Local Setup" in local_setup
+    assert "segformer-phase2" in local_setup
+    assert "run_train_segformer_cuda.bat" in local_setup
+    assert "run_web_app.bat" in local_setup
     assert "Internal labeled dataset" in summary
     assert "Official competition samples" in summary
     assert "Demo cases" in summary
