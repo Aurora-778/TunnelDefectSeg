@@ -11,6 +11,7 @@
 - `assessment`: `risk`、`review_priority`、`adaptive_selection` 的可读汇总。
 - `evidence`: `self_consistency`、`uncertainty_summary`、`disagreement_summary`、`morphology`、`morphology_delta`。
 - `views`: 原图、mask、overlay、uncertainty、disagreement、skeleton 等可视化链接。
+- `multidomain_results`: 统一的 civil / track / equipment 结果列表，便于比赛展示和后续扩展。
 - `artifacts`: 导出文件名清单，只保留相对文件名。
 - `summary_cards`: 适合网页和答辩展示的高层摘要卡片。
 

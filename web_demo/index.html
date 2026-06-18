@@ -1247,6 +1247,20 @@
         </div>
         <pre id="jsonBlock"></pre>
       </section>
+
+      <section class="panel" id="multidomainPanel" style="margin-top:34px;" hidden>
+        <div class="panel-title">Multidomain summary <span>civil / track / equipment</span></div>
+        <div class="panel-body">
+          <div class="metric-grid" id="multidomainCards"></div>
+          <div class="advantage-note" id="multidomainNote" style="margin-top:12px;"></div>
+          <table style="margin-top:12px;">
+            <thead>
+              <tr><th>领域</th><th>病害类型</th><th>来源</th><th>状态</th><th>位置</th><th>置信度</th><th>复核优先级</th></tr>
+            </thead>
+            <tbody id="multidomainRows"></tbody>
+          </table>
+        </div>
+      </section>
     </section>
 
     <section class="panel interest-bento" id="evidence" style="margin-top:34px;">
@@ -2195,6 +2209,55 @@
       document.querySelector("#morphologyDeltaGrid").innerHTML = cards.join("");
     }
 
+    function renderMultidomain(report) {
+      const panel = document.querySelector("#multidomainPanel");
+      const cards = document.querySelector("#multidomainCards");
+      const note = document.querySelector("#multidomainNote");
+      const rows = document.querySelector("#multidomainRows");
+      const payload = report.multidomain_results;
+
+      if (!payload || !Array.isArray(payload.results) || payload.results.length === 0) {
+        panel.hidden = true;
+        return;
+      }
+
+      const order = ["civil", "track", "equipment"];
+      const labels = {
+        civil: "Civil / 土建",
+        track: "Track / 轨道",
+        equipment: "Equipment / 设备",
+      };
+      const counts = Object.fromEntries(order.map((domain) => [domain, 0]));
+      const types = new Map();
+
+      payload.results.forEach((item) => {
+        const domain = item.domain || "unknown";
+        counts[domain] = (counts[domain] || 0) + 1;
+        if (!types.has(domain)) types.set(domain, new Set());
+        types.get(domain).add(item.defect_type || "-");
+      });
+
+      panel.hidden = false;
+      cards.innerHTML = order.map((domain) => {
+        const typeList = [...(types.get(domain) || [])].slice(0, 3).join(" / ") || "暂无";
+        const suffix = domain === "civil" ? "来自当前 SegFormer 输出。" : "来自 demo adapter，等待真实样本替换。";
+        return `<div class="metric"><span>${labels[domain]}</span><b>${counts[domain] || 0}</b><small>${escapeHtml(typeList)}，${escapeHtml(suffix)}</small></div>`;
+      }).join("");
+
+      rows.innerHTML = payload.results.map((item) => {
+        const location = item.location?.status === "available"
+          ? `${item.location?.source || "available"}${item.location?.accuracy_level ? ` · ${item.location.accuracy_level}` : ""}`
+          : "unavailable";
+        const confidence = item.confidence?.available ? fmt(item.confidence?.score, 3) : "N/A";
+        const priority = item.review_priority?.priority || "-";
+        return `<tr><td>${escapeHtml(item.domain || "-")}</td><td>${escapeHtml(item.defect_type || "-")}</td><td>${escapeHtml(item.source || "-")}</td><td>${escapeHtml(item.status || "-")}</td><td>${escapeHtml(location)}</td><td>${escapeHtml(confidence)}</td><td>${escapeHtml(priority)}</td></tr>`;
+      }).join("");
+
+      const civilCount = payload.summary?.civil_result_count ?? 0;
+      const locationStatus = payload.summary?.location_status || "unavailable";
+      note.textContent = `当前报告已把 civil 结果写入统一多领域合同（${civilCount} 项）；track / equipment 适配器可通过 demo runner 补充。定位状态：${locationStatus}。`;
+    }
+
     function renderReport(report, views) {
       renderHeader(report);
       renderCase(report);
@@ -2203,6 +2266,7 @@
       renderSummary(report);
       renderAdvantages(report);
       renderMorphology(report);
+      renderMultidomain(report);
       renderViews(views);
       const exportBox = document.querySelector("#reportExport");
       const exportHint = document.querySelector("#reportExportHint");

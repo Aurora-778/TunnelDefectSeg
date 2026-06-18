@@ -244,16 +244,21 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     matrix = (ROOT / "docs" / "competition" / "cs-202613-requirements-matrix.md").read_text(encoding="utf-8")
     civil = (ROOT / "docs" / "competition" / "civil-defect-evaluation.md").read_text(encoding="utf-8")
+    multidomain = (ROOT / "docs" / "competition" / "multidomain-detector-notes.md").read_text(encoding="utf-8")
+    report_template = (ROOT / "docs" / "competition" / "report-template.md").read_text(encoding="utf-8")
     summary = (ROOT / "docs" / "competition" / "experiment-summary.md").read_text(encoding="utf-8")
     case_pack = (ROOT / "docs" / "competition" / "demo-case-pack.md").read_text(encoding="utf-8")
     local_setup = (ROOT / "docs" / "local-setup-windows.md").read_text(encoding="utf-8")
+    html = (ROOT / "web_demo" / "index.html").read_text(encoding="utf-8")
 
     assert "docs/competition/cs-202613-requirements-matrix.md" in readme
     assert "docs/competition/civil-defect-evaluation.md" in readme
+    assert "docs/competition/multidomain-detector-notes.md" in readme
     assert "docs/competition/experiment-summary.md" in readme
     assert "docs/competition/demo-case-pack.md" in readme
     assert "docs/competition/report-template.md" in readme
     assert "docs/local-setup-windows.md" in readme
+    assert "run_multidomain_inspection.py" in readme
     assert "C:/Users/26822" not in readme
     assert "D:/users/anaconda3" not in readme
     assert "third_party/SegFormer-master" not in readme
@@ -269,6 +274,13 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     assert "Civil Defect Evaluation" in civil
     assert "simple" in civil
     assert "blocky" in civil
+    assert "Multidomain Detector Notes" in multidomain
+    assert "fastener_missing" in multidomain
+    assert "bracket_loose" in multidomain
+    assert "multidomain_results" in report_template
+    assert "multidomainPanel" in html
+    assert "renderMultidomain" in html
+    assert "multidomain_results" in html
     assert "Internal labeled dataset" in summary
     assert "Official competition samples" in summary
     assert "Demo cases" in summary

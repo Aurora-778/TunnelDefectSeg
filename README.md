@@ -39,10 +39,12 @@
 | `build_6class_labels.py` | 生成 6 类标签、清单和摘要 |
 | `segformer_tools.py` | 生成 SegFormer/mmseg 配置和启动脚本 |
 | `run_confidence_risk.py` | 推理后增强模块（mask、uncertainty、skeleton、报告） |
+| `run_multidomain_inspection.py` | 轨道/设备 demo 组合报告入口 |
 | `evaluate_confidence_risk.py` | 有 GT 标注时的增强模块评估 |
 | `enhancement_evidence.py` | 增强证据汇总 |
 | `morphology_adapter.py` | 形态量化（面积、连通域、骨架、方向） |
 | `adaptive_fusion.py` | 自适应 mask 选择逻辑 |
+| `multidomain_detectors.py` | 轨道/设备 demo 适配器和多领域示例结果 |
 | `web_app.py` | 本地 Web 检测服务 |
 | `web_demo/index.html` | Web 前端展示界面 |
 
@@ -159,6 +161,7 @@ python web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
 - 比赛案例包：`docs/competition/demo-case-pack.md`
 - 比赛要求矩阵：`docs/competition/cs-202613-requirements-matrix.md`
 - 土建病害映射说明：`docs/competition/civil-defect-evaluation.md`
+- 轨道/设备适配说明：`docs/competition/multidomain-detector-notes.md`
 - 报告模板：`docs/competition/report-template.md`
 - 专利交底书与权利要求：`docs/patent-notes/`
 - 消融实验矩阵：`docs/experiments/patent-ablation-summary.md`
