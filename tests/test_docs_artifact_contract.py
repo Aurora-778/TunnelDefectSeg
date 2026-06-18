@@ -238,3 +238,19 @@ def test_software_copyright_materials_document_scope_and_boundaries():
     assert "web_app.py" in checklist
     assert "third_party/" in checklist
     assert "模型权重" in checklist
+
+
+def test_competition_materials_indexes_internal_demo_and_pending_external_sources():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    summary = (ROOT / "docs" / "competition" / "experiment-summary.md").read_text(encoding="utf-8")
+    case_pack = (ROOT / "docs" / "competition" / "demo-case-pack.md").read_text(encoding="utf-8")
+
+    assert "docs/competition/experiment-summary.md" in readme
+    assert "docs/competition/demo-case-pack.md" in readme
+    assert "docs/competition/report-template.md" in readme
+    assert "Internal labeled dataset" in summary
+    assert "Official competition samples" in summary
+    assert "Demo cases" in summary
+    assert "C1" in case_pack and "C7" in case_pack
+    assert "official samples" in case_pack
+    assert "simulation-only" in case_pack

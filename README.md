@@ -153,8 +153,11 @@ python web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
 
 健康检查：`http://127.0.0.1:8000/api/health`
 
-## 专利与软著材料
+## 比赛、专利与软著材料
 
+- 比赛实验总览：`docs/competition/experiment-summary.md`
+- 比赛案例包：`docs/competition/demo-case-pack.md`
+- 报告模板：`docs/competition/report-template.md`
 - 专利交底书与权利要求：`docs/patent-notes/`
 - 消融实验矩阵：`docs/experiments/patent-ablation-summary.md`
 - 代表案例清单：`docs/experiments/patent-case-pack.md`
