@@ -242,12 +242,19 @@ def test_software_copyright_materials_document_scope_and_boundaries():
 
 def test_competition_materials_indexes_internal_demo_and_pending_external_sources():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    matrix = (ROOT / "docs" / "competition" / "cs-202613-requirements-matrix.md").read_text(encoding="utf-8")
     summary = (ROOT / "docs" / "competition" / "experiment-summary.md").read_text(encoding="utf-8")
     case_pack = (ROOT / "docs" / "competition" / "demo-case-pack.md").read_text(encoding="utf-8")
 
+    assert "docs/competition/cs-202613-requirements-matrix.md" in readme
     assert "docs/competition/experiment-summary.md" in readme
     assert "docs/competition/demo-case-pack.md" in readme
     assert "docs/competition/report-template.md" in readme
+    assert "CS-202613 Requirements Matrix" in matrix
+    for req_id in [f"R{index}" for index in range(1, 16)]:
+        assert req_id in matrix
+    for status in ["supported", "planned", "simulation-only", "out-of-scope"]:
+        assert status in matrix
     assert "Internal labeled dataset" in summary
     assert "Official competition samples" in summary
     assert "Demo cases" in summary
