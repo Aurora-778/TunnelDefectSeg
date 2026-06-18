@@ -12,6 +12,7 @@ from torchvision import transforms
 
 from adaptive_fusion import select_adaptive_mask
 from morphology_adapter import CLASS_NAMES, MorphologyConfig, compare_mask_morphology, measure_mask, skeleton_mask
+from multidomain_schema import build_multidomain_payload
 from risk_adapter import RiskConfig, score_image, score_review_priority
 from segformer_inference_adapter import (
     DEFAULT_SEGFORMER_CHECKPOINT,
@@ -288,6 +289,7 @@ def write_result_artifacts(
         "review_priority": review_priority,
         "artifacts": {name: str(path.name) for name, path in paths.items()},
     }
+    report["multidomain_results"] = build_multidomain_payload(report)
     save_json(report, paths["report"])
     return report
 

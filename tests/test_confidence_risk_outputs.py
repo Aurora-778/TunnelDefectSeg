@@ -177,6 +177,8 @@ def test_process_image_accepts_segformer_like_mask_source(tmp_path):
     assert report["review_priority"]["priority"] in {"low", "medium", "high"}
     assert report["review_priority"]["note"].startswith("Image-based manual-review priority")
     assert "formula" in report["review_priority"]
+    assert report["multidomain_results"]["schema_version"] == "multidomain-result.v1"
+    assert report["multidomain_results"]["summary"]["civil_result_count"] == 1
     assert all("unavailable" not in item for item in report["risk"]["suggestions"])
     assert report["tta_specs"] == ["segformer_identity", "segformer_hflip"]
     assert report["single_prediction_stats"]["1"] == 8

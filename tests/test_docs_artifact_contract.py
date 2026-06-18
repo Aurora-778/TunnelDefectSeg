@@ -243,11 +243,13 @@ def test_software_copyright_materials_document_scope_and_boundaries():
 def test_competition_materials_indexes_internal_demo_and_pending_external_sources():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     matrix = (ROOT / "docs" / "competition" / "cs-202613-requirements-matrix.md").read_text(encoding="utf-8")
+    civil = (ROOT / "docs" / "competition" / "civil-defect-evaluation.md").read_text(encoding="utf-8")
     summary = (ROOT / "docs" / "competition" / "experiment-summary.md").read_text(encoding="utf-8")
     case_pack = (ROOT / "docs" / "competition" / "demo-case-pack.md").read_text(encoding="utf-8")
     local_setup = (ROOT / "docs" / "local-setup-windows.md").read_text(encoding="utf-8")
 
     assert "docs/competition/cs-202613-requirements-matrix.md" in readme
+    assert "docs/competition/civil-defect-evaluation.md" in readme
     assert "docs/competition/experiment-summary.md" in readme
     assert "docs/competition/demo-case-pack.md" in readme
     assert "docs/competition/report-template.md" in readme
@@ -264,6 +266,9 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     assert "segformer-phase2" in local_setup
     assert "run_train_segformer_cuda.bat" in local_setup
     assert "run_web_app.bat" in local_setup
+    assert "Civil Defect Evaluation" in civil
+    assert "simple" in civil
+    assert "blocky" in civil
     assert "Internal labeled dataset" in summary
     assert "Official competition samples" in summary
     assert "Demo cases" in summary

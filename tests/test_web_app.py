@@ -190,6 +190,7 @@ def test_detect_image_exports_structured_report(tmp_path, monkeypatch):
 
     assert report["inspection_report_url"].endswith("demo_inspection_report.json")
     assert report["inspection_report"]["schema_version"] == "inspection-report.v1"
+    assert report["inspection_report"]["multidomain_results"]["schema_version"] == "multidomain-result.v1"
     exported = list(tmp_path.rglob("demo_inspection_report.json"))
     assert len(exported) == 1
     saved = json.loads(exported[0].read_text(encoding="utf-8"))

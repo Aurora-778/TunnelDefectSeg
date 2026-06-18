@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from multidomain_schema import build_multidomain_payload
+
 
 SCHEMA_VERSION = "inspection-report.v1"
 
@@ -52,6 +54,7 @@ def build_inspection_report(
     morphology_delta = _json_safe(report.get("morphology_delta", {}))
     evaluation = _json_safe(report.get("evaluation")) if report.get("evaluation") is not None else None
     views = _json_safe(report.get("views", []))
+    multidomain_results = _json_safe(report.get("multidomain_results") or build_multidomain_payload(report))
 
     source_report_url = report.get("report_url") or (
         f"/outputs/{job_id}/{artifacts['report']}" if artifacts.get("report") else None
@@ -123,6 +126,7 @@ def build_inspection_report(
         },
         "artifacts": artifacts,
         "views": views,
+        "multidomain_results": multidomain_results,
         "summary_cards": summary_cards,
         "source_report_url": source_report_url,
         "inspection_report_url": inspection_report_url,

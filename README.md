@@ -158,6 +158,7 @@ python web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
 - 比赛实验总览：`docs/competition/experiment-summary.md`
 - 比赛案例包：`docs/competition/demo-case-pack.md`
 - 比赛要求矩阵：`docs/competition/cs-202613-requirements-matrix.md`
+- 土建病害映射说明：`docs/competition/civil-defect-evaluation.md`
 - 报告模板：`docs/competition/report-template.md`
 - 专利交底书与权利要求：`docs/patent-notes/`
 - 消融实验矩阵：`docs/experiments/patent-ablation-summary.md`

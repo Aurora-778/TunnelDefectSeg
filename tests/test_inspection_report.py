@@ -76,6 +76,9 @@ def test_build_inspection_report_writes_structured_contract(tmp_path):
     assert saved["summary_cards"][1]["label"] == "Review"
     assert saved["summary_cards"][2]["label"] == "Selection"
     assert saved["summary_cards"][3]["label"] == "Self IoU"
+    assert saved["multidomain_results"]["schema_version"] == "multidomain-result.v1"
+    assert saved["multidomain_results"]["summary"]["civil_result_count"] == 1
+    assert saved["multidomain_results"]["results"][0]["domain"] == "civil"
     assert saved["elapsed_ms"] == 17
     assert export["inspection_report_path"] == "sample_inspection_report.json"
     assert export["assessment"]["review_priority"]["priority"] == "low"
@@ -105,4 +108,5 @@ def test_build_inspection_report_includes_evaluation_and_spatial_summary(tmp_pat
 
     assert export["evaluation"]["selected_mIoU"] == 0.33
     assert export["spatial_summary"]["estimated"] == 1
+    assert export["multidomain_results"]["summary"]["has_spatial_summary"] is True
     assert any(card["label"] == "GT mIoU" for card in export["summary_cards"])
