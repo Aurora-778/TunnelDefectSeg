@@ -90,7 +90,7 @@ flowchart TB
   - `spatial_mapping.py`
   - `tests/test_spatial_mapping.py`
   - `docs/competition/spatial-mapping-method.md`
-- **Expected fields:** `status`、`source`、`accuracy_level`、`method`、`pixel_center`、`normalized_center`、`bbox`、`clock_position`、`ring_id`、`mileage`、`local_3d`、`limitations`。
+- **Expected fields:** `status`、`source`、`location_source`、`accuracy_level`、`method`、`pixel_center`、`normalized_center`、`bbox`、`clock_position`、`ring_id`、`mileage`、`local_3d`、`limitations`。
 - **Test scenarios:**
   - mask/bbox 输入能输出中心点和归一化坐标。
   - 缺少几何时输出 `status=unavailable` 和可读原因。
@@ -125,7 +125,7 @@ flowchart TB
   - 提供 `ring_id` 时，定位结果保留环号。
   - 提供 `mileage` 时，定位结果保留里程。
   - 未提供工程元数据时，不影响 clock position 输出。
-  - metadata 来源标记进入 `source` 或 `method_detail`。
+  - metadata 来源标记进入 `source` / `location_source`；多领域总览同步保留 `location_source`。
 - **Verification:** `python -m pytest tests/test_spatial_mapping.py tests/test_run_multidomain_inspection.py -q`
 
 ### U4. Optional Local 3D Projection
@@ -155,7 +155,7 @@ flowchart TB
   - 土建 selected mask 结果能挂载 location。
   - 轨道/设备 demo result 如果有 bbox，也能挂载 location。
   - 没有 spatial metadata 时，location 不再只是泛泛 placeholder，而是明确说明缺什么。
-  - `summary.location_status` 统计 available / partial / unavailable。
+  - `summary.location_status` 统计 available / partial / unavailable，并同步输出 `summary.location_source` 与 `summary.location_accuracy_level`。
 - **Verification:** `python -m pytest tests/test_multidomain_schema.py tests/test_inspection_report.py -q`
 
 ### U6. Web Display Improvements
@@ -188,7 +188,7 @@ flowchart TB
   - 流程：几何提取、坐标归一化、方位映射、元数据融合。
   - 边界：simulation-only、calibration-based、field-grade 的区别。
 - **Test scenarios:**
-  - 文档出现 `simulation-only`、`source`、`accuracy_level`、`clock position` 等关键锚点。
+  - 文档出现 `simulation-only`、`source`、`location_source`、`accuracy_level`、`clock position` 等关键锚点。
   - 比赛矩阵不再把空间定位标为纯 planned，而是标为 prototype / simulation-supported。
   - 论文证据矩阵只主张已实现和可验证的部分。
 - **Verification:** `python -m pytest tests/test_docs_artifact_contract.py -q`

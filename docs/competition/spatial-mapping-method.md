@@ -54,6 +54,15 @@
 - 有 `camera_intrinsics` 和 `depth` 才输出 `local_3d`
 - 缺少元数据时，保留图像位置和时钟方位，但把边界写进 `limitations`
 
+## Multidomain Report Fields
+
+空间定位结果接入 `multidomain_results` 后，单条 defect result 的 `location` 会保留完整 `summary`。总览层还会镜像三个便于展示和筛选的字段：
+
+- `location_status`: `available` / `partial` / `unavailable`
+- `location_source`: 来自 spatial summary 的 `location_source` / `source`
+- `location_accuracy_level`: 来自 spatial summary 的 `accuracy_level`
+
+这样 Web 和报告总览不用解析完整 spatial summary，也能说明定位来源和精度边界。
 ## Boundary Rules
 
 - 不能把 `simulation` 或 `calibration` 输出写成实测

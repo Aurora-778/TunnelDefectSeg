@@ -304,4 +304,5 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     assert "simulation-only" in case_pack
     assert "location_source" in spatial_method
     assert "accuracy_level" in spatial_method
+    assert "location_accuracy_level" in spatial_method
     assert "clock position" in spatial_method
