@@ -250,6 +250,7 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     demo_script = (ROOT / "docs" / "competition" / "demo-script.md").read_text(encoding="utf-8")
     summary = (ROOT / "docs" / "competition" / "experiment-summary.md").read_text(encoding="utf-8")
     case_pack = (ROOT / "docs" / "competition" / "demo-case-pack.md").read_text(encoding="utf-8")
+    spatial_method = (ROOT / "docs" / "competition" / "spatial-mapping-method.md").read_text(encoding="utf-8")
     local_setup = (ROOT / "docs" / "local-setup-windows.md").read_text(encoding="utf-8")
     html = (ROOT / "web_demo" / "index.html").read_text(encoding="utf-8")
 
@@ -293,9 +294,13 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     assert "Multidomain Extension" in report_outline
     assert "Demo Script" in demo_script
     assert "track / equipment" in demo_script
+    assert "spatial mapping 卡片" in demo_script
     assert "Internal labeled dataset" in summary
     assert "Official competition samples" in summary
     assert "Demo cases" in summary
     assert "C1" in case_pack and "C7" in case_pack
     assert "official samples" in case_pack
     assert "simulation-only" in case_pack
+    assert "location_source" in spatial_method
+    assert "accuracy_level" in spatial_method
+    assert "clock position" in spatial_method

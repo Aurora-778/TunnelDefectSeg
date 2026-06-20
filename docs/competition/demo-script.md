@@ -19,6 +19,7 @@
 7. 切换 uncertainty、disagreement、skeleton，说明这是模型证据，不是新的 GT。
 8. 打开报告导出，说明系统会把结果整理成结构化 report。
 9. 展示多领域摘要，说明 civil / track / equipment 已经统一到同一份合同里。
+10. 展示 spatial mapping 卡片，说明系统现在能把病害位置翻译成钟位、环号和里程，但仍按 prototype / simulation 边界讲。
 
 ## Key Talking Points
 
@@ -52,7 +53,7 @@
 
 ### Multidomain
 
-“civil 是当前已经完成的主线，track 和 equipment 先用 demo adapter 接进来，空间定位先作为 planned / prototype 处理。”
+“civil 是当前已经完成的主线，track 和 equipment 先用 demo adapter 接进来，空间定位已经有原型实现，但对外仍按 prototype / simulation 边界说明。”
 
 ### Conclusion
 
@@ -74,5 +75,5 @@
 - selected 的价值是修复 fixed fusion 损失，不是绝对压过 single。
 - 自选图片没有 GT，不能把模型自测当真实精度。
 - track / equipment 目前是 demo adapter，后续可以换真实模型。
-- spatial mapping 目前适合按 planned / prototype 讲，不夸大。
+- spatial mapping 现在已经有 prototype 实现，但仍只能按 simulation/calibration 边界讲，不夸大成外业级定位。
 

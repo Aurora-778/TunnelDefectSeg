@@ -140,7 +140,7 @@ Transition: 有了模型、增强模块和 Web 展示，就可以进一步整理
 
 左边先说 civil 已经完成，SegFormer B1、adaptive selection、review priority 和 report export 都已经接上。中间和右边分别说 track / equipment 先用 demo adapter 接入示例结果，统一到 multidomain schema 里，后续可以替换成真实训练模型。
 
-这一页还要明确 spatial mapping 的边界：当前只能按 planned / prototype 讲，不把仿真定位说成外业级精确定位。
+这一页还要明确 spatial mapping 的边界：当前已经有 prototype 实现，但对外仍按 simulation/calibration 边界讲，不把仿真定位说成外业级精确定位。
 
 Transition: 接下来再回到专利表达，把“模型之后的判断流程”收束一下。
 
@@ -260,7 +260,7 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 
 ### 21. 多领域扩展现在到什么程度？
 
-civil 主线已经完成，能跑 SegFormer、enhancement、report export 和 Web 展示。track 和 equipment 目前先用 demo adapter 接入，统一到同一份 multidomain schema 里，目的是先让比赛展示能看懂、能扩展，再逐步替换成真实训练模型。spatial mapping 目前还应该按 planned / prototype 讲，不能夸大成外业级定位。
+civil 主线已经完成，能跑 SegFormer、enhancement、report export 和 Web 展示。track 和 equipment 目前先用 demo adapter 接入，统一到同一份 multidomain schema 里，目的是先让比赛展示能看懂、能扩展，再逐步替换成真实训练模型。spatial mapping 目前应该按 prototype 讲，但仍不能夸大成外业级定位；没有真实标定和传感器时只算 simulation/calibration prototype。
 
 ## Key Parameters And Methods
 

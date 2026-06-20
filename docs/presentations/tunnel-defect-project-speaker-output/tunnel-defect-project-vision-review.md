@@ -29,7 +29,7 @@ Deck reviewed: `C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-p
 - Web 和 PPT 的 skeleton 应尽量使用同一套 selected mask 生成逻辑，否则老师会问为什么骨架形状不同。讲稿中已把 skeleton 定义为“从最终选择的 mask 提取的形态证据”。
 - 第 8 页的增强模块数据和第 5 页 SegFormer mIoU 属于两层实验，不要混着讲。第 5 页讲模型能力，第 8 页讲 fixed fusion 与 selected 的相对对比。
 - 第 10 页自选图片没有 GT 时，不能显示真实 mIoU。讲稿已准备标准解释。
-- 第 11 页是多领域扩展页，重点是 civil 主线已经完成，track / equipment 是 demo adapter，spatial mapping 仍是 planned / prototype 边界。
+- 第 11 页是多领域扩展页，重点是 civil 主线已经完成，track / equipment 是 demo adapter，spatial mapping 已有 prototype 实现，但仍按 simulation/calibration 边界讲。
 
 ## Uncertain Or Limited Elements
 

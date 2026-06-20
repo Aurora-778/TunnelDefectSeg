@@ -72,5 +72,5 @@ The following artifact names are used across the pack:
 
 - `self_consistency` is not ground-truth accuracy.
 - `review_priority` is not structural safety diagnosis.
-- `simulation-only` spatial outputs must be labelled as such.
+- `simulation-only` spatial outputs must be labelled as such, and prototype outputs should still carry `location_source` / `accuracy_level`.
 - `official samples` are not yet integrated into the current pack.

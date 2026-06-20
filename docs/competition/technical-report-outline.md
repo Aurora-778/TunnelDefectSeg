@@ -52,7 +52,7 @@
 - civil / track / equipment 统一结果 schema
 - civil 结果如何从当前 6 类标签映射到比赛口径
 - track / equipment demo adapter 如何保持 `simulation-only` 边界
-- spatial mapping 当前作为 planned / prototype extension，不夸大
+- spatial mapping 已有 prototype 实现，但仍按 simulation/calibration 边界说明
 
 ## 8. Experiments
 
@@ -81,7 +81,7 @@
 
 - blocky 类仍是弱项
 - 轨道/设备目前是 demo adapter，不是完整训练模型
-- spatial mapping 目前还是 planned / simulation-only
+- spatial mapping 现在有 prototype 实现，但仍不是外业级定位
 - 真实官方比赛样本还未接入
 
 ## 12. Conclusion
@@ -90,6 +90,6 @@
 - 目前最适合继续推进的是：
   - blocky 类优化
   - 多领域样本补充
-  - spatial mapping 原型
+  - spatial mapping 原型与边界说明
   - 典型案例和材料包完善
 
