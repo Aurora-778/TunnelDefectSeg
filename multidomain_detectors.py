@@ -34,8 +34,8 @@ def _default_location(report: dict[str, Any] | None) -> dict[str, Any]:
     spatial = report["spatial_summary"]
     if isinstance(spatial, dict):
         return {
-            "status": "available" if spatial.get("available", True) else "unavailable",
-            "source": spatial.get("source", "report"),
+            "status": str(spatial.get("status") or ("available" if spatial.get("available", True) else "unavailable")),
+            "source": spatial.get("location_source", spatial.get("source", "report")),
             "accuracy_level": spatial.get("accuracy_level"),
             "summary": _json_safe(spatial),
         }

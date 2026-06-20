@@ -13,6 +13,7 @@ from torchvision import transforms
 from adaptive_fusion import select_adaptive_mask
 from morphology_adapter import CLASS_NAMES, MorphologyConfig, compare_mask_morphology, measure_mask, skeleton_mask
 from multidomain_schema import build_multidomain_payload
+from spatial_mapping import build_spatial_summary
 from risk_adapter import RiskConfig, score_image, score_review_priority
 from segformer_inference_adapter import (
     DEFAULT_SEGFORMER_CHECKPOINT,
@@ -269,6 +270,13 @@ def write_result_artifacts(
         },
         config=risk_cfg,
     )
+    spatial_summary = build_spatial_summary(
+        selected_mask,
+        image_shape=raw_resized.shape[:2],
+        metadata=source.get("spatial_metadata") if isinstance(source.get("spatial_metadata"), dict) else None,
+        source=str(source.get("spatial_source") or "simulation"),
+        accuracy_level=str(source.get("spatial_accuracy_level") or "coarse"),
+    )
 
     report = {
         "stem": stem,
@@ -287,6 +295,7 @@ def write_result_artifacts(
         "morphology_delta": morphology_delta,
         "risk": risk,
         "review_priority": review_priority,
+        "spatial_summary": spatial_summary,
         "artifacts": {name: str(path.name) for name, path in paths.items()},
     }
     report["multidomain_results"] = build_multidomain_payload(report)

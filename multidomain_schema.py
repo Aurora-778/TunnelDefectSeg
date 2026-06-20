@@ -68,10 +68,10 @@ def _location_summary(report: dict[str, Any]) -> dict[str, Any]:
         }
 
     spatial = _json_safe(spatial_summary)
-    status = "available" if bool(spatial.get("available", True)) else "unavailable"
+    status = str(spatial.get("status") or ("available" if bool(spatial.get("available", True)) else "unavailable"))
     return {
         "status": status,
-        "source": spatial.get("source", "report"),
+        "source": spatial.get("location_source", spatial.get("source", "report")),
         "accuracy_level": spatial.get("accuracy_level"),
         "summary": spatial,
     }

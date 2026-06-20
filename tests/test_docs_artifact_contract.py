@@ -285,6 +285,10 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     assert "multidomainPanel" in html
     assert "renderMultidomain" in html
     assert "multidomain_results" in html
+    assert "clock_position" in html
+    assert "locationParts" in html
+    assert "环号" in html
+    assert "里程" in html
     assert "Technical Report Outline" in report_outline
     assert "Multidomain Extension" in report_outline
     assert "Demo Script" in demo_script
