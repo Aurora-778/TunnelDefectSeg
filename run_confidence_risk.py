@@ -270,12 +270,17 @@ def write_result_artifacts(
         },
         config=risk_cfg,
     )
+    spatial_metadata = (
+        source.get("spatial_metadata") if isinstance(source.get("spatial_metadata"), dict) else None
+    )
+    spatial_source = source.get("spatial_source")
+    spatial_accuracy_level = source.get("spatial_accuracy_level")
     spatial_summary = build_spatial_summary(
         selected_mask,
         image_shape=raw_resized.shape[:2],
-        metadata=source.get("spatial_metadata") if isinstance(source.get("spatial_metadata"), dict) else None,
-        source=str(source.get("spatial_source") or "simulation"),
-        accuracy_level=str(source.get("spatial_accuracy_level") or "coarse"),
+        metadata=spatial_metadata,
+        source=str(spatial_source) if spatial_source else None,
+        accuracy_level=str(spatial_accuracy_level) if spatial_accuracy_level else None,
     )
 
     report = {

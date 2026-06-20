@@ -175,6 +175,8 @@ def build_multidomain_payload(report: dict[str, Any], extra_results: list[dict[s
             "civil_defect_types": civil_classes,
             "has_spatial_summary": report.get("spatial_summary") is not None,
             "location_status": location.get("status"),
+            "location_source": location.get("source"),
+            "location_accuracy_level": location.get("accuracy_level"),
             "review_priority": review_priority.get("priority"),
         },
     }

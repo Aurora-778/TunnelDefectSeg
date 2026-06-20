@@ -2250,8 +2250,10 @@
         if (locationSummary.clock_position?.label) locationParts.push(locationSummary.clock_position.label);
         if (locationSummary.ring_id) locationParts.push(`环号 ${locationSummary.ring_id}`);
         if (locationSummary.mileage) locationParts.push(`里程 ${locationSummary.mileage}`);
-        const location = item.location?.status === "available"
-          ? `${item.location?.source || "available"}${item.location?.accuracy_level ? ` · ${item.location.accuracy_level}` : ""}${locationParts.length ? ` · ${locationParts.join(" / ")}` : ""}`
+        const locationStatus = item.location?.status || "unavailable";
+        const locationDisplayable = locationStatus !== "unavailable";
+        const location = locationDisplayable
+          ? `${item.location?.source || locationStatus}${item.location?.accuracy_level ? ` · ${item.location.accuracy_level}` : ""}${locationStatus === "partial" ? " · partial" : ""}${locationParts.length ? ` · ${locationParts.join(" / ")}` : ""}`
           : "unavailable";
         const confidence = item.confidence?.available ? fmt(item.confidence?.score, 3) : "N/A";
         const priority = item.review_priority?.priority || "-";

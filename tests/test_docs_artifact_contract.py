@@ -288,6 +288,7 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     assert "multidomain_results" in html
     assert "clock_position" in html
     assert "locationParts" in html
+    assert "locationDisplayable" in html
     assert "环号" in html
     assert "里程" in html
     assert "Technical Report Outline" in report_outline
