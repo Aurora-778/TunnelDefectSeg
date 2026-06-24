@@ -6,11 +6,11 @@ Deck path: `C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-proje
 
 ## Deck Comprehension Brief
 
-**Thesis**: 这个项目不是只做一个分割模型，而是做一个能自动找隧道病害、能解释结果、能提示复核风险的检测展示系统。
+**Thesis**: 这个项目不是只做一个分割模型，而是做一个能自动找隧道病害、解释可信度、提示复核风险，并输出工程位置表达的检测展示系统。
 
-**Structure**: 先讲问题，再讲数据和系统流程，然后讲 SegFormer 提升基础 mask 质量，接着讲自适应增强模块如何选择更可靠的 mask，最后用实验结果、Web demo 和专利方向收束。
+**Structure**: 先讲问题，再讲数据和系统流程，然后讲 SegFormer 提升基础 mask 质量，接着讲自适应增强模块如何选择更可靠的 mask，最后用实验结果、Web demo、多领域扩展、空间定位和专利方向收束。
 
-**Methods**: 6 类语义分割、SegFormer B1、mIoU 评估、自适应 mask selection、fixed fused 对照、uncertainty 复核提示、形态学骨架和连通域分析、Web drag-and-drop demo。
+**Methods**: 6 类语义分割、SegFormer B1、mIoU 评估、自适应 mask selection、fixed fused 对照、uncertainty 复核提示、形态学骨架和连通域分析、spatial mapping、multidomain schema、Web drag-and-drop demo。
 
 **Key parameters**: 数据集 1000 张，训练/验证/测试为 700/150/150，输入尺寸 384 x 384，SegFormer B1 训练到 160000 iter，最终 mIoU 84.33%，mAcc 91.17%，aAcc 98.62%。
 
@@ -24,7 +24,7 @@ Deck path: `C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-proje
 
 **Middle**: SegFormer 先提升基础分割质量，增强模块再解决 fixed fusion 可能抹掉小病害、上传图片没有 GT、结果缺少解释的问题。
 
-**Close**: 项目已经形成“模型检测 + 可信选择 + 复核证据 + Web 展示”的完整链路，后续可以继续优化 blocky 类和专利材料。
+**Close**: 项目已经形成“模型检测 + 可信选择 + 复核证据 + 空间定位 + Web 展示”的完整链路，后续可以继续优化 blocky 类、真实标定数据和专利材料。
 
 ## Opening Script
 
@@ -90,17 +90,19 @@ Transition: 模型画完之后，系统还会判断哪一个输出更适合给�
 
 模型可能产生 single mask，也可能通过翻转等方式得到 fused mask。传统做法可能直接固定融合，但在这个数据里，固定融合有时会把小病害抹掉。所以增强模块会比较候选 mask：哪一个更稳定，哪一个保留了小病害，哪一个更适合作为最终输出。现在又增加了 review priority，也就是人工复核优先级，用来回答“这张图是不是应该先让人看”。
 
+这里还可以补一句：这套增强逻辑本身不绑定 SegFormer。SegFormer 是当前底座，但只要其他模型能输出 mask，最好还能输出概率图或多次预测结果，也可以接入同一套可信分析流程。
+
 系统现在主要支持三种选择逻辑：single 表示保留单次预测结果，fused 表示采用融合结果，hybrid 或 selected 表示根据规则自适应选择。选完之后，还会把 mask 转成可解释证据，比如骨架、面积、方向、连通域、复核提示和 review priority。
 
 Transition: 这也是我认为项目最适合写成创新点的地方。
 
 ### [Slide 7 - 创新点]
 
-这个项目的创新点不是“发明一个新的大模型”，而是在病害分割结果后面加了一层会判断、会解释的机制。
+这个项目的创新点不是“发明一个新的大模型”，而是在病害分割结果后面加了一层会判断、会解释、会表达工程位置的机制。
 
-第一，它能发现 fixed fusion 反而变差的情况。比如小裂缝或小块病害被融合过程抹掉，系统会倾向于保留更可靠的 single mask。第二，它不是固定使用某一种结果，而是自动选择当前样本更合适的 mask。第三，它把 mask 继续转成骨架长度、方向、连通域、面积和复核理由，让检测结果从“一个色块”变成“可检查的证据”。第四，它不会在无 GT 的上传图片上乱报真实 mIoU，这一点对展示和实际使用很重要。
+第一，它不是固定使用某一种结果，而是自动选择当前样本更合适的 mask，减少 fixed fusion 抹掉小病害的问题。第二，它把 mask 继续转成 uncertainty、分歧、骨架长度、方向、连通域、面积和复核理由，让检测结果从“一个色块”变成“可检查的证据”。第三，它把病害位置转成钟位、环号、里程等工程语言，并用 `location_source` 和 `accuracy_level` 标注来源与精度边界。第四，它不绑定 SegFormer，也不会在无 GT 的上传图片上乱报真实 mIoU。
 
-如果写专利，方向可以概括为：一种面向隧道病害分割结果的置信感知自适应输出选择与复核证据生成方法。
+如果写专利，方向可以概括为：一种面向隧道病害分割结果的置信感知自适应输出选择、复核证据生成与空间语义定位方法。
 
 Transition: 下面用实验结果说明这个增强模块具体带来了什么。
 
@@ -140,7 +142,7 @@ Transition: 有了模型、增强模块和 Web 展示，就可以进一步整理
 
 左边先说 civil 已经完成，SegFormer B1、adaptive selection、review priority 和 report export 都已经接上。中间和右边分别说 track / equipment 先用 demo adapter 接入示例结果，统一到 multidomain schema 里，后续可以替换成真实训练模型。
 
-这一页还要明确 spatial mapping 的边界：当前已经有 prototype 实现，但对外仍按 simulation/calibration 边界讲，不把仿真定位说成外业级精确定位。
+这一页还要明确 spatial mapping 的边界：当前已经有 prototype 实现，可以输出钟位、环号、里程和可选 local 3D；多领域 summary 里也保留 `location_source` 和 `location_accuracy_level`。但是对外仍按 simulation/calibration 边界讲，不把仿真定位说成外业级精确定位。
 
 Transition: 接下来再回到专利表达，把“模型之后的判断流程”收束一下。
 
@@ -148,9 +150,9 @@ Transition: 接下来再回到专利表达，把“模型之后的判断流程�
 
 专利表达的重点应该放在“检测后的判断流程”，而不是把 SegFormer 当成创新。
 
-可以主张的点包括：第一，基于候选 mask 的差异和置信信息，自动选择更可靠的输出；第二，识别 fixed fusion 抹掉小病害的情况，并保护前景证据；第三，从最终 mask 生成骨架、面积、方向、连通域和风险提示；第四，在无 GT 场景下不输出伪精度，而是输出自一致性和复核依据。
+可以主张的点包括：第一，基于候选 mask 的差异和置信信息，自动选择更可靠的输出；第二，识别 fixed fusion 抹掉小病害的情况，并保护前景证据；第三，从最终 mask 生成骨架、面积、方向、连通域和风险提示；第四，把病害位置转换成钟位、环号、里程等工程表达，并明确 `source` / `accuracy_level`；第五，在无 GT 场景下不输出伪精度，而是输出自一致性和复核依据。
 
-同时也要避免过度主张。SegFormer、TTA、uncertainty、skeletonization 都是已有技术，不能说是我单独发明的。更合理的创新是把这些能力组合成一个面向隧道病害检测的自适应选择和复核证据生成流程。
+同时也要避免过度主张。SegFormer、TTA、uncertainty、skeletonization 都是已有技术，不能说是我单独发明的。更合理的创新是把这些能力组合成一个面向隧道病害检测的自适应选择、复核证据生成和空间语义定位流程。
 
 Transition: 最后一页总结目前完成情况和下一步工作。
 
@@ -158,12 +160,11 @@ Transition: 最后一页总结目前完成情况和下一步工作。
 
 目前项目已经形成一个能训练、能评估、能展示、能解释的完整系统。
 
-已经完成的部分包括：数据集整理成 6 类标准格式；SegFormer B1 训练到 mIoU 84.33%；实现自适应 mask selection、基于 SegFormer 概率 TTA 的 uncertainty / disagreement 复核提示和形态学证据；做出了支持拖拽图片实时检测的 Web 展示。现在又补充了 U7 证据闭环：patent evidence pack、morphology delta、review queue 和软著说明材料；同时把 civil / track / equipment 的多领域结果合同接上了 demo adapter，让结果更适合给老师检查、整理专利交底和准备软著。
+已经完成的部分包括：数据集整理成 6 类标准格式；SegFormer B1 训练到 mIoU 84.33%；实现自适应 mask selection、基于 SegFormer 概率 TTA 的 uncertainty / disagreement 复核提示和形态学证据；做出了支持拖拽图片实时检测的 Web 展示。现在还补上了 spatial mapping prototype，可以输出钟位、环号、里程、`location_source` 和 `location_accuracy_level`；同时把 civil / track / equipment 的多领域结果合同接上了 demo adapter，让结果更适合给老师检查、整理专利交底和准备比赛材料。
 
-下一步可以从三方面继续推进。第一，优化 blocky 类，因为它目前 IoU 最低。第二，继续积累跨场景典型案例，让 review queue 里的高优先级样本覆盖更多真实巡检情况。第三，继续探索 temperature scaling 或 conformal prediction 这类更强的校准方法，把当前的复核优先级进一步做成更严谨的可信输出。
+下一步可以从三方面继续推进。第一，优化 blocky 类，因为它目前 IoU 最低。第二，继续积累跨场景典型案例，让 review queue 里的高优先级样本覆盖更多真实巡检情况。第三，接入真实标定、深度或传感器数据，验证空间定位误差；之后再继续探索 temperature scaling 或 conformal prediction 这类更强的校准方法。
 
-最后一句话总结这个项目：它不是只告诉用户“这里可能有病害”，而是进一步告诉用户“为什么这么判断，以及哪里需要再看一眼”。
-
+最后一句话总结这个项目：它不是只告诉用户“这里可能有病害”，而是进一步告诉用户“为什么这么判断、位置大概在哪里，以及哪里需要再看一眼”。
 ## Demo Operation Script
 
 1. 双击 `C:/Users/26822/Downloads/data/run_web_app.bat` 启动 Web 应用。
@@ -182,7 +183,7 @@ Transition: 最后一页总结目前完成情况和下一步工作。
 
 ### 2. SegFormer 是已有模型，那你的创新在哪里？
 
-创新不在“我发明了 SegFormer”。SegFormer 是底座。我的创新主要在模型输出之后：系统会用同一个 SegFormer checkpoint 生成 single 和 probability TTA fused 结果，比较候选 mask 的稳定性，识别 fixed fusion 抹掉小病害的情况，自适应选择更可靠的输出，并生成 uncertainty、disagreement、骨架、面积、方向、连通域、风险提示等可复核证据。
+创新不在“我发明了 SegFormer”。SegFormer 是底座。我的创新主要在模型输出之后：系统会比较候选 mask 的稳定性，识别 fixed fusion 抹掉小病害的情况，自适应选择更可靠的输出，并生成 uncertainty、disagreement、骨架、面积、方向、连通域、空间位置和风险提示等可复核证据。这一层逻辑是模型无关的，换成 UNet、DeepLab 或 Mask2Former 这类模型，只要能提供 mask 或概率图，也可以接入。
 
 ### 3. mIoU 84.33 是怎么来的？
 
@@ -252,7 +253,7 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 
 ### 19. 专利可以写哪些权利要求？
 
-可以围绕五点写：候选 mask 的自适应选择方法；检测 fixed fusion 抹掉小病害的保护策略；基于 mask 的骨架、连通域、面积、方向和风险证据生成；置信校准和人工复核优先级生成；无 GT 场景下的可信展示和复核提示机制。
+可以围绕六点写：候选 mask 的自适应选择方法；检测 fixed fusion 抹掉小病害的保护策略；基于 mask 的骨架、连通域、面积、方向和风险证据生成；病害钟位、环号、里程等空间语义定位；置信校准和人工复核优先级生成；无 GT 场景下的可信展示和复核提示机制。
 
 ### 20. 下一步最应该做什么？
 
@@ -260,8 +261,7 @@ HU 是 high uncertainty。HU error precision 表示高不确定性像素中，�
 
 ### 21. 多领域扩展现在到什么程度？
 
-civil 主线已经完成，能跑 SegFormer、enhancement、report export 和 Web 展示。track 和 equipment 目前先用 demo adapter 接入，统一到同一份 multidomain schema 里，目的是先让比赛展示能看懂、能扩展，再逐步替换成真实训练模型。spatial mapping 目前应该按 prototype 讲，但仍不能夸大成外业级定位；没有真实标定和传感器时只算 simulation/calibration prototype。
-
+civil 主线已经完成，能跑 SegFormer、enhancement、report export 和 Web 展示。track 和 equipment 目前先用 demo adapter 接入，统一到同一份 multidomain schema 里，目的是先让比赛展示能看懂、能扩展，再逐步替换成真实训练模型。spatial mapping 已经能输出钟位、环号、里程、`location_source` 和 `location_accuracy_level`，但仍按 prototype 讲；没有真实标定和传感器时只算 simulation/calibration prototype。
 ## Key Parameters And Methods
 
 | Term | Type | Slide(s) | Definition |
@@ -277,6 +277,7 @@ civil 主线已经完成，能跑 SegFormer、enhancement、report export 和 We
 | selected mask | 增强输出 | 6-10 | 自适应选择后的最终 mask。 |
 | uncertainty | 复核信号 | 9, 10 | 由 SegFormer 概率 TTA 计算出的模型不确定区域，用于提示人工复核。 |
 | skeleton | 形态证据 | 1, 10 | 从 mask 提取的骨架线，用来观察方向、长度和连通结构。 |
+| spatial mapping | 工程定位 | 7, 11, 12 | 把 mask 位置转成钟位、环号、里程等表达，并记录 `location_source` / `accuracy_level`。 |
 | blocky | 类别 | 3, 5, 13 | 块状病害类别，当前 IoU 最低，是后续优化重点。 |
 
 ## Timing Table
@@ -301,4 +302,4 @@ civil 主线已经完成，能跑 SegFormer、enhancement、report export 和 We
 
 ## One-Minute Backup Summary
 
-这个项目做的是隧道病害语义分割和可信增强展示。基础模型部分，我把系统切换到 SegFormer B1，在 6 类数据集上训练到 160000 iter，最终 mIoU 达到 84.33%。增强部分，我没有固定采用融合结果，而是用同一个 SegFormer checkpoint 生成 single 和 probability TTA fused 结果，比较候选 mask 的稳定性；当 fixed fusion 可能抹掉小病害时，selected 策略保留更可靠的输出。系统还会从模型概率里生成 uncertainty 和 disagreement，并从 mask 中提取骨架、面积、方向和连通域。U6 又增加了 uncertainty calibration evidence 和 review priority：有 GT 时看 uncertainty 是否真的对应错误，没有 GT 时只给人工复核优先级，不乱报真实精度。后面又补上了多领域扩展，把 civil 主线和 track / equipment 的 demo adapter 接到同一份结果合同里，方便比赛展示、专利表达和后续软著整理。最后做成 Web demo，支持拖拽图片实时检测。创新点主要是病害分割后的自适应输出选择、置信校准和复核优先级生成流程。
+这个项目做的是隧道病害语义分割和可信增强展示。基础模型部分，我把系统切换到 SegFormer B1，在 6 类数据集上训练到 160000 iter，最终 mIoU 达到 84.33%。增强部分，我没有固定采用融合结果，而是用同一个 SegFormer checkpoint 生成 single 和 probability TTA fused 结果，比较候选 mask 的稳定性；当 fixed fusion 可能抹掉小病害时，selected 策略保留更可靠的输出。系统还会从模型概率里生成 uncertainty 和 disagreement，并从 mask 中提取骨架、面积、方向和连通域。U6 又增加了 uncertainty calibration evidence 和 review priority：有 GT 时看 uncertainty 是否真的对应错误，没有 GT 时只给人工复核优先级，不乱报真实精度。后面又补上了多领域扩展，把 civil 主线和 track / equipment 的 demo adapter 接到同一份结果合同里，方便比赛展示、专利表达和后续软著整理。最后做成 Web demo，支持拖拽图片实时检测。创新点主要是病害分割后的自适应输出选择、可信复核证据生成、空间语义定位，以及这套增强模块对其他分割模型的可复用性。

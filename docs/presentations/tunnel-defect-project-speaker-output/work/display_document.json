@@ -3,14 +3,14 @@
   "deck_path": "C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-project/index.html",
   "language": "Chinese with canonical technical terms preserved in English",
   "comprehension_brief": {
-    "Thesis": "The project is not only a segmentation model; it is a tunnel defect inspection system that detects, explains, and flags uncertain results for review.",
-    "Structure": "Problem, dataset, system flow, SegFormer backbone, adaptive enhancement, evidence, Web demo, patent direction, next steps.",
-    "Methods": "SegFormer B1, 6-class semantic segmentation, mIoU evaluation, adaptive mask selection, uncertainty review, morphology evidence, Web drag-and-drop demo."
+    "Thesis": "The project is not only a segmentation model; it is a tunnel defect inspection system that detects defects, explains confidence, flags review risk, and expresses engineering location.",
+    "Structure": "Problem, dataset, system flow, SegFormer backbone, adaptive enhancement, evidence, Web demo, multidomain extension, spatial mapping, patent direction, next steps.",
+    "Methods": "SegFormer B1, 6-class semantic segmentation, mIoU evaluation, adaptive mask selection, uncertainty review, morphology evidence, spatial mapping, multidomain schema, Web drag-and-drop demo."
   },
   "narrative_arc": {
-    "Opening": "A usable tunnel defect system must answer whether the mask is trustworthy, not only whether a mask exists.",
-    "Middle": "SegFormer improves the mask source, while adaptive selection and review evidence reduce harmful fixed fusion and make results inspectable.",
-    "Close": "The current system can train, evaluate, explain, and demonstrate results; next work should optimize blocky defects and patent cases."
+    "Opening": "A usable tunnel defect system must answer whether the mask is trustworthy and where the defect is, not only whether a mask exists.",
+    "Middle": "SegFormer improves the mask source, while adaptive selection, review evidence, and spatial mapping make results inspectable and reportable.",
+    "Close": "The current system can train, evaluate, explain, locate, and demonstrate results; next work should optimize blocky defects, add real calibration/sensor data, and refine patent cases."
   },
   "slides": [
     {"slide": 1, "title": "给隧道图片自动找病害"},
@@ -23,14 +23,17 @@
     {"slide": 8, "title": "实验结果"},
     {"slide": 9, "title": "具体价值"},
     {"slide": 10, "title": "Web 展示"},
-    {"slide": 11, "title": "专利方向"},
-    {"slide": 12, "title": "总结和下一步"}
+    {"slide": 11, "title": "多领域扩展"},
+    {"slide": 12, "title": "专利方向"},
+    {"slide": 13, "title": "总结和下一步"}
   ],
   "key_parameters_methods": [
     {"term": "SegFormer B1", "type": "Model", "slides": "5", "definition": "Backbone segmentation model used to improve mask quality."},
     {"term": "mIoU", "type": "Metric", "slides": "5, 8, 10", "definition": "Mean Intersection over Union; requires GT mask."},
     {"term": "GT", "type": "Annotation", "slides": "3, 4, 10", "definition": "Ground Truth mask manually annotated in the dataset."},
-    {"term": "selected mask", "type": "Enhancement output", "slides": "6-10", "definition": "Final mask chosen by the adaptive selection layer."}
+    {"term": "selected mask", "type": "Enhancement output", "slides": "6-10", "definition": "Final mask chosen by the adaptive selection layer."},
+    {"term": "spatial mapping", "type": "Engineering location", "slides": "7, 11, 12", "definition": "Maps mask geometry to clock position, ring/mileage, and provenance fields."},
+    {"term": "location_source", "type": "Provenance", "slides": "7, 11", "definition": "Marks whether location evidence comes from simulation, calibration, or sensor inputs."}
   ],
   "timing": [
     {"slide": 1, "title": "给隧道图片自动找病害", "time": "0:45"},
@@ -43,13 +46,14 @@
     {"slide": 8, "title": "实验结果", "time": "1:10"},
     {"slide": 9, "title": "具体价值", "time": "1:00"},
     {"slide": 10, "title": "Web 展示", "time": "1:00"},
-    {"slide": 11, "title": "专利方向", "time": "1:00"},
-    {"slide": 12, "title": "总结和下一步", "time": "0:50"}
+    {"slide": 11, "title": "多领域扩展", "time": "0:55"},
+    {"slide": 12, "title": "专利方向", "time": "1:00"},
+    {"slide": 13, "title": "总结和下一步", "time": "0:50"}
   ],
   "coverage_notes": [
     "The source deck is HTML rather than PPTX, so notes were not injected into a PowerPoint notes pane.",
     "The display rehearsal document is available as Markdown at the output root.",
-    "The script keeps SegFormer backbone claims separate from adaptive enhancement claims."
+    "The script keeps SegFormer backbone claims separate from adaptive enhancement and spatial mapping claims."
   ],
   "injection_log": []
 }
