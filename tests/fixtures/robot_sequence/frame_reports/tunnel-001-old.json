@@ -1,0 +1,64 @@
+{
+  "source_image": {
+    "name": "tunnel.jpg"
+  },
+  "assessment": {
+    "risk": {
+      "score": 1.2,
+      "review_required": false
+    },
+    "review_priority": {
+      "priority": "low",
+      "review_required": false
+    }
+  },
+  "evidence": {
+    "morphology": {
+      "main_class": "simple",
+      "class_id": 1,
+      "defect_area_pixels": 96,
+      "skeleton_length": 31,
+      "defect_component_count": 1
+    },
+    "uncertainty_summary": {
+      "mean": 0.08,
+      "defect_mean": 0.18
+    },
+    "disagreement_summary": {
+      "mean": 0.02
+    }
+  },
+  "spatial_summary": {
+    "status": "available",
+    "bbox": [
+      0.48,
+      0.28,
+      0.57,
+      0.36
+    ],
+    "pixel_area": 96,
+    "normalized_center": [
+      0.525,
+      0.32
+    ],
+    "pixel_center": [
+      201.6,
+      122.8
+    ],
+    "mileage": "K12+340.5",
+    "ring_id": "R-128",
+    "clock_position": {
+      "hour": 12,
+      "label": "12点方向"
+    },
+    "local_3d": {
+      "status": "unavailable",
+      "available": false
+    },
+    "source": "robot_manifest_plus_mask",
+    "accuracy_level": "coarse",
+    "limitations": [
+      "local_3d_unavailable"
+    ]
+  }
+}

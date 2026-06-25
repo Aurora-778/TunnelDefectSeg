@@ -28,7 +28,7 @@
         <figure><img src="../../../web_demo/assets/segformer_t1_1_skeleton.png" alt="skeleton"></figure>
       </div>
     </div>
-    <div class="deck-footer"><span class="mono">图片输入 -> 病害 mask -> 可信复核 -> 空间定位 -> Web 报告</span><span class="slide-number" data-current="1" data-total="13"></span></div>
+    <div class="deck-footer"><span class="mono">图片输入 -> 病害 mask -> 可信复核 -> 空间定位 -> 时空 track -> Web 报告</span><span class="slide-number" data-current="1" data-total="13"></span></div>
     <div class="notes">开场直接说：这个项目不是只训练一个模型，而是做了一个能演示、能解释、能给出复核依据的隧道病害检测系统。</div>
   </section>
 
@@ -148,8 +148,8 @@
     <div class="innovation-bento mt-l">
       <div class="innovation wide"><span>创新点 1</span><h4>自适应选择更可靠的 mask</h4><p>系统会比较 single、fused、hybrid，不盲目相信固定融合，避免小病害被抹掉。</p></div>
       <div class="innovation tall"><span>创新点 2</span><h4>把 mask 变成可复核证据</h4><p>输出 uncertainty、分歧、骨架、面积、方向、风险原因和 review priority，让结果能被人工检查。</p></div>
-      <div class="innovation"><span>创新点 3</span><h4>把位置转成工程语言</h4><p>把病害 mask 转成钟位、环号、里程，并标注 location_source 和 accuracy_level。</p></div>
-      <div class="innovation"><span>创新点 4</span><h4>模块可复用、边界清楚</h4><p>增强模块不绑定 SegFormer；没有 GT 不报真实 mIoU，定位也区分 simulation、calibration 和 sensor。</p></div>
+      <div class="innovation"><span>创新点 3</span><h4>把位置转成工程语言</h4><p>把病害 mask 转成钟位、环号、里程，并进一步聚合成 defect track。</p></div>
+      <div class="innovation"><span>创新点 4</span><h4>增长判断有边界</h4><p>同轮只标 apparent-change-evidence；跨轮次且可比时才允许 suspected-growth。</p></div>
     </div>
     <div class="callout mt-m">一句话概括：不是发明一个新模型，而是把模型输出升级成可信复核、工程定位和巡检报告。</div>
     <div class="deck-footer"><span class="mono">专利方向：自适应输出选择 + 可信复核证据 + 空间语义定位</span><span class="slide-number" data-current="7" data-total="13"></span></div>
@@ -212,7 +212,7 @@
     <div class="grid g3 mt-m">
       <div class="card"><h4>能看多种结果</h4><p class="dim">原图、病害 mask、叠加图、骨架图、风险报告都能切换。</p></div>
       <div class="card"><h4>不乱显示准确率</h4><p class="dim">用户自己上传的图片没有人工标注，所以真实 mIoU 显示 N/A。</p></div>
-      <div class="card"><h4>结果能解释</h4><p class="dim">页面会显示 uncertainty、分歧、骨架长度、方向、risk level 和复核建议。</p></div>
+      <div class="card"><h4>路线级报告</h4><p class="dim">页面会显示 robot_route_report、defect tracks、review queue 和 claim guard。</p></div>
     </div>
     <div class="deck-footer"><span class="mono">双击 run_web_app.bat 后，打开 http://127.0.0.1:8000</span><span class="slide-number" data-current="10" data-total="13"></span></div>
     <div class="notes">展示时可以直接现场拖图。强调 Web 是项目成果的一部分，不只是截图。</div>
@@ -285,6 +285,7 @@
           <li>训练出 mIoU 84.33% 的 SegFormer 模型</li>
           <li>实现了 probability TTA、uncertainty、分歧、风险解释和 review priority 模块</li>
           <li>接入 spatial mapping，输出钟位、环号、里程、来源和精度边界</li>
+          <li>新增机器人时空巡检报告，展示 defect track、review queue 和 suspected-growth 边界</li>
           <li>做出了可拖拽检测的 Web 展示</li>
         </ul>
       </div>
@@ -299,7 +300,7 @@
       </div>
     </div>
     <div class="summary-line mt-l">一句话总结：这个项目把“自动画病害”升级成了“自动画病害，并给出可复核依据”。</div>
-    <div class="deck-footer"><span class="mono">阶段成果：模型 + 增强模块 + 空间定位 + Web 展示 + 多领域扩展</span><span class="slide-number" data-current="13" data-total="13"></span></div>
+    <div class="deck-footer"><span class="mono">阶段成果：模型 + 增强模块 + 空间定位 + 机器人时空 track + Web 展示</span><span class="slide-number" data-current="13" data-total="13"></span></div>
     <div class="notes">最后用一句话收住：不仅能画，还能解释为什么这样画、哪里值得复核。</div>
 </section>
 

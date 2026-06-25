@@ -1,7 +1,7 @@
 ---
 title: Robot Spatiotemporal Defect Monitoring Plan
 type: feat
-status: active
+status: completed
 date: 2026-06-25
 origin: docs/brainstorms/2026-06-25-robot-spatiotemporal-defect-monitoring-requirements.md
 ---

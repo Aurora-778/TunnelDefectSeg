@@ -34,6 +34,7 @@ EVIDENCE_FILES = {
     "test": ROOT / "experiments" / "enhancement_evidence_test_summary.json",
     "all": ROOT / "experiments" / "enhancement_evidence_all_summary.json",
 }
+ROBOT_ROUTE_REPORT_FILE = WEB_ROOT / "assets" / "robot_route_report.json"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 DEFAULT_WEB_PYTHON = Path("D:/users/anaconda3/envs/segformer-phase2/python.exe")
 
@@ -83,6 +84,33 @@ def _load_evidence_payload() -> dict:
         "missing": missing,
         "errors": errors,
     }
+
+
+def _load_robot_route_report() -> dict:
+    if not ROBOT_ROUTE_REPORT_FILE.exists():
+        return {
+            "ok": True,
+            "source": "fallback",
+            "report": None,
+            "missing": str(ROBOT_ROUTE_REPORT_FILE).replace("\\", "/"),
+            "errors": {},
+        }
+    try:
+        return {
+            "ok": True,
+            "source": "static-json",
+            "report": json.loads(ROBOT_ROUTE_REPORT_FILE.read_text(encoding="utf-8")),
+            "missing": None,
+            "errors": {},
+        }
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "ok": True,
+            "source": "fallback",
+            "report": None,
+            "missing": None,
+            "errors": {"robot_route_report": str(exc)},
+        }
 
 
 def _load_model_once():
@@ -222,6 +250,9 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/evidence":
             self._send_json(_load_evidence_payload())
+            return
+        if path == "/api/robot-route-report":
+            self._send_json(_load_robot_route_report())
             return
 
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)

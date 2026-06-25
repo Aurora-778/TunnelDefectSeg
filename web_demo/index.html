@@ -1060,6 +1060,26 @@
       .brand h1 { font-size: 23px; }
       pre { max-height: 360px; }
     }
+
+    #robotRouteGrid,
+    #robotTrackGrid {
+      grid-auto-flow: dense;
+    }
+
+    #robotRouteGrid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    #robotTrackGrid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    @media (max-width: 920px) {
+      #robotRouteGrid,
+      #robotTrackGrid {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1069,6 +1089,7 @@
       <div class="nav-links">
         <a href="#detect">实时检测</a>
         <a href="#evidence">增强证据</a>
+        <a href="#robot-route">机器人巡检</a>
         <a href="#patent">专利链条</a>
       </div>
     </nav>
@@ -1305,6 +1326,30 @@
       </div>
     </section>
 
+
+    <section class="panel interest-bento" id="robot-route" style="margin-top:34px;">
+      <div class="panel-title">机器人时空巡检报告 <span>FrameRecord / defect tracks / claim guard</span></div>
+      <div class="panel-body">
+        <div class="aggregate-evidence">
+          <div class="evidence-source">
+            <span>Route-level JSON</span>
+            <b id="robotRouteSource">等待加载 robot_route_report.json</b>
+          </div>
+          <div class="advantage-grid" id="robotRouteGrid">
+            <div class="advantage-card"><b>Frames</b><strong>-</strong><p>等待路线级样例数据。</p></div>
+            <div class="advantage-card"><b>Tracks</b><strong>-</strong><p>等待 defect tracks。</p></div>
+            <div class="advantage-card"><b>Review queue</b><strong>-</strong><p>等待复核队列。</p></div>
+            <div class="advantage-card"><b>Claim guard</b><strong>-</strong><p>等待边界声明。</p></div>
+          </div>
+          <div class="advantage-grid" id="robotTrackGrid">
+            <div class="advantage-card"><b>Track evidence</b><strong>N/A</strong><p>加载后显示跨时间、里程和环号聚合结果。</p></div>
+          </div>
+          <div class="advantage-note" id="robotRouteNote">
+            机器人巡检报告把连续照片排序成 FrameRecord，再把单图检测结果聚合成 defect tracks；同一轮拍摄只标 apparent-change-evidence，只有跨轮次且可比时才允许 suspected-growth。
+          </div>
+        </div>
+      </div>
+    </section>
     <section class="panel" id="patent" style="margin-top:34px;">
       <div class="panel-title">Metric glossary <span>中文说明</span></div>
       <div class="panel-body">
@@ -1739,6 +1784,82 @@
       }
     }
 
+
+    function shortLocation(location = {}) {
+      let mileage = "里程 N/A";
+      if (typeof location.mileage === "number") {
+        mileage = `K${fmt(location.mileage / 1000, 3)}`;
+      } else if (location.mileage) {
+        mileage = String(location.mileage);
+      }
+      const ring = location.ring_id || "环号 N/A";
+      const clock = location.clock_position || "钟位 N/A";
+      return `${mileage} / ${ring} / ${clock}`;
+    }
+
+    function trendTone(label) {
+      const tones = {
+        "suspected-growth": "疑似增长",
+        "apparent-change-evidence": "同轮表观变化",
+        "stable": "稳定",
+        "baseline-only": "仅基线",
+        "uncertain": "不确定"
+      };
+      return tones[label] || label || "N/A";
+    }
+
+    function renderRobotRouteReport(payload = {}) {
+      const report = payload.report || payload;
+      const summary = report.summary || {};
+      const tracks = report.tracks || [];
+      const queue = report.review_queue || [];
+      const guard = report.claim_guard || {};
+      const source = payload.source || "static-asset";
+      const schema = report.schema_version || "unknown-schema";
+
+      document.querySelector("#robotRouteSource").textContent = `${source} / ${schema}`;
+      document.querySelector("#robotRouteGrid").innerHTML = [
+        ["Frames", intFmt(summary.frame_count || 0), `inspection_run 被保留在每个 FrameRecord 中；输入照片按里程、时间或 manifest 顺序排序。`],
+        ["Tracks", intFmt(summary.track_count || tracks.length || 0), `把连续照片里的 observation 关联成 defect tracks，避免只看单张图。`],
+        ["Review queue", intFmt(summary.review_count || queue.length || 0), `按趋势、风险和定位置信度生成复核优先级。`],
+        ["Claim guard", guard.not_prediction_unless_cross_cycle_comparable_or_manual_verified ? "ON" : "CHECK", `claim_level、measurement_basis、comparability_status 会随报告输出，避免把同轮变化说成真实增长。`]
+      ].map(([title, value, help]) => `<div class="advantage-card"><b>${title}</b><strong>${value}</strong><p>${escapeHtml(help)}</p></div>`).join("");
+
+      const trackCards = tracks.length ? tracks.slice(0, 3).map((track, index) => {
+        const latest = track.latest_observation || track.observations?.[track.observations.length - 1] || {};
+        const trend = track.trend || {};
+        const metrics = trend.metrics || {};
+        const location = latest.location || {};
+        const guardText = `${trend.claim_level || "claim N/A"} / ${trend.measurement_basis || "basis N/A"} / ${trend.comparability_status || "comparability N/A"}`;
+        return `<div class="advantage-card"><b>${index + 1}. ${escapeHtml(track.track_id || "track")}</b><strong>${escapeHtml(trendTone(trend.label))}</strong><p>${escapeHtml(shortLocation(location))}；area ${fmt(metrics.first_area, 0)} -> ${fmt(metrics.latest_area, 0)} px；${escapeHtml(guardText)}。</p></div>`;
+      }) : [
+        `<div class="advantage-card"><b>Track evidence</b><strong>N/A</strong><p>当前报告没有可展示的 defect track。</p></div>`
+      ];
+      document.querySelector("#robotTrackGrid").innerHTML = trackCards.join("");
+
+      const firstQueue = queue[0];
+      const queueText = firstQueue
+        ? `Top review: ${firstQueue.track_id} / ${trendTone(firstQueue.trend_label)} / score ${fmt(firstQueue.score, 2)}。`
+        : "暂无 review queue。";
+      document.querySelector("#robotRouteNote").textContent = `${queueText} 路线报告只把跨轮次且可比的证据标为 suspected-growth；同一轮照片中的变化只作为 apparent-change-evidence，仍需要人工或传感器复核。`;
+    }
+
+    async function loadRobotRouteReport() {
+      try {
+        const response = await fetch("/api/robot-route-report");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        renderRobotRouteReport(await response.json());
+      } catch (apiError) {
+        try {
+          const response = await fetch("assets/robot_route_report.json");
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          renderRobotRouteReport({ source: "static-asset", report: await response.json() });
+        } catch (assetError) {
+          document.querySelector("#robotRouteSource").textContent = "robot route report unavailable";
+          document.querySelector("#robotRouteNote").textContent = `路线级样例暂不可用：${apiError.message}；${assetError.message}。`;
+        }
+      }
+    }
     function viewLabel(label) {
       const labels = {
         Original: "原图",
@@ -2348,6 +2469,7 @@
 
     renderExperiment();
     loadAggregateEvidence();
+    loadRobotRouteReport();
     renderReport(sampleReport, sampleViews);
     initTasteMotion();
   </script>

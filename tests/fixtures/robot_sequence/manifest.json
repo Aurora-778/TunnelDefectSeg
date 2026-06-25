@@ -1,0 +1,25 @@
+{
+  "inspection_run_id": "robot-demo-run-002",
+  "frames": [
+    {
+      "frame_id": "tunnel-001-old",
+      "inspection_run_id": "robot-demo-run-001",
+      "image_path": "images/tunnel-001-old.jpg",
+      "report_path": "frame_reports/tunnel-001-old.json",
+      "timestamp": "2026-06-01T08:00:00Z",
+      "mileage": "K12+340.5",
+      "ring_id": "R-128",
+      "camera_id": "front-left"
+    },
+    {
+      "frame_id": "tunnel-001-new",
+      "inspection_run_id": "robot-demo-run-002",
+      "image_path": "images/tunnel-001-new.jpg",
+      "report_path": "frame_reports/tunnel-001-new.json",
+      "timestamp": "2026-06-20T08:00:00Z",
+      "mileage": "K12+341.2",
+      "ring_id": "R-128",
+      "camera_id": "front-left"
+    }
+  ]
+}

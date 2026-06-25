@@ -8,6 +8,7 @@
 - 使用 SegFormer B1 提升 mask 质量
 - 后处理增强模块：TTA 融合、自适应选择、不确定性估计、骨架提取
 - Web 端支持拖拽图片实时检测与多视图展示
+- 路线级时空巡检报告：连续帧排序、缺陷 track、趋势声明边界和复核队列
 - 结构化巡检报告导出（`inspection_report.py` / `docs/competition/report-template.md`）
 - 输出复核优先级（review priority）和专利证据包
 
@@ -160,6 +161,7 @@ python web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
 - 比赛实验总览：`docs/competition/experiment-summary.md`
 - 比赛案例包：`docs/competition/demo-case-pack.md`
 - 比赛要求矩阵：`docs/competition/cs-202613-requirements-matrix.md`
+- 机器人时空巡检说明：`docs/competition/robot-spatiotemporal-monitoring.md`
 - 土建病害映射说明：`docs/competition/civil-defect-evaluation.md`
 - 轨道/设备适配说明：`docs/competition/multidomain-detector-notes.md`
 - 报告模板：`docs/competition/report-template.md`

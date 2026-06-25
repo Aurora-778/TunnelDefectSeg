@@ -196,3 +196,27 @@ def test_detect_image_exports_structured_report(tmp_path, monkeypatch):
     saved = json.loads(exported[0].read_text(encoding="utf-8"))
     assert saved["source_image"]["name"] == "demo.png"
     assert saved["artifacts"]["inspection_report"] == "demo_inspection_report.json"
+
+
+def test_load_robot_route_report_reads_static_asset(tmp_path, monkeypatch):
+    route_report = tmp_path / "robot_route_report.json"
+    route_report.write_text(json.dumps({"schema_version": "robot-inspection-report.v1", "summary": {"track_count": 1}}), encoding="utf-8")
+    monkeypatch.setattr(web_app, "ROBOT_ROUTE_REPORT_FILE", route_report)
+
+    payload = web_app._load_robot_route_report()
+
+    assert payload["ok"] is True
+    assert payload["source"] == "static-json"
+    assert payload["report"]["schema_version"] == "robot-inspection-report.v1"
+    assert payload["report"]["summary"]["track_count"] == 1
+
+
+def test_load_robot_route_report_falls_back_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "ROBOT_ROUTE_REPORT_FILE", tmp_path / "missing.json")
+
+    payload = web_app._load_robot_route_report()
+
+    assert payload["ok"] is True
+    assert payload["source"] == "fallback"
+    assert payload["report"] is None
+    assert payload["missing"].endswith("missing.json")

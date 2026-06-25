@@ -213,6 +213,13 @@ def test_web_demo_documents_segformer_probability_tta_sample():
     assert 'tta_specs: ["segformer_identity", "segformer_hflip"]' in html
     assert "assets/segformer_t1_1_uncertainty_heatmap.png" in html
     assert "assets/segformer_t1_1_disagreement_heatmap.png" in html
+    assert "robotRouteGrid" in html
+    assert "renderRobotRouteReport" in html
+    assert "/api/robot-route-report" in html
+    assert "assets/robot_route_report.json" in html
+    assert "comparability_status" in html
+    assert "claim_level" in html
+    assert 'typeof location.mileage === "number"' in html
     assert "当前 SegFormer 接口只输出单个 mask" not in html
     assert "当前 SegFormer 单 mask 模式" not in html
 
@@ -251,10 +258,13 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     summary = (ROOT / "docs" / "competition" / "experiment-summary.md").read_text(encoding="utf-8")
     case_pack = (ROOT / "docs" / "competition" / "demo-case-pack.md").read_text(encoding="utf-8")
     spatial_method = (ROOT / "docs" / "competition" / "spatial-mapping-method.md").read_text(encoding="utf-8")
+    route_monitoring = (ROOT / "docs" / "competition" / "robot-spatiotemporal-monitoring.md").read_text(encoding="utf-8")
+    robot_report_asset = json.loads((ROOT / "web_demo" / "assets" / "robot_route_report.json").read_text(encoding="utf-8"))
     local_setup = (ROOT / "docs" / "local-setup-windows.md").read_text(encoding="utf-8")
     html = (ROOT / "web_demo" / "index.html").read_text(encoding="utf-8")
 
     assert "docs/competition/cs-202613-requirements-matrix.md" in readme
+    assert "docs/competition/robot-spatiotemporal-monitoring.md" in readme
     assert "docs/competition/civil-defect-evaluation.md" in readme
     assert "docs/competition/multidomain-detector-notes.md" in readme
     assert "docs/competition/technical-report-outline.md" in readme
@@ -306,3 +316,11 @@ def test_competition_materials_indexes_internal_demo_and_pending_external_source
     assert "accuracy_level" in spatial_method
     assert "location_accuracy_level" in spatial_method
     assert "clock position" in spatial_method
+    assert "Robot Spatiotemporal Defect Monitoring" in route_monitoring
+    assert "FrameRecord" in route_monitoring
+    assert "comparability_status" in route_monitoring
+    assert "suspected-growth" in route_monitoring
+    assert "robot_route_report.json" in matrix
+    assert robot_report_asset["schema_version"] == "robot-inspection-report.v1"
+    assert robot_report_asset["claim_guard"]["not_prediction_unless_cross_cycle_comparable_or_manual_verified"] is True
+    assert robot_report_asset["tracks"][0]["trend"]["comparability_status"] in {"comparable-cross-cycle", "same-run-not-growth-evidence", "single-observation-baseline"}
