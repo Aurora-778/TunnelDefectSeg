@@ -25,5 +25,12 @@ def test_generate_simulation_tables_outputs_expected_files_and_counts():
 
     assert (base_dir / "outputs" / "simulation_summary.md").exists()
     assert all(row["image_path"].startswith("data/images/") for row in sequence_df)
-    assert not any(Path(row["image_path"]).exists() for row in sequence_df)
+    assert all(row["image_path"].endswith(".jpg") for row in sequence_df)
     assert all(isinstance(row["area_growth_rate"], float) for row in growth_df)
+
+    growth_by_key = {(row["disease_id"], row["inspection_id"]): row for row in growth_df}
+    for row in mapping_df:
+        growth_row = growth_by_key[(row["disease_id"], row["inspection_id"])]
+        assert row["area_px"] == growth_row["area_px"]
+        assert row["length_m"] == growth_row["length_m"]
+        assert row["width_mm"] == growth_row["width_mm"]

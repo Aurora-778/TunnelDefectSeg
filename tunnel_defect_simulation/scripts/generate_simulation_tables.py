@@ -79,11 +79,13 @@ def write_csv(rows: list[dict], fieldnames: list[str], filename: str) -> None:
         writer.writerows(rows)
 
 
-def growth_factor(inspection_id: str) -> float:
+def growth_factor(disease_id: str, inspection_id: str) -> float:
     inspection_index = int(inspection_id[1:]) - 1
     if inspection_index == 0:
         return 1.0
-    return round(1.0 + 0.25 * inspection_index + random.uniform(-0.05, 0.05), 4)
+    disease_index = int(disease_id[1:])
+    jitter = ((disease_index * 37 + inspection_index * 17) % 101) / 1000 - 0.05
+    return round(1.0 + 0.25 * inspection_index + jitter, 4)
 
 
 def random_bbox() -> tuple[int, int, int, int]:
@@ -226,7 +228,7 @@ def generate_frame_disease_mapping(sequence_rows: list[dict], disease_rows: list
             if frame["clock_direction"] != disease["clock_direction"]:
                 continue
 
-            factor = growth_factor(frame["inspection_id"])
+            factor = growth_factor(disease["disease_id"], frame["inspection_id"])
             area_px = int(round(disease["base_area_px"] * factor))
             length_m = round(disease["base_length_m"] * factor, 3)
             width_mm = 0.0 if disease["base_width_mm"] == 0 else round(disease["base_width_mm"] * factor, 3)
@@ -279,7 +281,7 @@ def generate_disease_growth_records(disease_rows: list[dict]) -> list[dict]:
         base_width = disease["base_width_mm"]
 
         for inspection_id, start_time_text in INSPECTIONS:
-            factor = growth_factor(inspection_id)
+            factor = growth_factor(disease["disease_id"], inspection_id)
             area_px = int(round(base_area * factor))
             length_m = round(base_length * factor, 3)
             width_mm = 0.0 if base_width == 0 else round(base_width * factor, 3)
@@ -319,11 +321,16 @@ def validate_tables(
 
     growth_counts = Counter(row["disease_id"] for row in growth_rows)
     assert all(growth_counts[row["disease_id"]] == len(INSPECTIONS) for row in disease_rows)
+    growth_by_key = {(row["disease_id"], row["inspection_id"]): row for row in growth_rows}
 
     for row in mapping_rows:
         assert 0 <= row["bbox_x1"] < row["bbox_x2"] <= IMAGE_WIDTH
         assert 0 <= row["bbox_y1"] < row["bbox_y2"] <= IMAGE_HEIGHT
         assert 0.0 <= row["confidence"] <= 1.0
+        growth_row = growth_by_key[(row["disease_id"], row["inspection_id"])]
+        assert row["area_px"] == growth_row["area_px"]
+        assert row["length_m"] == growth_row["length_m"]
+        assert row["width_mm"] == growth_row["width_mm"]
 
     for row in growth_rows:
         assert math.isfinite(row["area_growth_rate"])
