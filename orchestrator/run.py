@@ -21,7 +21,36 @@ def main() -> int:
         default="config/pipeline.yaml",
         help="Pipeline YAML path, relative to the project root unless absolute.",
     )
+    parser.add_argument(
+        "--dag",
+        help="DAG YAML path, relative to the project root unless absolute.",
+    )
     args = parser.parse_args()
+
+    registry = build_default_registry()
+    if args.dag:
+        from orchestrator.dag.builder import build_dag
+        from orchestrator.executor import DAGExecutor
+
+        dag_path = Path(args.dag)
+        if not dag_path.is_absolute():
+            dag_path = project_root / dag_path
+        tasks, config = build_dag(dag_path)
+        shared = dict(config.get("shared", {}))
+        shared.setdefault("project_root", str(project_root))
+        shared.setdefault("dag_config", str(dag_path))
+        context = {
+            "inputs": config.get("inputs", {}),
+            "outputs": {},
+            "shared": shared,
+            "task_status": {},
+        }
+        result = DAGExecutor(registry, project_root).run(tasks, context)
+        print("DAG Multi-Agent Orchestrator finished")
+        print(f"dag: {dag_path}")
+        print(f"task status: {result.get('task_status', {})}")
+        print(f"dag log: {project_root / 'logs' / 'dag_execution.json'}")
+        return 0
 
     config_path = Path(args.pipeline)
     if not config_path.is_absolute():
@@ -30,7 +59,7 @@ def main() -> int:
     orchestrator = Orchestrator(
         project_root=project_root,
         config_path=config_path,
-        registry=build_default_registry(),
+        registry=registry,
     )
 
     result = orchestrator.run_pipeline()
