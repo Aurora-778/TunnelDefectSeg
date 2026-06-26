@@ -220,3 +220,92 @@ def test_load_robot_route_report_falls_back_when_missing(tmp_path, monkeypatch):
     assert payload["source"] == "fallback"
     assert payload["report"] is None
     assert payload["missing"].endswith("missing.json")
+
+
+def test_load_robot_dashboard_reads_generated_artifacts(tmp_path, monkeypatch):
+    route_report = tmp_path / "robot_route_report.json"
+    route_report.write_text(json.dumps({
+        "schema_version": "robot-inspection-report.v1",
+        "summary": {"frame_count": 8, "track_count": 3, "review_count": 2, "limitations": ["pose_missing"]},
+    }), encoding="utf-8")
+    priority_csv = tmp_path / "priority_recheck_list.csv"
+    priority_csv.write_text(
+        "priority_rank,disease_id,disease_type,attention_level,growth_trend,last_risk_level,recheck_reason\n"
+        "2,D002,crack,重点关注,持续增长,高,增长较快\n"
+        "1,D001,spalling,重点关注,基本稳定,高,风险较高\n",
+        encoding="utf-8",
+    )
+    growth_csv = tmp_path / "disease_growth_analysis.csv"
+    growth_csv.write_text(
+        "disease_id,disease_type,inspection_count,growth_trend,attention_level,last_risk_level,last_inspection\n"
+        "D001,spalling,3,基本稳定,重点关注,高,I003\n"
+        "D002,crack,3,持续增长,重点关注,高,I003\n"
+        "D003,crack,2,基本稳定,一般关注,中,I002\n",
+        encoding="utf-8",
+    )
+    mileage_chart = tmp_path / "mileage_risk_distribution.png"
+    mileage_chart.write_bytes(b"png")
+
+    monkeypatch.setattr(web_app, "ROBOT_ROUTE_REPORT_FILE", route_report)
+    monkeypatch.setattr(web_app, "PRIORITY_RECHECK_FILE", priority_csv)
+    monkeypatch.setattr(web_app, "DISEASE_GROWTH_FILE", growth_csv)
+    monkeypatch.setattr(web_app, "VISUALIZATION_FILES", {"mileage_risk": mileage_chart})
+
+    payload = web_app._load_robot_dashboard()
+
+    assert payload["ok"] is True
+    assert payload["source"] == "generated-artifacts"
+    assert payload["summary"]["frame_count"] == 8
+    assert payload["summary"]["inspection_count"] == 3
+    assert payload["summary"]["priority_recheck_count"] == 2
+    assert payload["summary"]["high_risk_count"] == 2
+    assert [row["disease_id"] for row in payload["priority_rechecks"]] == ["D001", "D002"]
+    assert payload["growth_distribution"] == {"基本稳定": 2, "持续增长": 1}
+    assert payload["visualization_links"]["mileage_risk"] == "/outputs/visualizations/mileage_risk_distribution.png"
+    assert "pose_missing" in payload["limitations"]
+    assert "rule_evidence" in payload["limitations"]
+
+
+def test_load_robot_dashboard_handles_missing_csv_without_failing(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "ROBOT_ROUTE_REPORT_FILE", tmp_path / "missing.json")
+    monkeypatch.setattr(web_app, "PRIORITY_RECHECK_FILE", tmp_path / "missing-priority.csv")
+    monkeypatch.setattr(web_app, "DISEASE_GROWTH_FILE", tmp_path / "missing-growth.csv")
+    monkeypatch.setattr(web_app, "VISUALIZATION_FILES", {})
+
+    payload = web_app._load_robot_dashboard()
+
+    assert payload["ok"] is True
+    assert payload["source"] == "fallback"
+    assert payload["priority_rechecks"] == []
+    assert payload["growth_distribution"] == {}
+    assert "priority_recheck_list_missing" in payload["limitations"]
+    assert "disease_growth_analysis_missing" in payload["limitations"]
+
+
+def test_robot_dashboard_api_route_returns_payload(monkeypatch):
+    sent = {}
+    handler = object.__new__(web_app.DetectionHandler)
+    handler.path = "/api/robot-dashboard"
+    handler._send_json = lambda payload, status=None: sent.update(payload=payload, status=status)
+    monkeypatch.setattr(web_app, "_load_robot_dashboard", lambda: {"ok": True, "summary": {"track_count": 1}})
+
+    web_app.DetectionHandler.do_GET(handler)
+
+    assert sent["payload"]["ok"] is True
+    assert sent["payload"]["summary"]["track_count"] == 1
+
+
+def test_web_demo_has_robot_dashboard_and_preserves_single_image_review():
+    html = Path("web_demo/index.html").read_text(encoding="utf-8")
+
+    assert "机器人巡检 Dashboard" in html
+    assert "/api/robot-dashboard" in html
+    assert "重点复检清单" in html
+    assert "单图检测 / 现场复核" in html
+    assert "拖入图片实时检测" in html
+    assert "/api/detect" in html
+    assert "mIoU" in html
+    assert "Self IoU" in html
+    assert "mask" in html
+    assert "GT" in html
+    assert "uncertainty" in html

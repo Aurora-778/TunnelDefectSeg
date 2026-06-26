@@ -292,6 +292,227 @@
     .risk-low { background: #d7eadf; color: #17212b; }
     .risk-none { background: #f8fbfd; color: #17212b; }
 
+    .robot-dashboard {
+      margin-bottom: 34px;
+    }
+
+    .robot-dashboard-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(340px, .95fr);
+      gap: 14px;
+      padding: 16px;
+      color: #17212b;
+    }
+
+    .robot-title h1 {
+      margin: 0;
+      font-size: clamp(32px, 4vw, 56px);
+      line-height: 1.04;
+      letter-spacing: 0;
+    }
+
+    .robot-title p {
+      max-width: 720px;
+      margin: 10px 0 0;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .robot-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .robot-kpi {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 10px;
+      min-height: 82px;
+    }
+
+    .robot-kpi span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .robot-kpi b {
+      display: block;
+      margin-top: 10px;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .claim-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .claim-chip {
+      border: 1px solid rgba(23,33,43,.26);
+      background: #f8fbfd;
+      padding: 6px 9px;
+      border-radius: 999px;
+      color: #425466;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .robot-chart-panel {
+      border: 1px solid var(--line);
+      background: #fff;
+      min-height: 280px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .robot-chart-panel h2,
+    .recheck-panel h2,
+    .defect-detail h2 {
+      margin: 0;
+      padding: 12px;
+      border-bottom: 1px solid rgba(23,33,43,.16);
+      font-size: 16px;
+    }
+
+    .robot-chart-panel img {
+      width: 100%;
+      height: 100%;
+      min-height: 220px;
+      object-fit: contain;
+      background: #f8fbfd;
+      display: block;
+    }
+
+    .robot-empty {
+      display: grid;
+      place-items: center;
+      min-height: 180px;
+      color: var(--muted);
+      padding: 16px;
+      text-align: center;
+    }
+
+    .robot-workspace {
+      display: grid;
+      grid-template-columns: minmax(320px, .9fr) minmax(0, 1.1fr);
+      gap: 14px;
+      padding: 0 16px 16px;
+      color: #17212b;
+    }
+
+    .recheck-panel,
+    .defect-detail {
+      border: 1px solid var(--line);
+      background: #fff;
+      min-width: 0;
+    }
+
+    .recheck-list {
+      display: grid;
+      gap: 8px;
+      max-height: 390px;
+      overflow: auto;
+      padding: 12px;
+    }
+
+    .recheck-item {
+      width: 100%;
+      border-radius: 0;
+      border: 1px solid rgba(23,33,43,.28);
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      text-align: left;
+      box-shadow: none;
+    }
+
+    .recheck-item:hover { transform: none; box-shadow: inset 0 0 0 2px rgba(0,166,166,.18); }
+    .recheck-item.active { background: #e8f8f7; border-color: var(--cyan); }
+
+    .recheck-rank {
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-weight: 800;
+      color: var(--cyan);
+    }
+
+    .recheck-main b,
+    .detail-grid b {
+      font-family: "Cascadia Mono", "Consolas", monospace;
+    }
+
+    .recheck-main span,
+    .detail-grid span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .detail-body {
+      padding: 12px;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .detail-cell {
+      border: 1px solid rgba(23,33,43,.18);
+      background: #f8fbfd;
+      padding: 9px;
+      min-width: 0;
+    }
+
+    .detail-note {
+      border-left: 4px solid var(--cyan);
+      background: #f8fbfd;
+      padding: 10px;
+      color: #425466;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .robot-distribution-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      padding: 0 16px 16px;
+      color: #17212b;
+    }
+
+    .distribution-card {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 10px;
+      min-height: 92px;
+    }
+
+    .distribution-card b {
+      display: block;
+      margin-bottom: 6px;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+    }
+
+    .distribution-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
     .upload-panel {
       margin-bottom: 34px;
     }
@@ -1022,6 +1243,9 @@
       header { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .brand { grid-column: 1 / -1; }
       .dashboard, .lower, .experiment-grid { grid-template-columns: 1fr; }
+      .robot-dashboard-body, .robot-workspace { grid-template-columns: 1fr; }
+      .robot-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .robot-distribution-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .stage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       #aggregateEvidenceGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       #reviewQueueGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1055,6 +1279,9 @@
       .compare-row { grid-template-columns: 74px 1fr 44px; }
       .compare-row span:nth-child(4),
       .compare-row span:nth-child(5) { display: none; }
+      .robot-dashboard-body, .robot-workspace { padding: 12px; }
+      .robot-kpi-grid, .robot-distribution-grid, .detail-grid { grid-template-columns: 1fr; }
+      .robot-title h1 { font-size: 32px; }
       .glossary { grid-template-columns: 1fr; }
       .bar-row { grid-template-columns: 78px minmax(0, 1fr) 46px; }
       .brand h1 { font-size: 23px; }
@@ -1087,32 +1314,61 @@
     <nav class="premium-nav">
       <div class="nav-brand"><span class="nav-mark"></span><span>tunnel defect studio</span></div>
       <div class="nav-links">
-        <a href="#detect">实时检测</a>
-        <a href="#evidence">增强证据</a>
-        <a href="#robot-route">机器人巡检</a>
-        <a href="#patent">专利链条</a>
+        <a href="#robot-dashboard">巡检总览</a>
+        <a href="#recheck">重点复检</a>
+        <a href="#detect">单图检测</a>
+        <a href="#patent">指标说明</a>
       </div>
     </nav>
 
-    <section class="hero-chapter" id="top">
-      <div class="hero-copy">
-        <h1>可信隧道病害<span class="inline-image" aria-hidden="true"></span>检测工作台</h1>
-        <p class="scrub-text">把语义分割结果转化为可复核的工程证据：mask source、adaptive selection、uncertainty、morphology 与 risk report 在同一页面完成闭环。</p>
-        <div class="hero-actions">
-          <a class="hero-btn primary" href="#detect">开始检测</a>
-          <a class="hero-btn secondary" href="#evidence">查看增强证据</a>
+    <section class="panel robot-dashboard" id="robot-dashboard">
+      <div class="panel-title">机器人巡检 Dashboard <span id="robotDashboardSource">loading /api/robot-dashboard</span></div>
+      <div class="robot-dashboard-body">
+        <div>
+          <div class="robot-title">
+            <h1>隧道机器人巡检结果</h1>
+            <p>按时间和里程聚合图像检测结果，输出重点复检对象、风险分布和证据边界。</p>
+          </div>
+          <div class="robot-kpi-grid" id="robotKpiGrid">
+            <div class="robot-kpi"><span>Inspection</span><b>-</b></div>
+            <div class="robot-kpi"><span>Frames</span><b>-</b></div>
+            <div class="robot-kpi"><span>Defects</span><b>-</b></div>
+            <div class="robot-kpi"><span>Recheck</span><b>-</b></div>
+            <div class="robot-kpi"><span>High risk</span><b>-</b></div>
+          </div>
+          <div class="claim-row" id="claimChips">
+            <span class="claim-chip">rule evidence</span>
+            <span class="claim-chip">requires review</span>
+            <span class="claim-chip">simulation/coarse</span>
+          </div>
+        </div>
+        <div class="robot-chart-panel">
+          <h2>里程风险分布</h2>
+          <img id="mileageRiskChart" src="" alt="里程风险分布图" hidden />
+          <div class="robot-empty" id="mileageRiskEmpty">等待图表。</div>
         </div>
       </div>
-      <div class="hero-media">
-        <div class="media-card motion-image"><img src="assets/segformer_t1_1_selected_overlay.png" alt="隧道病害检测叠加结果"></div>
-        <div class="hero-caption">当前样例展示 selected overlay。自选图片无 GT 时不会显示真实 mIoU，只显示 self-consistency 与复核证据。</div>
+      <div class="robot-workspace">
+        <section class="recheck-panel" id="recheck">
+          <h2>重点复检清单</h2>
+          <div class="recheck-list" id="recheckList">
+            <div class="robot-empty">等待 priority_recheck_list.csv。</div>
+          </div>
+        </section>
+        <section class="defect-detail">
+          <h2>病害证据</h2>
+          <div class="detail-body" id="defectDetail">
+            <div class="robot-empty">选择一个复检对象。</div>
+          </div>
+        </section>
       </div>
+      <div class="robot-distribution-grid" id="robotDistributionGrid"></div>
     </section>
 
     <header class="quick-stats">
       <section class="brand">
-        <h1>隧道病害可信评估展示台</h1>
-        <p>TTA fusion / Uncertainty / Skeleton morphology / Risk report</p>
+        <h1>单图检测 / 现场复核</h1>
+        <p>mask / GT / uncertainty / Self IoU</p>
       </section>
       <section class="stat risk-medium" id="riskLevelCard"><span>Risk level</span><strong id="riskLevel">Medium</strong></section>
       <section class="stat"><span>Risk score</span><strong id="riskScore">3.25</strong></section>
@@ -1781,6 +2037,109 @@
       } catch (error) {
         renderAggregateEvidence(fallbackEvidenceSummary, { source: "fallback-sample", split: "all" });
         document.querySelector("#aggregateEvidenceNote").textContent += ` API 暂不可用：${error.message}。`;
+      }
+    }
+
+    function renderDistribution(title, distribution = {}) {
+      const entries = Object.entries(distribution);
+      const text = entries.length
+        ? entries.map(([name, count]) => `${escapeHtml(name)} ${intFmt(count)}`).join(" / ")
+        : "N/A";
+      return `<div class="distribution-card"><b>${escapeHtml(title)}</b><p>${text}</p></div>`;
+    }
+
+    function renderDefectDetail(row = {}) {
+      const cells = [
+        ["Disease", row.disease_id || "-"],
+        ["Type", row.disease_type || "-"],
+        ["Mileage", row.last_mileage_range || "-"],
+        ["Clock", row.main_clock_direction || "-"],
+        ["Trend", row.growth_trend || "-"],
+        ["Risk", row.last_risk_level || "-"],
+        ["Growth", row.area_growth_rate !== undefined ? `${fmt(row.area_growth_rate, 2)}%` : "-"],
+        ["Claim", "rule evidence / requires review"],
+      ];
+      document.querySelector("#defectDetail").innerHTML = `
+        <div class="detail-grid">
+          ${cells.map(([label, value]) => `<div class="detail-cell"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`).join("")}
+        </div>
+        <div class="detail-note">${escapeHtml(row.growth_description || row.recheck_reason || "暂无增长描述。")}</div>
+        <div class="detail-note" style="margin-top:8px;">${escapeHtml(row.recheck_suggestion || "建议人工复核后再形成养护结论。")}</div>
+      `;
+    }
+
+    function renderRobotDashboard(payload = {}) {
+      const summary = payload.summary || {};
+      const rechecks = payload.priority_rechecks || [];
+      const links = payload.visualization_links || {};
+      document.querySelector("#robotDashboardSource").textContent = payload.source || "fallback";
+
+      const kpis = [
+        ["Inspection", summary.inspection_count ?? "-"],
+        ["Frames", summary.frame_count ?? "-"],
+        ["Defects", summary.growth_object_count ?? summary.track_count ?? "-"],
+        ["Recheck", summary.priority_recheck_count ?? summary.review_count ?? "-"],
+        ["High risk", summary.high_risk_count ?? "-"],
+      ];
+      document.querySelector("#robotKpiGrid").innerHTML = kpis
+        .map(([label, value]) => `<div class="robot-kpi"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`)
+        .join("");
+
+      const limitations = (payload.limitations || []).slice(0, 5);
+      document.querySelector("#claimChips").innerHTML = (limitations.length ? limitations : ["rule_evidence", "requires_review"])
+        .map((item) => `<span class="claim-chip">${escapeHtml(String(item).replaceAll("_", " "))}</span>`)
+        .join("");
+
+      const chart = document.querySelector("#mileageRiskChart");
+      const empty = document.querySelector("#mileageRiskEmpty");
+      if (links.mileage_risk) {
+        chart.src = links.mileage_risk;
+        chart.hidden = false;
+        empty.hidden = true;
+      } else {
+        chart.hidden = true;
+        empty.hidden = false;
+        empty.textContent = "里程风险图暂缺。";
+      }
+
+      const list = document.querySelector("#recheckList");
+      if (!rechecks.length) {
+        list.innerHTML = `<div class="robot-empty">暂无重点复检对象。</div>`;
+        renderDefectDetail({});
+      } else {
+        list.innerHTML = rechecks.slice(0, 12).map((row, index) => `
+          <button class="recheck-item ${index === 0 ? "active" : ""}" type="button" data-recheck-index="${index}">
+            <span class="recheck-rank">#${escapeHtml(row.priority_rank || index + 1)}</span>
+            <span class="recheck-main"><b>${escapeHtml(row.disease_id || "-")} / ${escapeHtml(row.disease_type || "-")}</b><span>${escapeHtml(row.last_mileage_range || "-")} · ${escapeHtml(row.main_clock_direction || "-")} · ${escapeHtml(row.growth_trend || "-")}</span></span>
+            <b>${escapeHtml(row.last_risk_level || "-")}</b>
+          </button>
+        `).join("");
+        list.querySelectorAll("[data-recheck-index]").forEach((button) => {
+          button.addEventListener("click", () => {
+            list.querySelectorAll(".recheck-item").forEach((item) => item.classList.remove("active"));
+            button.classList.add("active");
+            renderDefectDetail(rechecks[Number(button.dataset.recheckIndex)]);
+          });
+        });
+        renderDefectDetail(rechecks[0]);
+      }
+
+      document.querySelector("#robotDistributionGrid").innerHTML = [
+        renderDistribution("Growth trend", payload.growth_distribution),
+        renderDistribution("Attention", payload.attention_distribution),
+        renderDistribution("Disease type", payload.disease_type_distribution),
+        renderDistribution("Risk level", payload.risk_level_distribution),
+      ].join("");
+    }
+
+    async function loadRobotDashboard() {
+      try {
+        const response = await fetch("/api/robot-dashboard");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        renderRobotDashboard(await response.json());
+      } catch (error) {
+        document.querySelector("#robotDashboardSource").textContent = "dashboard unavailable";
+        document.querySelector("#recheckList").innerHTML = `<div class="robot-empty">Dashboard 暂不可用：${escapeHtml(error.message)}</div>`;
       }
     }
 
@@ -2469,6 +2828,7 @@
 
     renderExperiment();
     loadAggregateEvidence();
+    loadRobotDashboard();
     loadRobotRouteReport();
     renderReport(sampleReport, sampleViews);
     initTasteMotion();

@@ -1,7 +1,7 @@
 ---
 title: Robot Inspection Web Dashboard Plan
 type: feat
-status: active
+status: completed
 date: 2026-06-26
 origin: docs/plans/2026-06-25-001-feat-robot-spatiotemporal-defect-monitoring-plan.md
 ---
