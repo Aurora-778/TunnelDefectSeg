@@ -41,7 +41,7 @@ class AssociationAgent(BaseAgent):
                     "clock_direction": frame.get("clock_direction", ""),
                     "disease_type": frame.get("disease_type", ""),
                     "kict_area_px": frame.get("kict_area_px", ""),
-                    "risk_level": memory.get("risk_level", ""),
+                    "risk_level": memory.get("last_risk_level", memory.get("risk_level", "")),
                     "growth_trend": memory.get("growth_trend", ""),
                     "kict_image_path": frame.get("kict_image_path", ""),
                     "kict_mask_path": frame.get("kict_mask_path", ""),

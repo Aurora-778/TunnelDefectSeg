@@ -1,47 +1,88 @@
-"""Build a disease memory bank from engineering and growth records."""
+"""Build a long-term disease memory bank from inspection records."""
 
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from orchestrator.agents.base import BaseAgent
 
 
 class MemoryAgent(BaseAgent):
-    """Convert current disease reports into a reusable memory table."""
+    """Aggregate disease records into one memory item per disease_id."""
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         report_path = self.data_dir / "disease_engineering_report.csv"
         growth_path = self.data_dir / "disease_growth_analysis.csv"
         output_path = self.data_dir / "disease_memory_bank.csv"
+        report_path_md = self.outputs_dir / "memory_agent_report.md"
+        log_path = self.project_root / "logs" / "memory_agent.log"
 
+        self._log(log_path, "start")
         report_rows = self.read_csv(report_path)
         growth_rows = self.read_csv(growth_path)
         growth_by_id = {row.get("disease_id", ""): row for row in growth_rows}
+        grouped_rows = self._group_by_disease(report_rows)
 
         rows: list[dict[str, Any]] = []
-        for item in report_rows:
-            disease_id = item.get("disease_id", "")
+        for disease_id in sorted(grouped_rows):
+            disease_rows = sorted(grouped_rows[disease_id], key=self._inspection_sort_key)
+            first = disease_rows[0]
+            last = disease_rows[-1]
             growth = growth_by_id.get(disease_id, {})
+            first_area = self._to_float(first.get("max_area_px"))
+            last_area = self._to_float(last.get("max_area_px"))
+            area_growth_px = last_area - first_area
+            area_growth_rate = area_growth_px / first_area if first_area else 0.0
+            max_area = max(self._to_float(row.get("max_area_px")) for row in disease_rows)
+            first_risk = first.get("risk_level", "")
+            last_risk = last.get("risk_level", "")
+            risk_change = self._risk_score(last_risk) - self._risk_score(first_risk)
+            growth_trend = self._growth_trend(area_growth_rate)
+            attention_level = self._attention_level(area_growth_rate, last_risk)
+            total_seen_frames = sum(int(self._to_float(row.get("frame_count"))) for row in disease_rows)
+            first_inspection = first.get("inspection_id", "")
+            last_inspection = last.get("inspection_id", "")
+            disease_type = first.get("disease_type", "")
+            main_clock_direction = growth.get("main_clock_direction") or last.get("main_clock_direction", "")
+            first_mileage = first.get("start_mileage_text", "")
+            last_mileage = last.get("end_mileage_text", "")
+
             rows.append(
                 {
                     "memory_id": f"MEM-{disease_id}",
                     "disease_id": disease_id,
-                    "disease_type": item.get("disease_type", ""),
-                    "risk_level": item.get("risk_level", ""),
-                    "attention_level": growth.get("attention_level", ""),
-                    "growth_trend": growth.get("growth_trend", ""),
-                    "main_clock_direction": item.get("main_clock_direction", ""),
-                    "mileage_range": self._join_range(
-                        item.get("start_mileage_text", ""),
-                        item.get("end_mileage_text", ""),
+                    "disease_type": disease_type,
+                    "first_seen_inspection": first_inspection,
+                    "last_seen_inspection": last_inspection,
+                    "inspection_count": len({row.get("inspection_id", "") for row in disease_rows}),
+                    "total_seen_frames": total_seen_frames,
+                    "first_area_px": self._format_number(first_area),
+                    "last_area_px": self._format_number(last_area),
+                    "max_area_px": self._format_number(max_area),
+                    "area_growth_px": self._format_number(area_growth_px),
+                    "area_growth_rate": f"{area_growth_rate:.6f}",
+                    "first_risk_level": first_risk,
+                    "last_risk_level": last_risk,
+                    "risk_level_change": risk_change,
+                    "growth_trend": growth_trend,
+                    "attention_level": attention_level,
+                    "main_clock_direction": main_clock_direction,
+                    "mileage_range": self._join_range(first_mileage, last_mileage),
+                    "representative_image_path": last.get("representative_image_path", ""),
+                    "representative_mask_path": last.get("representative_mask_path", ""),
+                    "memory_description": self._memory_description(
+                        disease_id=disease_id,
+                        disease_type=disease_type,
+                        first_seen=first_inspection,
+                        last_seen=last_inspection,
+                        growth_trend=growth_trend,
+                        area_growth_rate=area_growth_rate,
+                        last_risk=last_risk,
+                        attention_level=attention_level,
                     ),
-                    "max_area_px": item.get("max_area_px", ""),
-                    "area_growth_px": growth.get("area_growth_px", ""),
-                    "area_growth_rate": growth.get("area_growth_rate", ""),
-                    "representative_image_path": item.get("representative_image_path", ""),
-                    "representative_mask_path": item.get("representative_mask_path", ""),
-                    "engineering_description": item.get("engineering_description", ""),
                 }
             )
 
@@ -49,41 +90,157 @@ class MemoryAgent(BaseAgent):
             "memory_id",
             "disease_id",
             "disease_type",
-            "risk_level",
-            "attention_level",
-            "growth_trend",
-            "main_clock_direction",
-            "mileage_range",
+            "first_seen_inspection",
+            "last_seen_inspection",
+            "inspection_count",
+            "total_seen_frames",
+            "first_area_px",
+            "last_area_px",
             "max_area_px",
             "area_growth_px",
             "area_growth_rate",
+            "first_risk_level",
+            "last_risk_level",
+            "risk_level_change",
+            "growth_trend",
+            "attention_level",
+            "main_clock_direction",
+            "mileage_range",
             "representative_image_path",
             "representative_mask_path",
-            "engineering_description",
+            "memory_description",
         ]
         self.write_csv(output_path, rows, fieldnames)
 
         summary_path = self.outputs_dir / "disease_memory_bank_summary.md"
-        self.write_markdown(
-            summary_path,
-            "Disease Memory Bank Summary",
-            [
-                f"- 输入工程报告：`{report_path}`",
-                f"- 输入增长分析：`{growth_path}`",
-                f"- 输出记忆库：`{output_path}`",
-                f"- 记忆对象数量：{len(rows)}",
-                "",
-                "该表把病害编号、类型、风险、增长趋势和代表性图像路径整理为可复用记忆，后续可用于跨巡检关联和复检排序。",
-            ],
-        )
+        self._write_reports(summary_path, report_path_md, report_path, growth_path, output_path, rows)
+        self._log(log_path, f"disease count: {len(grouped_rows)}")
+        self._log(log_path, f"row count: {len(rows)}")
+        self._log(log_path, "end")
 
         return {
+            "disease_memory_bank_path": str(output_path),
             "memory_bank_path": str(output_path),
             "memory_bank_rows": len(rows),
+            "memory_agent_report_path": str(report_path_md),
             "memory_summary_path": str(summary_path),
+            "memory_agent_log_path": str(log_path),
         }
 
     def _join_range(self, start: str, end: str) -> str:
         if start and end and start != end:
             return f"{start} - {end}"
         return start or end
+
+    def _group_by_disease(self, report_rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
+        grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
+        for row in report_rows:
+            disease_id = row.get("disease_id", "").strip()
+            if disease_id:
+                grouped[disease_id].append(row)
+        if not grouped:
+            raise ValueError("No disease_id records found in disease_engineering_report.csv")
+        return grouped
+
+    def _inspection_sort_key(self, row: dict[str, str]) -> tuple[int, str]:
+        inspection_id = row.get("inspection_id", "")
+        digits = "".join(ch for ch in inspection_id if ch.isdigit())
+        return (int(digits) if digits else 0, inspection_id)
+
+    def _to_float(self, value: object) -> float:
+        try:
+            if value in (None, ""):
+                return 0.0
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _format_number(self, value: float) -> str:
+        return str(int(value)) if float(value).is_integer() else f"{value:.2f}"
+
+    def _risk_score(self, risk_level: str) -> int:
+        normalized = risk_level.strip().lower()
+        mapping = {
+            "低": 1,
+            "low": 1,
+            "中": 2,
+            "medium": 2,
+            "高": 3,
+            "high": 3,
+        }
+        return mapping.get(normalized, 0)
+
+    def _growth_trend(self, area_growth_rate: float) -> str:
+        # A small dead band avoids calling tiny numeric noise real growth.
+        if area_growth_rate >= 0.05:
+            return "increasing"
+        if area_growth_rate <= -0.05:
+            return "decreasing"
+        return "stable"
+
+    def _attention_level(self, area_growth_rate: float, risk_level: str) -> str:
+        risk_score = self._risk_score(risk_level)
+        if risk_score >= 3 or area_growth_rate >= 0.2:
+            return "high"
+        if risk_score == 2 or area_growth_rate >= 0.05:
+            return "medium"
+        return "low"
+
+    def _memory_description(
+        self,
+        disease_id: str,
+        disease_type: str,
+        first_seen: str,
+        last_seen: str,
+        growth_trend: str,
+        area_growth_rate: float,
+        last_risk: str,
+        attention_level: str,
+    ) -> str:
+        type_name = {
+            "crack": "裂缝",
+            "spalling": "剥落",
+            "water_leakage": "渗水",
+        }.get(disease_type, disease_type or "病害")
+        trend_name = {
+            "increasing": "明显增长",
+            "stable": "基本稳定",
+            "decreasing": "下降",
+        }.get(growth_trend, growth_trend)
+        return (
+            f"病害{disease_id}为{type_name}，首次出现于{first_seen}，末次出现于{last_seen}，"
+            f"面积变化率约为{area_growth_rate * 100:.1f}%，呈{trend_name}趋势，"
+            f"末次风险等级为{last_risk}，当前关注等级为{attention_level}。"
+        )
+
+    def _write_reports(
+        self,
+        summary_path: Path,
+        report_path: Path,
+        source_report_path: Path,
+        source_growth_path: Path,
+        output_path: Path,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        increasing_count = sum(1 for row in rows if row.get("growth_trend") == "increasing")
+        high_attention_count = sum(1 for row in rows if row.get("attention_level") == "high")
+        high_risk_count = sum(1 for row in rows if str(row.get("last_risk_level", "")).lower() in ("高", "high"))
+        lines = [
+            f"- 输入工程报告：`{source_report_path}`",
+            f"- 输入增长分析：`{source_growth_path}`",
+            f"- 输出记忆库：`{output_path}`",
+            f"- disease总数：{len(rows)}",
+            f"- 重点增长病害数量：{increasing_count}",
+            f"- 高关注病害数量：{high_attention_count}",
+            f"- 高风险病害数量：{high_risk_count}",
+            "",
+            "统计总结：Memory Agent 已按 disease_id 汇总跨巡检记录，形成首末巡检、面积增长、风险变化、趋势和关注等级等长期记忆字段。",
+        ]
+        self.write_markdown(summary_path, "Disease Memory Bank Summary", lines)
+        self.write_markdown(report_path, "Memory Agent Report", lines)
+
+    def _log(self, log_path: Path, message: str) -> None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{timestamp} {message}\n")
