@@ -391,6 +391,8 @@ def test_web_demo_has_robot_dashboard_and_preserves_single_image_review():
     assert "/api/recheck-list" in html
     assert "/api/visualization-assets" in html
     assert "重点复检清单" in html
+    assert "Selected 结果展示" in html
+    assert "assets/segformer_t1_1_selected_overlay.png" in html
     assert "工程化病害报告" in html
     assert "跨巡检增长分析" in html
     assert "可视化图表" in html
