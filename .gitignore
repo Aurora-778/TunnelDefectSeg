@@ -26,6 +26,7 @@ class_summary.json
 *.log
 *.err.log
 outputs/kict_preview/
+outputs/evidence_overlays/
 
 # Local OS/editor files
 .DS_Store

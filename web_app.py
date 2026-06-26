@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import mimetypes
+import os
 import re
 import shutil
 import threading
@@ -16,6 +17,8 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+from PIL import Image
 
 from run_confidence_risk import (
     DEFAULT_SEGFORMER_CHECKPOINT,
@@ -40,7 +43,14 @@ SIMULATED_ROOT = ROOT / "data" / "simulated"
 ENGINEERING_REPORT_FILE = SIMULATED_ROOT / "disease_engineering_report.csv"
 PRIORITY_RECHECK_FILE = SIMULATED_ROOT / "priority_recheck_list.csv"
 DISEASE_GROWTH_FILE = SIMULATED_ROOT / "disease_growth_analysis.csv"
+ROBOT_KICT_FRAME_RECORDS_FILE = SIMULATED_ROOT / "robot_kict_frame_records.csv"
 VISUALIZATION_ROOT = ROOT / "outputs" / "visualizations"
+EVIDENCE_OVERLAY_ROOT = ROOT / "outputs" / "evidence_overlays"
+KICT_DATASET_ROOTS = [
+    ROOT / "kict_sample",
+    ROOT.parent / "kict_sample",
+    Path.home() / "Downloads" / "Compressed" / "archive" / "kict_sample",
+]
 VISUALIZATION_FILES = {
     "attention_level": VISUALIZATION_ROOT / "attention_level_distribution.png",
     "growth_trend": VISUALIZATION_ROOT / "growth_trend_distribution.png",
@@ -182,6 +192,113 @@ def _visualization_url(path: Path) -> str:
     return "/static-outputs/visualizations/" + path.name
 
 
+def _evidence_overlay_url(path: Path) -> str:
+    return "/static-outputs/evidence-overlays/" + path.name
+
+
+def _candidate_kict_roots() -> list[Path]:
+    roots = []
+    env_root = os.environ.get("KICT_DATASET_ROOT")
+    if env_root:
+        roots.append(Path(env_root))
+    roots.extend(KICT_DATASET_ROOTS)
+    return roots
+
+
+def _resolve_kict_artifact_path(value: str | None) -> Path | None:
+    if not value:
+        return None
+    raw_path = Path(value)
+    if raw_path.is_absolute() and raw_path.exists():
+        return raw_path
+    for root in _candidate_kict_roots():
+        candidate = root / raw_path
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _make_overlay_image(image_path: Path, mask_path: Path, output_path: Path) -> None:
+    """Create a simple cyan mask overlay without changing the source dataset."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.open(image_path).convert("RGB")
+    mask = Image.open(mask_path).convert("L")
+    if mask.size != image.size:
+        resampling = getattr(Image, "Resampling", Image).NEAREST
+        mask = mask.resize(image.size, resampling)
+    alpha = mask.point(lambda pixel: 110 if pixel > 0 else 0)
+    cyan_mask = Image.new("RGBA", image.size, (0, 188, 212, 0))
+    cyan_mask.putalpha(alpha)
+    overlay = Image.alpha_composite(image.convert("RGBA"), cyan_mask)
+    overlay.convert("RGB").save(output_path)
+
+
+def _safe_artifact_stem(*parts: str | None) -> str:
+    joined = "_".join(part for part in parts if part)
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", joined).strip("._") or "evidence"
+
+
+def _select_kict_evidence_row(disease_id: str, last_inspection: str, kict_rows: list[dict]) -> dict | None:
+    matches = [row for row in kict_rows if row.get("disease_id") == disease_id]
+    if not matches:
+        return None
+    if last_inspection:
+        for row in reversed(matches):
+            if row.get("inspection_id") == last_inspection:
+                return row
+    return matches[-1]
+
+
+def _attach_recheck_evidence(priority_rechecks: list[dict], errors: dict, limitations: list[str]) -> list[dict]:
+    kict_rows = _read_csv_rows(ROBOT_KICT_FRAME_RECORDS_FILE, "robot_kict_frame_records", errors, limitations)
+    enriched = []
+    for row in priority_rechecks:
+        item = dict(row)
+        evidence = _select_kict_evidence_row(
+            item.get("disease_id", ""),
+            item.get("last_inspection", ""),
+            kict_rows,
+        )
+        if not evidence:
+            item["evidence_status"] = "missing_mapping"
+            enriched.append(item)
+            continue
+
+        image_path = _resolve_kict_artifact_path(evidence.get("kict_image_path") or evidence.get("kict_image_file"))
+        mask_path = _resolve_kict_artifact_path(evidence.get("kict_mask_path") or evidence.get("kict_mask_file"))
+        if not image_path or not mask_path:
+            item["evidence_status"] = "missing_source_file"
+            limitations.append("kict_source_file_missing")
+            enriched.append(item)
+            continue
+
+        output_name = _safe_artifact_stem(
+            evidence.get("disease_id"),
+            evidence.get("inspection_id"),
+            evidence.get("image_id"),
+            "overlay",
+        ) + ".png"
+        output_path = EVIDENCE_OVERLAY_ROOT / output_name
+        try:
+            if not output_path.exists():
+                _make_overlay_image(image_path, mask_path, output_path)
+            item.update({
+                "evidence_status": "ok",
+                "evidence_overlay_url": _evidence_overlay_url(output_path),
+                "evidence_image_id": evidence.get("image_id", ""),
+                "evidence_inspection_id": evidence.get("inspection_id", ""),
+                "evidence_mileage_text": evidence.get("mileage_text", ""),
+                "evidence_clock_direction": evidence.get("clock_direction", ""),
+                "evidence_image_file": evidence.get("kict_image_file") or evidence.get("kict_image_path", ""),
+                "evidence_mask_file": evidence.get("kict_mask_file") or evidence.get("kict_mask_path", ""),
+            })
+        except OSError as exc:
+            item["evidence_status"] = "overlay_failed"
+            errors[f"evidence_overlay_{item.get('disease_id') or 'unknown'}"] = str(exc)
+        enriched.append(item)
+    return enriched
+
+
 def _load_visualization_assets() -> dict:
     missing = []
     items = []
@@ -302,6 +419,7 @@ def _load_robot_dashboard() -> dict:
     priority_rechecks = _read_csv_rows(PRIORITY_RECHECK_FILE, "priority_recheck_list", errors, limitations)
     growth_rows = _read_csv_rows(DISEASE_GROWTH_FILE, "disease_growth_analysis", errors, limitations)
     priority_rechecks.sort(key=lambda row: int(_to_float(row.get("priority_rank")) or 999999))
+    priority_rechecks = _attach_recheck_evidence(priority_rechecks, errors, limitations)
 
     route_report = route_payload.get("report") or {}
     route_summary = route_report.get("summary") or {}
@@ -464,6 +582,9 @@ class DetectionHandler(SimpleHTTPRequestHandler):
         if path.startswith("/static-outputs/visualizations/"):
             self._serve_visualization_file(path.removeprefix("/static-outputs/visualizations/"))
             return
+        if path.startswith("/static-outputs/evidence-overlays/"):
+            self._serve_evidence_overlay_file(path.removeprefix("/static-outputs/evidence-overlays/"))
+            return
         if path.startswith("/outputs/"):
             self._serve_file(OUTPUT_ROOT / path.removeprefix("/outputs/"))
             return
@@ -527,7 +648,7 @@ class DetectionHandler(SimpleHTTPRequestHandler):
 
     def _serve_file(self, path: Path) -> None:
         resolved = path.resolve()
-        allowed_roots = [WEB_ROOT.resolve(), OUTPUT_ROOT.resolve(), VISUALIZATION_ROOT.resolve()]
+        allowed_roots = [WEB_ROOT.resolve(), OUTPUT_ROOT.resolve(), VISUALIZATION_ROOT.resolve(), EVIDENCE_OVERLAY_ROOT.resolve()]
         if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
             self._send_json({"error": "Forbidden"}, HTTPStatus.FORBIDDEN)
             return
@@ -546,6 +667,14 @@ class DetectionHandler(SimpleHTTPRequestHandler):
     def _serve_visualization_file(self, filename: str) -> None:
         safe_name = Path(filename).name
         path = VISUALIZATION_ROOT / safe_name
+        if filename != safe_name or path.suffix.lower() != ".png":
+            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            return
+        self._serve_file(path)
+
+    def _serve_evidence_overlay_file(self, filename: str) -> None:
+        safe_name = Path(filename).name
+        path = EVIDENCE_OVERLAY_ROOT / safe_name
         if filename != safe_name or path.suffix.lower() != ".png":
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
             return

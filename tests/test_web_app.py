@@ -223,6 +223,17 @@ def test_load_robot_route_report_falls_back_when_missing(tmp_path, monkeypatch):
 
 
 def test_load_robot_dashboard_reads_generated_artifacts(tmp_path, monkeypatch):
+    kict_root = tmp_path / "kict"
+    image_dir = kict_root / "images"
+    mask_dir = kict_root / "masks"
+    image_dir.mkdir(parents=True)
+    mask_dir.mkdir(parents=True)
+    Image.new("RGB", (12, 12), (80, 80, 80)).save(image_dir / "case.png")
+    mask = Image.new("L", (12, 12), 0)
+    for x in range(3, 8):
+        mask.putpixel((x, 6), 255)
+    mask.save(mask_dir / "case.png")
+
     route_report = tmp_path / "robot_route_report.json"
     route_report.write_text(json.dumps({
         "schema_version": "robot-inspection-report.v1",
@@ -245,10 +256,20 @@ def test_load_robot_dashboard_reads_generated_artifacts(tmp_path, monkeypatch):
     )
     mileage_chart = tmp_path / "mileage_risk_distribution.png"
     mileage_chart.write_bytes(b"png")
+    kict_records = tmp_path / "robot_kict_frame_records.csv"
+    kict_records.write_text(
+        "image_id,inspection_id,disease_id,kict_image_file,kict_mask_file,kict_image_path,kict_mask_path,mileage_text,clock_direction\n"
+        "I003_000001,I003,D001,images/case.png,masks/case.png,images/case.png,masks/case.png,K12+001.0,3点\n"
+        "I003_000002,I003,D002,images/case.png,masks/case.png,images/case.png,masks/case.png,K12+002.0,4点\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(web_app, "ROBOT_ROUTE_REPORT_FILE", route_report)
     monkeypatch.setattr(web_app, "PRIORITY_RECHECK_FILE", priority_csv)
     monkeypatch.setattr(web_app, "DISEASE_GROWTH_FILE", growth_csv)
+    monkeypatch.setattr(web_app, "ROBOT_KICT_FRAME_RECORDS_FILE", kict_records)
+    monkeypatch.setattr(web_app, "EVIDENCE_OVERLAY_ROOT", tmp_path / "evidence_overlays")
+    monkeypatch.setattr(web_app, "KICT_DATASET_ROOTS", [kict_root])
     monkeypatch.setattr(web_app, "VISUALIZATION_FILES", {"mileage_risk": mileage_chart})
 
     payload = web_app._load_robot_dashboard()
@@ -262,6 +283,9 @@ def test_load_robot_dashboard_reads_generated_artifacts(tmp_path, monkeypatch):
     assert [row["disease_id"] for row in payload["priority_rechecks"]] == ["D001", "D002"]
     assert payload["growth_distribution"] == {"基本稳定": 2, "持续增长": 1}
     assert payload["visualization_links"]["mileage_risk"] == "/static-outputs/visualizations/mileage_risk_distribution.png"
+    assert payload["priority_rechecks"][0]["evidence_status"] == "ok"
+    assert payload["priority_rechecks"][0]["evidence_overlay_url"].startswith("/static-outputs/evidence-overlays/")
+    assert (tmp_path / "evidence_overlays" / Path(payload["priority_rechecks"][0]["evidence_overlay_url"]).name).exists()
     assert "pose_missing" in payload["limitations"]
     assert "rule_evidence" in payload["limitations"]
 
@@ -381,6 +405,16 @@ def test_visualization_static_route_rejects_path_traversal():
     assert sent["status"] == web_app.HTTPStatus.NOT_FOUND
 
 
+def test_evidence_overlay_static_route_rejects_path_traversal():
+    sent = {}
+    handler = object.__new__(web_app.DetectionHandler)
+    handler._send_json = lambda payload, status=None: sent.update(payload=payload, status=status)
+
+    web_app.DetectionHandler._serve_evidence_overlay_file(handler, "../secret.png")
+
+    assert sent["status"] == web_app.HTTPStatus.NOT_FOUND
+
+
 def test_web_demo_has_robot_dashboard_and_preserves_single_image_review():
     html = Path("web_demo/index.html").read_text(encoding="utf-8")
 
@@ -391,8 +425,8 @@ def test_web_demo_has_robot_dashboard_and_preserves_single_image_review():
     assert "/api/recheck-list" in html
     assert "/api/visualization-assets" in html
     assert "重点复检清单" in html
-    assert "Selected 结果展示" in html
-    assert "assets/segformer_t1_1_selected_overlay.png" in html
+    assert "原图 + mask 融合图" in html
+    assert "evidence_overlay_url" in html
     assert "工程化病害报告" in html
     assert "跨巡检增长分析" in html
     assert "可视化图表" in html

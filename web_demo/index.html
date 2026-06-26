@@ -372,22 +372,7 @@
       grid-template-rows: auto 1fr;
     }
 
-    .robot-right-stack {
-      display: grid;
-      gap: 14px;
-      min-width: 0;
-    }
-
-    .selected-result-panel {
-      border: 1px solid var(--line);
-      background: #fff;
-      display: grid;
-      grid-template-rows: auto 1fr auto;
-      min-height: 280px;
-    }
-
     .robot-chart-panel h2,
-    .selected-result-panel h2,
     .recheck-panel h2,
     .defect-detail h2 {
       margin: 0;
@@ -396,23 +381,13 @@
       font-size: 16px;
     }
 
-    .robot-chart-panel img,
-    .selected-result-panel img {
+    .robot-chart-panel img {
       width: 100%;
       height: 100%;
       min-height: 220px;
       object-fit: contain;
       background: #f8fbfd;
       display: block;
-    }
-
-    .selected-result-panel p {
-      margin: 0;
-      padding: 10px 12px;
-      border-top: 1px solid rgba(23,33,43,.12);
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.45;
     }
 
     .robot-empty {
@@ -508,6 +483,28 @@
       color: #425466;
       font-size: 13px;
       line-height: 1.55;
+    }
+
+    .evidence-preview {
+      margin-top: 10px;
+      border: 1px solid rgba(23,33,43,.18);
+      background: #f8fbfd;
+    }
+
+    .evidence-preview img {
+      display: block;
+      width: 100%;
+      max-height: 360px;
+      object-fit: contain;
+      background: #0b1118;
+    }
+
+    .evidence-preview figcaption {
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      border-top: 1px solid rgba(23,33,43,.12);
     }
 
     .robot-distribution-grid {
@@ -1467,17 +1464,10 @@
             <span class="claim-chip">simulation/coarse</span>
           </div>
         </div>
-        <div class="robot-right-stack">
-          <div class="selected-result-panel">
-            <h2>Selected 结果展示</h2>
-            <img src="assets/segformer_t1_1_selected_overlay.png" alt="Selected mask 叠加展示图" />
-            <p>展示系统最终选择的病害区域叠加结果，和单图检测里的“选择叠加图”保持一致。</p>
-          </div>
-          <div class="robot-chart-panel">
-            <h2>里程风险分布</h2>
-            <img id="mileageRiskChart" src="" alt="里程风险分布图" hidden />
-            <div class="robot-empty" id="mileageRiskEmpty">等待图表。</div>
-          </div>
+        <div class="robot-chart-panel">
+          <h2>里程风险分布</h2>
+          <img id="mileageRiskChart" src="" alt="里程风险分布图" hidden />
+          <div class="robot-empty" id="mileageRiskEmpty">等待图表。</div>
         </div>
       </div>
       <div class="robot-workspace">
@@ -2161,12 +2151,19 @@
         ["Trend", row.growth_trend || "-"],
         ["Risk", row.last_risk_level || "-"],
         ["Growth", row.area_growth_rate !== undefined ? `${fmt(row.area_growth_rate, 2)}%` : "-"],
-        ["Claim", "rule evidence / requires review"],
+        ["Evidence", row.evidence_status || "pending"],
       ];
+      const evidenceFigure = row.evidence_overlay_url
+        ? `<figure class="evidence-preview">
+            <img src="${escapeHtml(row.evidence_overlay_url)}" alt="${escapeHtml(row.disease_id || "病害")} 原图与 mask 融合图" />
+            <figcaption>原图 + mask 融合图；样本 ${escapeHtml(row.evidence_image_id || "-")}，巡检 ${escapeHtml(row.evidence_inspection_id || row.last_inspection || "-")}，位置 ${escapeHtml(row.evidence_mileage_text || row.last_mileage_range || "-")} / ${escapeHtml(row.evidence_clock_direction || row.main_clock_direction || "-")}。</figcaption>
+          </figure>`
+        : `<div class="detail-note" style="margin-top:8px;">当前复检对象暂未找到可展示的原图 + mask 融合图，请检查 robot_kict_frame_records.csv 或 KICT 数据集路径。</div>`;
       document.querySelector("#defectDetail").innerHTML = `
         <div class="detail-grid">
           ${cells.map(([label, value]) => `<div class="detail-cell"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`).join("")}
         </div>
+        ${evidenceFigure}
         <div class="detail-note">${escapeHtml(row.growth_description || row.recheck_reason || "暂无增长描述。")}</div>
         <div class="detail-note" style="margin-top:8px;">${escapeHtml(row.recheck_suggestion || "建议人工复核后再形成养护结论。")}</div>
       `;
