@@ -261,7 +261,7 @@ def test_load_robot_dashboard_reads_generated_artifacts(tmp_path, monkeypatch):
     assert payload["summary"]["high_risk_count"] == 2
     assert [row["disease_id"] for row in payload["priority_rechecks"]] == ["D001", "D002"]
     assert payload["growth_distribution"] == {"基本稳定": 2, "持续增长": 1}
-    assert payload["visualization_links"]["mileage_risk"] == "/outputs/visualizations/mileage_risk_distribution.png"
+    assert payload["visualization_links"]["mileage_risk"] == "/static-outputs/visualizations/mileage_risk_distribution.png"
     assert "pose_missing" in payload["limitations"]
     assert "rule_evidence" in payload["limitations"]
 
@@ -295,15 +295,111 @@ def test_robot_dashboard_api_route_returns_payload(monkeypatch):
     assert sent["payload"]["summary"]["track_count"] == 1
 
 
+def test_project_summary_reads_generated_tables(tmp_path, monkeypatch):
+    engineering_csv = tmp_path / "disease_engineering_report.csv"
+    engineering_csv.write_text(
+        "inspection_id,disease_id,disease_type,risk_level\n"
+        "I001,D001,crack,高\n"
+        "I002,D001,crack,高\n",
+        encoding="utf-8",
+    )
+    growth_csv = tmp_path / "disease_growth_analysis.csv"
+    growth_csv.write_text(
+        "disease_id,inspection_count,growth_trend,last_risk_level\n"
+        "D001,3,明显增长,高\n"
+        "D002,2,基本稳定,中\n",
+        encoding="utf-8",
+    )
+    recheck_csv = tmp_path / "priority_recheck_list.csv"
+    recheck_csv.write_text("priority_rank,disease_id\n1,D001\n", encoding="utf-8")
+    chart = tmp_path / "mileage_risk_distribution.png"
+    chart.write_bytes(b"png")
+
+    monkeypatch.setattr(web_app, "ENGINEERING_REPORT_FILE", engineering_csv)
+    monkeypatch.setattr(web_app, "DISEASE_GROWTH_FILE", growth_csv)
+    monkeypatch.setattr(web_app, "PRIORITY_RECHECK_FILE", recheck_csv)
+    monkeypatch.setattr(web_app, "VISUALIZATION_FILES", {"mileage_risk": chart})
+
+    payload = web_app._load_project_summary()
+
+    assert payload["ok"] is True
+    assert payload["source"] == "generated-artifacts"
+    assert payload["inspection_count"] == 3
+    assert payload["disease_count"] == 2
+    assert payload["engineering_record_count"] == 2
+    assert payload["priority_recheck_count"] == 1
+    assert payload["high_risk_count"] == 1
+    assert payload["obvious_growth_count"] == 1
+    assert payload["visualization_count"] == 1
+
+
+def test_project_summary_falls_back_when_files_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "ENGINEERING_REPORT_FILE", tmp_path / "missing-engineering.csv")
+    monkeypatch.setattr(web_app, "DISEASE_GROWTH_FILE", tmp_path / "missing-growth.csv")
+    monkeypatch.setattr(web_app, "PRIORITY_RECHECK_FILE", tmp_path / "missing-recheck.csv")
+    monkeypatch.setattr(web_app, "VISUALIZATION_FILES", {})
+
+    payload = web_app._load_project_summary()
+
+    assert payload["ok"] is True
+    assert payload["source"] == "fallback"
+    assert payload["missing"]
+
+
+def test_table_api_payloads_keep_expected_fields(tmp_path):
+    table = tmp_path / "table.csv"
+    table.write_text("disease_id,disease_type,extra\nD001,crack,ignored\n", encoding="utf-8")
+
+    payload = web_app._load_csv_payload(table, "table", ["disease_id", "disease_type", "missing_field"])
+
+    assert payload["ok"] is True
+    assert payload["items"] == [{"disease_id": "D001", "disease_type": "crack", "missing_field": ""}]
+
+
+def test_visualization_assets_use_static_outputs_url(tmp_path, monkeypatch):
+    chart = tmp_path / "attention_level_distribution.png"
+    chart.write_bytes(b"png")
+    monkeypatch.setattr(web_app, "VISUALIZATION_FILES", {"attention_level": chart})
+
+    payload = web_app._load_visualization_assets()
+
+    assert payload["ok"] is True
+    assert payload["items"] == [{
+        "key": "attention_level",
+        "title": "关注等级分布",
+        "url": "/static-outputs/visualizations/attention_level_distribution.png",
+    }]
+
+
+def test_visualization_static_route_rejects_path_traversal():
+    sent = {}
+    handler = object.__new__(web_app.DetectionHandler)
+    handler._send_json = lambda payload, status=None: sent.update(payload=payload, status=status)
+
+    web_app.DetectionHandler._serve_visualization_file(handler, "../secret.png")
+
+    assert sent["status"] == web_app.HTTPStatus.NOT_FOUND
+
+
 def test_web_demo_has_robot_dashboard_and_preserves_single_image_review():
     html = Path("web_demo/index.html").read_text(encoding="utf-8")
 
-    assert "机器人巡检 Dashboard" in html
-    assert "/api/robot-dashboard" in html
+    assert "机器人隧道巡检病害时空监测 Dashboard" in html
+    assert "/api/project-summary" in html
+    assert "/api/engineering-report" in html
+    assert "/api/growth-analysis" in html
+    assert "/api/recheck-list" in html
+    assert "/api/visualization-assets" in html
     assert "重点复检清单" in html
+    assert "工程化病害报告" in html
+    assert "跨巡检增长分析" in html
+    assert "可视化图表" in html
     assert "单图检测 / 现场复核" in html
     assert "拖入图片实时检测" in html
     assert "/api/detect" in html
+    assert "本系统使用 KICT Tunnel Crack Segmentation Dataset" in html
+    assert "增强模块优势证据" not in html
+    assert "Metric glossary" not in html
     assert "mIoU" in html
     assert "Self IoU" in html
     assert "mask" in html

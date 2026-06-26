@@ -37,16 +37,25 @@ EVIDENCE_FILES = {
 }
 ROBOT_ROUTE_REPORT_FILE = WEB_ROOT / "assets" / "robot_route_report.json"
 SIMULATED_ROOT = ROOT / "data" / "simulated"
+ENGINEERING_REPORT_FILE = SIMULATED_ROOT / "disease_engineering_report.csv"
 PRIORITY_RECHECK_FILE = SIMULATED_ROOT / "priority_recheck_list.csv"
 DISEASE_GROWTH_FILE = SIMULATED_ROOT / "disease_growth_analysis.csv"
 VISUALIZATION_ROOT = ROOT / "outputs" / "visualizations"
 VISUALIZATION_FILES = {
-    "mileage_risk": VISUALIZATION_ROOT / "mileage_risk_distribution.png",
-    "growth_trend": VISUALIZATION_ROOT / "growth_trend_distribution.png",
     "attention_level": VISUALIZATION_ROOT / "attention_level_distribution.png",
-    "disease_type": VISUALIZATION_ROOT / "disease_type_distribution.png",
+    "growth_trend": VISUALIZATION_ROOT / "growth_trend_distribution.png",
     "risk_change": VISUALIZATION_ROOT / "risk_level_change_distribution.png",
     "top_growth": VISUALIZATION_ROOT / "top10_area_growth_rate.png",
+    "disease_type": VISUALIZATION_ROOT / "disease_type_distribution.png",
+    "mileage_risk": VISUALIZATION_ROOT / "mileage_risk_distribution.png",
+}
+VISUALIZATION_TITLES = {
+    "attention_level": "关注等级分布",
+    "growth_trend": "增长趋势分布",
+    "risk_change": "风险等级变化",
+    "top_growth": "面积增长率 Top 10",
+    "disease_type": "病害类型分布",
+    "mileage_risk": "里程段风险分布",
 }
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 DEFAULT_WEB_PYTHON = Path("D:/users/anaconda3/envs/segformer-phase2/python.exe")
@@ -139,6 +148,21 @@ def _read_csv_rows(path: Path, missing_key: str, errors: dict, limitations: list
         return []
 
 
+def _load_csv_payload(path: Path, missing_key: str, fields: list[str] | None = None) -> dict:
+    errors = {}
+    limitations = []
+    rows = _read_csv_rows(path, missing_key, errors, limitations)
+    if fields is not None:
+        rows = [{field: row.get(field, "") for field in fields} for row in rows]
+    return {
+        "ok": True,
+        "source": "generated-csv" if rows else "fallback",
+        "items": rows,
+        "missing": [str(path).replace("\\", "/")] if limitations else [],
+        "errors": errors,
+    }
+
+
 def _count_by_field(rows: list[dict], field: str) -> dict:
     counts = {}
     for row in rows:
@@ -152,6 +176,118 @@ def _to_float(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _visualization_url(path: Path) -> str:
+    return "/static-outputs/visualizations/" + path.name
+
+
+def _load_visualization_assets() -> dict:
+    missing = []
+    items = []
+    for key, path in VISUALIZATION_FILES.items():
+        if path.exists():
+            items.append({"key": key, "title": VISUALIZATION_TITLES[key], "url": _visualization_url(path)})
+        else:
+            missing.append(str(path).replace("\\", "/"))
+    return {
+        "ok": True,
+        "source": "generated-png" if items else "fallback",
+        "items": items,
+        "missing": missing,
+    }
+
+
+def _inspection_count_from_growth(rows: list[dict]) -> int:
+    inspection_counts = [int(value) for value in (_to_float(row.get("inspection_count")) for row in rows) if value]
+    inspection_ids = {
+        row.get(field)
+        for row in rows
+        for field in ("first_inspection", "last_inspection")
+        if row.get(field)
+    }
+    return max(inspection_counts) if inspection_counts else len(inspection_ids)
+
+
+def _load_project_summary() -> dict:
+    errors = {}
+    limitations = []
+    engineering_rows = _read_csv_rows(ENGINEERING_REPORT_FILE, "engineering_report", errors, limitations)
+    growth_rows = _read_csv_rows(DISEASE_GROWTH_FILE, "disease_growth_analysis", errors, limitations)
+    recheck_rows = _read_csv_rows(PRIORITY_RECHECK_FILE, "priority_recheck_list", errors, limitations)
+    visualizations = _load_visualization_assets()
+    disease_ids = {row.get("disease_id") for row in growth_rows if row.get("disease_id")}
+    high_risk_count = sum(1 for row in growth_rows if row.get("last_risk_level") == "高")
+    obvious_growth_count = sum(1 for row in growth_rows if row.get("growth_trend") in {"明显增长", "持续增长"})
+    missing = [
+        str(path).replace("\\", "/")
+        for path in (ENGINEERING_REPORT_FILE, DISEASE_GROWTH_FILE, PRIORITY_RECHECK_FILE)
+        if not path.exists()
+    ] + visualizations["missing"]
+    return {
+        "ok": True,
+        "source": "generated-artifacts" if engineering_rows or growth_rows or recheck_rows else "fallback",
+        "inspection_count": _inspection_count_from_growth(growth_rows),
+        "disease_count": len(disease_ids),
+        "engineering_record_count": len(engineering_rows),
+        "priority_recheck_count": len(recheck_rows),
+        "high_risk_count": high_risk_count,
+        "obvious_growth_count": obvious_growth_count,
+        "visualization_count": len(visualizations["items"]),
+        "missing": missing,
+        "errors": errors,
+    }
+
+
+ENGINEERING_REPORT_FIELDS = [
+    "inspection_id",
+    "disease_id",
+    "disease_type",
+    "start_mileage_text",
+    "end_mileage_text",
+    "start_ring",
+    "end_ring",
+    "main_clock_direction",
+    "frame_count",
+    "max_area_px",
+    "mean_area_px",
+    "risk_level",
+    "engineering_description",
+    "representative_image_path",
+    "representative_mask_path",
+]
+GROWTH_ANALYSIS_FIELDS = [
+    "disease_id",
+    "disease_type",
+    "first_inspection",
+    "last_inspection",
+    "first_area_px",
+    "last_area_px",
+    "area_growth_rate",
+    "area_growth_px",
+    "first_risk_level",
+    "last_risk_level",
+    "growth_trend",
+    "attention_level",
+    "last_mileage_range",
+    "main_clock_direction",
+    "growth_description",
+]
+RECHECK_FIELDS = [
+    "priority_rank",
+    "disease_id",
+    "disease_type",
+    "attention_level",
+    "growth_trend",
+    "area_growth_rate",
+    "first_risk_level",
+    "last_risk_level",
+    "last_mileage_range",
+    "main_clock_direction",
+    "recheck_reason",
+    "recheck_suggestion",
+    "growth_description",
+]
 
 
 def _load_robot_dashboard() -> dict:
@@ -170,15 +306,8 @@ def _load_robot_dashboard() -> dict:
     route_report = route_payload.get("report") or {}
     route_summary = route_report.get("summary") or {}
     high_risk_count = sum(1 for row in growth_rows if row.get("last_risk_level") == "高")
-    inspection_counts = [int(value) for value in (_to_float(row.get("inspection_count")) for row in growth_rows) if value]
-    inspection_ids = {
-        row.get(field)
-        for row in growth_rows
-        for field in ("first_inspection", "last_inspection")
-        if row.get(field)
-    }
     summary = {
-        "inspection_count": max(inspection_counts) if inspection_counts else len(inspection_ids),
+        "inspection_count": _inspection_count_from_growth(growth_rows),
         "frame_count": route_summary.get("frame_count"),
         "track_count": route_summary.get("track_count") or len(growth_rows),
         "review_count": route_summary.get("review_count") or len(priority_rechecks),
@@ -190,7 +319,7 @@ def _load_robot_dashboard() -> dict:
     visualization_links = {}
     for key, path in VISUALIZATION_FILES.items():
         if path.exists():
-            visualization_links[key] = "/outputs/visualizations/" + path.name
+            visualization_links[key] = _visualization_url(path)
         else:
             limitations.append(f"{key}_visualization_missing")
 
@@ -332,6 +461,9 @@ class DetectionHandler(SimpleHTTPRequestHandler):
         if path.startswith("/assets/"):
             self._serve_file(WEB_ROOT / path.lstrip("/"))
             return
+        if path.startswith("/static-outputs/visualizations/"):
+            self._serve_visualization_file(path.removeprefix("/static-outputs/visualizations/"))
+            return
         if path.startswith("/outputs/"):
             self._serve_file(OUTPUT_ROOT / path.removeprefix("/outputs/"))
             return
@@ -353,6 +485,21 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/robot-dashboard":
             self._send_json(_load_robot_dashboard())
+            return
+        if path == "/api/project-summary":
+            self._send_json(_load_project_summary())
+            return
+        if path == "/api/engineering-report":
+            self._send_json(_load_csv_payload(ENGINEERING_REPORT_FILE, "engineering_report", ENGINEERING_REPORT_FIELDS))
+            return
+        if path == "/api/growth-analysis":
+            self._send_json(_load_csv_payload(DISEASE_GROWTH_FILE, "disease_growth_analysis", GROWTH_ANALYSIS_FIELDS))
+            return
+        if path == "/api/recheck-list":
+            self._send_json(_load_csv_payload(PRIORITY_RECHECK_FILE, "priority_recheck_list", RECHECK_FIELDS))
+            return
+        if path == "/api/visualization-assets":
+            self._send_json(_load_visualization_assets())
             return
 
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
@@ -380,7 +527,7 @@ class DetectionHandler(SimpleHTTPRequestHandler):
 
     def _serve_file(self, path: Path) -> None:
         resolved = path.resolve()
-        allowed_roots = [WEB_ROOT.resolve(), OUTPUT_ROOT.resolve()]
+        allowed_roots = [WEB_ROOT.resolve(), OUTPUT_ROOT.resolve(), VISUALIZATION_ROOT.resolve()]
         if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
             self._send_json({"error": "Forbidden"}, HTTPStatus.FORBIDDEN)
             return
@@ -395,6 +542,14 @@ class DetectionHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         with resolved.open("rb") as fh:
             shutil.copyfileobj(fh, self.wfile)
+
+    def _serve_visualization_file(self, filename: str) -> None:
+        safe_name = Path(filename).name
+        path = VISUALIZATION_ROOT / safe_name
+        if filename != safe_name or path.suffix.lower() != ".png":
+            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            return
+        self._serve_file(path)
 
 
 def parse_args() -> argparse.Namespace:

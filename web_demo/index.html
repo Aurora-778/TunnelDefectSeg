@@ -513,6 +513,102 @@
       line-height: 1.45;
     }
 
+    .data-section {
+      margin-top: 34px;
+    }
+
+    .data-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .data-card {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 12px;
+      color: #17212b;
+      min-height: 164px;
+    }
+
+    .data-card b {
+      display: block;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+
+    .data-card strong {
+      display: inline-block;
+      margin-bottom: 8px;
+      color: var(--green);
+      font-family: "Cascadia Mono", "Consolas", monospace;
+    }
+
+    .data-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid rgba(23,33,43,.26);
+      background: #f8fbfd;
+      padding: 3px 7px;
+      margin: 0 4px 6px 0;
+      color: #425466;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .tag.hot {
+      background: #fff3dd;
+      color: #8a4b00;
+      border-color: rgba(244,185,66,.72);
+    }
+
+    .visualization-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .chart-card {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #17212b;
+      min-height: 320px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .chart-card b {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(23,33,43,.16);
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+    }
+
+    .chart-card img {
+      width: 100%;
+      height: 100%;
+      min-height: 260px;
+      object-fit: contain;
+      background: #f8fbfd;
+      display: block;
+    }
+
+    .data-note-box {
+      border-left: 5px solid var(--cyan);
+      background: #fff;
+      padding: 14px;
+      color: #425466;
+      line-height: 1.72;
+      font-size: 14px;
+    }
+
     .upload-panel {
       margin-bottom: 34px;
     }
@@ -1246,6 +1342,7 @@
       .robot-dashboard-body, .robot-workspace { grid-template-columns: 1fr; }
       .robot-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .robot-distribution-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .data-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .stage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       #aggregateEvidenceGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       #reviewQueueGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1280,7 +1377,7 @@
       .compare-row span:nth-child(4),
       .compare-row span:nth-child(5) { display: none; }
       .robot-dashboard-body, .robot-workspace { padding: 12px; }
-      .robot-kpi-grid, .robot-distribution-grid, .detail-grid { grid-template-columns: 1fr; }
+      .robot-kpi-grid, .robot-distribution-grid, .detail-grid, .data-grid, .visualization-grid { grid-template-columns: 1fr; }
       .robot-title h1 { font-size: 32px; }
       .glossary { grid-template-columns: 1fr; }
       .bar-row { grid-template-columns: 78px minmax(0, 1fr) 46px; }
@@ -1314,20 +1411,23 @@
     <nav class="premium-nav">
       <div class="nav-brand"><span class="nav-mark"></span><span>tunnel defect studio</span></div>
       <div class="nav-links">
-        <a href="#robot-dashboard">巡检总览</a>
-        <a href="#recheck">重点复检</a>
+        <a href="#dashboard">系统总览</a>
+        <a href="#engineering-report">工程报告</a>
+        <a href="#growth-analysis">增长分析</a>
+        <a href="#recheck-list">复检清单</a>
+        <a href="#visualizations">可视化图表</a>
         <a href="#detect">单图检测</a>
-        <a href="#patent">指标说明</a>
+        <a href="#data-note">数据说明</a>
       </div>
     </nav>
 
-    <section class="panel robot-dashboard" id="robot-dashboard">
-      <div class="panel-title">机器人巡检 Dashboard <span id="robotDashboardSource">loading /api/robot-dashboard</span></div>
+    <section class="panel robot-dashboard" id="dashboard">
+      <div class="panel-title">机器人隧道巡检病害监测系统 <span id="robotDashboardSource">loading /api/project-summary</span></div>
       <div class="robot-dashboard-body">
         <div>
           <div class="robot-title">
-            <h1>隧道机器人巡检结果</h1>
-            <p>按时间和里程聚合图像检测结果，输出重点复检对象、风险分布和证据边界。</p>
+            <h1>机器人隧道巡检病害时空监测 Dashboard</h1>
+            <p>融合 KICT 裂缝 mask 几何特征与仿真巡检元数据，实现病害工程化定位、跨巡检增长分析和重点复检清单生成。</p>
           </div>
           <div class="robot-kpi-grid" id="robotKpiGrid">
             <div class="robot-kpi"><span>Inspection</span><b>-</b></div>
@@ -1363,6 +1463,42 @@
         </section>
       </div>
       <div class="robot-distribution-grid" id="robotDistributionGrid"></div>
+    </section>
+
+    <section class="panel data-section" id="engineering-report">
+      <div class="panel-title">工程化病害报告 <span>/api/engineering-report</span></div>
+      <div class="panel-body">
+        <div class="data-grid" id="engineeringReportGrid">
+          <div class="robot-empty">等待工程报告。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section" id="growth-analysis">
+      <div class="panel-title">跨巡检增长分析 <span>/api/growth-analysis</span></div>
+      <div class="panel-body">
+        <div class="data-grid" id="growthAnalysisGrid">
+          <div class="robot-empty">等待增长分析。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section" id="recheck-list">
+      <div class="panel-title">重点复检清单 <span>/api/recheck-list</span></div>
+      <div class="panel-body">
+        <div class="data-grid" id="fullRecheckGrid">
+          <div class="robot-empty">等待复检清单。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section" id="visualizations">
+      <div class="panel-title">可视化图表 <span>/api/visualization-assets</span></div>
+      <div class="panel-body">
+        <div class="visualization-grid" id="visualizationGrid">
+          <div class="robot-empty">等待图表。</div>
+        </div>
+      </div>
     </section>
 
     <header class="quick-stats">
@@ -1540,49 +1676,6 @@
       </section>
     </section>
 
-    <section class="panel interest-bento" id="evidence" style="margin-top:34px;">
-      <div class="panel-title">增强模块优势证据 <span>Adaptive fusion / uncertainty / morphology</span></div>
-      <div class="panel-body">
-        <div class="aggregate-evidence">
-          <div class="evidence-source">
-            <span>Dataset evidence</span>
-            <b id="aggregateEvidenceSource">等待加载 generated JSON</b>
-          </div>
-          <div class="advantage-grid" id="aggregateEvidenceGrid">
-            <div class="advantage-card"><b>Selected vs Fused</b><strong>+0.0393</strong><p>all split 上 selected mIoU 相比 fixed fused 的恢复量。</p></div>
-            <div class="advantage-card"><b>Successful guard</b><strong>614 / 1000</strong><p>保护小缺陷且 selected-vs-fused mIoU 有正收益的样本数。</p></div>
-            <div class="advantage-card"><b>Protected pixels</b><strong>1,230,616</strong><p>all split 中相对 fixed fused 保护下来的缺陷前景像素。</p></div>
-            <div class="advantage-card"><b>Review signal</b><strong>431 / 1000</strong><p>缺陷区高不确定性达到复核阈值的样本数。</p></div>
-          </div>
-          <div class="advantage-note" id="aggregateEvidenceNote">
-            正在读取 experiments/enhancement_evidence_all_summary.json；若文件缺失，会显示内置阶段性样例值。
-          </div>
-          <div class="queue-panel">
-            <div class="evidence-source">
-              <span>Review queue</span>
-              <b id="reviewQueueSummary">等待加载 top cases</b>
-            </div>
-            <div class="advantage-grid" id="reviewQueueGrid">
-              <div class="advantage-card"><b>Top case</b><strong>-</strong><p>等待 review_queue_summary。</p></div>
-            </div>
-            <div class="advantage-note" id="reviewQueueNote">
-              Review queue 只用模型内部证据排序；GT 只用于评估队列是否覆盖真实错误或融合损伤。
-            </div>
-          </div>
-        </div>
-        <div class="advantage-grid" id="advantageGrid">
-          <div class="advantage-card"><b>Adaptive selection</b><strong>+0.0489</strong><p>Selected mIoU 相比 Fused mIoU 的保护收益。</p></div>
-          <div class="advantage-card"><b>Small defect guard</b><strong>591 px</strong><p>融合收缩时保留下来的小缺陷像素。</p></div>
-          <div class="advantage-card"><b>Uncertainty triage</b><strong>74.91%</strong><p>缺陷区域中高不确定像素占比，触发人工复核。</p></div>
-          <div class="advantage-card"><b>Morphology evidence</b><strong>63</strong><p>骨架长度、方向和连通域把 mask 变成可解释结构证据。</p></div>
-        </div>
-        <div class="advantage-note" id="advantageNote">
-          当前样例里，普通 TTA fusion 把缺陷区域从 1108 px 收缩到 517 px，mIoU 从 0.2221 降到 0.1732；增强模块检测到收缩后选择 single mask，保住小缺陷证据，同时输出不确定性和形态风险。
-        </div>
-      </div>
-    </section>
-
-
     <section class="panel interest-bento" id="robot-route" style="margin-top:34px;">
       <div class="panel-title">机器人时空巡检报告 <span>FrameRecord / defect tracks / claim guard</span></div>
       <div class="panel-body">
@@ -1606,33 +1699,12 @@
         </div>
       </div>
     </section>
-    <section class="panel" id="patent" style="margin-top:34px;">
-      <div class="panel-title">Metric glossary <span>中文说明</span></div>
-      <div class="panel-body">
-        <div class="glossary">
-          <div class="glossary-item"><b>风险等级</b><p>由缺陷面积、骨架长度、连通域数量和不确定性综合得到，分为 none / low / medium / high。</p></div>
-          <div class="glossary-item"><b>风险分</b><p>风险等级背后的连续分值。分值越高，代表病害形态或模型不确定性越需要关注。</p></div>
-          <div class="glossary-item"><b>缺陷像素</b><p>融合预测 mask 中非背景类别的像素总数，反映检测到的病害区域大小。</p></div>
-          <div class="glossary-item"><b>Review</b><p>当缺陷区不确定性偏高，系统会给出 YES，表示建议人工检查该图。</p></div>
-          <div class="glossary-item"><b>增强候选</b><p>指 SegFormer 对原图、水平翻转图等输入姿态输出的概率预测，先对齐再融合。</p></div>
-          <div class="glossary-item"><b>Uncertainty</b><p>由概率熵或 TTA 概率计算，颜色越热表示模型越拿不准。</p></div>
-          <div class="glossary-item"><b>高不确定缺陷占比</b><p>缺陷像素中不确定性超过阈值的比例，是复核建议的重要依据。</p></div>
-          <div class="glossary-item"><b>连通域</b><p>互相分离的缺陷块数量。数量多可能表示破碎、散裂或误检碎片。</p></div>
-          <div class="glossary-item"><b>骨架长度</b><p>把缺陷区域细化成中心线后的长度，适合描述裂缝类长条形病害。</p></div>
-          <div class="glossary-item"><b>mIoU</b><p>预测 mask 与人工标注 GT 的平均交并比。没有 GT 的自选图片显示 N/A。</p></div>
-          <div class="glossary-item"><b>Fused mask</b><p>由多姿态概率平均后再 argmax 得到，用来减少单次推理的偶然波动。</p></div>
-          <div class="glossary-item"><b>Self IoU</b><p>只比较 Single mask 和 Fused mask 的一致性，可用于无 GT 图片，但不能代表真实精度。</p></div>
-          <div class="glossary-item"><b>Disagreement</b><p>由多姿态预测差异计算，颜色越热表示候选预测分歧越大。</p></div>
-          <div class="glossary-item"><b>Overlay</b><p>把融合 mask 叠加到原图上，用于直观看缺陷位置和覆盖范围。</p></div>
-        </div>
-      </div>
-    </section>
 
-    <section class="panel" style="margin-top:12px;">
-      <div class="panel-title">Patent evidence chain <span>可导出</span></div>
+    <section class="panel data-section" id="data-note">
+      <div class="panel-title">数据说明与仿真边界 <span>KICT + simulation metadata</span></div>
       <div class="panel-body">
-        <div class="callout">
-          输入图像 -> 单次预测 -> 概率 TTA 融合/选择预测 -> uncertainty / disagreement -> 骨架/连通域量化 -> 风险等级与复核建议。当前样例展示的是“分割可信评估与风险分级”的完整证据链；指标上融合 mIoU 未必更高，但可解释性和复核定位明显增强。
+        <div class="data-note-box">
+          本系统使用 KICT Tunnel Crack Segmentation Dataset 中的真实隧道裂缝图像和 mask 几何特征；机器人巡检过程中的时间、里程、环号、方位、disease_id 以及跨巡检增长关系为仿真元数据。本系统当前用于验证机器人巡检场景下病害工程化描述、时空聚合、增长分析和复检清单生成流程，不代表真实隧道病害长期演化规律。
         </div>
       </div>
     </section>
@@ -2143,6 +2215,111 @@
       }
     }
 
+    async function loadProjectSummary() {
+      try {
+        const response = await fetch("/api/project-summary");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const kpis = [
+          ["巡检次数", payload.inspection_count ?? "-"],
+          ["病害对象", payload.disease_count ?? "-"],
+          ["工程记录", payload.engineering_record_count ?? "-"],
+          ["重点复检", payload.priority_recheck_count ?? "-"],
+          ["高风险", payload.high_risk_count ?? "-"],
+          ["明显增长", payload.obvious_growth_count ?? "-"],
+          ["图表", payload.visualization_count ?? "-"],
+        ];
+        document.querySelector("#robotDashboardSource").textContent = payload.source || "fallback";
+        document.querySelector("#robotKpiGrid").innerHTML = kpis
+          .map(([label, value]) => `<div class="robot-kpi"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`)
+          .join("");
+      } catch (error) {
+        document.querySelector("#robotDashboardSource").textContent = `summary unavailable: ${error.message}`;
+      }
+    }
+
+    async function loadEngineeringReport() {
+      const grid = document.querySelector("#engineeringReportGrid");
+      try {
+        const response = await fetch("/api/engineering-report");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const rows = payload.items || [];
+        grid.innerHTML = rows.length ? rows.slice(0, 12).map((row) => `
+          <article class="data-card">
+            <b>${escapeHtml(row.disease_id || "-")} - ${escapeHtml(row.disease_type || "-")}</b>
+            <span class="tag ${row.risk_level === "高" ? "hot" : ""}">风险 ${escapeHtml(row.risk_level || "-")}</span>
+            <span class="tag">${escapeHtml(row.main_clock_direction || "-")}</span>
+            <p>里程：${escapeHtml(row.start_mileage_text || "-")} 至 ${escapeHtml(row.end_mileage_text || "-")}；环号：${escapeHtml(row.start_ring || "-")} 至 ${escapeHtml(row.end_ring || "-")}；连续帧数：${escapeHtml(row.frame_count || "-")}；最大面积：${escapeHtml(row.max_area_px || "-")} px²。</p>
+            <p style="margin-top:8px;">${escapeHtml(row.engineering_description || "暂无工程描述。")}</p>
+          </article>
+        `).join("") : `<div class="robot-empty">暂无工程化病害报告。</div>`;
+      } catch (error) {
+        grid.innerHTML = `<div class="robot-empty">工程报告不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function loadGrowthAnalysis() {
+      const grid = document.querySelector("#growthAnalysisGrid");
+      try {
+        const response = await fetch("/api/growth-analysis");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const rows = payload.items || [];
+        grid.innerHTML = rows.length ? rows.slice(0, 12).map((row) => `
+          <article class="data-card">
+            <b>${escapeHtml(row.disease_id || "-")} / ${escapeHtml(row.disease_type || "-")}</b>
+            <span class="tag ${row.attention_level === "重点关注" ? "hot" : ""}">${escapeHtml(row.attention_level || "-")}</span>
+            <span class="tag">${escapeHtml(row.growth_trend || "-")}</span>
+            <p>面积：${escapeHtml(row.first_area_px || "-")} -> ${escapeHtml(row.last_area_px || "-")} px²；增长率：${escapeHtml(row.area_growth_rate || "0")}%；风险：${escapeHtml(row.first_risk_level || "-")} -> ${escapeHtml(row.last_risk_level || "-")}。</p>
+            <p style="margin-top:8px;">${escapeHtml(row.growth_description || "暂无增长描述。")}</p>
+          </article>
+        `).join("") : `<div class="robot-empty">暂无增长分析记录。</div>`;
+      } catch (error) {
+        grid.innerHTML = `<div class="robot-empty">增长分析不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function loadFullRecheckList() {
+      const grid = document.querySelector("#fullRecheckGrid");
+      try {
+        const response = await fetch("/api/recheck-list");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const rows = payload.items || [];
+        grid.innerHTML = rows.length ? rows.map((row) => `
+          <article class="data-card">
+            <b>Priority ${escapeHtml(row.priority_rank || "-")}：${escapeHtml(row.disease_id || "-")} ${escapeHtml(row.disease_type || "-")}</b>
+            <span class="tag hot">${escapeHtml(row.attention_level || "-")}</span>
+            <span class="tag">${escapeHtml(row.growth_trend || "-")}</span>
+            <p>位置：${escapeHtml(row.last_mileage_range || "-")}，${escapeHtml(row.main_clock_direction || "-")}；风险：${escapeHtml(row.first_risk_level || "-")} -> ${escapeHtml(row.last_risk_level || "-")}。</p>
+            <p style="margin-top:8px;">复检原因：${escapeHtml(row.recheck_reason || "-")}</p>
+            <p style="margin-top:8px;">复检建议：${escapeHtml(row.recheck_suggestion || "-")}</p>
+          </article>
+        `).join("") : `<div class="robot-empty">当前未筛选出需要重点复检的病害对象。</div>`;
+      } catch (error) {
+        grid.innerHTML = `<div class="robot-empty">复检清单不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function loadVisualizationAssets() {
+      const grid = document.querySelector("#visualizationGrid");
+      try {
+        const response = await fetch("/api/visualization-assets");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const items = payload.items || [];
+        grid.innerHTML = items.length ? items.map((item) => `
+          <article class="chart-card">
+            <b>${escapeHtml(item.title || item.key || "图表")}</b>
+            <img src="${escapeHtml(item.url)}" alt="${escapeHtml(item.title || "可视化图表")}" loading="lazy" />
+          </article>
+        `).join("") : `<div class="robot-empty">暂无可视化图表。</div>`;
+      } catch (error) {
+        grid.innerHTML = `<div class="robot-empty">图表不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
 
     function shortLocation(location = {}) {
       let mileage = "里程 N/A";
@@ -2603,6 +2780,9 @@
     }
 
     function renderAdvantages(report) {
+      const advantageGrid = document.querySelector("#advantageGrid");
+      const advantageNote = document.querySelector("#advantageNote");
+      if (!advantageGrid || !advantageNote) return;
       const ev = report.evaluation;
       const singleDefect = defectPixelCount(report.single_prediction_stats);
       const fusedDefect = defectPixelCount(report.fused_prediction_stats);
@@ -2619,7 +2799,7 @@
       const guardGain = hasGT ? (ev.selected_mIoU ?? ev.single_mIoU) - ev.fused_mIoU : null;
       const relativeGuardGain = hasGT && ev.fused_mIoU ? guardGain / ev.fused_mIoU : null;
 
-      document.querySelector("#advantageGrid").innerHTML = [
+      advantageGrid.innerHTML = [
         [
           "Review priority",
           riskLabel(report.review_priority?.priority || "none"),
@@ -2654,7 +2834,7 @@
       const gtSentence = hasGT
         ? `有 GT 的样例中，Fused mIoU=${fmt(ev.fused_mIoU)}，Selected mIoU=${fmt(ev.selected_mIoU ?? ev.single_mIoU)}，说明增强模块避免了这次融合收缩造成的精度损失。`
         : `自选图片没有 GT，因此不能直接证明 mIoU 提升；但仍可展示 selection mode、前景收缩、uncertainty、disagreement 和 morphology 这些无 GT 可计算证据。`;
-      document.querySelector("#advantageNote").textContent =
+      advantageNote.textContent =
         `${gtSentence} Single/Fused foreground IoU=${fmt(foregroundIoU)}，当前 selection=${selectionMode}，保留缺陷像素 ${selectedDefect} px。`;
     }
 
@@ -2827,8 +3007,12 @@
     });
 
     renderExperiment();
-    loadAggregateEvidence();
     loadRobotDashboard();
+    loadProjectSummary();
+    loadEngineeringReport();
+    loadGrowthAnalysis();
+    loadFullRecheckList();
+    loadVisualizationAssets();
     loadRobotRouteReport();
     renderReport(sampleReport, sampleViews);
     initTasteMotion();
