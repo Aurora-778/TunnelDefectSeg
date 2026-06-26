@@ -25,6 +25,7 @@ class_summary.json
 # Logs
 *.log
 *.err.log
+outputs/kict_preview/
 
 # Local OS/editor files
 .DS_Store
