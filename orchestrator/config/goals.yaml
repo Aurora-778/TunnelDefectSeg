@@ -1,0 +1,15 @@
+pipeline:
+  - memory
+  - association
+  - web
+  - doc
+
+goals:
+  memory:
+    depends_on: []
+  association:
+    depends_on: [memory]
+  web:
+    depends_on: [association]
+  doc:
+    depends_on: [web]
