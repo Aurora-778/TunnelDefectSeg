@@ -71,7 +71,22 @@ def test_memory_agent_builds_cross_inspection_memory(tmp_path):
         ["disease_id", "main_clock_direction"],
     )
 
-    result = MemoryAgent(tmp_path).run({"project_root": str(tmp_path)})
+    context = {
+        "inputs": {
+            "memory": {
+                "engineering_report": "data/simulated/disease_engineering_report.csv",
+                "growth_analysis": "data/simulated/disease_growth_analysis.csv",
+                "output_path": "data/simulated/disease_memory_bank.csv",
+                "report_path": "outputs/memory_agent_report.md",
+                "summary_path": "outputs/disease_memory_bank_summary.md",
+                "log_path": "logs/memory_agent.log",
+            }
+        },
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+    result = MemoryAgent().run(context)
 
     rows = read_csv(Path(result["disease_memory_bank_path"]))
     assert len(rows) == 1
@@ -91,3 +106,4 @@ def test_memory_agent_builds_cross_inspection_memory(tmp_path):
 
     assert Path(result["memory_agent_report_path"]).exists()
     assert Path(result["memory_agent_log_path"]).exists()
+    assert context["outputs"]["memory"]["memory_bank_rows"] == 1

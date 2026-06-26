@@ -11,7 +11,21 @@ def main() -> int:
 
     from orchestrator.agents.memory_agent import MemoryAgent
 
-    result = MemoryAgent(project_root).run({"project_root": str(project_root)})
+    context = {
+        "inputs": {
+            "memory": {
+                "engineering_report": "data/simulated/disease_engineering_report.csv",
+                "growth_analysis": "data/simulated/disease_growth_analysis.csv",
+                "output_path": "data/simulated/disease_memory_bank.csv",
+                "report_path": "outputs/memory_agent_report.md",
+                "summary_path": "outputs/disease_memory_bank_summary.md",
+                "log_path": "logs/memory_agent.log",
+            }
+        },
+        "outputs": {},
+        "shared": {"project_root": str(project_root)},
+    }
+    result = MemoryAgent().run(context)
     print("Memory Agent finished")
     print(f"disease_memory_bank_path: {result['disease_memory_bank_path']}")
     print(f"memory_agent_report_path: {result['memory_agent_report_path']}")

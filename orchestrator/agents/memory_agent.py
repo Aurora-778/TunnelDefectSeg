@@ -13,12 +13,15 @@ from orchestrator.agents.base import BaseAgent
 class MemoryAgent(BaseAgent):
     """Aggregate disease records into one memory item per disease_id."""
 
+    name = "memory"
+
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
-        report_path = self.data_dir / "disease_engineering_report.csv"
-        growth_path = self.data_dir / "disease_growth_analysis.csv"
-        output_path = self.data_dir / "disease_memory_bank.csv"
-        report_path_md = self.outputs_dir / "memory_agent_report.md"
-        log_path = self.project_root / "logs" / "memory_agent.log"
+        inputs = self.agent_inputs(context)
+        report_path = self.resolve_path(context, self._required_input(inputs, "engineering_report"))
+        growth_path = self.resolve_path(context, self._required_input(inputs, "growth_analysis"))
+        output_path = self.resolve_path(context, self._required_input(inputs, "output_path"))
+        report_path_md = self.resolve_path(context, self._required_input(inputs, "report_path"))
+        log_path = self.resolve_path(context, self._required_input(inputs, "log_path"))
 
         self._log(log_path, "start")
         report_rows = self.read_csv(report_path)
@@ -112,13 +115,13 @@ class MemoryAgent(BaseAgent):
         ]
         self.write_csv(output_path, rows, fieldnames)
 
-        summary_path = self.outputs_dir / "disease_memory_bank_summary.md"
+        summary_path = self.resolve_path(context, inputs.get("summary_path", "outputs/disease_memory_bank_summary.md"))
         self._write_reports(summary_path, report_path_md, report_path, growth_path, output_path, rows)
         self._log(log_path, f"disease count: {len(grouped_rows)}")
         self._log(log_path, f"row count: {len(rows)}")
         self._log(log_path, "end")
 
-        return {
+        result = {
             "disease_memory_bank_path": str(output_path),
             "memory_bank_path": str(output_path),
             "memory_bank_rows": len(rows),
@@ -126,11 +129,19 @@ class MemoryAgent(BaseAgent):
             "memory_summary_path": str(summary_path),
             "memory_agent_log_path": str(log_path),
         }
+        context.setdefault("outputs", {})[self.name] = result
+        return result
 
     def _join_range(self, start: str, end: str) -> str:
         if start and end and start != end:
             return f"{start} - {end}"
         return start or end
+
+    def _required_input(self, inputs: dict[str, Any], key: str) -> str:
+        value = inputs.get(key)
+        if not value:
+            raise ValueError(f"MemoryAgent missing required input: {key}")
+        return str(value)
 
     def _group_by_disease(self, report_rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
         grouped: dict[str, list[dict[str, str]]] = defaultdict(list)

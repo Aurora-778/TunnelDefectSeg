@@ -1,9 +1,9 @@
-# Multi-Agent Orchestrator v1 Summary
+# Generic Multi-Agent Framework Summary
 
 ## Pipeline
 
-1. MemoryAgent：从工程报告和增长分析生成病害对象记忆库。
-2. AssociationAgent：把机器人帧记录与病害记忆对象按 disease_id 关联。
+1. MemoryAgent：从配置输入读取工程报告和增长分析，生成病害对象记忆库。
+2. AssociationAgent：从配置输入读取机器人帧记录，并与病害记忆对象关联。
 3. WebAgent：输出后续 Web Dashboard 可读取的结构说明。
 4. DocAgent：生成本摘要，方便检查和交接。
 
@@ -15,4 +15,4 @@
 
 ## Boundary
 
-该 Orchestrator v1 只做规则化 CSV 处理和工程编排，不训练模型、不下载数据、不接入 DINOv2/SAM/WinCLIP 等重模型。
+Orchestrator 只负责 pipeline、registry、context 和 logging；业务文件路径由 `config/pipeline.yaml` 提供。

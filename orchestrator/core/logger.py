@@ -1,4 +1,4 @@
-"""Run logging for goal execution."""
+"""Run logging for pipeline and agent execution."""
 
 from __future__ import annotations
 
@@ -9,57 +9,90 @@ from typing import Any
 
 
 class GoalLogger:
-    """Write human-readable and structured goal logs."""
+    """Write human-readable and structured pipeline logs."""
 
     def __init__(self, project_root: Path) -> None:
         self.logs_dir = project_root / "logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.run_log_path = self.logs_dir / "run.log"
+        self.pipeline_json_path = self.logs_dir / "pipeline.json"
+        self.agent_json_path = self.logs_dir / "agent.json"
         self.goals_json_path = self.logs_dir / "goals.json"
-        self.events: list[dict[str, Any]] = []
+        self.pipeline_events: list[dict[str, Any]] = []
+        self.agent_events: list[dict[str, Any]] = []
 
-    def start_run(self) -> None:
-        self.events = []
-        self._write_line("=== orchestrator run start ===")
+    def start_run(self, pipeline: list[str]) -> None:
+        self.pipeline_events = []
+        self.agent_events = []
+        event = {"time": self._now(), "event": "pipeline_start", "pipeline": pipeline}
+        self.pipeline_events.append(event)
+        self._write_line(f"=== pipeline start: {pipeline} ===")
 
-    def end_run(self) -> None:
-        self._write_line("=== orchestrator run end ===")
+    def end_run(self, context: dict[str, Any]) -> None:
+        event = {
+            "time": self._now(),
+            "event": "pipeline_end",
+            "output_summary": self._summarize(context.get("outputs", {})),
+        }
+        self.pipeline_events.append(event)
+        self._write_line("=== pipeline end ===")
+        self.pipeline_json_path.write_text(
+            json.dumps(self.pipeline_events, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.agent_json_path.write_text(
+            json.dumps(self.agent_events, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        # Keep the v1 filename as a compatibility alias for older checks.
         self.goals_json_path.write_text(
-            json.dumps(self.events, ensure_ascii=False, indent=2),
+            json.dumps(self.agent_events, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
-    def goal_start(self, goal_name: str, context: dict[str, Any]) -> None:
+    def agent_start(self, agent_name: str, context: dict[str, Any]) -> None:
         summary = self._summarize(context)
         event = {
             "time": self._now(),
-            "event": "goal_start",
-            "goal": goal_name,
+            "event": "agent_start",
+            "agent": agent_name,
             "input_summary": summary,
         }
-        self.events.append(event)
-        self._write_line(f"[START] {goal_name} inputs={summary}")
+        self.agent_events.append(event)
+        self._write_line(f"[START] {agent_name} inputs={summary}")
 
-    def goal_end(self, goal_name: str, result: dict[str, Any]) -> None:
+    def agent_end(self, agent_name: str, result: dict[str, Any], runtime_seconds: float) -> None:
         summary = self._summarize(result)
         event = {
             "time": self._now(),
-            "event": "goal_end",
-            "goal": goal_name,
+            "event": "agent_end",
+            "agent": agent_name,
+            "runtime_seconds": round(runtime_seconds, 6),
             "output_summary": summary,
         }
-        self.events.append(event)
-        self._write_line(f"[END] {goal_name} outputs={summary}")
+        self.agent_events.append(event)
+        self._write_line(f"[END] {agent_name} runtime={runtime_seconds:.3f}s outputs={summary}")
 
-    def goal_failure(self, goal_name: str, exc: Exception) -> None:
+    def agent_failure(self, agent_name: str, exc: Exception, runtime_seconds: float) -> None:
         event = {
             "time": self._now(),
-            "event": "goal_failure",
-            "goal": goal_name,
+            "event": "agent_failure",
+            "agent": agent_name,
+            "runtime_seconds": round(runtime_seconds, 6),
             "failure_reason": repr(exc),
         }
-        self.events.append(event)
-        self._write_line(f"[FAIL] {goal_name} reason={exc!r}")
+        self.agent_events.append(event)
+        self._write_line(f"[FAIL] {agent_name} runtime={runtime_seconds:.3f}s reason={exc!r}")
+
+    # Compatibility wrappers for the v1 method names.
+    def goal_start(self, goal_name: str, context: dict[str, Any]) -> None:
+        self.agent_start(goal_name, context)
+
+    def goal_end(self, goal_name: str, result: dict[str, Any]) -> None:
+        self.agent_end(goal_name, result, 0.0)
+
+    def goal_failure(self, goal_name: str, exc: Exception) -> None:
+        self.agent_failure(goal_name, exc, 0.0)
 
     def _write_line(self, message: str) -> None:
         timestamp = self._now()

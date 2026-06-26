@@ -10,21 +10,28 @@ from orchestrator.agents.base import BaseAgent
 class WebAgent(BaseAgent):
     """Summarize generated files for later Web Dashboard integration."""
 
+    name = "web"
+
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
-        manifest_path = self.outputs_dir / "orchestrator_web_manifest.md"
-        memory_path = context.get("memory_bank_path", self.data_dir / "disease_memory_bank.csv")
-        association_path = context.get("association_records_path", self.data_dir / "association_records.csv")
+        inputs = self.agent_inputs(context)
+        manifest_path = self.resolve_path(context, inputs.get("manifest_path", "outputs/orchestrator_web_manifest.md"))
+        memory_output = context.get("outputs", {}).get("memory", {})
+        association_output = context.get("outputs", {}).get("association", {})
+        memory_path = memory_output.get("disease_memory_bank_path") or inputs.get("memory_bank", "")
+        association_path = association_output.get("association_records_path") or inputs.get("association_records", "")
 
         lines = [
             "## Web Dashboard 可接入文件",
             "",
             f"- Disease Memory Bank：`{memory_path}`",
             f"- Association Records：`{association_path}`",
-            f"- Memory rows：{context.get('memory_bank_rows', 0)}",
-            f"- Association rows：{context.get('association_rows', 0)}",
+            f"- Memory rows：{memory_output.get('memory_bank_rows', 0)}",
+            f"- Association rows：{association_output.get('association_rows', 0)}",
             "",
             "本阶段不修改 `web_app.py` 和 `web_demo/`，只生成前端后续可读取的结构说明。",
         ]
         self.write_markdown(manifest_path, "Orchestrator Web Manifest", lines)
 
-        return {"web_manifest_path": str(manifest_path)}
+        result = {"web_manifest_path": str(manifest_path)}
+        context.setdefault("outputs", {})[self.name] = result
+        return result
