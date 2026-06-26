@@ -2,22 +2,22 @@ tasks:
   memory:
     agent: memory
     deps: []
-    retries: 2
+    retries: 3
     cache: true
   association:
     agent: association
     deps: [memory]
-    retries: 2
+    retries: 3
     cache: true
   web:
     agent: web
     deps: [association]
-    retries: 2
+    retries: 3
     cache: true
   doc:
     agent: doc
     deps: [memory, association]
-    retries: 2
+    retries: 3
     cache: true
 
 shared:

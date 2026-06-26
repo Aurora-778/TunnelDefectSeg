@@ -73,6 +73,8 @@ def test_dag_layers_retry_and_cache(tmp_path):
     assert result["task_status"] == {"seed": "success", "flaky": "success", "tail": "success"}
     assert result["outputs"]["tail"]["value"] == "ok-flaky-tail"
     assert FlakyAgent.calls == 2
+    assert (tmp_path / "orchestrator" / "state" / "run_state.json").exists()
+    assert (tmp_path / "logs" / "execution_trace.json").exists()
 
     cached_context = {
         "inputs": config["inputs"],
@@ -84,3 +86,7 @@ def test_dag_layers_retry_and_cache(tmp_path):
     cached = DAGExecutor(registry, tmp_path).run(tasks, cached_context)
     assert cached["outputs"]["tail"]["value"] == "ok-flaky-tail"
     assert FlakyAgent.calls == 0
+
+    resumed = DAGExecutor(registry, tmp_path, resume=True).run(tasks, cached_context)
+    assert resumed["outputs"]["tail"]["value"] == "ok-flaky-tail"
+    assert resumed["task_status"]["tail"] == "success"

@@ -44,6 +44,7 @@ ENGINEERING_REPORT_FILE = SIMULATED_ROOT / "disease_engineering_report.csv"
 PRIORITY_RECHECK_FILE = SIMULATED_ROOT / "priority_recheck_list.csv"
 DISEASE_GROWTH_FILE = SIMULATED_ROOT / "disease_growth_analysis.csv"
 ROBOT_KICT_FRAME_RECORDS_FILE = SIMULATED_ROOT / "robot_kict_frame_records.csv"
+ORCHESTRATOR_STATE_FILE = ROOT / "orchestrator" / "state" / "run_state.json"
 VISUALIZATION_ROOT = ROOT / "outputs" / "visualizations"
 EVIDENCE_OVERLAY_ROOT = ROOT / "outputs" / "evidence_overlays"
 KICT_DATASET_ROOTS = [
@@ -143,6 +144,27 @@ def _load_robot_route_report() -> dict:
             "missing": None,
             "errors": {"robot_route_report": str(exc)},
         }
+
+
+def _load_orchestrator_status() -> dict:
+    if not ORCHESTRATOR_STATE_FILE.exists():
+        return {"ok": True, "progress": 0.0, "running_task": None, "completed": [], "failed": []}
+    try:
+        state = json.loads(ORCHESTRATOR_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"ok": False, "progress": 0.0, "running_task": None, "completed": [], "failed": [], "error": str(exc)}
+    task_status = state.get("task_status", {})
+    completed = [name for name, status in task_status.items() if status == "success"]
+    failed = [name for name, status in task_status.items() if status == "failed"]
+    running = [name for name, status in task_status.items() if status == "running"]
+    total = len(task_status)
+    return {
+        "ok": True,
+        "progress": round(len(completed) / total, 3) if total else 0.0,
+        "running_task": running[0] if running else None,
+        "completed": completed,
+        "failed": failed,
+    }
 
 
 def _read_csv_rows(path: Path, missing_key: str, errors: dict, limitations: list[str]) -> list[dict]:
@@ -597,6 +619,9 @@ class DetectionHandler(SimpleHTTPRequestHandler):
                     "segformer_device": _WEB_MODEL_CONFIG.segformer_device,
                 }
             )
+            return
+        if path == "/api/status":
+            self._send_json(_load_orchestrator_status())
             return
         if path == "/api/evidence":
             self._send_json(_load_evidence_payload())

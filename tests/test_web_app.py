@@ -58,6 +58,22 @@ def test_load_evidence_payload_reports_invalid_json_without_failing(tmp_path, mo
     assert "all" in payload["errors"]
 
 
+def test_load_orchestrator_status_reads_checkpoint(tmp_path, monkeypatch):
+    state_path = tmp_path / "run_state.json"
+    state_path.write_text(
+        json.dumps({"task_status": {"memory": "success", "association": "running", "doc": "failed"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "ORCHESTRATOR_STATE_FILE", state_path)
+
+    payload = web_app._load_orchestrator_status()
+
+    assert payload["progress"] == 0.333
+    assert payload["running_task"] == "association"
+    assert payload["completed"] == ["memory"]
+    assert payload["failed"] == ["doc"]
+
+
 def test_default_web_config_uses_segformer_probability_source():
     config = web_app.WebModelConfig()
 

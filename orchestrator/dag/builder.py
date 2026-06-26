@@ -12,7 +12,7 @@ class Task:
     name: str
     agent: str
     deps: list[str]
-    retries: int = 2
+    retries: int = 3
     cache: bool = True
 
 
