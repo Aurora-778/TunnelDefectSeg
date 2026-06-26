@@ -100,6 +100,20 @@
       color: #fff;
     }
 
+    .nav-links a.active {
+      background: rgba(0,166,166,.22);
+      color: #fff;
+      box-shadow: inset 0 0 0 1px rgba(0,166,166,.55);
+    }
+
+    .app-view {
+      display: none;
+    }
+
+    .app-view.active-view {
+      display: block;
+    }
+
     .hero-chapter {
       position: relative;
       min-height: 560px;
@@ -1433,17 +1447,17 @@
     <nav class="premium-nav">
       <div class="nav-brand"><span class="nav-mark"></span><span>tunnel defect studio</span></div>
       <div class="nav-links">
-        <a href="#dashboard">系统总览</a>
-        <a href="#engineering-report">工程报告</a>
-        <a href="#growth-analysis">增长分析</a>
-        <a href="#recheck-list">复检清单</a>
-        <a href="#visualizations">可视化图表</a>
-        <a href="#detect">单图检测</a>
-        <a href="#data-note">数据说明</a>
+        <a href="#dashboard" data-view-link="dashboard">系统总览</a>
+        <a href="#engineering-report" data-view-link="engineering-report">工程报告</a>
+        <a href="#growth-analysis" data-view-link="growth-analysis">增长分析</a>
+        <a href="#recheck-list" data-view-link="recheck-list">复检清单</a>
+        <a href="#visualizations" data-view-link="visualizations">可视化图表</a>
+        <a href="#detect" data-view-link="detect">单图检测</a>
+        <a href="#data-note" data-view-link="data-note">数据说明</a>
       </div>
     </nav>
 
-    <section class="panel robot-dashboard" id="dashboard">
+    <section class="panel robot-dashboard app-view" id="dashboard" data-app-view="dashboard">
       <div class="panel-title">机器人隧道巡检病害监测系统 <span id="robotDashboardSource">loading /api/project-summary</span></div>
       <div class="robot-dashboard-body">
         <div>
@@ -1487,7 +1501,7 @@
       <div class="robot-distribution-grid" id="robotDistributionGrid"></div>
     </section>
 
-    <section class="panel data-section" id="engineering-report">
+    <section class="panel data-section app-view" id="engineering-report" data-app-view="engineering-report">
       <div class="panel-title">工程化病害报告 <span>/api/engineering-report</span></div>
       <div class="panel-body">
         <div class="data-grid" id="engineeringReportGrid">
@@ -1496,7 +1510,7 @@
       </div>
     </section>
 
-    <section class="panel data-section" id="growth-analysis">
+    <section class="panel data-section app-view" id="growth-analysis" data-app-view="growth-analysis">
       <div class="panel-title">跨巡检增长分析 <span>/api/growth-analysis</span></div>
       <div class="panel-body">
         <div class="data-grid" id="growthAnalysisGrid">
@@ -1505,7 +1519,7 @@
       </div>
     </section>
 
-    <section class="panel data-section" id="recheck-list">
+    <section class="panel data-section app-view" id="recheck-list" data-app-view="recheck-list">
       <div class="panel-title">重点复检清单 <span>/api/recheck-list</span></div>
       <div class="panel-body">
         <div class="data-grid" id="fullRecheckGrid">
@@ -1514,7 +1528,7 @@
       </div>
     </section>
 
-    <section class="panel data-section" id="visualizations">
+    <section class="panel data-section app-view" id="visualizations" data-app-view="visualizations">
       <div class="panel-title">可视化图表 <span>/api/visualization-assets</span></div>
       <div class="panel-body">
         <div class="visualization-grid" id="visualizationGrid">
@@ -1523,7 +1537,7 @@
       </div>
     </section>
 
-    <header class="quick-stats">
+    <header class="quick-stats app-view" data-app-view="detect">
       <section class="brand">
         <h1>单图检测 / 现场复核</h1>
         <p>mask / GT / uncertainty / Self IoU</p>
@@ -1534,7 +1548,7 @@
       <section class="stat"><span>Review priority</span><strong id="reviewFlag">High</strong></section>
     </header>
 
-    <section class="panel upload-panel" id="detect">
+    <section class="panel upload-panel app-view" id="detect" data-app-view="detect">
       <div class="drop-zone" id="dropZone">
         <div>
           <p class="drop-title">拖入图片实时检测</p>
@@ -1550,7 +1564,7 @@
       <div class="upload-status" id="uploadStatus">实时检测服务：等待上传。</div>
     </section>
 
-    <section class="panel experiment-panel">
+    <section class="panel experiment-panel app-view" data-app-view="detect">
       <div class="panel-title">SegFormer B1 阶段结果 <span>160000 iter / val set</span></div>
       <div class="panel-body">
         <div class="experiment-grid">
@@ -1583,7 +1597,7 @@
       </div>
     </section>
 
-    <section class="dashboard">
+    <section class="dashboard app-view" data-app-view="detect">
       <aside class="panel">
         <div class="panel-title">Case file <span class="pill"><i class="dot"></i> 当前样本</span></div>
         <div class="panel-body">
@@ -1643,7 +1657,7 @@
       </aside>
     </section>
 
-    <section class="lower">
+    <section class="lower app-view" data-app-view="detect">
       <section class="panel">
         <div class="panel-title">Metrics summary <span>Single / Fused / Selected</span></div>
         <div class="panel-body">
@@ -1698,7 +1712,7 @@
       </section>
     </section>
 
-    <section class="panel interest-bento" id="robot-route" style="margin-top:34px;">
+    <section class="panel interest-bento app-view" id="robot-route" data-app-view="dashboard" style="margin-top:34px;">
       <div class="panel-title">机器人时空巡检报告 <span>FrameRecord / defect tracks / claim guard</span></div>
       <div class="panel-body">
         <div class="aggregate-evidence">
@@ -1722,7 +1736,7 @@
       </div>
     </section>
 
-    <section class="panel data-section" id="data-note">
+    <section class="panel data-section app-view" id="data-note" data-app-view="data-note">
       <div class="panel-title">数据说明与仿真边界 <span>KICT + simulation metadata</span></div>
       <div class="panel-body">
         <div class="data-note-box">
@@ -2571,6 +2585,43 @@
       uploadStatus.className = `upload-status ${type}`.trim();
     }
 
+    const appViewIds = ["dashboard", "engineering-report", "growth-analysis", "recheck-list", "visualizations", "detect", "data-note"];
+
+    function currentAppViewFromHash() {
+      const hash = window.location.hash.replace("#", "");
+      return appViewIds.includes(hash) ? hash : "dashboard";
+    }
+
+    function showAppView(viewId, options = {}) {
+      const nextView = appViewIds.includes(viewId) ? viewId : "dashboard";
+      document.querySelectorAll("[data-app-view]").forEach((node) => {
+        node.classList.toggle("active-view", node.dataset.appView === nextView);
+      });
+      document.querySelectorAll("[data-view-link]").forEach((link) => {
+        link.classList.toggle("active", link.dataset.viewLink === nextView);
+      });
+      if (options.updateHash && window.location.hash !== `#${nextView}`) {
+        history.pushState(null, "", `#${nextView}`);
+      }
+      if (options.scrollTop) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      if (window.ScrollTrigger) {
+        window.ScrollTrigger.refresh();
+      }
+    }
+
+    function initAppNavigation() {
+      document.querySelectorAll("[data-view-link]").forEach((link) => {
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          showAppView(link.dataset.viewLink, { updateHash: true, scrollTop: true });
+        });
+      });
+      window.addEventListener("hashchange", () => showAppView(currentAppViewFromHash()));
+      showAppView(currentAppViewFromHash());
+    }
+
     function initTasteMotion() {
       if (!window.gsap || !window.ScrollTrigger) return;
       gsap.registerPlugin(ScrollTrigger);
@@ -3044,6 +3095,7 @@
     loadVisualizationAssets();
     loadRobotRouteReport();
     renderReport(sampleReport, sampleViews);
+    initAppNavigation();
     initTasteMotion();
   </script>
 </body>

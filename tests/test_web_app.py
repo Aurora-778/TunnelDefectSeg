@@ -419,6 +419,11 @@ def test_web_demo_has_robot_dashboard_and_preserves_single_image_review():
     html = Path("web_demo/index.html").read_text(encoding="utf-8")
 
     assert "机器人隧道巡检病害时空监测 Dashboard" in html
+    assert 'data-view-link="dashboard"' in html
+    assert 'data-app-view="dashboard"' in html
+    assert 'data-app-view="detect"' in html
+    assert "function showAppView" in html
+    assert "function initAppNavigation" in html
     assert "/api/project-summary" in html
     assert "/api/engineering-report" in html
     assert "/api/growth-analysis" in html
