@@ -17,6 +17,27 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(file))
 
 
+def kict_feature_row(**overrides):
+    row = {
+        "image_file": "images/a.jpg",
+        "mask_file": "masks/a.png",
+        "image_path": "images/a.jpg",
+        "mask_path": "masks/a.png",
+        "area_px": "12",
+        "bbox_x1": "1",
+        "bbox_y1": "2",
+        "bbox_x2": "5",
+        "bbox_y2": "6",
+        "center_x": "3.0",
+        "center_y": "4.0",
+        "mask_width": "4",
+        "mask_height": "4",
+        "has_crack": "TRUE",
+    }
+    row.update(overrides)
+    return row
+
+
 def test_merge_kict_with_simulation_outputs_robot_frame_records(tmp_path):
     sim_dir = tmp_path / "simulated"
     output_csv = tmp_path / "robot_kict_frame_records.csv"
@@ -85,24 +106,7 @@ def test_merge_kict_with_simulation_outputs_robot_frame_records(tmp_path):
     )
     write_csv(
         kict_features,
-        [
-            {
-                "image_file": "images/a.jpg",
-                "mask_file": "masks/a.png",
-                "image_path": "images/a.jpg",
-                "mask_path": "masks/a.png",
-                "area_px": "12",
-                "bbox_x1": "1",
-                "bbox_y1": "2",
-                "bbox_x2": "5",
-                "bbox_y2": "6",
-                "center_x": "3.0",
-                "center_y": "4.0",
-                "mask_width": "4",
-                "mask_height": "4",
-                "has_crack": "TRUE",
-            }
-        ],
+        [kict_feature_row()],
     )
 
     result = subprocess.run(
@@ -133,3 +137,111 @@ def test_merge_kict_with_simulation_outputs_robot_frame_records(tmp_path):
     assert rows[0]["sim_area_px"] == "100"
     assert rows[1]["disease_id"] == "D002"
     assert report_file.exists()
+
+
+def test_custom_sim_dir_does_not_fallback_to_repository_tables(tmp_path):
+    sim_dir = tmp_path / "custom_simulated"
+    kict_features = tmp_path / "kict_mask_features.csv"
+    write_csv(kict_features, [kict_feature_row()])
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/merge_kict_with_simulation.py",
+            "--sim-dir",
+            str(sim_dir),
+            "--kict-features",
+            str(kict_features),
+            "--output-csv",
+            str(tmp_path / "out.csv"),
+            "--report-file",
+            str(tmp_path / "report.md"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert f"Input file not found: {sim_dir / 'inspection_sequence.csv'}" in result.stderr
+
+
+def test_explicit_default_sim_dir_does_not_use_fallback(tmp_path):
+    kict_features = tmp_path / "kict_mask_features.csv"
+    write_csv(kict_features, [kict_feature_row()])
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/merge_kict_with_simulation.py",
+            "--sim-dir",
+            "data/simulated",
+            "--kict-features",
+            str(kict_features),
+            "--output-csv",
+            str(tmp_path / "out.csv"),
+            "--report-file",
+            str(tmp_path / "report.md"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Input file not found: data\\simulated\\inspection_sequence.csv" in result.stderr
+
+
+def test_merge_fails_when_mapping_image_id_has_no_engineering_metadata(tmp_path):
+    sim_dir = tmp_path / "simulated"
+    kict_features = sim_dir / "kict_mask_features.csv"
+    write_csv(
+        sim_dir / "inspection_sequence.csv",
+        [
+            {
+                "image_id": "I001_000001",
+                "inspection_id": "I001",
+                "frame_id": "1",
+                "timestamp": "2026-06-01 10:00:00",
+                "mileage_m": "12000.0",
+                "mileage_text": "K12+000.0",
+                "ring_id": "1000",
+                "clock_direction": "12点",
+                "image_path": "data/images/I001_000001.jpg",
+            }
+        ],
+    )
+    write_csv(
+        sim_dir / "frame_disease_mapping.csv",
+        [
+            {
+                "image_id": "I001_999999",
+                "inspection_id": "I001",
+                "frame_id": "99",
+                "disease_id": "D999",
+                "disease_type": "crack",
+                "area_px": "100",
+                "length_m": "1.1",
+                "width_mm": "2.2",
+            }
+        ],
+    )
+    write_csv(kict_features, [kict_feature_row()])
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/merge_kict_with_simulation.py",
+            "--sim-dir",
+            str(sim_dir),
+            "--kict-features",
+            str(kict_features),
+            "--output-csv",
+            str(tmp_path / "out.csv"),
+            "--report-file",
+            str(tmp_path / "report.md"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "image_id values were not found in inspection_sequence.csv: I001_999999" in result.stderr

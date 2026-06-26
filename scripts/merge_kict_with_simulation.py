@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -53,18 +54,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-csv", type=Path, default=DEFAULT_OUTPUT_CSV, help="Merged robot/KICT output CSV.")
     parser.add_argument("--report-file", type=Path, default=DEFAULT_REPORT, help="Markdown merge report output.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.allow_default_fallback = not any(
+        arg == "--sim-dir" or arg.startswith("--sim-dir=") for arg in sys.argv[1:]
+    )
+    return args
 
 
-def resolve_input_file(sim_dir: Path, filename: str) -> Path:
+def resolve_input_file(sim_dir: Path, filename: str, allow_fallback: bool = False) -> Path:
     preferred = sim_dir / filename
     if preferred.exists():
         return preferred
 
-    # Current repository keeps the robot simulation tables under this subfolder.
-    fallback = FALLBACK_SIM_DIR / filename
-    if fallback.exists():
-        return fallback
+    # 默认目录缺文件时，兼容当前仓库把仿真表放在子目录的历史布局。
+    if allow_fallback:
+        fallback = FALLBACK_SIM_DIR / filename
+        if fallback.exists():
+            return fallback
 
     raise FileNotFoundError(f"Input file not found: {preferred}")
 
@@ -109,16 +115,18 @@ def build_records(
     inspection_rows: list[dict[str, str]],
     mapping_rows: list[dict[str, str]],
     valid_kict_rows: list[dict[str, str]],
-) -> tuple[list[dict[str, str]], int]:
+) -> tuple[list[dict[str, str]], int, list[str]]:
     inspection_by_image = {row["image_id"]: row for row in inspection_rows}
     output_rows: list[dict[str, str]] = []
     missing_inspection_count = 0
+    missing_image_ids: list[str] = []
 
     for index, mapping in enumerate(mapping_rows):
         kict = valid_kict_rows[index % len(valid_kict_rows)]
         inspection = inspection_by_image.get(mapping.get("image_id", ""))
         if inspection is None:
             missing_inspection_count += 1
+            missing_image_ids.append(mapping.get("image_id", ""))
             inspection = {}
 
         output_rows.append(
@@ -153,7 +161,7 @@ def build_records(
                 "has_crack": "True",
             }
         )
-    return output_rows, missing_inspection_count
+    return output_rows, missing_inspection_count, missing_image_ids
 
 
 def validate_records(rows: list[dict[str, str]]) -> None:
@@ -162,6 +170,9 @@ def validate_records(rows: list[dict[str, str]]) -> None:
     for row in rows:
         if not row["disease_id"]:
             raise ValueError("Merged row missing disease_id")
+        for key in ["timestamp", "mileage_m", "mileage_text", "ring_id", "clock_direction"]:
+            if row.get(key, "") == "":
+                raise ValueError(f"Merged row missing engineering metadata field: {key}")
         if not row["kict_image_path"] or not row["kict_mask_path"]:
             raise ValueError("Merged row missing KICT image/mask path")
         if int_value(row, "kict_area_px") <= 0:
@@ -230,16 +241,34 @@ def write_report(
 
 def main() -> None:
     args = parse_args()
+    allow_fallback = args.allow_default_fallback
     paths = {
-        "inspection_sequence": resolve_input_file(args.sim_dir, "inspection_sequence.csv"),
-        "frame_disease_mapping": resolve_input_file(args.sim_dir, "frame_disease_mapping.csv"),
+        "inspection_sequence": resolve_input_file(
+            args.sim_dir,
+            "inspection_sequence.csv",
+            allow_fallback=allow_fallback,
+        ),
+        "frame_disease_mapping": resolve_input_file(
+            args.sim_dir,
+            "frame_disease_mapping.csv",
+            allow_fallback=allow_fallback,
+        ),
         "kict_mask_features": args.kict_features,
     }
     inspection_rows = read_csv(paths["inspection_sequence"])
     mapping_rows = read_csv(paths["frame_disease_mapping"])
     kict_rows = read_csv(paths["kict_mask_features"])
     valid_kict_rows = filter_valid_kict_samples(kict_rows)
-    output_rows, missing_inspection_count = build_records(inspection_rows, mapping_rows, valid_kict_rows)
+    output_rows, missing_inspection_count, missing_image_ids = build_records(
+        inspection_rows,
+        mapping_rows,
+        valid_kict_rows,
+    )
+    if missing_inspection_count:
+        preview = ", ".join(missing_image_ids[:5])
+        raise ValueError(
+            f"{missing_inspection_count} image_id values were not found in inspection_sequence.csv: {preview}"
+        )
     validate_records(output_rows)
     write_csv(output_rows, args.output_csv)
     write_report(
