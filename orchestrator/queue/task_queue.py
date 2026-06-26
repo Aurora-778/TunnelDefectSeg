@@ -16,3 +16,9 @@ class TaskQueue:
 
     def dequeue(self) -> str | None:
         return self.ready.popleft() if self.ready else None
+
+    def mark_retry(self, task_name: str) -> None:
+        self.retry_queue.append(task_name)
+
+    def mark_failed(self, task_name: str) -> None:
+        self.failed_queue.append(task_name)

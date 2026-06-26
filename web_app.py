@@ -164,6 +164,7 @@ def _load_orchestrator_status() -> dict:
         "running_task": running[0] if running else None,
         "completed": completed,
         "failed": failed,
+        "task_status": task_status,
     }
 
 

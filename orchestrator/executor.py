@@ -60,7 +60,7 @@ class DAGExecutor:
                 if context["task_status"].get(skipped) == "success":
                     continue
                 context["task_status"][skipped] = "skipped"
-                events.append(self._event(skipped, "skipped", reason="dependency failed"))
+                self._append_event(events, self._event(skipped, "skipped", reason="dependency failed"))
                 self._checkpoint(context)
 
             queue = TaskQueue()
@@ -73,13 +73,13 @@ class DAGExecutor:
                     break
                 batch.append(name)
 
-            coros = [self._run_task(tasks[name], context, cache, events) for name in batch]
+            coros = [self._run_task(tasks[name], context, cache, events, queue) for name in batch]
             for done in asyncio.as_completed(coros):
                 name, status, result, event = await done
                 context["task_status"][name] = status
                 if result:
                     context["outputs"][name] = result
-                events.append(event)
+                self._append_event(events, event)
                 self._checkpoint(context)
 
         self._write_json(self.cache_path, cache)
@@ -93,6 +93,7 @@ class DAGExecutor:
         context: dict[str, Any],
         cache: dict[str, Any],
         events: list[dict[str, Any]],
+        queue: TaskQueue,
     ) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
         key = self._cache_key(task, context)
         if task.cache and cache.get(task.name, {}).get("key") == key:
@@ -104,12 +105,17 @@ class DAGExecutor:
             attempts += 1
             start = perf_counter()
             context["task_status"][task.name] = "running"
-            events.append(self._event(task.name, "running", retry_count=attempts - 1))
+            self._append_event(events, self._event(task.name, "running", retry_count=attempts - 1))
+            self._checkpoint(context)
             try:
                 agent = self.registry.get(task.agent)
                 # ponytail: sync agents run in a worker thread; replace with native async agents if needed.
+                task_inputs = self._task_inputs(task, context)
+                inputs = deepcopy(context.get("inputs", {}))
+                inputs[task.agent] = task_inputs
+                inputs[task.name] = task_inputs
                 task_context = {
-                    "inputs": context.get("inputs", {}),
+                    "inputs": inputs,
                     "outputs": deepcopy(context.get("outputs", {})),
                     "shared": context.get("shared", {}),
                     "task_status": context.get("task_status", {}),
@@ -125,10 +131,12 @@ class DAGExecutor:
                 )
             except Exception as exc:
                 last_error = repr(exc)
-                events.append(self._event(task.name, "retry", retry_count=attempts, error=last_error))
                 if attempts <= task.retries:
+                    queue.mark_retry(task.name)
+                    self._append_event(events, self._event(task.name, "retry", retry_count=attempts, error=last_error))
                     await asyncio.sleep(min(0.1 * (2 ** (attempts - 1)), 1.0))
 
+        queue.mark_failed(task.name)
         return task.name, "failed", {}, self._event(task.name, "failed", retry_count=attempts - 1, error=last_error)
 
     def _resume_context(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -149,11 +157,36 @@ class DAGExecutor:
     def _cache_key(self, task: Task, context: dict[str, Any]) -> str:
         payload = {
             "agent": task.agent,
-            "inputs": context.get("inputs", {}).get(task.agent, {}),
+            "inputs": self._fingerprint(self._task_inputs(task, context), context),
             "deps": {dep: context.get("outputs", {}).get(dep, {}) for dep in task.deps},
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _task_inputs(self, task: Task, context: dict[str, Any]) -> dict[str, Any]:
+        inputs = context.get("inputs", {})
+        return inputs.get(task.name) or inputs.get(task.agent, {})
+
+    def _fingerprint(self, value: Any, context: dict[str, Any], key_name: str = "") -> Any:
+        if isinstance(value, dict):
+            return {key: self._fingerprint(item, context, key) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._fingerprint(item, context, key_name) for item in value]
+        if isinstance(value, str):
+            path = Path(value)
+            if not path.is_absolute():
+                path = self.project_root / path
+            if path.is_file() and not self._looks_like_output_key(key_name):
+                # ponytail: content hash is enough; no metadata database until files get huge.
+                return {"path": value, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        return value
+
+    def _looks_like_output_key(self, key_name: str) -> bool:
+        return key_name in {"output_path", "report_path", "summary_path", "log_path", "manifest_path", "docs_path"}
+
+    def _append_event(self, events: list[dict[str, Any]], event: dict[str, Any]) -> None:
+        events.append({"run_id": self.run_id, **event})
+        self._write_json(self.trace_path, events)
 
     def _event(self, task: str, status: str, **extra: Any) -> dict[str, Any]:
         return {"time": datetime.now().isoformat(timespec="seconds"), "task": task, "status": status, **extra}

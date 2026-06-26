@@ -72,6 +72,7 @@ def test_load_orchestrator_status_reads_checkpoint(tmp_path, monkeypatch):
     assert payload["running_task"] == "association"
     assert payload["completed"] == ["memory"]
     assert payload["failed"] == ["doc"]
+    assert payload["task_status"]["association"] == "running"
 
 
 def test_default_web_config_uses_segformer_probability_source():

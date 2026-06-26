@@ -1,5 +1,5 @@
 {
-  "run_id": "20260626233810-8efd86",
+  "run_id": "20260626234615-a96198",
   "task_status": {
     "memory": "success",
     "association": "success",
@@ -49,12 +49,12 @@
         "association_rows": 30,
         "association_matched_rows": 30
       },
-      "web": {
-        "web_manifest_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\orchestrator_web_manifest.md"
-      },
       "doc": {
         "doc_summary_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\orchestrator_v1_summary.md",
         "doc_project_summary_path": "C:\\Users\\26822\\Downloads\\data\\docs\\orchestrator_v1_summary.md"
+      },
+      "web": {
+        "web_manifest_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\orchestrator_web_manifest.md"
       }
     },
     "shared": {

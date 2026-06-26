@@ -1,54 +1,62 @@
 [
   {
-    "time": "2026-06-26T23:38:10",
+    "run_id": "20260626234615-a96198",
+    "time": "2026-06-26T23:46:15",
     "task": "memory",
     "status": "running",
     "retry_count": 0
   },
   {
-    "time": "2026-06-26T23:38:10",
+    "run_id": "20260626234615-a96198",
+    "time": "2026-06-26T23:46:15",
     "task": "memory",
     "status": "success",
     "retry_count": 0,
-    "runtime_seconds": 0.018571299995528534
+    "runtime_seconds": 0.022301700002572034
   },
   {
-    "time": "2026-06-26T23:38:10",
+    "run_id": "20260626234615-a96198",
+    "time": "2026-06-26T23:46:15",
     "task": "association",
     "status": "running",
     "retry_count": 0
   },
   {
-    "time": "2026-06-26T23:38:10",
+    "run_id": "20260626234615-a96198",
+    "time": "2026-06-26T23:46:15",
     "task": "association",
     "status": "success",
     "retry_count": 0,
-    "runtime_seconds": 0.004694200004450977
+    "runtime_seconds": 0.007601699995575473
   },
   {
-    "time": "2026-06-26T23:38:10",
-    "task": "web",
-    "status": "running",
-    "retry_count": 0
-  },
-  {
-    "time": "2026-06-26T23:38:10",
+    "run_id": "20260626234615-a96198",
+    "time": "2026-06-26T23:46:15",
     "task": "doc",
     "status": "running",
     "retry_count": 0
   },
   {
-    "time": "2026-06-26T23:38:10",
+    "run_id": "20260626234615-a96198",
+    "time": "2026-06-26T23:46:15",
     "task": "web",
-    "status": "success",
-    "retry_count": 0,
-    "runtime_seconds": 0.0030373999979929067
+    "status": "running",
+    "retry_count": 0
   },
   {
-    "time": "2026-06-26T23:38:10",
+    "run_id": "20260626234615-a96198",
+    "time": "2026-06-26T23:46:15",
     "task": "doc",
     "status": "success",
     "retry_count": 0,
-    "runtime_seconds": 0.005242200000793673
+    "runtime_seconds": 0.00727539999934379
+  },
+  {
+    "run_id": "20260626234615-a96198",
+    "time": "2026-06-26T23:46:15",
+    "task": "web",
+    "status": "success",
+    "retry_count": 0,
+    "runtime_seconds": 0.007160400004067924
   }
 ]
