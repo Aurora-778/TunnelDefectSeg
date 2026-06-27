@@ -238,5 +238,8 @@ Remove-Item -LiteralPath $tmp -Force
 - Use `apply_patch` for manual file edits.
 - Do not revert user changes.
 - After each meaningful work chunk, commit and push to `origin/main` unless the user says otherwise.
+- After each project modification, the final summary should include a review prompt tailored to that exact change, so the user can immediately request a focused review of the new work.
+- After each review, also generate a repair prompt based on the review findings, so the next work cycle can fix the identified issues directly.
+- Treat the default project loop as: implement change -> summarize and provide review prompt -> review -> provide repair prompt -> repair.
 - Look in `docs/solutions/` for reusable solved-problem notes before re-solving workflow, tooling, environment, or training-entrypoint issues.
 - After each `ce-compound` run, also persist stable reusable conclusions into long-term memory when the environment provides a memory mechanism; if no memory tool is available, record the durable rule in `AGENTS.md` or the relevant project knowledge file.
