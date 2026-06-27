@@ -90,6 +90,7 @@ REQUIRED_SCHEMAS = {
         "growth_trend",
         "attention_level",
         "mileage_range",
+        "requires_manual_review",
         "memory_description",
     ],
     "disease_association_records": [

@@ -183,8 +183,13 @@ class MemoryAgent(BaseAgent):
             memory_id = association.get("memory_id", "")
             matched = association.get("association_status") == "matched"
             needs_review = association.get("needs_manual_review") == "true"
-            if matched and memory_id in memory_by_id and not needs_review:
-                memory_by_id[memory_id] = self._update_memory_row(memory_by_id[memory_id], frame, version)
+            if matched and memory_id in memory_by_id:
+                memory_by_id[memory_id] = self._update_memory_row(
+                    memory_by_id[memory_id],
+                    frame,
+                    version,
+                    requires_review=needs_review,
+                )
             else:
                 provisional = self._new_provisional_memory(frame, version, requires_review=True)
                 memory_by_id[provisional["memory_id"]] = provisional
@@ -219,7 +224,14 @@ class MemoryAgent(BaseAgent):
             return f"{start} - {end}"
         return start or end
 
-    def _update_memory_row(self, memory: dict[str, str], frame: dict[str, str], version: str) -> dict[str, str]:
+    def _update_memory_row(
+        self,
+        memory: dict[str, str],
+        frame: dict[str, str],
+        version: str,
+        *,
+        requires_review: bool = False,
+    ) -> dict[str, str]:
         updated = dict(memory)
         inspection_id = frame.get("inspection_id", "")
         source_ids = [value for value in updated.get("source_inspection_ids", "").split("|") if value]
@@ -237,7 +249,7 @@ class MemoryAgent(BaseAgent):
             {
                 "memory_version": version,
                 "memory_update_mode": "incremental_update",
-                "memory_confidence": self._confidence_from_inspection_count(len(source_ids)),
+                "memory_confidence": self._confidence_from_inspection_count(len(source_ids), requires_review=requires_review),
                 "memory_limit_note": "Incremental CSV memory from historical records and current association; rule evidence only",
                 "last_seen_inspection": inspection_id,
                 "inspection_count": str(len(source_ids)),
@@ -256,7 +268,7 @@ class MemoryAgent(BaseAgent):
                 "mileage_range": self._join_range(updated.get("mileage_range", ""), frame.get("mileage_text", "")),
                 "representative_image_path": frame.get("kict_image_path", ""),
                 "representative_mask_path": frame.get("kict_mask_path", ""),
-                "requires_manual_review": "false",
+                "requires_manual_review": "true" if requires_review else "false",
             }
         )
         updated["memory_description"] = self._memory_description(
@@ -324,7 +336,9 @@ class MemoryAgent(BaseAgent):
                 versions.append(int(text))
         return f"v{(max(versions) if versions else 1) + 1}"
 
-    def _confidence_from_inspection_count(self, inspection_count: int) -> str:
+    def _confidence_from_inspection_count(self, inspection_count: int, *, requires_review: bool = False) -> str:
+        if requires_review:
+            return "low" if inspection_count >= 2 else "very_low"
         if inspection_count >= 3:
             return "medium"
         if inspection_count == 2:

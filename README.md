@@ -1,6 +1,6 @@
 # 机器人隧道巡检病害识别、时空聚合与增长监测系统
 
-本项目面向机器人隧道巡检场景：机器人在隧道内连续行进并拍摄图像，系统识别病害区域，并结合时间、里程、环号、方位等工程信息，形成可追踪的病害对象、增长分析和重点复检清单。
+本项目面向机器人隧道巡检场景：机器人在隧道内连续行进并拍摄图像，系统识别病害区域，并结合时间、里程、环号、方位等工程信息，形成可追踪的病害对象、规则面积变化提示和重点复检清单。
 
 当前主线不是单张图片分割 Demo，而是把真实图像 mask 几何信息接入仿真巡检流程，验证“图像病害识别 -> 工程化定位描述 -> 病害对象记忆 -> 跨巡检关联 -> 规则面积变化提示 -> 风险评分 -> Web 展示 -> 最终报告”的完整应用闭环。
 
@@ -30,7 +30,7 @@ python orchestrator/run.py --dag config/dag.yaml
 8. 风险等级与关注等级判断。
 9. 重点复检清单生成。
 10. 图表可视化输出。
-11. Web Dashboard 展示巡检总览、工程报告、增长分析、复检清单和图表。
+11. Web Dashboard 展示巡检总览、工程报告、规则面积变化提示、复检清单和图表。
 12. Disease Memory Bank 病害对象记忆库生成。
 13. 病害对象与机器人巡检帧的关联记录生成。
 14. 一键完整 pipeline 入口与最终项目报告生成。
@@ -44,7 +44,7 @@ python orchestrator/run.py --dag config/dag.yaml
 当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。
 系统可以验证病害对象建模、跨巡检关联、规则面积变化提示和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
 
-由于 KICT 是静态公开图像数据集，本项目的跨时间增长分析主要用于验证监测流程和工程化表达能力，不能声称反映真实隧道病害长期演化规律，也不能替代现场工程检测结论。
+由于 KICT 是静态公开图像数据集，本项目的跨时间面积变化分析主要用于验证监测流程和工程化表达能力，不能声称反映真实隧道病害长期演化规律，也不能替代现场工程检测结论。
 
 ## 项目目录结构
 
@@ -55,7 +55,7 @@ data/
 scripts/                      # 数据检查、特征提取、合并、报告和可视化脚本
 
 outputs/
-  visualizations/             # 增长分析和复检清单图表
+  visualizations/             # 规则面积变化和复检清单图表
   *.md                        # 阶段报告和检查报告
 
 docs/                         # 运行流程、阶段总结、比赛/专利/软著材料
@@ -177,9 +177,9 @@ python scripts/extract_kict_mask_features.py --dataset-root "C:/path/to/kict_sam
 | `data/simulated/kict_mask_features.csv` | KICT mask 几何特征表。 |
 | `data/simulated/robot_kict_frame_records.csv` | 融合 KICT 与仿真巡检元数据的核心表。 |
 | `data/simulated/disease_engineering_report.csv` | 工程化病害描述表。 |
-| `data/simulated/disease_growth_analysis.csv` | Web 兼容用跨巡检增长分析表。 |
-| `data/simulated/disease_growth_results.csv` | 当前完整 pipeline 的标准增长分析输出。 |
-| `data/simulated/disease_memory_bank.csv` | Disease Memory Bank，按 `disease_id` 汇总长期病害对象记忆。 |
+| `data/simulated/disease_growth_analysis.csv` | Web 兼容用跨巡检规则面积变化表。 |
+| `data/simulated/disease_growth_results.csv` | 当前完整 pipeline 的标准规则面积变化输出。 |
+| `data/simulated/disease_memory_bank.csv` | Disease Memory Bank，按 `disease_id` 汇总病害对象记忆。 |
 | `data/simulated/disease_association_records.csv` | 当前完整 pipeline 的标准病害关联记录表。 |
 | `data/simulated/association_records.csv` | 旧 orchestrator/Web 兼容用关联记录表。 |
 | `data/simulated/priority_recheck_list.csv` | 重点复检清单。 |
@@ -191,7 +191,7 @@ python scripts/extract_kict_mask_features.py --dataset-root "C:/path/to/kict_sam
 | `outputs/system_summary.md` | 系统闭环摘要。 |
 | `outputs/key_insights.md` | 关键洞察和复检建议摘要。 |
 | `outputs/association_evaluation_report.md` | 渐进式 Association baseline / ablation 评估报告。 |
-| `outputs/visualizations/*.png` | 关注等级、增长趋势、风险变化、面积增长率、病害类型、里程风险图表。 |
+| `outputs/visualizations/*.png` | 关注等级、规则面积变化、风险变化、面积变化率、病害类型、里程风险图表。 |
 | `outputs/visualizations/association_relationship_graph.png` | 病害对象与关联帧数量关系图。 |
 
 ## Web Dashboard
@@ -212,7 +212,7 @@ Web 页面当前展示：
 
 1. 系统总览指标。
 2. 工程化病害报告。
-3. 跨巡检增长分析。
+3. 跨巡检规则面积变化提示。
 4. 重点复检清单。
 5. 6 张可视化图表。
 6. 单图检测/现场复核入口。

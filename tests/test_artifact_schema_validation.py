@@ -2,6 +2,7 @@ import csv
 from pathlib import Path
 
 from orchestrator.schema import validate_csv_schema
+from scripts.validate_artifacts import validate_artifacts
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
@@ -116,3 +117,40 @@ def test_association_schema_requires_candidate_fields(tmp_path):
     errors = validate_csv_schema(path, "disease_association_records")
 
     assert any("candidate_count" in error for error in errors)
+
+
+def test_memory_schema_requires_manual_review_field(tmp_path):
+    path = tmp_path / "memory.csv"
+    fieldnames = [
+        "memory_id",
+        "memory_version",
+        "disease_id",
+        "disease_type",
+        "source_record_count",
+        "source_inspection_ids",
+        "memory_update_mode",
+        "memory_confidence",
+        "memory_limit_note",
+        "first_seen_inspection",
+        "last_seen_inspection",
+        "inspection_count",
+        "last_area_px",
+        "max_area_px",
+        "growth_trend",
+        "attention_level",
+        "mileage_range",
+        "memory_description",
+    ]
+    write_csv(path, fieldnames, [{name: "" for name in fieldnames}])
+
+    errors = validate_csv_schema(path, "disease_memory_bank")
+
+    assert any("requires_manual_review" in error for error in errors)
+
+
+def test_validate_artifacts_reports_missing_progressive_outputs(tmp_path):
+    errors = validate_artifacts(tmp_path)
+
+    assert "progressive_evaluation" in errors
+    assert any("progressive_evaluation_manifest.json" in error for error in errors["progressive_evaluation"])
+    assert any("association_evaluation_report.md" in error for error in errors["progressive_evaluation"])

@@ -5,6 +5,7 @@ import csv
 import json
 from collections import Counter
 from pathlib import Path
+import shutil
 import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT)
     return parser.parse_args()
+
+
+def repo_path(path: Path) -> Path:
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def prepare_outputs(output_dir: Path, report_path: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for child in output_dir.glob("round_*"):
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    manifest_path = output_dir / "progressive_evaluation_manifest.json"
+    if manifest_path.exists():
+        manifest_path.unlink()
+    if report_path.exists():
+        report_path.unlink()
 
 
 def read_csv(path: Path, *, require_inspection_id: bool = False) -> list[dict[str, str]]:
@@ -225,7 +244,7 @@ def write_report(report_path: Path, manifest: dict[str, object]) -> None:
     lines = [
         "# Association Progressive Evaluation Report",
         "",
-        "说明：本报告使用仿真 disease_id 作为评估标签；匹配阶段禁用 disease_id 得分，只允许使用历史 memory、空间、面积、时间和风险规则。",
+        "说明：本报告使用仿真 disease_id 作为评估标签；匹配阶段禁用 disease_id 得分、hard 判定和解释文本，只允许使用历史 memory、空间、面积、时间和风险规则。",
         "",
     ]
     for round_info in manifest["rounds"]:
@@ -259,13 +278,17 @@ def write_report(report_path: Path, manifest: dict[str, object]) -> None:
 
 
 def run_progressive(input_csv: Path, output_dir: Path, report_path: Path) -> dict[str, object]:
-    project_root = Path(".").resolve()
+    project_root = PROJECT_ROOT
+    input_csv = repo_path(input_csv)
+    output_dir = repo_path(output_dir)
+    report_path = repo_path(report_path)
+    prepare_outputs(output_dir, report_path)
+
     rows = read_csv(input_csv, require_inspection_id=True)
     inspections = sorted({row["inspection_id"] for row in rows}, key=inspection_key)
     if len(inspections) < 2:
         raise ValueError("progressive evaluation requires at least two inspection_id values")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, object] = {"input_csv": input_csv.as_posix(), "rounds": []}
     current_memory: Path | None = None
 

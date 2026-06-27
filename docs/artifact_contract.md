@@ -168,6 +168,7 @@ Consumer：`AssociationAgent`, final report
 - `mileage_range`
 - `representative_image_path`
 - `representative_mask_path`
+- `requires_manual_review`
 - `memory_description`
 
 当前限制：
@@ -227,9 +228,9 @@ Consumer：final report, Web Dashboard, artifact review
 评分说明：
 
 - `hard`: 同一 `disease_id` 命中，且空间、面积、时间、风险不存在明显冲突。
-- `soft`: 通过空间距离、面积相似、时间连续、风险相似和 `disease_id` 辅助信息综合评分选择候选。
+- `soft`: 通过空间距离、面积相似、时间连续、风险相似，以及默认 pipeline 中的 `disease_id` 辅助信息综合评分选择候选。
 - `uncertain`: 没有候选达到最低阈值，或候选存在明显冲突，需人工复核。
-- 渐进式评估中 `disease_id` 只作为评估标签，匹配打分会禁用 `disease_id` 得分。
+- 渐进式评估中 `disease_id` 只作为评估标签，匹配打分、`hard` 判定和解释文本都会禁用 `disease_id`。
 
 约束：
 

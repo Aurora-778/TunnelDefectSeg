@@ -83,6 +83,30 @@ def test_progressive_evaluation_splits_history_and_query_without_future_leakage(
     assert (tmp_path / "association_report.md").read_text(encoding="utf-8").count("Baseline / Ablation") == 2
 
 
+def test_progressive_evaluation_cleans_old_round_outputs(tmp_path):
+    input_csv = tmp_path / "robot_kict_frame_records.csv"
+    output_dir = tmp_path / "progressive"
+    report_path = tmp_path / "association_report.md"
+    old_round = output_dir / "round_999"
+    old_round.mkdir(parents=True)
+    (old_round / "stale.csv").write_text("stale", encoding="utf-8")
+    (output_dir / "progressive_evaluation_manifest.json").write_text("stale", encoding="utf-8")
+    report_path.write_text("stale", encoding="utf-8")
+    write_csv(
+        input_csv,
+        [
+            frame_row(),
+            frame_row(image_id="I002_000001", inspection_id="I002", timestamp="2026-07-01 10:00:00"),
+        ],
+    )
+
+    run_progressive(input_csv, output_dir, report_path)
+
+    assert not old_round.exists()
+    assert "stale" not in (output_dir / "progressive_evaluation_manifest.json").read_text(encoding="utf-8")
+    assert "stale" not in report_path.read_text(encoding="utf-8")
+
+
 def test_progressive_evaluation_requires_inspection_id(tmp_path):
     input_csv = tmp_path / "bad.csv"
     write_csv(input_csv, [{"image_id": "x"}])

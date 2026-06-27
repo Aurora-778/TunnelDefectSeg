@@ -206,3 +206,30 @@ def test_association_can_disable_disease_id_score(tmp_path):
     row = read_csv(output_path)[0]
 
     assert row["memory_id"] == "MEM-D002"
+
+
+def test_disabled_disease_id_score_does_not_create_hard_match_or_rule_basis(tmp_path):
+    frame_path = tmp_path / "frames.csv"
+    memory_path = tmp_path / "memory.csv"
+    output_path = tmp_path / "association.csv"
+    write_csv(memory_path, [memory_row()])
+    write_csv(frame_path, [frame_row(disease_id="D001", mileage_text="K12+006.0", kict_area_px="1000")])
+    context = {
+        "inputs": {
+            "association": {
+                "frame_records": str(frame_path),
+                "memory_bank": str(memory_path),
+                "output_path": str(output_path),
+                "use_disease_id_score": "false",
+            }
+        },
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+    AssociationAgent().run(context)
+    row = read_csv(output_path)[0]
+
+    assert row["memory_id"] == "MEM-D001"
+    assert row["match_type"] == "soft"
+    assert "same disease_id" not in row["rule_basis"]

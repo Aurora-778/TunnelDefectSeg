@@ -33,7 +33,13 @@ class AssociationAgent(BaseAgent):
             association_score = scores["association_score"]
             conflict_reason = self._conflict_reason(scores)
             score_margin = self._score_margin(candidates)
-            match_type = self._match_type(frame, memory, association_score, conflict_reason)
+            match_type = self._match_type(
+                frame,
+                memory,
+                association_score,
+                conflict_reason,
+                use_disease_id_score=use_disease_id_score,
+            )
             needs_manual_review = self._needs_manual_review(matched, match_type, conflict_reason, score_margin)
             confidence_level = self._confidence_level(association_score, matched, needs_manual_review)
             rows.append(
@@ -45,7 +51,7 @@ class AssociationAgent(BaseAgent):
                     "disease_id": disease_id,
                     "memory_id": memory.get("memory_id", ""),
                     "association_status": "matched" if matched else "unmatched",
-                    "rule_basis": self._rule_basis(frame, memory, match_type),
+                    "rule_basis": self._rule_basis(frame, memory, match_type, use_disease_id_score=use_disease_id_score),
                     "association_score": f"{association_score:.4f}",
                     "spatial_distance_score": f"{scores['spatial_distance_score']:.4f}",
                     "area_similarity_score": f"{scores['area_similarity_score']:.4f}",
@@ -232,19 +238,36 @@ class AssociationAgent(BaseAgent):
             return "medium"
         return "low"
 
-    def _match_type(self, frame: dict[str, str], memory: dict[str, str], score: float, conflict_reason: str) -> str:
+    def _match_type(
+        self,
+        frame: dict[str, str],
+        memory: dict[str, str],
+        score: float,
+        conflict_reason: str,
+        *,
+        use_disease_id_score: bool = True,
+    ) -> str:
         if not memory:
             return "uncertain"
-        if frame.get("disease_id", "") == memory.get("disease_id", "") and not conflict_reason and score >= 0.75:
+        same_id_allowed = use_disease_id_score and frame.get("disease_id", "") == memory.get("disease_id", "")
+        if same_id_allowed and not conflict_reason and score >= 0.75:
             return "hard"
         if score >= 0.65:
             return "soft"
         return "uncertain"
 
-    def _rule_basis(self, frame: dict[str, str], memory: dict[str, str], match_type: str) -> str:
+    def _rule_basis(
+        self,
+        frame: dict[str, str],
+        memory: dict[str, str],
+        match_type: str,
+        *,
+        use_disease_id_score: bool = True,
+    ) -> str:
         if not memory:
             return "no candidate above score threshold"
-        if match_type == "hard":
+        same_id_allowed = use_disease_id_score and frame.get("disease_id", "") == memory.get("disease_id", "")
+        if match_type == "hard" and same_id_allowed:
             return "same disease_id plus spatial/area/temporal/risk consistency"
         if match_type == "soft":
             return "best scored candidate by spatial/area/temporal/risk similarity"

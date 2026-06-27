@@ -1,5 +1,5 @@
 {
-  "input_csv": "data/simulated/robot_kict_frame_records.csv",
+  "input_csv": "C:/Users/26822/Downloads/data/data/simulated/robot_kict_frame_records.csv",
   "rounds": [
     {
       "round_index": 1,
@@ -8,13 +8,13 @@
       ],
       "query_inspection": "I002",
       "allowed_inputs": [
-        "data/simulated/progressive/round_001/memory.csv",
-        "data/simulated/progressive/round_001/query_frames.csv"
+        "C:/Users/26822/Downloads/data/data/simulated/progressive/round_001/memory.csv",
+        "C:/Users/26822/Downloads/data/data/simulated/progressive/round_001/query_frames.csv"
       ],
       "query_frame_count": 10,
-      "memory_before": "data/simulated/progressive/round_001/memory.csv",
-      "association_records": "data/simulated/progressive/round_001/association_records.csv",
-      "memory_after": "data/simulated/progressive/round_001/memory_after_query.csv",
+      "memory_before": "C:/Users/26822/Downloads/data/data/simulated/progressive/round_001/memory.csv",
+      "association_records": "C:/Users/26822/Downloads/data/data/simulated/progressive/round_001/association_records.csv",
+      "memory_after": "C:/Users/26822/Downloads/data/data/simulated/progressive/round_001/memory_after_query.csv",
       "metrics": {
         "strategy_accuracy": {
           "area_only": 0.5,
@@ -72,13 +72,13 @@
       ],
       "query_inspection": "I003",
       "allowed_inputs": [
-        "data/simulated/progressive/round_001/memory_after_query.csv",
-        "data/simulated/progressive/round_002/query_frames.csv"
+        "C:/Users/26822/Downloads/data/data/simulated/progressive/round_001/memory_after_query.csv",
+        "C:/Users/26822/Downloads/data/data/simulated/progressive/round_002/query_frames.csv"
       ],
       "query_frame_count": 10,
-      "memory_before": "data/simulated/progressive/round_001/memory_after_query.csv",
-      "association_records": "data/simulated/progressive/round_002/association_records.csv",
-      "memory_after": "data/simulated/progressive/round_002/memory_after_query.csv",
+      "memory_before": "C:/Users/26822/Downloads/data/data/simulated/progressive/round_001/memory_after_query.csv",
+      "association_records": "C:/Users/26822/Downloads/data/data/simulated/progressive/round_002/association_records.csv",
+      "memory_after": "C:/Users/26822/Downloads/data/data/simulated/progressive/round_002/memory_after_query.csv",
       "metrics": {
         "strategy_accuracy": {
           "area_only": 0.5,

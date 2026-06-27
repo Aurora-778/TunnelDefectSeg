@@ -13,9 +13,9 @@ Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Assoc
 ## 数量统计
 
 - 工程化病害记录：30
-- 增长分析病害：10
+- 规则面积变化病害：10
 - 重点复检病害：10
 
 ## Web 展示
 
-启动原有 Web 服务后，可通过 Dashboard 查看工程报告、增长分析、重点复检清单和可视化图表。
+启动原有 Web 服务后，可通过 Dashboard 查看工程报告、规则面积变化提示、重点复检清单和可视化图表。

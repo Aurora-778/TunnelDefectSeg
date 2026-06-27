@@ -1,6 +1,6 @@
 # Association Progressive Evaluation Report
 
-说明：本报告使用仿真 disease_id 作为评估标签；匹配阶段禁用 disease_id 得分，只允许使用历史 memory、空间、面积、时间和风险规则。
+说明：本报告使用仿真 disease_id 作为评估标签；匹配阶段禁用 disease_id 得分、hard 判定和解释文本，只允许使用历史 memory、空间、面积、时间和风险规则。
 
 ## Round 1: query I002
 

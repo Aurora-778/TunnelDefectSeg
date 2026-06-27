@@ -85,7 +85,7 @@ class FinalReportAgent(BaseAgent):
 ## 病害分析结果
 
 - 工程化病害记录数：{len(engineering_rows)}
-- 长期病害对象数：{len(growth_rows)}
+- 病害对象数：{len(growth_rows)}
 - 重点复检记录数：{len(recheck_rows)}
 
 ## 关联分析结果
@@ -98,7 +98,7 @@ class FinalReportAgent(BaseAgent):
 
 {self._counter_lines(risk_counts)}
 
-## 增长趋势分布
+## 规则面积变化提示分布
 
 {self._counter_lines(trend_counts)}
 
@@ -116,19 +116,19 @@ class FinalReportAgent(BaseAgent):
 
 ## 数据边界
 
-当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。系统可以验证病害对象建模、跨巡检关联、增长分析和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
+当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。系统可以验证病害对象建模、跨巡检关联、规则面积变化提示和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
 
 ## 局限性
 
 - 当前关联评分仍主要依赖仿真元数据和 mask 几何特征，尚未接入真实机器人位姿、深度或视觉重识别。
-- 当前增长趋势是基于面积和风险规则的工程判断，不等同于结构安全结论。
+- 当前面积变化提示是基于面积和风险规则的工程判断，不等同于结构安全结论。
 - KICT 数据主要提供静态裂缝 mask，真实跨时间病害演化仍需要长期巡检数据支撑。
 
 ## 未来扩展
 
 - 接入真实机器人里程计、位姿和相机标定，提高空间定位精度。
 - 引入视觉相似度、人工确认机制或真实位姿约束增强跨巡检关联。
-- 增加长期时间序列数据后，再扩展为更严格的病害增长趋势分析。
+- 增加真实长期时间序列数据后，再扩展为更严格的病害变化分析。
 """
 
     def _system_summary_text(
@@ -155,12 +155,12 @@ Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Assoc
 ## 数量统计
 
 - 工程化病害记录：{len(engineering_rows)}
-- 增长分析病害：{len(growth_rows)}
+- 规则面积变化病害：{len(growth_rows)}
 - 重点复检病害：{len(recheck_rows)}
 
 ## Web 展示
 
-启动原有 Web 服务后，可通过 Dashboard 查看工程报告、增长分析、重点复检清单和可视化图表。
+启动原有 Web 服务后，可通过 Dashboard 查看工程报告、规则面积变化提示、重点复检清单和可视化图表。
 """
 
     def _key_insights_text(self, growth_rows: list[dict[str, str]], recheck_rows: list[dict[str, str]]) -> str:
@@ -174,7 +174,7 @@ Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Assoc
         ) or "- 当前没有重点复检记录。"
         return f"""# 关键洞察
 
-## 增长最明显的病害
+## 规则面积变化最明显的病害
 
 {top_lines}
 
