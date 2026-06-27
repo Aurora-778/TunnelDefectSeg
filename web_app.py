@@ -29,10 +29,12 @@ from run_confidence_risk import (
     process_image,
 )
 from inspection_report import build_inspection_report
+from orchestrator.api import dag_payload, run_payload, runs_payload
 
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web_demo"
+WEB_PLATFORM_ROOT = ROOT / "web"
 OUTPUT_ROOT = ROOT / "experiments" / "web_live"
 EVIDENCE_FILES = {
     "test": ROOT / "experiments" / "enhancement_evidence_test_summary.json",
@@ -599,6 +601,12 @@ class DetectionHandler(SimpleHTTPRequestHandler):
         if path in {"/", "/index.html"}:
             self._serve_file(WEB_ROOT / "index.html")
             return
+        if path in {"/platform", "/platform/"}:
+            self._serve_file(WEB_PLATFORM_ROOT / "dashboard" / "index.html")
+            return
+        if path.startswith("/web/"):
+            self._serve_file(WEB_PLATFORM_ROOT / path.removeprefix("/web/"))
+            return
         if path.startswith("/assets/"):
             self._serve_file(WEB_ROOT / path.lstrip("/"))
             return
@@ -623,6 +631,15 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/status":
             self._send_json(_load_orchestrator_status())
+            return
+        if path == "/api/dag":
+            self._send_json(dag_payload(ROOT))
+            return
+        if path == "/api/runs":
+            self._send_json(runs_payload(ROOT))
+            return
+        if path.startswith("/api/run/"):
+            self._send_json(run_payload(ROOT, Path(path.removeprefix("/api/run/")).name))
             return
         if path == "/api/evidence":
             self._send_json(_load_evidence_payload())
@@ -674,7 +691,13 @@ class DetectionHandler(SimpleHTTPRequestHandler):
 
     def _serve_file(self, path: Path) -> None:
         resolved = path.resolve()
-        allowed_roots = [WEB_ROOT.resolve(), OUTPUT_ROOT.resolve(), VISUALIZATION_ROOT.resolve(), EVIDENCE_OVERLAY_ROOT.resolve()]
+        allowed_roots = [
+            WEB_ROOT.resolve(),
+            WEB_PLATFORM_ROOT.resolve(),
+            OUTPUT_ROOT.resolve(),
+            VISUALIZATION_ROOT.resolve(),
+            EVIDENCE_OVERLAY_ROOT.resolve(),
+        ]
         if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
             self._send_json({"error": "Forbidden"}, HTTPStatus.FORBIDDEN)
             return

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Multi-Agent Engineering Platform</title>
+  <style>
+    body { margin: 0; background: #0d1719; color: #10202b; font-family: Arial, "Microsoft YaHei", sans-serif; }
+    .shell { max-width: 1180px; margin: 28px auto; background: #f4f8fb; border: 1px solid #1d3440; }
+    header { display: flex; justify-content: space-between; gap: 20px; padding: 22px 26px; border-bottom: 1px solid #c6d2da; }
+    h1 { margin: 0; font-size: 34px; line-height: 1.05; }
+    nav a { color: #10202b; text-decoration: none; margin-left: 16px; font-weight: 700; }
+    main { padding: 24px 26px; display: grid; gap: 18px; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .panel { border: 1px solid #9eb0ba; background: #fff; padding: 16px; }
+    .label { color: #6d8293; font-size: 13px; }
+    .value { font-size: 28px; font-weight: 800; margin-top: 6px; }
+    .dag { display: flex; gap: 10px; flex-wrap: wrap; }
+    .node { min-width: 130px; border: 1px solid #22323c; padding: 10px; background: #eef5f7; }
+    .success { border-color: #009b8e; }
+    .failed { border-color: #cc3b3b; }
+    .running { border-color: #d89400; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #d6e0e6; padding: 10px; text-align: left; }
+    code { color: #006f77; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <div class="label">AI Multi-Agent Engineering Platform</div>
+        <h1>机器人隧道巡检平台 Dashboard</h1>
+      </div>
+      <nav>
+        <a href="/web/dashboard/index.html">Dashboard</a>
+        <a href="/web/dag_view/index.html">DAG 可视化</a>
+        <a href="/web/run_compare/index.html">Run 对比</a>
+        <a href="/">检测演示</a>
+      </nav>
+    </header>
+    <main>
+      <section class="grid">
+        <div class="panel"><div class="label">Latest run</div><div class="value" id="runId">-</div></div>
+        <div class="panel"><div class="label">Progress</div><div class="value" id="progress">0%</div></div>
+        <div class="panel"><div class="label">Completed</div><div class="value" id="completed">0</div></div>
+        <div class="panel"><div class="label">Failed</div><div class="value" id="failed">0</div></div>
+      </section>
+      <section class="panel">
+        <h2>DAG 进度</h2>
+        <div id="dag" class="dag"></div>
+      </section>
+      <section class="panel">
+        <h2>最近运行</h2>
+        <table>
+          <thead><tr><th>run_id</th><th>status</th><th>created_at</th><th>completed</th><th>failed</th></tr></thead>
+          <tbody id="runs"></tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+  <script>
+    async function loadJson(url) {
+      const response = await fetch(url);
+      return response.json();
+    }
+    async function render() {
+      const [status, dag, runs] = await Promise.all([loadJson('/api/status'), loadJson('/api/dag'), loadJson('/api/runs')]);
+      document.getElementById('runId').textContent = dag.run_id || status.run_id || '-';
+      document.getElementById('progress').textContent = Math.round((status.progress || 0) * 100) + '%';
+      document.getElementById('completed').textContent = (status.completed || []).length;
+      document.getElementById('failed').textContent = (status.failed || []).length;
+      document.getElementById('dag').innerHTML = (dag.nodes || []).map(node => (
+        `<div class="node ${node.status || ''}"><strong>${node.id}</strong><br><span class="label">${node.agent}</span><br><code>${node.status || 'pending'}</code></div>`
+      )).join('');
+      document.getElementById('runs').innerHTML = (runs.runs || []).slice(-8).reverse().map(run => (
+        `<tr><td><a href="/web/run_compare/index.html#${run.run_id}">${run.run_id}</a></td><td>${run.status || '-'}</td><td>${run.created_at || '-'}</td><td>${(run.completed_tasks || []).length}</td><td>${(run.failed_tasks || []).length}</td></tr>`
+      )).join('');
+    }
+    render();
+    setInterval(render, 5000);
+  </script>
+</body>
+</html>

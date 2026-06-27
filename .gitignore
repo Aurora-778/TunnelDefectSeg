@@ -25,8 +25,12 @@ class_summary.json
 # Logs
 *.log
 *.err.log
+logs/dag_cache.json
 outputs/kict_preview/
 outputs/evidence_overlays/
+
+# Multi-run platform artifacts
+/runs/
 
 # Local OS/editor files
 .DS_Store

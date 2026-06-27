@@ -48,12 +48,14 @@ def main() -> int:
             "shared": shared,
             "task_status": {},
         }
-        executor = DAGExecutor(registry, project_root, resume=args.resume, debug=args.debug)
+        executor = DAGExecutor(registry, project_root, resume=args.resume, debug=args.debug, dag_config=str(dag_path))
         result = executor.run(tasks, context)
         print("DAG Multi-Agent Orchestrator finished")
+        print(f"run id: {executor.run_id}")
         print(f"dag: {dag_path}")
         print(f"task status: {result.get('task_status', {})}")
         print(f"dag log: {project_root / 'logs' / 'dag_execution.json'}")
+        print(f"run dir: {executor.run_info.run_dir}")
         if args.debug:
             print(f"checkpoint: {project_root / 'orchestrator' / 'state' / 'run_state.json'}")
             print(f"trace: {project_root / 'logs' / 'execution_trace.json'}")

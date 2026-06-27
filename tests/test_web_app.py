@@ -336,6 +336,27 @@ def test_robot_dashboard_api_route_returns_payload(monkeypatch):
     assert sent["payload"]["summary"]["track_count"] == 1
 
 
+def test_platform_api_routes_return_run_payloads(monkeypatch):
+    sent = {}
+    handler = object.__new__(web_app.DetectionHandler)
+    handler._send_json = lambda payload, status=None: sent.update(payload=payload, status=status)
+    monkeypatch.setattr(web_app, "dag_payload", lambda root: {"ok": True, "nodes": [{"id": "memory"}]})
+    monkeypatch.setattr(web_app, "runs_payload", lambda root: {"ok": True, "runs": [{"run_id": "run_001"}]})
+    monkeypatch.setattr(web_app, "run_payload", lambda root, run_id: {"ok": True, "run_id": run_id})
+
+    handler.path = "/api/dag"
+    web_app.DetectionHandler.do_GET(handler)
+    assert sent["payload"]["nodes"][0]["id"] == "memory"
+
+    handler.path = "/api/runs"
+    web_app.DetectionHandler.do_GET(handler)
+    assert sent["payload"]["runs"][0]["run_id"] == "run_001"
+
+    handler.path = "/api/run/run_001"
+    web_app.DetectionHandler.do_GET(handler)
+    assert sent["payload"]["run_id"] == "run_001"
+
+
 def test_project_summary_reads_generated_tables(tmp_path, monkeypatch):
     engineering_csv = tmp_path / "disease_engineering_report.csv"
     engineering_csv.write_text(

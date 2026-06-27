@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run 对比</title>
+  <style>
+    body { margin: 0; background: #0d1719; color: #10202b; font-family: Arial, "Microsoft YaHei", sans-serif; }
+    .shell { max-width: 1180px; margin: 28px auto; background: #f4f8fb; border: 1px solid #1d3440; padding: 24px; }
+    a { color: #006f77; font-weight: 700; text-decoration: none; margin-right: 14px; }
+    h1 { margin: 16px 0 8px; font-size: 32px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px; }
+    .panel { border: 1px solid #9eb0ba; background: #fff; padding: 16px; }
+    pre { white-space: pre-wrap; background: #0b1418; color: #cceff1; padding: 14px; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { border-bottom: 1px solid #d6e0e6; padding: 10px; text-align: left; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav>
+      <a href="/web/dashboard/index.html">Dashboard</a>
+      <a href="/web/dag_view/index.html">DAG 可视化</a>
+      <a href="/web/run_compare/index.html">Run 对比</a>
+    </nav>
+    <h1>Run 对比</h1>
+    <p>对比多次 DAG 执行的状态、输出和 context 版本。</p>
+    <section class="panel">
+      <h2>Runs</h2>
+      <table>
+        <thead><tr><th>run_id</th><th>status</th><th>updated_at</th><th>contexts</th></tr></thead>
+        <tbody id="runs"></tbody>
+      </table>
+    </section>
+    <div class="grid">
+      <section class="panel"><h2>Diff</h2><pre id="diff">{}</pre></section>
+      <section class="panel"><h2>Latest timeline</h2><pre id="timeline">[]</pre></section>
+    </div>
+  </div>
+  <script>
+    async function render() {
+      const runsPayload = await fetch('/api/runs').then(r => r.json());
+      const runs = runsPayload.runs || [];
+      document.getElementById('runs').innerHTML = runs.slice().reverse().map(run =>
+        `<tr><td>${run.run_id}</td><td>${run.status || '-'}</td><td>${run.updated_at || '-'}</td><td>${(run.completed_tasks || []).length + (run.failed_tasks || []).length}</td></tr>`
+      ).join('');
+      document.getElementById('diff').textContent = JSON.stringify(runsPayload.compare || {}, null, 2);
+      if (runs.length) {
+        const latest = await fetch('/api/run/' + runs[runs.length - 1].run_id).then(r => r.json());
+        document.getElementById('timeline').textContent = JSON.stringify(latest.timeline || [], null, 2);
+      }
+    }
+    render();
+  </script>
+</body>
+</html>
