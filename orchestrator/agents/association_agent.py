@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -18,19 +19,22 @@ class AssociationAgent(BaseAgent):
         frame_path = self.resolve_path(context, self._required_input(inputs, "frame_records"))
         memory_path = self._memory_path(context, inputs)
         output_path = self.resolve_path(context, self._required_input(inputs, "output_path"))
+        legacy_output_path = self.resolve_path(context, inputs["legacy_output_path"]) if inputs.get("legacy_output_path") else None
 
         frame_rows = self.read_csv(frame_path)
         memory_rows = self.read_csv(memory_path)
-        memory_by_id = {row.get("disease_id", ""): row for row in memory_rows}
 
         rows: list[dict[str, Any]] = []
         for frame in frame_rows:
             disease_id = frame.get("disease_id", "")
-            memory, scores = self._best_memory_match(frame, memory_rows, memory_by_id)
+            memory, scores, candidates = self._best_memory_match(frame, memory_rows)
             matched = bool(memory)
             association_score = scores["association_score"]
-            confidence_level = self._confidence_level(association_score, matched)
-            match_type = self._match_type(frame, memory, association_score)
+            conflict_reason = self._conflict_reason(scores)
+            score_margin = self._score_margin(candidates)
+            match_type = self._match_type(frame, memory, association_score, conflict_reason)
+            needs_manual_review = self._needs_manual_review(matched, match_type, conflict_reason, score_margin)
+            confidence_level = self._confidence_level(association_score, matched, needs_manual_review)
             rows.append(
                 {
                     "association_id": f"ASSOC-{frame.get('inspection_id', '')}-{frame.get('frame_id', '')}-{disease_id}",
@@ -48,6 +52,11 @@ class AssociationAgent(BaseAgent):
                     "risk_similarity_score": f"{scores['risk_similarity_score']:.4f}",
                     "confidence_level": confidence_level,
                     "match_type": match_type,
+                    "candidate_count": len(candidates),
+                    "top_candidate_ids": self._top_candidate_ids(candidates),
+                    "score_margin": f"{score_margin:.4f}",
+                    "conflict_reason": conflict_reason,
+                    "needs_manual_review": "true" if needs_manual_review else "false",
                     "mileage_text": frame.get("mileage_text", ""),
                     "clock_direction": frame.get("clock_direction", ""),
                     "disease_type": frame.get("disease_type", ""),
@@ -75,6 +84,11 @@ class AssociationAgent(BaseAgent):
             "risk_similarity_score",
             "confidence_level",
             "match_type",
+            "candidate_count",
+            "top_candidate_ids",
+            "score_margin",
+            "conflict_reason",
+            "needs_manual_review",
             "mileage_text",
             "clock_direction",
             "disease_type",
@@ -85,6 +99,9 @@ class AssociationAgent(BaseAgent):
             "kict_mask_path",
         ]
         self.write_csv(output_path, rows, fieldnames)
+        if legacy_output_path:
+            legacy_output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(output_path, legacy_output_path)
 
         matched_count = sum(1 for row in rows if row["association_status"] == "matched")
         result = {
@@ -92,7 +109,6 @@ class AssociationAgent(BaseAgent):
             "association_rows": len(rows),
             "association_matched_rows": matched_count,
         }
-        context.setdefault("outputs", {})[self.name] = result
         return result
 
     def _memory_path(self, context: dict[str, Any], inputs: dict[str, Any]) -> Path:
@@ -113,28 +129,26 @@ class AssociationAgent(BaseAgent):
         self,
         frame: dict[str, str],
         memory_rows: list[dict[str, str]],
-        memory_by_id: dict[str, dict[str, str]],
-    ) -> tuple[dict[str, str], dict[str, float]]:
-        same_id_memory = memory_by_id.get(frame.get("disease_id", ""))
-        if same_id_memory:
-            return same_id_memory, self._scores(frame, same_id_memory, same_id=True)
-
-        scored = [(memory, self._scores(frame, memory, same_id=False)) for memory in memory_rows]
+    ) -> tuple[dict[str, str], dict[str, float], list[tuple[dict[str, str], dict[str, float]]]]:
+        scored = [
+            (memory, self._scores(frame, memory, same_id=frame.get("disease_id", "") == memory.get("disease_id", "")))
+            for memory in memory_rows
+        ]
+        scored.sort(key=lambda item: item[1]["association_score"], reverse=True)
         if not scored:
-            return {}, self._empty_scores()
-        memory, scores = max(scored, key=lambda item: item[1]["association_score"])
+            return {}, self._empty_scores(), []
+        memory, scores = scored[0]
         if scores["association_score"] < 0.45:
-            return {}, scores
-        return memory, scores
+            return {}, scores, scored
+        return memory, scores, scored
 
     def _scores(self, frame: dict[str, str], memory: dict[str, str], *, same_id: bool) -> dict[str, float]:
         spatial = self._spatial_distance_score(frame, memory)
         area = self._area_similarity_score(frame, memory)
         temporal = self._temporal_continuity_score(frame, memory)
         risk = self._risk_similarity_score(frame, memory)
-        score = 0.35 * spatial + 0.3 * area + 0.2 * temporal + 0.15 * risk
-        if same_id:
-            score = max(score, 0.9)
+        id_score = 1.0 if same_id else 0.0
+        score = 0.25 * spatial + 0.25 * area + 0.20 * temporal + 0.15 * risk + 0.15 * id_score
         return {
             "association_score": min(score, 1.0),
             "spatial_distance_score": spatial,
@@ -191,19 +205,19 @@ class AssociationAgent(BaseAgent):
             return 0.5
         return 1.0 - min(abs(self._risk_score(frame_risk) - self._risk_score(memory_risk)) / 2.0, 1.0)
 
-    def _confidence_level(self, score: float, matched: bool) -> str:
+    def _confidence_level(self, score: float, matched: bool, needs_manual_review: bool) -> str:
         if not matched:
             return "low"
-        if score >= 0.8:
+        if score >= 0.8 and not needs_manual_review:
             return "high"
         if score >= 0.6:
             return "medium"
         return "low"
 
-    def _match_type(self, frame: dict[str, str], memory: dict[str, str], score: float) -> str:
+    def _match_type(self, frame: dict[str, str], memory: dict[str, str], score: float, conflict_reason: str) -> str:
         if not memory:
             return "uncertain"
-        if frame.get("disease_id", "") == memory.get("disease_id", ""):
+        if frame.get("disease_id", "") == memory.get("disease_id", "") and not conflict_reason and score >= 0.75:
             return "hard"
         if score >= 0.65:
             return "soft"
@@ -217,6 +231,38 @@ class AssociationAgent(BaseAgent):
         if match_type == "soft":
             return "best scored candidate by spatial/area/temporal/risk similarity"
         return "low confidence candidate; requires review"
+
+    def _conflict_reason(self, scores: dict[str, float]) -> str:
+        reasons = []
+        if scores["spatial_distance_score"] < 0.4:
+            reasons.append("spatial mismatch")
+        if scores["area_similarity_score"] < 0.3:
+            reasons.append("area mismatch")
+        if scores["temporal_continuity_score"] < 0.3:
+            reasons.append("temporal mismatch")
+        if scores["risk_similarity_score"] < 0.4:
+            reasons.append("risk mismatch")
+        return "; ".join(reasons)
+
+    def _needs_manual_review(self, matched: bool, match_type: str, conflict_reason: str, score_margin: float) -> bool:
+        if not matched:
+            return True
+        if conflict_reason:
+            return True
+        if match_type == "uncertain":
+            return True
+        return score_margin < 0.15
+
+    def _score_margin(self, candidates: list[tuple[dict[str, str], dict[str, float]]]) -> float:
+        if len(candidates) < 2:
+            return 1.0 if candidates else 0.0
+        return max(0.0, candidates[0][1]["association_score"] - candidates[1][1]["association_score"])
+
+    def _top_candidate_ids(self, candidates: list[tuple[dict[str, str], dict[str, float]]]) -> str:
+        labels = []
+        for memory, scores in candidates[:3]:
+            labels.append(f"{memory.get('disease_id', '')}:{scores['association_score']:.4f}")
+        return "|".join(labels)
 
     def _risk_from_area(self, value: str) -> str:
         area = self._to_float(value)

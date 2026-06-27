@@ -1,11 +1,89 @@
 tasks:
-  full_pipeline:
-    agent: full_pipeline
+  engineering_report:
+    agent: engineering_report
     deps: []
-    retries: 3
+    retries: 2
+    cache: false
+
+  growth_analysis:
+    agent: growth_analysis
+    deps: [engineering_report]
+    retries: 2
+    cache: false
+
+  memory:
+    agent: memory
+    deps: [growth_analysis]
+    retries: 2
+    cache: false
+
+  association:
+    agent: association
+    deps: [memory]
+    retries: 2
+    cache: false
+
+  visualization:
+    agent: visualization
+    deps: [growth_analysis, association]
+    retries: 2
+    cache: false
+
+  final_report:
+    agent: final_report
+    deps: [memory, association, visualization]
+    retries: 2
     cache: false
 
 shared:
   project_name: tunnel_robot_inspection
 
-inputs: {}
+inputs:
+  engineering_report:
+    frame_records: data/simulated/robot_kict_frame_records.csv
+    output_path: data/simulated/disease_engineering_report.csv
+    markdown_path: outputs/disease_engineering_report.md
+    summary_path: outputs/disease_engineering_report_summary.md
+
+  growth_analysis:
+    engineering_report: data/simulated/disease_engineering_report.csv
+    output_path: data/simulated/disease_growth_results.csv
+    legacy_output_path: data/simulated/disease_growth_analysis.csv
+    markdown_path: outputs/disease_growth_analysis_report.md
+    summary_path: outputs/disease_growth_analysis_summary.md
+
+  memory:
+    engineering_report: data/simulated/disease_engineering_report.csv
+    growth_analysis: data/simulated/disease_growth_results.csv
+    output_path: data/simulated/disease_memory_bank.csv
+    report_path: outputs/memory_agent_report.md
+    summary_path: outputs/disease_memory_bank_summary.md
+    log_path: logs/memory_agent.log
+
+  association:
+    frame_records: data/simulated/robot_kict_frame_records.csv
+    memory_bank: data/simulated/disease_memory_bank.csv
+    output_path: data/simulated/disease_association_records.csv
+    legacy_output_path: data/simulated/association_records.csv
+
+  visualization:
+    engineering_report: data/simulated/disease_engineering_report.csv
+    growth_results: data/simulated/disease_growth_results.csv
+    association_records: data/simulated/disease_association_records.csv
+    recheck_list: data/simulated/priority_recheck_list.csv
+    visualization_dir: outputs/visualizations
+    visualization_report: outputs/visualization_report.md
+    recheck_report: outputs/recheck_list_report.md
+    visualization_summary: outputs/visualization_summary.md
+    association_graph: outputs/visualizations/association_relationship_graph.png
+
+  final_report:
+    engineering_report: data/simulated/disease_engineering_report.csv
+    growth_results: data/simulated/disease_growth_results.csv
+    memory_bank: data/simulated/disease_memory_bank.csv
+    association_records: data/simulated/disease_association_records.csv
+    recheck_list: data/simulated/priority_recheck_list.csv
+    visualization_dir: outputs/visualizations
+    final_report: outputs/final_project_report.md
+    system_summary: outputs/system_summary.md
+    key_insights: outputs/key_insights.md

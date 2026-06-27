@@ -1,4 +1,4 @@
-"""Run the application-level closed-loop pipeline as a DAG task."""
+"""Deprecated compatibility wrapper for the old single-node pipeline task."""
 
 from __future__ import annotations
 
@@ -8,7 +8,11 @@ from orchestrator.agents.base import BaseAgent
 
 
 class FullPipelineAgent(BaseAgent):
-    """Thin agent wrapper around the robot inspection application pipeline."""
+    """Deprecated wrapper.
+
+    The default pipeline uses config/dag.yaml with separate business stages.
+    Keep this class only for older callers that still reference full_pipeline.
+    """
 
     name = "full_pipeline"
 
@@ -16,5 +20,4 @@ class FullPipelineAgent(BaseAgent):
         from run import run_full_pipeline_direct
 
         result = run_full_pipeline_direct(self.project_root(context))
-        context.setdefault("outputs", {})[self.name] = result
         return result

@@ -4,7 +4,7 @@
 
 当前主线不是单张图片分割 Demo，而是把真实图像 mask 几何信息接入仿真巡检流程，验证“图像病害识别 -> 工程化定位描述 -> 病害对象记忆 -> 跨巡检关联 -> 增长分析 -> 风险评分 -> Web 展示 -> 最终报告”的完整应用闭环。
 
-当前推荐运行入口：
+## 推荐运行方式
 
 ```bash
 python run.py --mode full_pipeline
@@ -36,9 +36,12 @@ python orchestrator/run.py --dag config/dag.yaml
 14. 一键完整 pipeline 入口与最终项目报告生成。
 15. AI Multi-Agent Engineering Platform 的 run 状态、DAG、run 对比 API 和轻量展示页面。
 
-## 数据说明
+## 数据边界
 
 本项目视觉图像和 mask 几何特征来自 KICT Tunnel Crack Segmentation Dataset。机器人巡检过程中的时间、里程、环号、方位、`disease_id` 和跨巡检变化关系为仿真元数据。
+
+当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。
+系统可以验证病害对象建模、跨巡检关联、增长分析和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
 
 由于 KICT 是静态公开图像数据集，本项目的跨时间增长分析主要用于验证监测流程和工程化表达能力，不能声称反映真实隧道病害长期演化规律，也不能替代现场工程检测结论。
 
@@ -224,12 +227,13 @@ http://127.0.0.1:8000/platform
 
 ## 当前创新点
 
-1. 将 KICT 静态裂缝 mask 的几何信息接入机器人巡检时间、里程、环号和方位元数据，形成工程可读的病害对象。
-2. 构建 Disease Memory Bank，把同一 `disease_id` 的跨巡检面积、风险、趋势和代表图像沉淀为长期记忆。
-3. 通过 Association Agent 生成病害对象与机器人巡检帧的关联记录，把“单图识别”收束为“病害跟踪”。
-4. Association Agent 输出 `spatial_distance_score`、`area_similarity_score`、`temporal_continuity_score`、`risk_similarity_score`、`association_score`、`confidence_level` 和 `match_type`，让跨巡检关联具备可解释证据。
-5. 输出增长分析、风险评分、重点复检清单和最终报告，使系统结果能服务现场复核、课程展示和后续论文/专利论证。
-6. 保留 Web Dashboard 和 Multi-Agent 平台页面，既能展示应用结果，也能展示执行链路。
+- 面向机器人巡检的病害对象级建模。
+- Disease Memory Bank 批处理记忆表。
+- 基于空间、面积、时间和风险的规则关联评分。
+- DAG 多阶段工程闭环。
+- 可视化报告和重点复检清单。
+
+Association Agent 会输出 `spatial_distance_score`、`area_similarity_score`、`temporal_continuity_score`、`risk_similarity_score`、`association_score`、`confidence_level`、`match_type`、`candidate_count`、`top_candidate_ids`、`score_margin`、`conflict_reason` 和 `needs_manual_review`。其中 `disease_id` 只是辅助信息，不能一票决定高置信匹配。
 
 ## 模型与来源标记
 

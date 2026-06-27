@@ -45,5 +45,4 @@ class DocAgent(BaseAgent):
             "doc_summary_path": str(summary_path),
             "doc_project_summary_path": str(docs_path),
         }
-        context.setdefault("outputs", {})[self.name] = result
         return result

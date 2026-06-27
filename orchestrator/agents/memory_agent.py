@@ -46,6 +46,7 @@ class MemoryAgent(BaseAgent):
             growth_trend = growth.get("growth_trend") or self._growth_trend(area_growth_rate)
             attention_level = growth.get("attention_level") or self._attention_level(area_growth_rate, last_risk)
             total_seen_frames = sum(int(self._to_float(row.get("frame_count"))) for row in disease_rows)
+            source_inspection_ids = sorted({row.get("inspection_id", "") for row in disease_rows if row.get("inspection_id", "")})
             first_inspection = first.get("inspection_id", "")
             last_inspection = last.get("inspection_id", "")
             disease_type = first.get("disease_type", "")
@@ -56,8 +57,14 @@ class MemoryAgent(BaseAgent):
             rows.append(
                 {
                     "memory_id": f"MEM-{disease_id}",
+                    "memory_version": "v1",
                     "disease_id": disease_id,
                     "disease_type": disease_type,
+                    "source_record_count": len(disease_rows),
+                    "source_inspection_ids": "|".join(source_inspection_ids),
+                    "memory_update_mode": "batch_rebuild",
+                    "memory_confidence": self._memory_confidence(disease_rows, growth),
+                    "memory_limit_note": "KICT static masks + simulated inspection metadata; not real longitudinal evidence",
                     "first_seen_inspection": first_inspection,
                     "last_seen_inspection": last_inspection,
                     "inspection_count": len({row.get("inspection_id", "") for row in disease_rows}),
@@ -91,8 +98,14 @@ class MemoryAgent(BaseAgent):
 
         fieldnames = [
             "memory_id",
+            "memory_version",
             "disease_id",
             "disease_type",
+            "source_record_count",
+            "source_inspection_ids",
+            "memory_update_mode",
+            "memory_confidence",
+            "memory_limit_note",
             "first_seen_inspection",
             "last_seen_inspection",
             "inspection_count",
@@ -129,7 +142,6 @@ class MemoryAgent(BaseAgent):
             "memory_summary_path": str(summary_path),
             "memory_agent_log_path": str(log_path),
         }
-        context.setdefault("outputs", {})[self.name] = result
         return result
 
     def _join_range(self, start: str, end: str) -> str:
@@ -197,6 +209,14 @@ class MemoryAgent(BaseAgent):
             return "持续观察"
         return "常规记录"
 
+    def _memory_confidence(self, disease_rows: list[dict[str, str]], growth: dict[str, str]) -> str:
+        inspection_count = len({row.get("inspection_id", "") for row in disease_rows if row.get("inspection_id", "")})
+        if inspection_count >= 3:
+            return "medium"
+        if inspection_count == 2:
+            return "low"
+        return "very_low"
+
     def _memory_description(
         self,
         disease_id: str,
@@ -233,8 +253,8 @@ class MemoryAgent(BaseAgent):
         output_path: Path,
         rows: list[dict[str, Any]],
     ) -> None:
-        increasing_count = sum(1 for row in rows if row.get("growth_trend") == "increasing")
-        high_attention_count = sum(1 for row in rows if row.get("attention_level") == "high")
+        increasing_count = sum(1 for row in rows if row.get("growth_trend") in {"明显增长", "increasing"})
+        high_attention_count = sum(1 for row in rows if row.get("attention_level") in {"重点关注", "high"})
         high_risk_count = sum(1 for row in rows if str(row.get("last_risk_level", "")).lower() in ("高", "high"))
         lines = [
             f"- 输入工程报告：`{source_report_path}`",

@@ -150,6 +150,8 @@ class DAGExecutor:
                     "task_status": context.get("task_status", {}),
                 }
                 result = await asyncio.to_thread(agent.run, task_context)
+                if not isinstance(result, dict):
+                    raise TypeError(f"Agent {task.agent} must return dict, got {type(result).__name__}")
                 if task.cache:
                     cache[task.name] = {"key": key, "result": result}
                 duration = perf_counter() - start

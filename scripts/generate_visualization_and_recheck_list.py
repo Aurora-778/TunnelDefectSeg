@@ -3,13 +3,16 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
+import warnings
 from collections import Counter
 from pathlib import Path
 
 import matplotlib
-from matplotlib import font_manager
 
 matplotlib.use("Agg")
+warnings.filterwarnings("ignore", message="Glyph .* missing from font")
+from matplotlib import font_manager
 from matplotlib import pyplot as plt
 
 
@@ -196,7 +199,8 @@ def ensure_output_dir(path: Path) -> None:
 
 def save_bar_chart(labels: list[str], values: list[int | float], title: str, xlabel: str, ylabel: str, output: Path) -> Path:
     fig_width = max(7, len(labels) * 1.1)
-    fig, ax = plt.subplots(figsize=(fig_width, 4.8), dpi=150)
+    dpi = 90 if os.environ.get("FAST_TEST_MODE") == "1" else 150
+    fig, ax = plt.subplots(figsize=(fig_width, 4.8), dpi=dpi)
     bars = ax.bar(labels, values, color="#0ea5a8", edgecolor="#083344", linewidth=0.8)
     ax.set_title(title)
     ax.set_xlabel(xlabel)
@@ -303,7 +307,8 @@ def generate_mileage_visualization(mileage_rows: list[dict[str, int | str]], out
 
     labels = [str(row["mileage_bucket"]) for row in mileage_rows]
     fig_width = max(8, len(labels) * 1.25)
-    fig, ax = plt.subplots(figsize=(fig_width, 5), dpi=150)
+    dpi = 90 if os.environ.get("FAST_TEST_MODE") == "1" else 150
+    fig, ax = plt.subplots(figsize=(fig_width, 5), dpi=dpi)
     x_positions = range(len(labels))
     width = 0.38
     bars_all = ax.bar(

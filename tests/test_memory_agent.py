@@ -102,8 +102,13 @@ def test_memory_agent_builds_cross_inspection_memory(tmp_path):
     assert memory["risk_level_change"] == "1"
     assert memory["growth_trend"] == "明显增长"
     assert memory["attention_level"] == "重点关注"
+    assert memory["memory_version"] == "v1"
+    assert memory["memory_update_mode"] == "batch_rebuild"
+    assert memory["memory_confidence"] == "low"
+    assert memory["source_record_count"] == "2"
+    assert memory["source_inspection_ids"] == "I001|I002"
     assert "病害D001为裂缝" in memory["memory_description"]
 
     assert Path(result["memory_agent_report_path"]).exists()
     assert Path(result["memory_agent_log_path"]).exists()
-    assert context["outputs"]["memory"]["memory_bank_rows"] == 1
+    assert result["memory_bank_rows"] == 1

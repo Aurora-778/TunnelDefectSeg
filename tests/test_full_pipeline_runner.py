@@ -1,5 +1,6 @@
 import csv
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -58,7 +59,8 @@ def frame_row(**overrides):
     return row
 
 
-def test_full_pipeline_runner_creates_end_to_end_outputs(tmp_path):
+def test_full_pipeline_runner_creates_end_to_end_outputs(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAST_TEST_MODE", "1")
     runner = load_project_runner()
     frame_csv = tmp_path / "data" / "simulated" / "robot_kict_frame_records.csv"
     write_csv(
@@ -91,9 +93,19 @@ def test_full_pipeline_runner_creates_end_to_end_outputs(tmp_path):
     assert result["association_rows"] == 2
     assert result["association_matched_rows"] == 2
     assert result["chart_count"] >= 7
-    assert result["task_status"] == {"full_pipeline": "success"}
+    assert result["task_status"] == {
+        "engineering_report": "success",
+        "growth_analysis": "success",
+        "memory": "success",
+        "association": "success",
+        "visualization": "success",
+        "final_report": "success",
+    }
     assert result["run_id"].startswith("run_")
-    assert (tmp_path / "runs" / result["run_id"] / "dag.json").exists()
+    dag_path = tmp_path / "runs" / result["run_id"] / "dag.json"
+    assert dag_path.exists()
+    dag = json.loads(dag_path.read_text(encoding="utf-8"))
+    assert len(dag["nodes"]) >= 6
 
     data_dir = tmp_path / "data" / "simulated"
     output_dir = tmp_path / "outputs"

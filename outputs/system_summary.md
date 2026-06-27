@@ -2,16 +2,13 @@
 
 ## 执行链
 
-Memory Agent → Disease Memory Bank → Association Agent → Cross-inspection Matching → Growth Analysis → Risk Scoring → Web Visualization → Final Report
+Engineering Report -> Growth Analysis -> Disease Memory Bank -> Association Agent -> Visualization/Recheck -> Final Report
 
 ## 核心输出
 
-- `data/simulated/disease_memory_bank.csv`
-- `data/simulated/disease_association_records.csv`
-- `data/simulated/disease_growth_results.csv`
-- `outputs/final_project_report.md`
-- `outputs/system_summary.md`
-- `outputs/key_insights.md`
+- `C:/Users/26822/Downloads/data/data/simulated/disease_memory_bank.csv`
+- `C:/Users/26822/Downloads/data/data/simulated/disease_association_records.csv`
+- `C:/Users/26822/Downloads/data/data/simulated/disease_growth_results.csv`
 
 ## 数量统计
 

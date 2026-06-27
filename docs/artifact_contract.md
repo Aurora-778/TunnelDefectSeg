@@ -137,8 +137,14 @@ Consumer：`AssociationAgent`, final report
 必需字段：
 
 - `memory_id`
+- `memory_version`
 - `disease_id`
 - `disease_type`
+- `source_record_count`
+- `source_inspection_ids`
+- `memory_update_mode`
+- `memory_confidence`
+- `memory_limit_note`
 - `first_seen_inspection`
 - `last_seen_inspection`
 - `inspection_count`
@@ -161,8 +167,9 @@ Consumer：`AssociationAgent`, final report
 
 当前限制：
 
-- v1 memory 是批量重建式 memory。
-- 后续版本再引入 incremental update、memory version 和 conflict handling。
+- v1 memory 是批量重建式 memory，`memory_update_mode=batch_rebuild`。
+- `memory_confidence` 只表达当前仿真巡检元数据下的记录充分性，不代表真实长期跟踪置信度。
+- 后续版本再引入 incremental update 和 conflict handling。
 
 ### disease_association_records.csv
 
@@ -191,6 +198,11 @@ Consumer：final report, Web Dashboard, artifact review
 - `risk_similarity_score`
 - `confidence_level`
 - `match_type`
+- `candidate_count`
+- `top_candidate_ids`
+- `score_margin`
+- `conflict_reason`
+- `needs_manual_review`
 - `mileage_text`
 - `clock_direction`
 - `disease_type`
@@ -208,9 +220,15 @@ Consumer：final report, Web Dashboard, artifact review
 
 评分说明：
 
-- `hard`: 同一 `disease_id` 命中，同时输出空间、面积、时间、风险一致性评分。
-- `soft`: `disease_id` 不一致或缺失时，通过空间距离、面积相似、时间连续、风险相似综合评分选择候选。
-- `uncertain`: 没有候选达到最低阈值，需人工复核。
+- `hard`: 同一 `disease_id` 命中，且空间、面积、时间、风险不存在明显冲突。
+- `soft`: 通过空间距离、面积相似、时间连续、风险相似和 `disease_id` 辅助信息综合评分选择候选。
+- `uncertain`: 没有候选达到最低阈值，或候选存在明显冲突，需人工复核。
+
+约束：
+
+- `disease_id` 不能一票决定 hard match。
+- 若空间、面积、时间或风险存在明显冲突，应降级为 `uncertain` 或进入人工复核。
+- `candidate_count`、`top_candidate_ids`、`score_margin` 和 `conflict_reason` 用于解释多候选竞争或低置信匹配。
 
 ### priority_recheck_list.csv
 

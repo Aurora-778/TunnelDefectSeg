@@ -105,3 +105,73 @@ def test_association_agent_outputs_explainable_match_scores(tmp_path):
     assert rows[2]["match_type"] == "uncertain"
     assert rows[2]["association_status"] == "unmatched"
     assert rows[2]["confidence_level"] == "low"
+    assert "candidate_count" in rows[0]
+    assert "score_margin" in rows[0]
+    assert "needs_manual_review" in rows[0]
+
+
+def test_same_id_with_spatial_conflict_is_not_high_confidence(tmp_path):
+    frame_path = tmp_path / "frames.csv"
+    memory_path = tmp_path / "memory.csv"
+    output_path = tmp_path / "association.csv"
+    write_csv(memory_path, [memory_row(disease_id="D001", mileage_range="K12+000.0 - K12+010.0")])
+    write_csv(frame_path, [frame_row(disease_id="D001", mileage_text="K99+000.0", kict_area_px="1000")])
+    context = {
+        "inputs": {"association": {"frame_records": str(frame_path), "memory_bank": str(memory_path), "output_path": str(output_path)}},
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+    AssociationAgent().run(context)
+    row = read_csv(output_path)[0]
+
+    assert row["needs_manual_review"] == "true"
+    assert row["match_type"] in {"uncertain", "soft"}
+    assert row["confidence_level"] != "high"
+    assert "spatial mismatch" in row["conflict_reason"]
+
+
+def test_multiple_close_candidates_reports_score_margin(tmp_path):
+    frame_path = tmp_path / "frames.csv"
+    memory_path = tmp_path / "memory.csv"
+    output_path = tmp_path / "association.csv"
+    write_csv(
+        memory_path,
+        [
+            memory_row(memory_id="MEM-D010", disease_id="D010", mileage_range="K12+000.0 - K12+010.0", last_area_px="1000"),
+            memory_row(memory_id="MEM-D011", disease_id="D011", mileage_range="K12+001.0 - K12+011.0", last_area_px="1020"),
+        ],
+    )
+    write_csv(frame_path, [frame_row(disease_id="D404", mileage_text="K12+006.0", kict_area_px="1010")])
+    context = {
+        "inputs": {"association": {"frame_records": str(frame_path), "memory_bank": str(memory_path), "output_path": str(output_path)}},
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+    AssociationAgent().run(context)
+    row = read_csv(output_path)[0]
+
+    assert float(row["score_margin"]) < 0.15
+    assert row["needs_manual_review"] == "true"
+    assert row["candidate_count"] == "2"
+    assert "|" in row["top_candidate_ids"]
+
+
+def test_missing_disease_id_can_soft_match_by_spatial_and_area(tmp_path):
+    frame_path = tmp_path / "frames.csv"
+    memory_path = tmp_path / "memory.csv"
+    output_path = tmp_path / "association.csv"
+    write_csv(memory_path, [memory_row()])
+    write_csv(frame_path, [frame_row(disease_id="", mileage_text="K12+006.0", kict_area_px="1000")])
+    context = {
+        "inputs": {"association": {"frame_records": str(frame_path), "memory_bank": str(memory_path), "output_path": str(output_path)}},
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+    AssociationAgent().run(context)
+    row = read_csv(output_path)[0]
+
+    assert row["match_type"] == "soft"
+    assert row["association_status"] == "matched"

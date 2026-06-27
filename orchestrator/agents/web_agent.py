@@ -32,6 +32,4 @@ class WebAgent(BaseAgent):
         ]
         self.write_markdown(manifest_path, "Orchestrator Web Manifest", lines)
 
-        result = {"web_manifest_path": str(manifest_path)}
-        context.setdefault("outputs", {})[self.name] = result
-        return result
+        return {"web_manifest_path": str(manifest_path)}
