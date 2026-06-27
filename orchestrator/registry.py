@@ -29,10 +29,11 @@ def build_default_registry() -> AgentRegistry:
     """Register the project agents without coupling Orchestrator to business code."""
     from orchestrator.agents.association_agent import AssociationAgent
     from orchestrator.agents.doc_agent import DocAgent
+    from orchestrator.agents.full_pipeline_agent import FullPipelineAgent
     from orchestrator.agents.memory_agent import MemoryAgent
     from orchestrator.agents.web_agent import WebAgent
 
     registry = AgentRegistry()
-    for agent in (MemoryAgent(), AssociationAgent(), WebAgent(), DocAgent()):
+    for agent in (MemoryAgent(), AssociationAgent(), WebAgent(), DocAgent(), FullPipelineAgent()):
         registry.register(agent)
     return registry

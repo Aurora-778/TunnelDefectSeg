@@ -43,8 +43,8 @@ class MemoryAgent(BaseAgent):
             first_risk = first.get("risk_level", "")
             last_risk = last.get("risk_level", "")
             risk_change = self._risk_score(last_risk) - self._risk_score(first_risk)
-            growth_trend = self._growth_trend(area_growth_rate)
-            attention_level = self._attention_level(area_growth_rate, last_risk)
+            growth_trend = growth.get("growth_trend") or self._growth_trend(area_growth_rate)
+            attention_level = growth.get("attention_level") or self._attention_level(area_growth_rate, last_risk)
             total_seen_frames = sum(int(self._to_float(row.get("frame_count"))) for row in disease_rows)
             first_inspection = first.get("inspection_id", "")
             last_inspection = last.get("inspection_id", "")
@@ -184,18 +184,18 @@ class MemoryAgent(BaseAgent):
     def _growth_trend(self, area_growth_rate: float) -> str:
         # A small dead band avoids calling tiny numeric noise real growth.
         if area_growth_rate >= 0.05:
-            return "increasing"
+            return "明显增长"
         if area_growth_rate <= -0.05:
-            return "decreasing"
-        return "stable"
+            return "面积减小"
+        return "基本稳定"
 
     def _attention_level(self, area_growth_rate: float, risk_level: str) -> str:
         risk_score = self._risk_score(risk_level)
         if risk_score >= 3 or area_growth_rate >= 0.2:
-            return "high"
+            return "重点关注"
         if risk_score == 2 or area_growth_rate >= 0.05:
-            return "medium"
-        return "low"
+            return "持续观察"
+        return "常规记录"
 
     def _memory_description(
         self,

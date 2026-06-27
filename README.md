@@ -10,7 +10,13 @@
 python run.py --mode full_pipeline
 ```
 
-该命令会基于仓库中已经生成的 `data/simulated/robot_kict_frame_records.csv`，一键生成工程化报告、增长结果、Disease Memory Bank、病害关联记录、复检清单、可视化图表和最终项目报告。
+该命令是根目录薄封装，实际执行会进入 Orchestrator DAG。也可以直接运行：
+
+```bash
+python orchestrator/run.py --dag config/dag.yaml
+```
+
+两种方式都会基于仓库中已经生成的 `data/simulated/robot_kict_frame_records.csv`，一键生成工程化报告、增长结果、Disease Memory Bank、带评分的病害关联记录、复检清单、可视化图表和最终项目报告。
 
 ## 当前实现功能
 
@@ -68,7 +74,7 @@ orchestrator/                 # Memory/Association Agent、DAG、run 管理和�
 | `scripts/generate_engineering_report.py` | 生成按巡检和病害对象组织的工程化中文报告。 |
 | `scripts/analyze_disease_growth.py` | 统计同一病害跨巡检的面积、风险和趋势变化。 |
 | `scripts/generate_visualization_and_recheck_list.py` | 生成可视化图表、重点复检清单和阶段性 Markdown 报告。 |
-| `run.py` | 当前推荐入口，一键串联工程报告、增长分析、Memory Agent、Association Agent、可视化和最终报告。 |
+| `run.py` | 当前推荐入口，作为 Orchestrator DAG 的薄封装运行完整 pipeline。 |
 
 ## 一键运行完整闭环
 
@@ -76,6 +82,12 @@ orchestrator/                 # Memory/Association Agent、DAG、run 管理和�
 
 ```bash
 python run.py --mode full_pipeline
+```
+
+等价 DAG 原生入口：
+
+```bash
+python orchestrator/run.py --dag config/dag.yaml
 ```
 
 成功后会输出类似：
@@ -215,8 +227,9 @@ http://127.0.0.1:8000/platform
 1. 将 KICT 静态裂缝 mask 的几何信息接入机器人巡检时间、里程、环号和方位元数据，形成工程可读的病害对象。
 2. 构建 Disease Memory Bank，把同一 `disease_id` 的跨巡检面积、风险、趋势和代表图像沉淀为长期记忆。
 3. 通过 Association Agent 生成病害对象与机器人巡检帧的关联记录，把“单图识别”收束为“病害跟踪”。
-4. 输出增长分析、风险评分、重点复检清单和最终报告，使系统结果能服务现场复核、课程展示和后续论文/专利论证。
-5. 保留 Web Dashboard 和 Multi-Agent 平台页面，既能展示应用结果，也能展示执行链路。
+4. Association Agent 输出 `spatial_distance_score`、`area_similarity_score`、`temporal_continuity_score`、`risk_similarity_score`、`association_score`、`confidence_level` 和 `match_type`，让跨巡检关联具备可解释证据。
+5. 输出增长分析、风险评分、重点复检清单和最终报告，使系统结果能服务现场复核、课程展示和后续论文/专利论证。
+6. 保留 Web Dashboard 和 Multi-Agent 平台页面，既能展示应用结果，也能展示执行链路。
 
 ## 模型与来源标记
 

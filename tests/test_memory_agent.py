@@ -100,8 +100,8 @@ def test_memory_agent_builds_cross_inspection_memory(tmp_path):
     assert memory["area_growth_px"] == "50"
     assert memory["area_growth_rate"] == "0.500000"
     assert memory["risk_level_change"] == "1"
-    assert memory["growth_trend"] == "increasing"
-    assert memory["attention_level"] == "high"
+    assert memory["growth_trend"] == "明显增长"
+    assert memory["attention_level"] == "重点关注"
     assert "病害D001为裂缝" in memory["memory_description"]
 
     assert Path(result["memory_agent_report_path"]).exists()

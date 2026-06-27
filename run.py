@@ -48,6 +48,35 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_full_pipeline(project_root: Path = ROOT) -> dict[str, Any]:
+    """Run the full pipeline through the Orchestrator DAG."""
+
+    from orchestrator.dag.builder import build_dag
+    from orchestrator.executor import DAGExecutor
+    from orchestrator.registry import build_default_registry
+
+    dag_path = project_root / "config" / "dag.yaml"
+    if not dag_path.exists():
+        dag_path = ROOT / "config" / "dag.yaml"
+    tasks, config = build_dag(dag_path)
+    shared = dict(config.get("shared", {}))
+    shared.setdefault("project_root", str(project_root))
+    shared.setdefault("dag_config", str(dag_path))
+    context = {
+        "inputs": config.get("inputs", {}),
+        "outputs": {},
+        "shared": shared,
+        "task_status": {},
+    }
+    executor = DAGExecutor(build_default_registry(), project_root, dag_config=str(dag_path))
+    result = executor.run(tasks, context)
+    output = result.get("outputs", {}).get("full_pipeline", {})
+    output["run_id"] = executor.run_id
+    output["run_dir"] = str(executor.run_info.run_dir)
+    output["task_status"] = result.get("task_status", {})
+    return output
+
+
+def run_full_pipeline_direct(project_root: Path = ROOT) -> dict[str, Any]:
     """Run the complete application workflow from data tables to final reports."""
 
     paths = _paths(project_root)
@@ -297,7 +326,7 @@ def _final_report_text(
 ## 关联分析结果
 
 - 关联记录数：{matched_rows}
-- 关联依据：同一 disease_id 下的机器人巡检帧记录与 Disease Memory Bank 对象匹配。
+- 关联依据：Association Agent 综合 `disease_id`、空间距离、面积相似度、巡检时间连续性和风险相似度进行匹配，并输出 association_score、confidence_level 与 match_type。
 - 输出文件：`{_display_path(paths, paths['association_records'])}`
 
 ## 风险分布
@@ -316,19 +345,19 @@ def _final_report_text(
 
 - 将单图裂缝 mask 结果接入机器人巡检的时间、里程、环号和方位信息，形成面向工程定位的病害对象。
 - 引入 Disease Memory Bank，把 disease_id 的跨巡检历史沉淀为可复用记忆。
-- 通过规则化关联和增长分析，把“看见裂缝”升级为“跟踪同一病害的变化”。
+- 通过带评分的跨巡检关联和增长分析，把“看见裂缝”升级为“跟踪同一病害的变化”。
 - 输出重点复检清单，使系统结果能直接服务现场复核和运维决策。
 
 ## 局限性
 
-- 当前 disease_id 关联主要依赖规则和仿真元数据，尚未接入真实机器人位姿、深度或视觉重识别。
+- 当前关联评分仍主要依赖仿真元数据和 mask 几何特征，尚未接入真实机器人位姿、深度或视觉重识别。
 - 当前增长趋势是基于面积和风险规则的工程判断，不等同于结构安全结论。
 - KICT 数据主要提供静态裂缝 mask，真实跨时间病害演化仍需要长期巡检数据支撑。
 
 ## 未来扩展
 
 - 接入真实机器人里程计、位姿和相机标定，提高空间定位精度。
-- 在不改变主链路的前提下，后续可引入视觉相似度或人工确认机制增强 disease_id 关联。
+- 在不改变主链路的前提下，后续可引入视觉相似度、人工确认机制或真实位姿约束增强跨巡检关联。
 - 增加长期时间序列数据后，可扩展为更严格的病害增长预测。
 """
 

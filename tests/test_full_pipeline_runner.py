@@ -91,6 +91,9 @@ def test_full_pipeline_runner_creates_end_to_end_outputs(tmp_path):
     assert result["association_rows"] == 2
     assert result["association_matched_rows"] == 2
     assert result["chart_count"] >= 7
+    assert result["task_status"] == {"full_pipeline": "success"}
+    assert result["run_id"].startswith("run_")
+    assert (tmp_path / "runs" / result["run_id"] / "dag.json").exists()
 
     data_dir = tmp_path / "data" / "simulated"
     output_dir = tmp_path / "outputs"
