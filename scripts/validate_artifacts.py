@@ -68,6 +68,9 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
                 for key in ["history_inspections", "query_inspection", "memory_before", "association_records", "memory_after", "metrics"]:
                     if key not in round_info:
                         errors.append(f"progressive manifest round {index} missing {key}")
+                errors.extend(validate_manifest_file(project_root, round_info, index, "memory_before", "disease_memory_bank"))
+                errors.extend(validate_manifest_file(project_root, round_info, index, "association_records", "disease_association_records"))
+                errors.extend(validate_manifest_file(project_root, round_info, index, "memory_after", "disease_memory_bank"))
 
     if not report_path.exists():
         errors.append(f"missing file: {report_path}")
@@ -78,6 +81,20 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
         if "禁用 disease_id" not in report and "disabled disease_id" not in report:
             errors.append("association evaluation report must state disease_id is disabled during scoring")
     return errors
+
+
+def resolve_manifest_path(project_root: Path, value: object) -> Path:
+    path = Path(str(value))
+    return path if path.is_absolute() else project_root / path
+
+
+def validate_manifest_file(project_root: Path, round_info: dict, round_index: int, key: str, schema_name: str) -> list[str]:
+    if key not in round_info:
+        return []
+    path = resolve_manifest_path(project_root, round_info.get(key, ""))
+    if not path.exists():
+        return [f"progressive manifest round {round_index} {key} missing file: {path}"]
+    return [f"progressive manifest round {round_index} {key}: {error}" for error in validate_csv_schema(path, schema_name)]
 
 
 def main() -> int:

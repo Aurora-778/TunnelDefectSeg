@@ -193,26 +193,48 @@ def nearest_mileage(frame: dict[str, str], memory_rows: list[dict[str, str]]) ->
     return best
 
 
+def record_key(row: dict[str, str]) -> tuple[str, str, str]:
+    # One image can contain several disease records, so image_id is not enough.
+    return (row.get("image_id", ""), row.get("frame_id", ""), row.get("disease_id", ""))
+
+
+def association_for_frame(
+    frame: dict[str, str],
+    association_by_key: dict[tuple[str, str, str], dict[str, str]],
+    associations_by_image: dict[str, list[dict[str, str]]],
+) -> dict[str, str]:
+    key = record_key(frame)
+    if key in association_by_key:
+        return association_by_key[key]
+    same_image_associations = associations_by_image.get(frame.get("image_id", ""), [])
+    if len(same_image_associations) == 1:
+        return same_image_associations[0]
+    return {}
+
+
 def evaluate_round(query_rows: list[dict[str, str]], memory_rows: list[dict[str, str]], association_rows: list[dict[str, str]]) -> dict[str, object]:
     memory_by_id = {row.get("memory_id", ""): row for row in memory_rows}
-    association_by_image = {row.get("image_id", ""): row for row in association_rows}
+    association_by_key = {record_key(row): row for row in association_rows}
+    associations_by_image: dict[str, list[dict[str, str]]] = {}
+    for row in association_rows:
+        associations_by_image.setdefault(row.get("image_id", ""), []).append(row)
     strategy_hits = Counter()
     strategy_total = Counter()
     failures = []
 
     for frame in query_rows:
         label = frame.get("disease_id", "")
+        association = association_for_frame(frame, association_by_key, associations_by_image)
         predictions = {
             "same_disease_id": next((row.get("disease_id", "") for row in memory_rows if row.get("disease_id") == label), ""),
             "nearest_mileage": nearest_mileage(frame, memory_rows),
             "area_only": max(memory_rows, key=lambda row: area_score(frame, row)).get("disease_id", "") if memory_rows else "",
-            "weighted_score_no_id": memory_by_id.get(association_by_image.get(frame.get("image_id", ""), {}).get("memory_id", ""), {}).get("disease_id", ""),
+            "weighted_score_no_id": memory_by_id.get(association.get("memory_id", ""), {}).get("disease_id", ""),
         }
         for name, prediction in predictions.items():
             strategy_total[name] += 1
             if prediction == label:
                 strategy_hits[name] += 1
-        association = association_by_image.get(frame.get("image_id", ""), {})
         if predictions["weighted_score_no_id"] != label or association.get("needs_manual_review") == "true":
             failures.append(
                 {

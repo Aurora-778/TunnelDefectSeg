@@ -173,11 +173,14 @@ class MemoryAgent(BaseAgent):
                 fieldnames.append(extra)
 
         memory_by_id = {row.get("memory_id", ""): dict(row) for row in memory_rows}
-        frame_by_image = {row.get("image_id", ""): row for row in frame_rows}
+        frame_by_key = {self._frame_key(row): row for row in frame_rows}
+        frames_by_image: dict[str, list[dict[str, str]]] = defaultdict(list)
+        for row in frame_rows:
+            frames_by_image[row.get("image_id", "")].append(row)
         version = self._next_version(memory_rows)
 
         for association in association_rows:
-            frame = frame_by_image.get(association.get("image_id", ""))
+            frame = self._find_frame_for_association(association, frame_by_key, frames_by_image)
             if not frame:
                 continue
             memory_id = association.get("memory_id", "")
@@ -233,6 +236,7 @@ class MemoryAgent(BaseAgent):
         requires_review: bool = False,
     ) -> dict[str, str]:
         updated = dict(memory)
+        unresolved_review = requires_review or self._as_bool(updated.get("requires_manual_review"))
         inspection_id = frame.get("inspection_id", "")
         source_ids = [value for value in updated.get("source_inspection_ids", "").split("|") if value]
         if inspection_id and inspection_id not in source_ids:
@@ -249,7 +253,7 @@ class MemoryAgent(BaseAgent):
             {
                 "memory_version": version,
                 "memory_update_mode": "incremental_update",
-                "memory_confidence": self._confidence_from_inspection_count(len(source_ids), requires_review=requires_review),
+                "memory_confidence": self._confidence_from_inspection_count(len(source_ids), requires_review=unresolved_review),
                 "memory_limit_note": "Incremental CSV memory from historical records and current association; rule evidence only",
                 "last_seen_inspection": inspection_id,
                 "inspection_count": str(len(source_ids)),
@@ -268,7 +272,7 @@ class MemoryAgent(BaseAgent):
                 "mileage_range": self._join_range(updated.get("mileage_range", ""), frame.get("mileage_text", "")),
                 "representative_image_path": frame.get("kict_image_path", ""),
                 "representative_mask_path": frame.get("kict_mask_path", ""),
-                "requires_manual_review": "true" if requires_review else "false",
+                "requires_manual_review": "true" if unresolved_review else "false",
             }
         )
         updated["memory_description"] = self._memory_description(
@@ -321,6 +325,24 @@ class MemoryAgent(BaseAgent):
             "memory_description": f"病害{disease_id}为当前巡检新增候选，需要人工复核后确认是否并入既有记忆。",
         }
 
+    def _frame_key(self, row: dict[str, str]) -> tuple[str, str, str]:
+        # image_id alone is not unique when one frame contains multiple diseases.
+        return (row.get("image_id", ""), row.get("frame_id", ""), row.get("disease_id", ""))
+
+    def _find_frame_for_association(
+        self,
+        association: dict[str, str],
+        frame_by_key: dict[tuple[str, str, str], dict[str, str]],
+        frames_by_image: dict[str, list[dict[str, str]]],
+    ) -> dict[str, str] | None:
+        key = self._frame_key(association)
+        if key in frame_by_key:
+            return frame_by_key[key]
+        same_image_frames = frames_by_image.get(association.get("image_id", ""), [])
+        if len(same_image_frames) == 1:
+            return same_image_frames[0]
+        return None
+
     def _risk_from_area(self, area: float) -> str:
         if area < 1500:
             return "低"
@@ -344,6 +366,11 @@ class MemoryAgent(BaseAgent):
         if inspection_count == 2:
             return "low"
         return "very_low"
+
+    def _as_bool(self, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
     def _inspection_id_sort_key(self, inspection_id: str) -> tuple[int, str]:
         digits = "".join(ch for ch in str(inspection_id) if ch.isdigit())

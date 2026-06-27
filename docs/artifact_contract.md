@@ -236,7 +236,7 @@ Consumer：final report, Web Dashboard, artifact review
 
 - `disease_id` 不能一票决定 hard match。
 - 若空间、面积、时间或风险存在明显冲突，应降级为 `uncertain` 或进入人工复核。
-- `candidate_count`、`top_candidate_ids`、`score_margin` 和 `conflict_reason` 用于解释多候选竞争或低置信匹配。
+- `candidate_count`、`top_candidate_ids`、`score_margin` 和 `conflict_reason` 用于解释多候选竞争或低置信匹配；`top_candidate_ids` 保留兼容字段名，但内容应使用 `memory_id:score` 作为展示标签，避免把评估标签 `disease_id` 误解为 progressive scoring 输入。
 
 ### priority_recheck_list.csv
 

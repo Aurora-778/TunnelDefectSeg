@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.run_progressive_inspection_evaluation import run_progressive
+from scripts.run_progressive_inspection_evaluation import evaluate_round, run_progressive
 
 
 def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -113,3 +113,37 @@ def test_progressive_evaluation_requires_inspection_id(tmp_path):
 
     with pytest.raises(ValueError, match="inspection_id"):
         run_progressive(input_csv, tmp_path / "progressive", tmp_path / "association_report.md")
+
+
+def test_evaluate_round_uses_composite_key_for_same_image_records():
+    query_rows = [
+        frame_row(image_id="I002_same", frame_id="1", disease_id="D001", kict_area_px="1000"),
+        frame_row(image_id="I002_same", frame_id="2", disease_id="D002", kict_area_px="2000"),
+    ]
+    memory_rows = [
+        {"memory_id": "MEM-D001", "disease_id": "D001", "mileage_range": "K12+000.0", "last_area_px": "1000"},
+        {"memory_id": "MEM-D002", "disease_id": "D002", "mileage_range": "K12+000.0", "last_area_px": "2000"},
+    ]
+    association_rows = [
+        {
+            "image_id": "I002_same",
+            "frame_id": "1",
+            "disease_id": "D001",
+            "memory_id": "MEM-D001",
+            "association_status": "matched",
+            "needs_manual_review": "false",
+        },
+        {
+            "image_id": "I002_same",
+            "frame_id": "2",
+            "disease_id": "D002",
+            "memory_id": "MEM-D002",
+            "association_status": "matched",
+            "needs_manual_review": "false",
+        },
+    ]
+
+    metrics = evaluate_round(query_rows, memory_rows, association_rows)
+
+    assert metrics["strategy_accuracy"]["weighted_score_no_id"] == 1.0
+    assert metrics["failure_examples"] == []

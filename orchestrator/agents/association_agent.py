@@ -302,7 +302,7 @@ class AssociationAgent(BaseAgent):
     def _top_candidate_ids(self, candidates: list[tuple[dict[str, str], dict[str, float]]]) -> str:
         labels = []
         for memory, scores in candidates[:3]:
-            labels.append(f"{memory.get('disease_id', '')}:{scores['association_score']:.4f}")
+            labels.append(f"{memory.get('memory_id', '')}:{scores['association_score']:.4f}")
         return "|".join(labels)
 
     def _risk_from_area(self, value: str) -> str:

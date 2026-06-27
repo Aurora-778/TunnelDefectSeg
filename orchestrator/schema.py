@@ -142,6 +142,7 @@ ENUMS = {
     "memory_update_mode": {"batch_rebuild", "incremental_update"},
     "memory_confidence": {"medium", "low", "very_low"},
     "needs_manual_review": {"true", "false"},
+    "requires_manual_review": {"true", "false"},
     "claim_level": {"baseline_only", "rule_evidence_only", "suspected_growth"},
     "comparability_status": {"insufficient_history", "simulated_metadata_comparable", "verified_comparable"},
 }
