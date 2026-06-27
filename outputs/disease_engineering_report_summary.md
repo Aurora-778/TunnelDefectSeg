@@ -2,13 +2,13 @@
 
 ## 输入文件
 
-- data/simulated/robot_kict_frame_records.csv
+- C:/Users/26822/Downloads/data/data/simulated/robot_kict_frame_records.csv
 
 ## 输出文件
 
-- data/simulated/disease_engineering_report.csv
-- outputs/disease_engineering_report.md
-- outputs/disease_engineering_report_summary.md
+- C:/Users/26822/Downloads/data/data/simulated/disease_engineering_report.csv
+- C:/Users/26822/Downloads/data/outputs/disease_engineering_report.md
+- C:/Users/26822/Downloads/data/outputs/disease_engineering_report_summary.md
 
 ## 统计信息
 

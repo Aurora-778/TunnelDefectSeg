@@ -1,6 +1,6 @@
 # 重点复检病害清单
 
-数据来源：`data/simulated/priority_recheck_list.csv`
+数据来源：`C:/Users/26822/Downloads/data/data/simulated/priority_recheck_list.csv`
 
 ## 总体情况
 

@@ -1,7 +1,7 @@
 # Memory Agent Report
 
 - 输入工程报告：`C:\Users\26822\Downloads\data\data\simulated\disease_engineering_report.csv`
-- 输入增长分析：`C:\Users\26822\Downloads\data\data\simulated\disease_growth_analysis.csv`
+- 输入增长分析：`C:\Users\26822\Downloads\data\data\simulated\disease_growth_results.csv`
 - 输出记忆库：`C:\Users\26822\Downloads\data\data\simulated\disease_memory_bank.csv`
 - disease总数：10
 - 重点增长病害数量：0

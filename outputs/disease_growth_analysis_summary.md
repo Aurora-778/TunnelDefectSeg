@@ -2,13 +2,13 @@
 
 ## 输入文件
 
-- data/simulated/disease_engineering_report.csv
+- C:/Users/26822/Downloads/data/data/simulated/disease_engineering_report.csv
 
 ## 输出文件
 
-- data/simulated/disease_growth_analysis.csv
-- outputs/disease_growth_analysis_report.md
-- outputs/disease_growth_analysis_summary.md
+- C:/Users/26822/Downloads/data/data/simulated/disease_growth_results.csv
+- C:/Users/26822/Downloads/data/outputs/disease_growth_analysis_report.md
+- C:/Users/26822/Downloads/data/outputs/disease_growth_analysis_summary.md
 
 ## 统计信息
 

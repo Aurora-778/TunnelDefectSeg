@@ -2,24 +2,24 @@
 
 ## 输入文件
 
-- data/simulated/disease_growth_analysis.csv
-- data/simulated/disease_engineering_report.csv
+- C:/Users/26822/Downloads/data/data/simulated/disease_growth_results.csv
+- C:/Users/26822/Downloads/data/data/simulated/disease_engineering_report.csv
 
 ## 输出文件
 
-- data/simulated/priority_recheck_list.csv
-- outputs/visualization_report.md
-- outputs/recheck_list_report.md
-- outputs/visualization_summary.md
+- C:/Users/26822/Downloads/data/data/simulated/priority_recheck_list.csv
+- C:/Users/26822/Downloads/data/outputs/visualization_report.md
+- C:/Users/26822/Downloads/data/outputs/recheck_list_report.md
+- C:/Users/26822/Downloads/data/outputs/visualization_summary.md
 
 ## 图表文件
 
-- outputs/visualizations/attention_level_distribution.png
-- outputs/visualizations/growth_trend_distribution.png
-- outputs/visualizations/risk_level_change_distribution.png
-- outputs/visualizations/top10_area_growth_rate.png
-- outputs/visualizations/disease_type_distribution.png
-- outputs/visualizations/mileage_risk_distribution.png
+- C:/Users/26822/Downloads/data/outputs/visualizations/attention_level_distribution.png
+- C:/Users/26822/Downloads/data/outputs/visualizations/growth_trend_distribution.png
+- C:/Users/26822/Downloads/data/outputs/visualizations/risk_level_change_distribution.png
+- C:/Users/26822/Downloads/data/outputs/visualizations/top10_area_growth_rate.png
+- C:/Users/26822/Downloads/data/outputs/visualizations/disease_type_distribution.png
+- C:/Users/26822/Downloads/data/outputs/visualizations/mileage_risk_distribution.png
 
 ## 统计信息
 

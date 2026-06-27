@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 from collections import Counter
 from pathlib import Path
 
 import matplotlib
-import pandas as pd
 from matplotlib import font_manager
 
 matplotlib.use("Agg")
@@ -120,12 +120,7 @@ CHART_TITLES = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate disease growth visualizations and priority recheck list.")
     parser.add_argument("--growth-csv", type=Path, default=DEFAULT_GROWTH_CSV, help="disease_growth_analysis.csv path.")
-    parser.add_argument(
-        "--engineering-csv",
-        type=Path,
-        default=DEFAULT_ENGINEERING_CSV,
-        help="Optional disease_engineering_report.csv path.",
-    )
+    parser.add_argument("--engineering-csv", type=Path, default=DEFAULT_ENGINEERING_CSV, help="Optional engineering CSV path.")
     parser.add_argument("--recheck-csv", type=Path, default=DEFAULT_RECHECK_CSV, help="Priority recheck CSV path.")
     parser.add_argument("--visualization-dir", type=Path, default=DEFAULT_VIS_DIR, help="PNG output directory.")
     parser.add_argument("--visualization-report", type=Path, default=DEFAULT_VIS_REPORT, help="Visualization report path.")
@@ -146,34 +141,47 @@ def configure_matplotlib_font() -> str:
     return "未检测到 SimHei 等中文字体，图表仍已生成，但部分中文可能显示为方框。"
 
 
-def read_growth_csv(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(f"disease_growth_analysis.csv not found: {path}")
-    df = pd.read_csv(path, encoding="utf-8-sig")
-    if df.empty:
-        raise ValueError(f"disease_growth_analysis.csv is empty: {path}")
-    missing = [column for column in REQUIRED_GROWTH_COLUMNS if column not in df.columns]
+def read_growth_csv(path: Path) -> list[dict[str, str]]:
+    rows = read_csv(path, "disease_growth_analysis.csv")
+    missing = [column for column in REQUIRED_GROWTH_COLUMNS if column not in rows[0]]
     if missing:
         raise ValueError(f"disease_growth_analysis.csv missing required columns: {', '.join(missing)}")
+    for row in rows:
+        # 这里提前验证数值列，后续排序、筛选和画图就不会遇到隐性脏数据。
+        for column in ["area_growth_rate", "risk_level_change", "last_area_px", "first_area_px", "area_growth_px"]:
+            parse_float(row[column], column)
+    return rows
 
-    # 核心数值列先统一转换，后续排序、筛选和画图都基于干净数值。
-    for column in ["area_growth_rate", "risk_level_change", "last_area_px", "first_area_px", "area_growth_px"]:
-        df[column] = pd.to_numeric(df[column], errors="raise")
-    return df
 
-
-def read_engineering_csv(path: Path) -> tuple[pd.DataFrame | None, str]:
+def read_engineering_csv(path: Path) -> tuple[list[dict[str, str]] | None, str]:
     if not path.exists():
         return None, f"缺少工程报告输入：{path.as_posix()}，里程段风险统计可能受限。"
-    df = pd.read_csv(path, encoding="utf-8-sig")
-    if df.empty:
-        return None, f"工程报告输入为空：{path.as_posix()}，里程段风险统计可能受限。"
-    missing = [column for column in ENGINEERING_COLUMNS if column not in df.columns]
+    rows = read_csv(path, "disease_engineering_report.csv")
+    missing = [column for column in ENGINEERING_COLUMNS if column not in rows[0]]
     if missing:
         return None, f"工程报告缺少建议字段：{', '.join(missing)}，里程段风险统计可能受限。"
-    df["start_mileage_m"] = pd.to_numeric(df["start_mileage_m"], errors="coerce")
-    df["end_mileage_m"] = pd.to_numeric(df["end_mileage_m"], errors="coerce")
-    return df, ""
+    return rows, ""
+
+
+def read_csv(path: Path, label: str) -> list[dict[str, str]]:
+    if not path.exists():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows:
+        raise ValueError(f"{label} is empty: {path}")
+    return rows
+
+
+def parse_float(value: object, label: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be numeric, got {value!r}") from exc
+
+
+def parse_int(value: object, label: str) -> int:
+    return int(parse_float(value, label))
 
 
 def disease_type_label(value: str) -> str:
@@ -199,15 +207,15 @@ def save_bar_chart(labels: list[str], values: list[int | float], title: str, xla
     fig.tight_layout()
     try:
         fig.savefig(output)
-    except Exception as exc:  # pragma: no cover - matplotlib backend details are environment-specific.
+    except Exception as exc:  # pragma: no cover - backend details are environment-specific.
         raise RuntimeError(f"Failed to generate chart {output}: {exc}") from exc
     finally:
         plt.close(fig)
     return output
 
 
-def ordered_counts(series: pd.Series, order: list[str]) -> tuple[list[str], list[int]]:
-    counts = Counter(series.fillna("未知"))
+def ordered_counts(values: list[str], order: list[str]) -> tuple[list[str], list[int]]:
+    counts = Counter(value or "未知" for value in values)
     labels = [label for label in order if counts.get(label, 0) > 0]
     labels.extend(sorted(label for label in counts if label not in order))
     return labels, [counts[label] for label in labels]
@@ -221,20 +229,16 @@ def risk_change_label(value: int) -> str:
     return f"{value}\n下降{abs(value)}级"
 
 
-def generate_standard_visualizations(growth_df: pd.DataFrame, output_dir: Path) -> list[Path]:
+def generate_standard_visualizations(growth_rows: list[dict[str, str]], output_dir: Path) -> list[Path]:
     paths: list[Path] = []
 
-    labels, values = ordered_counts(growth_df["attention_level"], ATTENTION_ORDER)
-    paths.append(
-        save_bar_chart(labels, values, "关注等级分布", "关注等级", "病害数量", output_dir / CHART_FILES["attention"])
-    )
+    labels, values = ordered_counts([row["attention_level"] for row in growth_rows], ATTENTION_ORDER)
+    paths.append(save_bar_chart(labels, values, "关注等级分布", "关注等级", "病害数量", output_dir / CHART_FILES["attention"]))
 
-    labels, values = ordered_counts(growth_df["growth_trend"], GROWTH_TREND_ORDER)
-    paths.append(
-        save_bar_chart(labels, values, "增长趋势分布", "增长趋势", "病害数量", output_dir / CHART_FILES["trend"])
-    )
+    labels, values = ordered_counts([row["growth_trend"] for row in growth_rows], GROWTH_TREND_ORDER)
+    paths.append(save_bar_chart(labels, values, "增长趋势分布", "增长趋势", "病害数量", output_dir / CHART_FILES["trend"]))
 
-    risk_counts = Counter(growth_df["risk_level_change"].astype(int))
+    risk_counts = Counter(parse_int(row["risk_level_change"], "risk_level_change") for row in growth_rows)
     risk_keys = sorted(risk_counts)
     paths.append(
         save_bar_chart(
@@ -247,11 +251,11 @@ def generate_standard_visualizations(growth_df: pd.DataFrame, output_dir: Path) 
         )
     )
 
-    top_growth = growth_df.sort_values("area_growth_rate", ascending=False).head(10)
+    top_growth = sorted(growth_rows, key=lambda row: parse_float(row["area_growth_rate"], "area_growth_rate"), reverse=True)[:10]
     paths.append(
         save_bar_chart(
-            top_growth["disease_id"].astype(str).tolist(),
-            top_growth["area_growth_rate"].round(4).tolist(),
+            [row["disease_id"] for row in top_growth],
+            [round(parse_float(row["area_growth_rate"], "area_growth_rate"), 4) for row in top_growth],
             "病害面积增长率 Top 10",
             "病害编号",
             "面积增长率",
@@ -259,10 +263,8 @@ def generate_standard_visualizations(growth_df: pd.DataFrame, output_dir: Path) 
         )
     )
 
-    type_labels, type_values = ordered_counts(growth_df["disease_type"].map(disease_type_label), [])
-    paths.append(
-        save_bar_chart(type_labels, type_values, "病害类型分布", "病害类型", "病害数量", output_dir / CHART_FILES["type"])
-    )
+    type_labels, type_values = ordered_counts([disease_type_label(row["disease_type"]) for row in growth_rows], [])
+    paths.append(save_bar_chart(type_labels, type_values, "病害类型分布", "病害类型", "病害数量", output_dir / CHART_FILES["type"]))
     return paths
 
 
@@ -272,50 +274,48 @@ def mileage_bucket_label(start_m: float) -> str:
     return f"K{bucket_start // 1000}+{bucket_start % 1000:03d} - K{bucket_end // 1000}+{bucket_end % 1000:03d}"
 
 
-def build_mileage_risk_table(engineering_df: pd.DataFrame | None, growth_df: pd.DataFrame) -> pd.DataFrame:
-    if engineering_df is None:
-        return pd.DataFrame(columns=["mileage_bucket", "disease_count", "priority_count"])
+def build_mileage_risk_table(engineering_rows: list[dict[str, str]] | None, growth_rows: list[dict[str, str]]) -> list[dict[str, int | str]]:
+    if not engineering_rows:
+        return []
 
-    usable = engineering_df.dropna(subset=["start_mileage_m"]).copy()
-    if usable.empty:
-        return pd.DataFrame(columns=["mileage_bucket", "disease_count", "priority_count"])
-
-    attention = growth_df[["disease_id", "attention_level"]].drop_duplicates("disease_id")
-    usable = usable.merge(attention, on="disease_id", how="left")
-    usable["bucket_start_m"] = (usable["start_mileage_m"] // 10 * 10).astype(int)
-    usable["mileage_bucket"] = usable["bucket_start_m"].apply(mileage_bucket_label)
-    grouped = (
-        usable.groupby(["bucket_start_m", "mileage_bucket"], sort=True)
-        .agg(
-            disease_count=("disease_id", "count"),
-            priority_count=("attention_level", lambda values: int((values == "重点关注").sum())),
+    attention_by_id = {row["disease_id"]: row["attention_level"] for row in growth_rows}
+    buckets: dict[int, dict[str, int | str]] = {}
+    for row in engineering_rows:
+        try:
+            start_m = parse_float(row["start_mileage_m"], "start_mileage_m")
+        except ValueError:
+            continue
+        bucket_start = math.floor(start_m / 10) * 10
+        bucket = buckets.setdefault(
+            bucket_start,
+            {"bucket_start_m": bucket_start, "mileage_bucket": mileage_bucket_label(start_m), "disease_count": 0, "priority_count": 0},
         )
-        .reset_index()
-        .sort_values("bucket_start_m")
-    )
-    return grouped[["mileage_bucket", "disease_count", "priority_count"]]
+        bucket["disease_count"] = int(bucket["disease_count"]) + 1
+        if attention_by_id.get(row["disease_id"]) == "重点关注":
+            bucket["priority_count"] = int(bucket["priority_count"]) + 1
+    return [buckets[key] for key in sorted(buckets)]
 
 
-def generate_mileage_visualization(mileage_df: pd.DataFrame, output_dir: Path) -> Path:
+def generate_mileage_visualization(mileage_rows: list[dict[str, int | str]], output_dir: Path) -> Path:
     output = output_dir / CHART_FILES["mileage"]
-    if mileage_df.empty:
+    if not mileage_rows:
         return save_bar_chart(["暂无数据"], [0], "里程段风险统计", "里程段", "病害数量", output)
 
-    labels = mileage_df["mileage_bucket"].astype(str).tolist()
+    labels = [str(row["mileage_bucket"]) for row in mileage_rows]
     fig_width = max(8, len(labels) * 1.25)
     fig, ax = plt.subplots(figsize=(fig_width, 5), dpi=150)
     x_positions = range(len(labels))
     width = 0.38
     bars_all = ax.bar(
         [x - width / 2 for x in x_positions],
-        mileage_df["disease_count"].tolist(),
+        [int(row["disease_count"]) for row in mileage_rows],
         width=width,
         label="病害总数",
         color="#2563eb",
     )
     bars_priority = ax.bar(
         [x + width / 2 for x in x_positions],
-        mileage_df["priority_count"].tolist(),
+        [int(row["priority_count"]) for row in mileage_rows],
         width=width,
         label="重点关注数",
         color="#f97316",
@@ -332,22 +332,22 @@ def generate_mileage_visualization(mileage_df: pd.DataFrame, output_dir: Path) -
     fig.tight_layout()
     try:
         fig.savefig(output)
-    except Exception as exc:  # pragma: no cover - matplotlib backend details are environment-specific.
+    except Exception as exc:  # pragma: no cover - backend details are environment-specific.
         raise RuntimeError(f"Failed to generate chart {output}: {exc}") from exc
     finally:
         plt.close(fig)
     return output
 
 
-def recheck_reason(row: pd.Series) -> str:
+def recheck_reason(row: dict[str, str]) -> str:
     reasons: list[str] = []
     if row["attention_level"] == "重点关注":
         reasons.append("该病害被判定为重点关注对象")
-    if float(row["area_growth_rate"]) >= 0.5:
+    if parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5:
         reasons.append("面积增长率超过 50%，存在明显扩展趋势")
     if row["last_risk_level"] == "高":
         reasons.append("末次巡检风险等级为高")
-    if int(row["risk_level_change"]) >= 1:
+    if parse_int(row["risk_level_change"], "risk_level_change") >= 1:
         reasons.append("风险等级较首次巡检出现上升")
     if not reasons:
         reasons.append("该病害满足持续观察条件")
@@ -364,45 +364,53 @@ def recheck_suggestion(attention_level: str) -> str:
     return suggestions.get(attention_level, "建议结合现场情况安排复检。")
 
 
-def build_priority_recheck_list(growth_df: pd.DataFrame) -> pd.DataFrame:
-    primary_mask = (
-        (growth_df["attention_level"] == "重点关注")
-        | (growth_df["growth_trend"] == "明显增长")
-        | (growth_df["last_risk_level"] == "高")
-        | (growth_df["area_growth_rate"] >= 0.5)
+def build_priority_recheck_list(growth_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    selected = [
+        row
+        for row in growth_rows
+        if row["attention_level"] == "重点关注"
+        or row["growth_trend"] == "明显增长"
+        or row["last_risk_level"] == "高"
+        or parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5
+    ]
+    if not selected:
+        selected = [
+            row
+            for row in growth_rows
+            if row["attention_level"] == "持续观察" or row["growth_trend"] == "轻微增长" or row["last_risk_level"] == "中"
+        ]
+    selected = sorted(
+        selected,
+        key=lambda row: (
+            ATTENTION_RANK.get(row["attention_level"], len(ATTENTION_ORDER)),
+            -parse_float(row["area_growth_rate"], "area_growth_rate"),
+            -parse_int(row["risk_level_change"], "risk_level_change"),
+            -parse_float(row["last_area_px"], "last_area_px"),
+        ),
     )
-    selected = growth_df[primary_mask].copy()
-    if selected.empty:
-        fallback_mask = (
-            (growth_df["attention_level"] == "持续观察")
-            | (growth_df["growth_trend"] == "轻微增长")
-            | (growth_df["last_risk_level"] == "中")
-        )
-        selected = growth_df[fallback_mask].copy()
 
-    if selected.empty:
-        return pd.DataFrame(columns=RECHECK_COLUMNS)
-
-    selected["_attention_rank"] = selected["attention_level"].map(ATTENTION_RANK).fillna(len(ATTENTION_ORDER))
-    selected = selected.sort_values(
-        ["_attention_rank", "area_growth_rate", "risk_level_change", "last_area_px"],
-        ascending=[True, False, False, False],
-    ).reset_index(drop=True)
-    selected["priority_rank"] = selected.index + 1
-    selected["recheck_reason"] = selected.apply(recheck_reason, axis=1)
-    selected["recheck_suggestion"] = selected["attention_level"].apply(recheck_suggestion)
-    return selected[RECHECK_COLUMNS]
+    rows: list[dict[str, str]] = []
+    for index, row in enumerate(selected, start=1):
+        item = {key: row.get(key, "") for key in RECHECK_COLUMNS}
+        item["priority_rank"] = str(index)
+        item["recheck_reason"] = recheck_reason(row)
+        item["recheck_suggestion"] = recheck_suggestion(row["attention_level"])
+        rows.append(item)
+    return rows
 
 
-def write_recheck_csv(recheck_df: pd.DataFrame, output_csv: Path) -> None:
+def write_recheck_csv(recheck_rows: list[dict[str, str]], output_csv: Path) -> None:
     output_csv.parent.mkdir(parents=True, exist_ok=True)
-    recheck_df.to_csv(output_csv, index=False, encoding="utf-8-sig", columns=RECHECK_COLUMNS)
+    with output_csv.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=RECHECK_COLUMNS)
+        writer.writeheader()
+        writer.writerows([{name: row.get(name, "") for name in RECHECK_COLUMNS} for row in recheck_rows])
     if not output_csv.exists():
         raise OSError(f"priority_recheck_list.csv was not generated: {output_csv}")
 
 
-def count_by_order(series: pd.Series, order: list[str]) -> dict[str, int]:
-    counts = Counter(series.fillna("未知"))
+def count_by_order(values: list[str], order: list[str]) -> dict[str, int]:
+    counts = Counter(value or "未知" for value in values)
     result = {label: counts.get(label, 0) for label in order}
     for label in sorted(label for label in counts if label not in result):
         result[label] = counts[label]
@@ -410,7 +418,7 @@ def count_by_order(series: pd.Series, order: list[str]) -> dict[str, int]:
 
 
 def write_visualization_report(
-    growth_df: pd.DataFrame,
+    growth_rows: list[dict[str, str]],
     engineering_path: Path,
     growth_path: Path,
     chart_paths: list[Path],
@@ -419,14 +427,11 @@ def write_visualization_report(
     report_path: Path,
 ) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    attention_counts = count_by_order(growth_df["attention_level"], ATTENTION_ORDER)
-    obvious_growth_count = int((growth_df["growth_trend"] == "明显增长").sum())
-    high_risk_count = int((growth_df["last_risk_level"] == "高").sum())
+    attention_counts = count_by_order([row["attention_level"] for row in growth_rows], ATTENTION_ORDER)
+    obvious_growth_count = sum(1 for row in growth_rows if row["growth_trend"] == "明显增长")
+    high_risk_count = sum(1 for row in growth_rows if row["last_risk_level"] == "高")
     chart_lines = "\n".join(f"- {CHART_TITLES.get(path.name, path.stem)}：`{path.as_posix()}`" for path in chart_paths)
-    note_lines = "\n".join(f"- {note}" for note in [font_note, engineering_note] if note)
-    if not note_lines:
-        note_lines = "- 无"
-
+    note_lines = "\n".join(f"- {note}" for note in [font_note, engineering_note] if note) or "- 无"
     content = f"""# 病害增长结果可视化报告
 
 数据来源：
@@ -439,7 +444,7 @@ def write_visualization_report(
 
 ## 2. 总体统计
 
-- 病害总数：{len(growth_df)}
+- 病害总数：{len(growth_rows)}
 - 重点关注数量：{attention_counts.get('重点关注', 0)}
 - 持续观察数量：{attention_counts.get('持续观察', 0)}
 - 常规记录数量：{attention_counts.get('常规记录', 0)}
@@ -462,7 +467,7 @@ def percent_text(rate: float) -> str:
     return f"{round(rate * 100, 1)}%"
 
 
-def write_recheck_report(recheck_df: pd.DataFrame, report_path: Path, recheck_csv: Path) -> None:
+def write_recheck_report(recheck_rows: list[dict[str, str]], report_path: Path, recheck_csv: Path) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# 重点复检病害清单",
@@ -471,19 +476,19 @@ def write_recheck_report(recheck_df: pd.DataFrame, report_path: Path, recheck_cs
         "",
         "## 总体情况",
         "",
-        f"- 进入复检清单的病害数量：{len(recheck_df)}",
-        f"- 重点关注：{int((recheck_df.get('attention_level', pd.Series(dtype=str)) == '重点关注').sum())}",
-        f"- 持续观察：{int((recheck_df.get('attention_level', pd.Series(dtype=str)) == '持续观察').sum())}",
-        f"- 高风险病害：{int((recheck_df.get('last_risk_level', pd.Series(dtype=str)) == '高').sum())}",
-        f"- 明显增长病害：{int((recheck_df.get('growth_trend', pd.Series(dtype=str)) == '明显增长').sum())}",
+        f"- 进入复检清单的病害数量：{len(recheck_rows)}",
+        f"- 重点关注：{sum(1 for row in recheck_rows if row.get('attention_level') == '重点关注')}",
+        f"- 持续观察：{sum(1 for row in recheck_rows if row.get('attention_level') == '持续观察')}",
+        f"- 高风险病害：{sum(1 for row in recheck_rows if row.get('last_risk_level') == '高')}",
+        f"- 明显增长病害：{sum(1 for row in recheck_rows if row.get('growth_trend') == '明显增长')}",
         "",
         "## 复检清单",
         "",
     ]
-    if recheck_df.empty:
+    if not recheck_rows:
         lines.append("当前未筛选出需要重点复检的病害对象。")
     else:
-        for _, row in recheck_df.sort_values("priority_rank").iterrows():
+        for row in sorted(recheck_rows, key=lambda item: parse_int(item["priority_rank"], "priority_rank")):
             type_name = disease_type_label(row["disease_type"])
             lines.extend(
                 [
@@ -492,14 +497,14 @@ def write_recheck_report(recheck_df: pd.DataFrame, report_path: Path, recheck_cs
                     f"- 关注等级：{row['attention_level']}",
                     f"- 增长趋势：{row['growth_trend']}",
                     f"- 面积变化：{row['first_area_px']} px² -> {row['last_area_px']} px²",
-                    f"- 增长率：{percent_text(float(row['area_growth_rate']))}",
+                    f"- 增长率：{percent_text(parse_float(row['area_growth_rate'], 'area_growth_rate'))}",
                     f"- 风险变化：{row['first_risk_level']} -> {row['last_risk_level']}",
                     f"- 位置：{row['last_mileage_range']}，{row['main_clock_direction']}方向",
                     f"- 复检原因：{row['recheck_reason']}",
                     f"- 复检建议：{row['recheck_suggestion']}",
                     "",
                     "分析描述：",
-                    str(row["growth_description"]),
+                    row["growth_description"],
                     "",
                     "---",
                     "",
@@ -516,18 +521,17 @@ def write_summary_report(
     vis_report: Path,
     recheck_report: Path,
     summary_report: Path,
-    growth_df: pd.DataFrame,
-    recheck_df: pd.DataFrame,
+    growth_rows: list[dict[str, str]],
+    recheck_rows: list[dict[str, str]],
 ) -> None:
     summary_report.parent.mkdir(parents=True, exist_ok=True)
     attention_lines = "\n".join(
-        f"- {name}: {count}" for name, count in count_by_order(growth_df["attention_level"], ATTENTION_ORDER).items()
+        f"- {name}: {count}" for name, count in count_by_order([row["attention_level"] for row in growth_rows], ATTENTION_ORDER).items()
     )
     trend_lines = "\n".join(
-        f"- {name}: {count}" for name, count in count_by_order(growth_df["growth_trend"], GROWTH_TREND_ORDER).items()
+        f"- {name}: {count}" for name, count in count_by_order([row["growth_trend"] for row in growth_rows], GROWTH_TREND_ORDER).items()
     )
     chart_lines = "\n".join(f"- {path.as_posix()}" for path in chart_paths)
-
     content = f"""# 可视化与重点复检清单摘要
 
 ## 输入文件
@@ -549,7 +553,7 @@ def write_summary_report(
 ## 统计信息
 
 - 图表数量: {len(chart_paths)}
-- 复检清单记录数: {len(recheck_df)}
+- 复检清单记录数: {len(recheck_rows)}
 
 ## 关注等级分布
 
@@ -582,18 +586,18 @@ def validate_generated_outputs(chart_paths: list[Path], recheck_csv: Path, repor
 def main() -> None:
     args = parse_args()
     font_note = configure_matplotlib_font()
-    growth_df = read_growth_csv(args.growth_csv)
-    engineering_df, engineering_note = read_engineering_csv(args.engineering_csv)
+    growth_rows = read_growth_csv(args.growth_csv)
+    engineering_rows, engineering_note = read_engineering_csv(args.engineering_csv)
     ensure_output_dir(args.visualization_dir)
 
-    chart_paths = generate_standard_visualizations(growth_df, args.visualization_dir)
-    mileage_df = build_mileage_risk_table(engineering_df, growth_df)
-    chart_paths.append(generate_mileage_visualization(mileage_df, args.visualization_dir))
+    chart_paths = generate_standard_visualizations(growth_rows, args.visualization_dir)
+    mileage_rows = build_mileage_risk_table(engineering_rows, growth_rows)
+    chart_paths.append(generate_mileage_visualization(mileage_rows, args.visualization_dir))
 
-    recheck_df = build_priority_recheck_list(growth_df)
-    write_recheck_csv(recheck_df, args.recheck_csv)
+    recheck_rows = build_priority_recheck_list(growth_rows)
+    write_recheck_csv(recheck_rows, args.recheck_csv)
     write_visualization_report(
-        growth_df,
+        growth_rows,
         args.engineering_csv,
         args.growth_csv,
         chart_paths,
@@ -601,7 +605,7 @@ def main() -> None:
         engineering_note,
         args.visualization_report,
     )
-    write_recheck_report(recheck_df, args.recheck_report, args.recheck_csv)
+    write_recheck_report(recheck_rows, args.recheck_report, args.recheck_csv)
     write_summary_report(
         args.growth_csv,
         args.engineering_csv,
@@ -610,22 +614,16 @@ def main() -> None:
         args.visualization_report,
         args.recheck_report,
         args.summary_report,
-        growth_df,
-        recheck_df,
+        growth_rows,
+        recheck_rows,
     )
-    validate_generated_outputs(
-        chart_paths,
-        args.recheck_csv,
-        [args.visualization_report, args.recheck_report, args.summary_report],
-    )
+    validate_generated_outputs(chart_paths, args.recheck_csv, [args.visualization_report, args.recheck_report, args.summary_report])
 
-    # 后续可基于本阶段结果继续做最终项目总报告、Word/PDF 导出、dashboard、
-    # 真实模型预测接入、简单趋势预测模型，以及按隧道区间生成风险热力图。
     print("病害增长可视化与重点复检清单生成完成")
-    print(f"growth analysis rows: {len(growth_df)}")
-    print(f"engineering report rows: {0 if engineering_df is None else len(engineering_df)}")
+    print(f"growth analysis rows: {len(growth_rows)}")
+    print(f"engineering report rows: {0 if engineering_rows is None else len(engineering_rows)}")
     print(f"visualizations generated: {len(chart_paths)}")
-    print(f"priority recheck rows: {len(recheck_df)}")
+    print(f"priority recheck rows: {len(recheck_rows)}")
     print(f"output csv: {args.recheck_csv.as_posix()}")
     print(f"visualization report: {args.visualization_report.as_posix()}")
     print(f"recheck report: {args.recheck_report.as_posix()}")
