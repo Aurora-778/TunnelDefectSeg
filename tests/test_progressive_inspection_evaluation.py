@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import run_progressive_inspection_evaluation as progressive
 from scripts.run_progressive_inspection_evaluation import evaluate_round, run_progressive
 
 
@@ -147,3 +148,45 @@ def test_evaluate_round_uses_composite_key_for_same_image_records():
 
     assert metrics["strategy_accuracy"]["weighted_score_no_id"] == 1.0
     assert metrics["failure_examples"] == []
+
+
+def test_evaluate_round_rejects_duplicate_association_composite_key():
+    query_rows = [frame_row(image_id="I002_same", frame_id="1", disease_id="D001")]
+    memory_rows = [{"memory_id": "MEM-D001", "disease_id": "D001", "mileage_range": "K12+000.0", "last_area_px": "1000"}]
+    association = {
+        "image_id": "I002_same",
+        "frame_id": "1",
+        "disease_id": "D001",
+        "memory_id": "MEM-D001",
+        "association_status": "matched",
+        "needs_manual_review": "false",
+    }
+
+    with pytest.raises(ValueError, match="Duplicate association composite key"):
+        evaluate_round(query_rows, memory_rows, [association, dict(association)])
+
+
+def test_progressive_manifest_uses_relative_paths_for_project_outputs(tmp_path, monkeypatch):
+    monkeypatch.setattr(progressive, "PROJECT_ROOT", tmp_path)
+    input_csv = tmp_path / "data" / "simulated" / "robot_kict_frame_records.csv"
+    write_csv(
+        input_csv,
+        [
+            frame_row(),
+            frame_row(image_id="I002_000001", inspection_id="I002", timestamp="2026-07-01 10:00:00"),
+        ],
+    )
+
+    progressive.run_progressive(
+        Path("data/simulated/robot_kict_frame_records.csv"),
+        Path("data/simulated/progressive"),
+        Path("outputs/association_evaluation_report.md"),
+    )
+    manifest_path = tmp_path / "data" / "simulated" / "progressive" / "progressive_evaluation_manifest.json"
+    saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first_round = saved["rounds"][0]
+
+    assert saved["input_csv"] == "data/simulated/robot_kict_frame_records.csv"
+    assert first_round["memory_before"].startswith("data/simulated/progressive/")
+    assert first_round["association_records"].startswith("data/simulated/progressive/")
+    assert not Path(first_round["memory_before"]).is_absolute()

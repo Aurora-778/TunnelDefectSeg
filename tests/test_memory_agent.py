@@ -686,3 +686,181 @@ def test_memory_agent_incremental_update_keeps_unresolved_manual_review(tmp_path
 
     assert row["requires_manual_review"] == "true"
     assert row["memory_confidence"] == "low"
+
+
+def test_memory_agent_incremental_update_rejects_ambiguous_same_image_association(tmp_path):
+    data_dir = tmp_path / "data" / "simulated"
+    write_csv(data_dir / "memory.csv", [_memory_row_for_incremental("MEM-D001", "D001")], _memory_fields_for_incremental())
+    write_csv(
+        data_dir / "query.csv",
+        [
+            _frame_row_for_incremental(image_id="I002_same", frame_id="1", disease_id="D001"),
+            _frame_row_for_incremental(image_id="I002_same", frame_id="2", disease_id="D002"),
+        ],
+        _frame_fields_for_incremental(),
+    )
+    write_csv(
+        data_dir / "association.csv",
+        [
+            {
+                "image_id": "I002_same",
+                "memory_id": "MEM-D001",
+                "association_status": "matched",
+                "needs_manual_review": "false",
+            }
+        ],
+        ["image_id", "memory_id", "association_status", "needs_manual_review"],
+    )
+    context = _incremental_context(tmp_path)
+
+    try:
+        MemoryAgent().run(context)
+    except ValueError as exc:
+        assert "cannot be matched to a unique frame" in str(exc)
+    else:
+        raise AssertionError("Expected ambiguous same-image association to fail")
+
+
+def test_memory_agent_incremental_update_rejects_duplicate_frame_composite_key(tmp_path):
+    data_dir = tmp_path / "data" / "simulated"
+    write_csv(data_dir / "memory.csv", [_memory_row_for_incremental("MEM-D001", "D001")], _memory_fields_for_incremental())
+    duplicate_frame = _frame_row_for_incremental(image_id="I002_same", frame_id="1", disease_id="D001")
+    write_csv(data_dir / "query.csv", [duplicate_frame, dict(duplicate_frame)], _frame_fields_for_incremental())
+    write_csv(
+        data_dir / "association.csv",
+        [
+            {
+                "image_id": "I002_same",
+                "frame_id": "1",
+                "disease_id": "D001",
+                "memory_id": "MEM-D001",
+                "association_status": "matched",
+                "needs_manual_review": "false",
+            }
+        ],
+        ["image_id", "frame_id", "disease_id", "memory_id", "association_status", "needs_manual_review"],
+    )
+    context = _incremental_context(tmp_path)
+
+    try:
+        MemoryAgent().run(context)
+    except ValueError as exc:
+        assert "Duplicate frame composite key" in str(exc)
+    else:
+        raise AssertionError("Expected duplicate frame key to fail")
+
+
+def _memory_fields_for_incremental() -> list[str]:
+    return [
+        "memory_id",
+        "memory_version",
+        "disease_id",
+        "disease_type",
+        "source_record_count",
+        "source_inspection_ids",
+        "memory_update_mode",
+        "memory_confidence",
+        "memory_limit_note",
+        "first_seen_inspection",
+        "last_seen_inspection",
+        "inspection_count",
+        "total_seen_frames",
+        "first_area_px",
+        "last_area_px",
+        "max_area_px",
+        "area_growth_px",
+        "area_growth_rate",
+        "first_risk_level",
+        "last_risk_level",
+        "risk_level_change",
+        "growth_trend",
+        "attention_level",
+        "main_clock_direction",
+        "mileage_range",
+        "representative_image_path",
+        "representative_mask_path",
+        "requires_manual_review",
+        "memory_description",
+    ]
+
+
+def _memory_row_for_incremental(memory_id: str, disease_id: str) -> dict[str, str]:
+    return {
+        "memory_id": memory_id,
+        "memory_version": "v1",
+        "disease_id": disease_id,
+        "disease_type": "crack",
+        "source_record_count": "1",
+        "source_inspection_ids": "I001",
+        "memory_update_mode": "batch_rebuild",
+        "memory_confidence": "very_low",
+        "memory_limit_note": "",
+        "first_seen_inspection": "I001",
+        "last_seen_inspection": "I001",
+        "inspection_count": "1",
+        "total_seen_frames": "1",
+        "first_area_px": "1000",
+        "last_area_px": "1000",
+        "max_area_px": "1000",
+        "area_growth_px": "0",
+        "area_growth_rate": "0.000000",
+        "first_risk_level": "低",
+        "last_risk_level": "低",
+        "risk_level_change": "0",
+        "growth_trend": "数据不足",
+        "attention_level": "待补充巡检",
+        "main_clock_direction": "12点",
+        "mileage_range": "K12+000.0",
+        "representative_image_path": "images/old.jpg",
+        "representative_mask_path": "masks/old.png",
+        "requires_manual_review": "false",
+        "memory_description": "old",
+    }
+
+
+def _frame_fields_for_incremental() -> list[str]:
+    return [
+        "image_id",
+        "inspection_id",
+        "frame_id",
+        "disease_id",
+        "disease_type",
+        "mileage_text",
+        "clock_direction",
+        "kict_area_px",
+        "kict_image_path",
+        "kict_mask_path",
+    ]
+
+
+def _frame_row_for_incremental(image_id: str, frame_id: str, disease_id: str) -> dict[str, str]:
+    return {
+        "image_id": image_id,
+        "inspection_id": "I002",
+        "frame_id": frame_id,
+        "disease_id": disease_id,
+        "disease_type": "crack",
+        "mileage_text": "K12+002.0",
+        "clock_direction": "12点",
+        "kict_area_px": "1800",
+        "kict_image_path": f"images/{disease_id}.jpg",
+        "kict_mask_path": f"masks/{disease_id}.png",
+    }
+
+
+def _incremental_context(project_root: Path) -> dict:
+    return {
+        "inputs": {
+            "memory": {
+                "mode": "incremental_update",
+                "previous_memory": "data/simulated/memory.csv",
+                "frame_records": "data/simulated/query.csv",
+                "association_records": "data/simulated/association.csv",
+                "output_path": "data/simulated/memory_next.csv",
+                "report_path": "outputs/memory_incremental_report.md",
+                "log_path": "logs/memory_incremental.log",
+            }
+        },
+        "outputs": {},
+        "shared": {"project_root": str(project_root)},
+    }

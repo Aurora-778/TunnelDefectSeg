@@ -157,6 +157,17 @@ def test_validate_artifacts_reports_missing_progressive_outputs(tmp_path):
     assert any("association_evaluation_report.md" in error for error in errors["progressive_evaluation"])
 
 
+def test_validate_artifacts_reports_non_object_progressive_round(tmp_path):
+    manifest_path = tmp_path / "data" / "simulated" / "progressive" / "progressive_evaluation_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps({"rounds": [1]}), encoding="utf-8")
+    write_progressive_report(tmp_path)
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("round 1 must be an object" in error for error in errors["progressive_evaluation"])
+
+
 def valid_memory_row() -> dict[str, str]:
     return {
         "memory_id": "MEM-D001",

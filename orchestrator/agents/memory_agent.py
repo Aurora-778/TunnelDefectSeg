@@ -173,15 +173,18 @@ class MemoryAgent(BaseAgent):
                 fieldnames.append(extra)
 
         memory_by_id = {row.get("memory_id", ""): dict(row) for row in memory_rows}
-        frame_by_key = {self._frame_key(row): row for row in frame_rows}
+        frame_by_key = self._unique_rows_by_key(frame_rows, row_label="frame")
+        self._ensure_unique_association_keys(association_rows)
         frames_by_image: dict[str, list[dict[str, str]]] = defaultdict(list)
         for row in frame_rows:
             frames_by_image[row.get("image_id", "")].append(row)
         version = self._next_version(memory_rows)
+        skipped_associations: list[str] = []
 
         for association in association_rows:
             frame = self._find_frame_for_association(association, frame_by_key, frames_by_image)
             if not frame:
+                skipped_associations.append(association.get("association_id") or self._key_label(self._frame_key(association)))
                 continue
             memory_id = association.get("memory_id", "")
             matched = association.get("association_status") == "matched"
@@ -208,11 +211,13 @@ class MemoryAgent(BaseAgent):
                 f"- association records: `{association_path}`",
                 f"- output memory: `{output_path}`",
                 f"- memory rows: {len(rows)}",
+                f"- skipped associations without frame: {len(skipped_associations)}",
                 "",
                 "说明：该模式只使用历史 memory 与当前巡检关联结果更新记忆库，避免匹配阶段读取未来巡检聚合结果。",
             ],
         )
         self._log(log_path, f"row count: {len(rows)}")
+        self._log(log_path, f"skipped associations without frame: {len(skipped_associations)}")
         self._log(log_path, "end incremental_update")
         return {
             "disease_memory_bank_path": str(output_path),
@@ -329,6 +334,26 @@ class MemoryAgent(BaseAgent):
         # image_id alone is not unique when one frame contains multiple diseases.
         return (row.get("image_id", ""), row.get("frame_id", ""), row.get("disease_id", ""))
 
+    def _unique_rows_by_key(self, rows: list[dict[str, str]], *, row_label: str) -> dict[tuple[str, str, str], dict[str, str]]:
+        keyed_rows: dict[tuple[str, str, str], dict[str, str]] = {}
+        for row in rows:
+            key = self._frame_key(row)
+            if key in keyed_rows:
+                raise ValueError(f"Duplicate {row_label} composite key: {self._key_label(key)}")
+            keyed_rows[key] = row
+        return keyed_rows
+
+    def _ensure_unique_association_keys(self, association_rows: list[dict[str, str]]) -> None:
+        seen: set[tuple[str, str, str]] = set()
+        for association in association_rows:
+            key = self._frame_key(association)
+            if key in seen:
+                raise ValueError(f"Duplicate association composite key: {self._key_label(key)}")
+            seen.add(key)
+
+    def _key_label(self, key: tuple[str, str, str]) -> str:
+        return "|".join(key)
+
     def _find_frame_for_association(
         self,
         association: dict[str, str],
@@ -341,6 +366,11 @@ class MemoryAgent(BaseAgent):
         same_image_frames = frames_by_image.get(association.get("image_id", ""), [])
         if len(same_image_frames) == 1:
             return same_image_frames[0]
+        if len(same_image_frames) > 1:
+            raise ValueError(
+                "Association cannot be matched to a unique frame; "
+                f"missing or inconsistent frame_id/disease_id for image_id={association.get('image_id', '')}"
+            )
         return None
 
     def _risk_from_area(self, area: float) -> str:

@@ -34,6 +34,13 @@ def repo_path(path: Path) -> Path:
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
+def manifest_display_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def prepare_outputs(output_dir: Path, report_path: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     for child in output_dir.glob("round_*"):
@@ -198,6 +205,20 @@ def record_key(row: dict[str, str]) -> tuple[str, str, str]:
     return (row.get("image_id", ""), row.get("frame_id", ""), row.get("disease_id", ""))
 
 
+def key_label(key: tuple[str, str, str]) -> str:
+    return "|".join(key)
+
+
+def unique_rows_by_key(rows: list[dict[str, str]], *, row_label: str) -> dict[tuple[str, str, str], dict[str, str]]:
+    keyed_rows: dict[tuple[str, str, str], dict[str, str]] = {}
+    for row in rows:
+        key = record_key(row)
+        if key in keyed_rows:
+            raise ValueError(f"Duplicate {row_label} composite key: {key_label(key)}")
+        keyed_rows[key] = row
+    return keyed_rows
+
+
 def association_for_frame(
     frame: dict[str, str],
     association_by_key: dict[tuple[str, str, str], dict[str, str]],
@@ -214,7 +235,8 @@ def association_for_frame(
 
 def evaluate_round(query_rows: list[dict[str, str]], memory_rows: list[dict[str, str]], association_rows: list[dict[str, str]]) -> dict[str, object]:
     memory_by_id = {row.get("memory_id", ""): row for row in memory_rows}
-    association_by_key = {record_key(row): row for row in association_rows}
+    unique_rows_by_key(query_rows, row_label="query frame")
+    association_by_key = unique_rows_by_key(association_rows, row_label="association")
     associations_by_image: dict[str, list[dict[str, str]]] = {}
     for row in association_rows:
         associations_by_image.setdefault(row.get("image_id", ""), []).append(row)
@@ -311,7 +333,7 @@ def run_progressive(input_csv: Path, output_dir: Path, report_path: Path) -> dic
     if len(inspections) < 2:
         raise ValueError("progressive evaluation requires at least two inspection_id values")
 
-    manifest: dict[str, object] = {"input_csv": input_csv.as_posix(), "rounds": []}
+    manifest: dict[str, object] = {"input_csv": manifest_display_path(input_csv), "rounds": []}
     current_memory: Path | None = None
 
     for index in range(1, len(inspections)):
@@ -338,11 +360,11 @@ def run_progressive(input_csv: Path, output_dir: Path, report_path: Path) -> dic
                 "round_index": index,
                 "history_inspections": history_ids,
                 "query_inspection": query_id,
-                "allowed_inputs": [current_memory.as_posix(), query_path.as_posix()],
+                "allowed_inputs": [manifest_display_path(current_memory), manifest_display_path(query_path)],
                 "query_frame_count": len(query_rows),
-                "memory_before": current_memory.as_posix(),
-                "association_records": association_path.as_posix(),
-                "memory_after": next_memory.as_posix(),
+                "memory_before": manifest_display_path(current_memory),
+                "association_records": manifest_display_path(association_path),
+                "memory_after": manifest_display_path(next_memory),
                 "metrics": metrics,
             }
         )
@@ -351,8 +373,8 @@ def run_progressive(input_csv: Path, output_dir: Path, report_path: Path) -> dic
     manifest_path = output_dir / "progressive_evaluation_manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     write_report(report_path, manifest)
-    manifest["manifest_path"] = manifest_path.as_posix()
-    manifest["report_path"] = report_path.as_posix()
+    manifest["manifest_path"] = manifest_display_path(manifest_path)
+    manifest["report_path"] = manifest_display_path(report_path)
     return manifest
 
 

@@ -65,6 +65,9 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
             if not isinstance(rounds, list) or not rounds:
                 errors.append("progressive manifest must contain non-empty rounds")
             for index, round_info in enumerate(rounds or [], start=1):
+                if not isinstance(round_info, dict):
+                    errors.append(f"progressive manifest round {index} must be an object")
+                    continue
                 for key in ["history_inspections", "query_inspection", "memory_before", "association_records", "memory_after", "metrics"]:
                     if key not in round_info:
                         errors.append(f"progressive manifest round {index} missing {key}")
