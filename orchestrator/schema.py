@@ -66,6 +66,9 @@ REQUIRED_SCHEMAS = {
         "risk_level_change",
         "growth_trend",
         "attention_level",
+        "measurement_basis",
+        "claim_level",
+        "comparability_status",
         "main_clock_direction",
         "growth_description",
     ],
@@ -135,9 +138,11 @@ ENUMS = {
     "association_status": {"matched", "unmatched"},
     "confidence_level": {"high", "medium", "low"},
     "match_type": {"hard", "soft", "uncertain"},
-    "memory_update_mode": {"batch_rebuild"},
+    "memory_update_mode": {"batch_rebuild", "incremental_update"},
     "memory_confidence": {"medium", "low", "very_low"},
     "needs_manual_review": {"true", "false"},
+    "claim_level": {"baseline_only", "rule_evidence_only", "suspected_growth"},
+    "comparability_status": {"insufficient_history", "simulated_metadata_comparable", "verified_comparable"},
 }
 
 

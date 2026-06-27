@@ -39,6 +39,9 @@ def test_validate_csv_schema_reports_enum_errors(tmp_path):
         "risk_level_change",
         "growth_trend",
         "attention_level",
+        "measurement_basis",
+        "claim_level",
+        "comparability_status",
         "main_clock_direction",
         "growth_description",
     ]

@@ -16,6 +16,7 @@
 |---|---|
 | `python run.py --mode full_pipeline` | 根目录薄封装，实际调用 Orchestrator DAG。 |
 | `python orchestrator/run.py --dag config/dag.yaml` | DAG 原生入口，默认运行 `full_pipeline` task。 |
+| `python scripts/run_progressive_inspection_evaluation.py` | 时间递进评估入口：历史 memory 匹配当前巡检，再增量更新 memory。 |
 
 ## 核心产物
 
@@ -111,6 +112,9 @@ Consumer：`MemoryAgent`, `scripts/generate_visualization_and_recheck_list.py`, 
 - `risk_level_change`
 - `growth_trend`
 - `attention_level`
+- `measurement_basis`
+- `claim_level`
+- `comparability_status`
 - `first_mileage_range`
 - `last_mileage_range`
 - `main_clock_direction`
@@ -125,6 +129,7 @@ Consumer：`MemoryAgent`, `scripts/generate_visualization_and_recheck_list.py`, 
 
 - `growth_trend` 是基于仿真巡检元数据和 mask 面积规则生成的工程提示。
 - 它不是结构安全结论，也不是真实线路长期演化证据。
+- `claim_level=baseline_only` 表示只有单次巡检基线；`rule_evidence_only` 表示仅有规则证据；强结论需要人工复核或真实可比数据支撑。
 
 ### disease_memory_bank.csv
 
@@ -167,9 +172,10 @@ Consumer：`AssociationAgent`, final report
 
 当前限制：
 
-- v1 memory 是批量重建式 memory，`memory_update_mode=batch_rebuild`。
+- 主 pipeline 的 v1 memory 仍是批量重建式 memory，`memory_update_mode=batch_rebuild`。
+- 渐进式评估脚本会使用 `memory_update_mode=incremental_update`，只从历史 memory 与当前巡检关联结果更新记忆库。
 - `memory_confidence` 只表达当前仿真巡检元数据下的记录充分性，不代表真实长期跟踪置信度。
-- 后续版本再引入 incremental update 和 conflict handling。
+- conflict handling 当前通过 `requires_manual_review`、`candidate_count`、`score_margin` 和 `conflict_reason` 暴露给人工复核。
 
 ### disease_association_records.csv
 
@@ -223,6 +229,7 @@ Consumer：final report, Web Dashboard, artifact review
 - `hard`: 同一 `disease_id` 命中，且空间、面积、时间、风险不存在明显冲突。
 - `soft`: 通过空间距离、面积相似、时间连续、风险相似和 `disease_id` 辅助信息综合评分选择候选。
 - `uncertain`: 没有候选达到最低阈值，或候选存在明显冲突，需人工复核。
+- 渐进式评估中 `disease_id` 只作为评估标签，匹配打分会禁用 `disease_id` 得分。
 
 约束：
 
@@ -262,6 +269,24 @@ Consumer：Web Dashboard, final report
 | `outputs/key_insights.md` | `run.py --mode full_pipeline` | 老师快速阅读 |
 | `outputs/visualizations/*.png` | `scripts/generate_visualization_and_recheck_list.py` | Web Dashboard / 报告 |
 | `outputs/visualizations/association_relationship_graph.png` | `run.py --mode full_pipeline` | 关联关系展示 |
+| `outputs/association_evaluation_report.md` | `scripts/run_progressive_inspection_evaluation.py` | Association baseline / ablation 评估 |
+
+### progressive_evaluation_manifest.json
+
+路径：`data/simulated/progressive/progressive_evaluation_manifest.json`
+
+Producer：`scripts/run_progressive_inspection_evaluation.py`
+
+用途：
+
+- 记录每轮 `history_inspections` 和 `query_inspection`。
+- 记录每轮只允许读取的历史 memory 与当前 query frames。
+- 记录 same disease_id、nearest mileage、area only、weighted score no id 的 baseline / ablation 指标。
+
+可信性说明：
+
+- 该入口用于检查 temporal leakage：匹配当前巡检时不能读取未来巡检帧或未来聚合结果。
+- 当前评估标签仍来自仿真 `disease_id`，不是现场人工标注的真实 identity benchmark。
 
 ## 边界声明
 

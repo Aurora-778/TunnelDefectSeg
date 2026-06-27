@@ -2,7 +2,7 @@
 
 本项目面向机器人隧道巡检场景：机器人在隧道内连续行进并拍摄图像，系统识别病害区域，并结合时间、里程、环号、方位等工程信息，形成可追踪的病害对象、增长分析和重点复检清单。
 
-当前主线不是单张图片分割 Demo，而是把真实图像 mask 几何信息接入仿真巡检流程，验证“图像病害识别 -> 工程化定位描述 -> 病害对象记忆 -> 跨巡检关联 -> 增长分析 -> 风险评分 -> Web 展示 -> 最终报告”的完整应用闭环。
+当前主线不是单张图片分割 Demo，而是把真实图像 mask 几何信息接入仿真巡检流程，验证“图像病害识别 -> 工程化定位描述 -> 病害对象记忆 -> 跨巡检关联 -> 规则面积变化提示 -> 风险评分 -> Web 展示 -> 最终报告”的完整应用闭环。
 
 ## 推荐运行方式
 
@@ -35,13 +35,14 @@ python orchestrator/run.py --dag config/dag.yaml
 13. 病害对象与机器人巡检帧的关联记录生成。
 14. 一键完整 pipeline 入口与最终项目报告生成。
 15. AI Multi-Agent Engineering Platform 的 run 状态、DAG、run 对比 API 和轻量展示页面。
+16. 渐进式巡检评估：历史 memory 匹配当前巡检，并生成 Association baseline / ablation 报告。
 
 ## 数据边界
 
 本项目视觉图像和 mask 几何特征来自 KICT Tunnel Crack Segmentation Dataset。机器人巡检过程中的时间、里程、环号、方位、`disease_id` 和跨巡检变化关系为仿真元数据。
 
 当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。
-系统可以验证病害对象建模、跨巡检关联、增长分析和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
+系统可以验证病害对象建模、跨巡检关联、规则面积变化提示和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
 
 由于 KICT 是静态公开图像数据集，本项目的跨时间增长分析主要用于验证监测流程和工程化表达能力，不能声称反映真实隧道病害长期演化规律，也不能替代现场工程检测结论。
 
@@ -77,6 +78,7 @@ orchestrator/                 # Memory/Association Agent、DAG、run 管理和�
 | `scripts/generate_engineering_report.py` | 生成按巡检和病害对象组织的工程化中文报告。 |
 | `scripts/analyze_disease_growth.py` | 统计同一病害跨巡检的面积、风险和趋势变化。 |
 | `scripts/generate_visualization_and_recheck_list.py` | 生成可视化图表、重点复检清单和阶段性 Markdown 报告。 |
+| `scripts/run_progressive_inspection_evaluation.py` | 按巡检顺序做历史 memory -> 当前 query -> 关联评估 -> 增量 memory 更新。 |
 | `run.py` | 当前推荐入口，作为 Orchestrator DAG 的薄封装运行完整 pipeline。 |
 
 ## 一键运行完整闭环
@@ -117,6 +119,21 @@ robot_kict_frame_records.csv
 -> outputs/visualizations/*.png
 -> outputs/final_project_report.md
 ```
+
+## 渐进式关联评估
+
+用于检查 temporal leakage 和 Association 规则是否比简单 baseline 更有价值：
+
+```bash
+python scripts/run_progressive_inspection_evaluation.py
+```
+
+输出：
+
+- `data/simulated/progressive/progressive_evaluation_manifest.json`
+- `outputs/association_evaluation_report.md`
+
+说明：该评估中 `disease_id` 只作为评估标签，匹配打分会禁用 `disease_id` 得分。
 
 ## 从原始 KICT 数据重新生成流程
 
@@ -173,6 +190,7 @@ python scripts/extract_kict_mask_features.py --dataset-root "C:/path/to/kict_sam
 | `outputs/final_project_report.md` | 当前完整闭环最终项目报告，适合展示和答辩。 |
 | `outputs/system_summary.md` | 系统闭环摘要。 |
 | `outputs/key_insights.md` | 关键洞察和复检建议摘要。 |
+| `outputs/association_evaluation_report.md` | 渐进式 Association baseline / ablation 评估报告。 |
 | `outputs/visualizations/*.png` | 关注等级、增长趋势、风险变化、面积增长率、病害类型、里程风险图表。 |
 | `outputs/visualizations/association_relationship_graph.png` | 病害对象与关联帧数量关系图。 |
 

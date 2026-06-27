@@ -20,6 +20,7 @@ class AssociationAgent(BaseAgent):
         memory_path = self._memory_path(context, inputs)
         output_path = self.resolve_path(context, self._required_input(inputs, "output_path"))
         legacy_output_path = self.resolve_path(context, inputs["legacy_output_path"]) if inputs.get("legacy_output_path") else None
+        use_disease_id_score = self._as_bool(inputs.get("use_disease_id_score", True))
 
         frame_rows = self.read_csv(frame_path)
         memory_rows = self.read_csv(memory_path)
@@ -27,7 +28,7 @@ class AssociationAgent(BaseAgent):
         rows: list[dict[str, Any]] = []
         for frame in frame_rows:
             disease_id = frame.get("disease_id", "")
-            memory, scores, candidates = self._best_memory_match(frame, memory_rows)
+            memory, scores, candidates = self._best_memory_match(frame, memory_rows, use_disease_id_score=use_disease_id_score)
             matched = bool(memory)
             association_score = scores["association_score"]
             conflict_reason = self._conflict_reason(scores)
@@ -129,9 +130,19 @@ class AssociationAgent(BaseAgent):
         self,
         frame: dict[str, str],
         memory_rows: list[dict[str, str]],
+        *,
+        use_disease_id_score: bool = True,
     ) -> tuple[dict[str, str], dict[str, float], list[tuple[dict[str, str], dict[str, float]]]]:
         scored = [
-            (memory, self._scores(frame, memory, same_id=frame.get("disease_id", "") == memory.get("disease_id", "")))
+            (
+                memory,
+                self._scores(
+                    frame,
+                    memory,
+                    same_id=frame.get("disease_id", "") == memory.get("disease_id", ""),
+                    use_disease_id_score=use_disease_id_score,
+                ),
+            )
             for memory in memory_rows
         ]
         scored.sort(key=lambda item: item[1]["association_score"], reverse=True)
@@ -142,12 +153,19 @@ class AssociationAgent(BaseAgent):
             return {}, scores, scored
         return memory, scores, scored
 
-    def _scores(self, frame: dict[str, str], memory: dict[str, str], *, same_id: bool) -> dict[str, float]:
+    def _scores(
+        self,
+        frame: dict[str, str],
+        memory: dict[str, str],
+        *,
+        same_id: bool,
+        use_disease_id_score: bool = True,
+    ) -> dict[str, float]:
         spatial = self._spatial_distance_score(frame, memory)
         area = self._area_similarity_score(frame, memory)
         temporal = self._temporal_continuity_score(frame, memory)
         risk = self._risk_similarity_score(frame, memory)
-        id_score = 1.0 if same_id else 0.0
+        id_score = 1.0 if same_id and use_disease_id_score else 0.0
         score = 0.25 * spatial + 0.25 * area + 0.20 * temporal + 0.15 * risk + 0.15 * id_score
         return {
             "association_score": min(score, 1.0),
@@ -298,6 +316,11 @@ class AssociationAgent(BaseAgent):
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+    def _as_bool(self, value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
     def _path_from_context(self, context: dict[str, Any], key: str):
         # Compatibility helper for older callers that passed flat context paths.

@@ -56,6 +56,9 @@ OUTPUT_COLUMNS = [
     "risk_level_change",
     "growth_trend",
     "attention_level",
+    "measurement_basis",
+    "claim_level",
+    "comparability_status",
     "first_mileage_range",
     "last_mileage_range",
     "main_clock_direction",
@@ -183,7 +186,7 @@ def build_growth_description(record: dict[str, str]) -> str:
         return (
             f"病害 {record['disease_id']} 为{type_name}，目前仅在 {record['first_inspection']} 中出现，"
             f"位于 {record['first_mileage_range']}，{record['main_clock_direction']}方向。"
-            "由于缺少跨巡检对比数据，暂无法判断增长趋势，建议后续巡检继续跟踪。"
+            "由于缺少跨巡检对比数据，当前仅作为基线记录，建议后续巡检继续跟踪。"
         )
 
     area_growth_percent = round(float(record["area_growth_rate"]) * 100, 1)
@@ -194,7 +197,7 @@ def build_growth_description(record: dict[str, str]) -> str:
         f"末次巡检 {record['last_inspection']} 最大面积约为 {record['last_area_px']} px²，"
         f"面积变化 {record['area_growth_px']} px²，增长率约为 {area_growth_percent}%。"
         f"风险等级由{record['first_risk_level']}变为{record['last_risk_level']}，"
-        f"趋势判断为{record['growth_trend']}，关注等级为{record['attention_level']}。"
+        f"规则证据提示为{record['growth_trend']}，关注等级为{record['attention_level']}。"
     )
 
 
@@ -221,6 +224,14 @@ def aggregate_disease(rows: list[dict[str, str]]) -> dict[str, str]:
     risk_change = risk_level_change(first["risk_level"], last["risk_level"])
     trend = growth_trend(len(ordered), area_rate, risk_change)
     attention = attention_level(last["risk_level"], trend)
+    if len(ordered) == 1:
+        measurement_basis = "single_inspection_area_rule"
+        claim_level = "baseline_only"
+        comparability_status = "insufficient_history"
+    else:
+        measurement_basis = "cross_inspection_area_rule"
+        claim_level = "rule_evidence_only"
+        comparability_status = "simulated_metadata_comparable"
 
     record = {
         "disease_id": first["disease_id"],
@@ -243,6 +254,9 @@ def aggregate_disease(rows: list[dict[str, str]]) -> dict[str, str]:
         "risk_level_change": str(risk_change),
         "growth_trend": trend,
         "attention_level": attention,
+        "measurement_basis": measurement_basis,
+        "claim_level": claim_level,
+        "comparability_status": comparability_status,
         "first_mileage_range": mileage_range(first),
         "last_mileage_range": mileage_range(last),
         "main_clock_direction": most_common_clock(ordered),
@@ -325,6 +339,8 @@ def write_markdown_report(
                     f"- 风险变化：{record['first_risk_level']} -> {record['last_risk_level']}",
                     f"- 趋势判断：{record['growth_trend']}",
                     f"- 关注等级：{record['attention_level']}",
+                    f"- 证据等级：{record['claim_level']}",
+                    f"- 可比性状态：{record['comparability_status']}",
                     "",
                     "分析描述：",
                     record["growth_description"],
@@ -385,7 +401,7 @@ def write_summary_report(
 
 ## 说明
 
-本阶段基于 disease_engineering_report.csv，对同一 disease_id 在多次巡检中的面积、可见帧数和风险等级进行跨巡检比较，生成病害增长变化分析结果。该结果可用于病害变形监测、风险预警和后续趋势预测模块。
+本阶段基于 disease_engineering_report.csv，对同一 disease_id 在多次巡检中的面积、可见帧数和风险等级进行规则比较，生成工程复检提示。该结果不等同于真实结构安全结论，后续应接入真实连续巡检数据和人工复核。
 """
     summary_report.write_text(content, encoding="utf-8")
 

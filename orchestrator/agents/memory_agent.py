@@ -17,6 +17,12 @@ class MemoryAgent(BaseAgent):
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         inputs = self.agent_inputs(context)
+        mode = str(inputs.get("mode", "batch_rebuild"))
+        if mode == "incremental_update":
+            return self._run_incremental_update(context, inputs)
+        if mode != "batch_rebuild":
+            raise ValueError(f"Unsupported memory update mode: {mode}")
+
         report_path = self.resolve_path(context, self._required_input(inputs, "engineering_report"))
         growth_path = self.resolve_path(context, self._required_input(inputs, "growth_analysis"))
         output_path = self.resolve_path(context, self._required_input(inputs, "output_path"))
@@ -83,6 +89,7 @@ class MemoryAgent(BaseAgent):
                     "mileage_range": self._join_range(first_mileage, last_mileage),
                     "representative_image_path": last.get("representative_image_path", ""),
                     "representative_mask_path": last.get("representative_mask_path", ""),
+                    "requires_manual_review": "false",
                     "memory_description": self._memory_description(
                         disease_id=disease_id,
                         disease_type=disease_type,
@@ -124,6 +131,7 @@ class MemoryAgent(BaseAgent):
             "mileage_range",
             "representative_image_path",
             "representative_mask_path",
+            "requires_manual_review",
             "memory_description",
         ]
         self.write_csv(output_path, rows, fieldnames)
@@ -144,10 +152,188 @@ class MemoryAgent(BaseAgent):
         }
         return result
 
+    def _run_incremental_update(self, context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+        previous_path = self.resolve_path(context, self._required_input(inputs, "previous_memory"))
+        frame_path = self.resolve_path(context, self._required_input(inputs, "frame_records"))
+        association_path = self.resolve_path(context, self._required_input(inputs, "association_records"))
+        output_path = self.resolve_path(context, self._required_input(inputs, "output_path"))
+        report_path = self.resolve_path(context, self._required_input(inputs, "report_path"))
+        log_path = self.resolve_path(context, self._required_input(inputs, "log_path"))
+
+        self._log(log_path, "start incremental_update")
+        memory_rows = self.read_csv(previous_path)
+        frame_rows = self.read_csv(frame_path)
+        association_rows = self.read_csv(association_path)
+        if not memory_rows:
+            raise ValueError("incremental_update requires a non-empty previous memory bank")
+
+        fieldnames = list(memory_rows[0].keys())
+        for extra in ["requires_manual_review"]:
+            if extra not in fieldnames:
+                fieldnames.append(extra)
+
+        memory_by_id = {row.get("memory_id", ""): dict(row) for row in memory_rows}
+        frame_by_image = {row.get("image_id", ""): row for row in frame_rows}
+        version = self._next_version(memory_rows)
+
+        for association in association_rows:
+            frame = frame_by_image.get(association.get("image_id", ""))
+            if not frame:
+                continue
+            memory_id = association.get("memory_id", "")
+            matched = association.get("association_status") == "matched"
+            needs_review = association.get("needs_manual_review") == "true"
+            if matched and memory_id in memory_by_id and not needs_review:
+                memory_by_id[memory_id] = self._update_memory_row(memory_by_id[memory_id], frame, version)
+            else:
+                provisional = self._new_provisional_memory(frame, version, requires_review=True)
+                memory_by_id[provisional["memory_id"]] = provisional
+
+        rows = [memory_by_id[key] for key in sorted(memory_by_id)]
+        self.write_csv(output_path, rows, fieldnames)
+        self.write_markdown(
+            report_path,
+            "Incremental Memory Update Report",
+            [
+                f"- previous memory: `{previous_path}`",
+                f"- frame records: `{frame_path}`",
+                f"- association records: `{association_path}`",
+                f"- output memory: `{output_path}`",
+                f"- memory rows: {len(rows)}",
+                "",
+                "说明：该模式只使用历史 memory 与当前巡检关联结果更新记忆库，避免匹配阶段读取未来巡检聚合结果。",
+            ],
+        )
+        self._log(log_path, f"row count: {len(rows)}")
+        self._log(log_path, "end incremental_update")
+        return {
+            "disease_memory_bank_path": str(output_path),
+            "memory_bank_path": str(output_path),
+            "memory_bank_rows": len(rows),
+            "memory_agent_report_path": str(report_path),
+            "memory_agent_log_path": str(log_path),
+        }
+
     def _join_range(self, start: str, end: str) -> str:
         if start and end and start != end:
             return f"{start} - {end}"
         return start or end
+
+    def _update_memory_row(self, memory: dict[str, str], frame: dict[str, str], version: str) -> dict[str, str]:
+        updated = dict(memory)
+        inspection_id = frame.get("inspection_id", "")
+        source_ids = [value for value in updated.get("source_inspection_ids", "").split("|") if value]
+        if inspection_id and inspection_id not in source_ids:
+            source_ids.append(inspection_id)
+        first_area = self._to_float(updated.get("first_area_px"))
+        last_area = self._to_float(frame.get("kict_area_px"))
+        max_area = max(self._to_float(updated.get("max_area_px")), last_area)
+        area_growth = last_area - first_area
+        area_rate = area_growth / first_area if first_area else 0.0
+        last_risk = self._risk_from_area(last_area)
+        first_risk = updated.get("first_risk_level", last_risk)
+
+        updated.update(
+            {
+                "memory_version": version,
+                "memory_update_mode": "incremental_update",
+                "memory_confidence": self._confidence_from_inspection_count(len(source_ids)),
+                "memory_limit_note": "Incremental CSV memory from historical records and current association; rule evidence only",
+                "last_seen_inspection": inspection_id,
+                "inspection_count": str(len(source_ids)),
+                "source_record_count": str(int(self._to_float(updated.get("source_record_count"))) + 1),
+                "source_inspection_ids": "|".join(sorted(source_ids, key=self._inspection_id_sort_key)),
+                "total_seen_frames": str(int(self._to_float(updated.get("total_seen_frames"))) + 1),
+                "last_area_px": self._format_number(last_area),
+                "max_area_px": self._format_number(max_area),
+                "area_growth_px": self._format_number(area_growth),
+                "area_growth_rate": f"{area_rate:.6f}",
+                "last_risk_level": last_risk,
+                "risk_level_change": str(self._risk_score(last_risk) - self._risk_score(first_risk)),
+                "growth_trend": self._growth_trend(area_rate),
+                "attention_level": self._attention_level(area_rate, last_risk),
+                "main_clock_direction": frame.get("clock_direction", updated.get("main_clock_direction", "")),
+                "mileage_range": self._join_range(updated.get("mileage_range", ""), frame.get("mileage_text", "")),
+                "representative_image_path": frame.get("kict_image_path", ""),
+                "representative_mask_path": frame.get("kict_mask_path", ""),
+                "requires_manual_review": "false",
+            }
+        )
+        updated["memory_description"] = self._memory_description(
+            disease_id=updated.get("disease_id", ""),
+            disease_type=updated.get("disease_type", ""),
+            first_seen=updated.get("first_seen_inspection", ""),
+            last_seen=updated.get("last_seen_inspection", ""),
+            growth_trend=updated.get("growth_trend", ""),
+            area_growth_rate=area_rate,
+            last_risk=last_risk,
+            attention_level=updated.get("attention_level", ""),
+        )
+        return updated
+
+    def _new_provisional_memory(self, frame: dict[str, str], version: str, *, requires_review: bool) -> dict[str, str]:
+        inspection_id = frame.get("inspection_id", "")
+        disease_id = frame.get("disease_id") or frame.get("image_id", "unknown")
+        area = self._to_float(frame.get("kict_area_px"))
+        risk = self._risk_from_area(area)
+        memory_id = f"MEM-PROV-{inspection_id}-{frame.get('frame_id', '')}-{disease_id}"
+        return {
+            "memory_id": memory_id,
+            "memory_version": version,
+            "disease_id": disease_id,
+            "disease_type": frame.get("disease_type", ""),
+            "source_record_count": "1",
+            "source_inspection_ids": inspection_id,
+            "memory_update_mode": "incremental_update",
+            "memory_confidence": "very_low",
+            "memory_limit_note": "Provisional memory from unmatched or uncertain association; requires manual review",
+            "first_seen_inspection": inspection_id,
+            "last_seen_inspection": inspection_id,
+            "inspection_count": "1",
+            "total_seen_frames": "1",
+            "first_area_px": self._format_number(area),
+            "last_area_px": self._format_number(area),
+            "max_area_px": self._format_number(area),
+            "area_growth_px": "0",
+            "area_growth_rate": "0.000000",
+            "first_risk_level": risk,
+            "last_risk_level": risk,
+            "risk_level_change": "0",
+            "growth_trend": "数据不足",
+            "attention_level": "待补充巡检",
+            "main_clock_direction": frame.get("clock_direction", ""),
+            "mileage_range": frame.get("mileage_text", ""),
+            "representative_image_path": frame.get("kict_image_path", ""),
+            "representative_mask_path": frame.get("kict_mask_path", ""),
+            "requires_manual_review": "true" if requires_review else "false",
+            "memory_description": f"病害{disease_id}为当前巡检新增候选，需要人工复核后确认是否并入既有记忆。",
+        }
+
+    def _risk_from_area(self, area: float) -> str:
+        if area < 1500:
+            return "低"
+        if area < 3000:
+            return "中"
+        return "高"
+
+    def _next_version(self, memory_rows: list[dict[str, str]]) -> str:
+        versions = []
+        for row in memory_rows:
+            text = str(row.get("memory_version", "")).lstrip("v")
+            if text.isdigit():
+                versions.append(int(text))
+        return f"v{(max(versions) if versions else 1) + 1}"
+
+    def _confidence_from_inspection_count(self, inspection_count: int) -> str:
+        if inspection_count >= 3:
+            return "medium"
+        if inspection_count == 2:
+            return "low"
+        return "very_low"
+
+    def _inspection_id_sort_key(self, inspection_id: str) -> tuple[int, str]:
+        digits = "".join(ch for ch in str(inspection_id) if ch.isdigit())
+        return (int(digits) if digits else 0, inspection_id)
 
     def _required_input(self, inputs: dict[str, Any], key: str) -> str:
         value = inputs.get(key)

@@ -112,10 +112,14 @@ def test_analyze_disease_growth_outputs_trends_and_attention(tmp_path):
     assert d001["risk_level_change"] == "2"
     assert d001["growth_trend"] == "明显增长"
     assert d001["attention_level"] == "重点关注"
+    assert d001["measurement_basis"] == "cross_inspection_area_rule"
+    assert d001["claim_level"] == "rule_evidence_only"
+    assert d001["comparability_status"] == "simulated_metadata_comparable"
     assert "增长率约为 160.0%" in d001["growth_description"]
     assert d002["growth_trend"] == "数据不足"
     assert d002["attention_level"] == "待补充巡检"
-    assert "暂无法判断增长趋势" in d002["growth_description"]
+    assert d002["claim_level"] == "baseline_only"
+    assert "当前仅作为基线记录" in d002["growth_description"]
     assert markdown_report.exists()
     assert "涉及巡检次数：3" in markdown_report.read_text(encoding="utf-8")
     assert summary_report.exists()

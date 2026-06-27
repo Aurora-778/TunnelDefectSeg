@@ -80,7 +80,7 @@ class FinalReportAgent(BaseAgent):
 
 ## 系统能力总结
 
-本系统面向机器人隧道连续巡检场景，形成从 KICT 裂缝 mask 几何特征、仿真巡检时间/里程/环号/方位元数据，到病害对象记忆、跨巡检关联、增长分析、风险排序、Web 展示和最终报告的端到端闭环。
+本系统面向机器人隧道连续巡检场景，形成从 KICT 裂缝 mask 几何特征、仿真巡检时间/里程/环号/方位元数据，到病害对象记忆、跨巡检关联、面积变化提示、风险排序、Web 展示和最终报告的端到端闭环。
 
 ## 病害分析结果
 
@@ -91,7 +91,7 @@ class FinalReportAgent(BaseAgent):
 ## 关联分析结果
 
 - 关联记录数：{len(association_rows)}
-- 关联依据：Association Agent 综合空间距离、面积相似度、巡检时间连续性、风险相似度和 disease_id 辅助信息进行评分，并输出 candidate、margin、conflict 和 manual review 标记。
+- 关联依据：Association Agent 综合空间距离、面积相似度、巡检时间连续性、风险相似度和 disease_id 辅助信息进行评分，并输出 candidate、margin、conflict 和 manual review 标记；该结果属于规则证据，需要人工复核闭环确认。
 - 输出文件：`{association_records.as_posix()}`
 
 ## 风险分布
@@ -109,8 +109,8 @@ class FinalReportAgent(BaseAgent):
 ## 创新点
 
 - 面向机器人巡检的病害对象级建模。
-- Disease Memory Bank 批处理记忆表。
-- 基于空间、面积、时间和风险的规则关联评分。
+- Disease Memory Bank 批处理记忆表，并提供时间递进评估使用的增量更新路径。
+- 基于空间、面积、时间和风险的规则关联评分，配套 baseline/ablation 报告说明收益和失败点。
 - DAG 多阶段工程闭环。
 - 可视化报告和重点复检清单。
 
@@ -144,7 +144,7 @@ class FinalReportAgent(BaseAgent):
 
 ## 执行链
 
-Engineering Report -> Growth Analysis -> Disease Memory Bank -> Association Agent -> Visualization/Recheck -> Final Report
+Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Association Agent -> Visualization/Recheck -> Final Report
 
 ## 核心输出
 
@@ -184,7 +184,7 @@ Engineering Report -> Growth Analysis -> Disease Memory Bank -> Association Agen
 
 ## 一句话结论
 
-当前系统已经能把机器人连续巡检数据整理成病害对象、增长趋势、风险等级和复检清单，适合用于课程展示、项目答辩和后续论文/专利方向论证。
+当前系统已经能把机器人连续巡检数据整理成病害对象、规则面积变化提示、风险等级和复检清单，适合用于课程展示、项目答辩和后续论文/专利方向论证。
 """
 
     def _validate_outputs(

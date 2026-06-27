@@ -1,0 +1,132 @@
+{
+  "input_csv": "data/simulated/robot_kict_frame_records.csv",
+  "rounds": [
+    {
+      "round_index": 1,
+      "history_inspections": [
+        "I001"
+      ],
+      "query_inspection": "I002",
+      "allowed_inputs": [
+        "data/simulated/progressive/round_001/memory.csv",
+        "data/simulated/progressive/round_001/query_frames.csv"
+      ],
+      "query_frame_count": 10,
+      "memory_before": "data/simulated/progressive/round_001/memory.csv",
+      "association_records": "data/simulated/progressive/round_001/association_records.csv",
+      "memory_after": "data/simulated/progressive/round_001/memory_after_query.csv",
+      "metrics": {
+        "strategy_accuracy": {
+          "area_only": 0.5,
+          "nearest_mileage": 1.0,
+          "same_disease_id": 1.0,
+          "weighted_score_no_id": 1.0
+        },
+        "manual_review_rate": 1.0,
+        "unmatched_rate": 0.0,
+        "conflict_count": 0,
+        "failure_examples": [
+          {
+            "image_id": "I002_000040",
+            "label": "D001",
+            "weighted_prediction": "D001",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          },
+          {
+            "image_id": "I002_000041",
+            "label": "D002",
+            "weighted_prediction": "D002",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          },
+          {
+            "image_id": "I002_000018",
+            "label": "D003",
+            "weighted_prediction": "D003",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          },
+          {
+            "image_id": "I002_000180",
+            "label": "D004",
+            "weighted_prediction": "D004",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          },
+          {
+            "image_id": "I002_000013",
+            "label": "D005",
+            "weighted_prediction": "D005",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          }
+        ]
+      }
+    },
+    {
+      "round_index": 2,
+      "history_inspections": [
+        "I001",
+        "I002"
+      ],
+      "query_inspection": "I003",
+      "allowed_inputs": [
+        "data/simulated/progressive/round_001/memory_after_query.csv",
+        "data/simulated/progressive/round_002/query_frames.csv"
+      ],
+      "query_frame_count": 10,
+      "memory_before": "data/simulated/progressive/round_001/memory_after_query.csv",
+      "association_records": "data/simulated/progressive/round_002/association_records.csv",
+      "memory_after": "data/simulated/progressive/round_002/memory_after_query.csv",
+      "metrics": {
+        "strategy_accuracy": {
+          "area_only": 0.5,
+          "nearest_mileage": 1.0,
+          "same_disease_id": 1.0,
+          "weighted_score_no_id": 1.0
+        },
+        "manual_review_rate": 1.0,
+        "unmatched_rate": 0.0,
+        "conflict_count": 0,
+        "failure_examples": [
+          {
+            "image_id": "I003_000040",
+            "label": "D001",
+            "weighted_prediction": "D001",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          },
+          {
+            "image_id": "I003_000041",
+            "label": "D002",
+            "weighted_prediction": "D002",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          },
+          {
+            "image_id": "I003_000018",
+            "label": "D003",
+            "weighted_prediction": "D003",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          },
+          {
+            "image_id": "I003_000180",
+            "label": "D004",
+            "weighted_prediction": "D004",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          },
+          {
+            "image_id": "I003_000013",
+            "label": "D005",
+            "weighted_prediction": "D005",
+            "needs_manual_review": "true",
+            "score": "0.7833"
+          }
+        ]
+      }
+    }
+  ]
+}

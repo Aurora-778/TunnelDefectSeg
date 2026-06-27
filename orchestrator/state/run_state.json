@@ -1,23 +1,40 @@
 {
-  "run_id": "20260626234615-a96198",
+  "run_id": "run_010",
   "task_status": {
+    "engineering_report": "success",
+    "growth_analysis": "success",
     "memory": "success",
     "association": "success",
-    "web": "success",
-    "doc": "success"
+    "visualization": "success",
+    "final_report": "success"
   },
   "completed_tasks": [
+    "engineering_report",
+    "growth_analysis",
     "memory",
     "association",
-    "web",
-    "doc"
+    "visualization",
+    "final_report"
   ],
   "failed_tasks": [],
   "context_snapshot": {
     "inputs": {
+      "engineering_report": {
+        "frame_records": "data/simulated/robot_kict_frame_records.csv",
+        "output_path": "data/simulated/disease_engineering_report.csv",
+        "markdown_path": "outputs/disease_engineering_report.md",
+        "summary_path": "outputs/disease_engineering_report_summary.md"
+      },
+      "growth_analysis": {
+        "engineering_report": "data/simulated/disease_engineering_report.csv",
+        "output_path": "data/simulated/disease_growth_results.csv",
+        "legacy_output_path": "data/simulated/disease_growth_analysis.csv",
+        "markdown_path": "outputs/disease_growth_analysis_report.md",
+        "summary_path": "outputs/disease_growth_analysis_summary.md"
+      },
       "memory": {
         "engineering_report": "data/simulated/disease_engineering_report.csv",
-        "growth_analysis": "data/simulated/disease_growth_analysis.csv",
+        "growth_analysis": "data/simulated/disease_growth_results.csv",
         "output_path": "data/simulated/disease_memory_bank.csv",
         "report_path": "outputs/memory_agent_report.md",
         "summary_path": "outputs/disease_memory_bank_summary.md",
@@ -25,17 +42,47 @@
       },
       "association": {
         "frame_records": "data/simulated/robot_kict_frame_records.csv",
-        "output_path": "data/simulated/association_records.csv"
+        "memory_bank": "data/simulated/disease_memory_bank.csv",
+        "output_path": "data/simulated/disease_association_records.csv",
+        "legacy_output_path": "data/simulated/association_records.csv"
       },
-      "web": {
-        "manifest_path": "outputs/orchestrator_web_manifest.md"
+      "visualization": {
+        "engineering_report": "data/simulated/disease_engineering_report.csv",
+        "growth_results": "data/simulated/disease_growth_results.csv",
+        "association_records": "data/simulated/disease_association_records.csv",
+        "recheck_list": "data/simulated/priority_recheck_list.csv",
+        "visualization_dir": "outputs/visualizations",
+        "visualization_report": "outputs/visualization_report.md",
+        "recheck_report": "outputs/recheck_list_report.md",
+        "visualization_summary": "outputs/visualization_summary.md",
+        "association_graph": "outputs/visualizations/association_relationship_graph.png"
       },
-      "doc": {
-        "summary_path": "outputs/orchestrator_v1_summary.md",
-        "docs_path": "docs/orchestrator_v1_summary.md"
+      "final_report": {
+        "engineering_report": "data/simulated/disease_engineering_report.csv",
+        "growth_results": "data/simulated/disease_growth_results.csv",
+        "memory_bank": "data/simulated/disease_memory_bank.csv",
+        "association_records": "data/simulated/disease_association_records.csv",
+        "recheck_list": "data/simulated/priority_recheck_list.csv",
+        "visualization_dir": "outputs/visualizations",
+        "final_report": "outputs/final_project_report.md",
+        "system_summary": "outputs/system_summary.md",
+        "key_insights": "outputs/key_insights.md"
       }
     },
     "outputs": {
+      "engineering_report": {
+        "engineering_report_path": "C:\\Users\\26822\\Downloads\\data\\data\\simulated\\disease_engineering_report.csv",
+        "engineering_markdown_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\disease_engineering_report.md",
+        "engineering_summary_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\disease_engineering_report_summary.md",
+        "engineering_rows": 30
+      },
+      "growth_analysis": {
+        "growth_results_path": "C:\\Users\\26822\\Downloads\\data\\data\\simulated\\disease_growth_results.csv",
+        "legacy_growth_analysis_path": "C:\\Users\\26822\\Downloads\\data\\data\\simulated\\disease_growth_analysis.csv",
+        "growth_markdown_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\disease_growth_analysis_report.md",
+        "growth_summary_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\disease_growth_analysis_summary.md",
+        "growth_rows": 10
+      },
       "memory": {
         "disease_memory_bank_path": "C:\\Users\\26822\\Downloads\\data\\data\\simulated\\disease_memory_bank.csv",
         "memory_bank_path": "C:\\Users\\26822\\Downloads\\data\\data\\simulated\\disease_memory_bank.csv",
@@ -45,28 +92,39 @@
         "memory_agent_log_path": "C:\\Users\\26822\\Downloads\\data\\logs\\memory_agent.log"
       },
       "association": {
-        "association_records_path": "C:\\Users\\26822\\Downloads\\data\\data\\simulated\\association_records.csv",
+        "association_records_path": "C:\\Users\\26822\\Downloads\\data\\data\\simulated\\disease_association_records.csv",
         "association_rows": 30,
         "association_matched_rows": 30
       },
-      "doc": {
-        "doc_summary_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\orchestrator_v1_summary.md",
-        "doc_project_summary_path": "C:\\Users\\26822\\Downloads\\data\\docs\\orchestrator_v1_summary.md"
+      "visualization": {
+        "recheck_list_path": "C:\\Users\\26822\\Downloads\\data\\data\\simulated\\priority_recheck_list.csv",
+        "visualization_report_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\visualization_report.md",
+        "recheck_report_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\recheck_list_report.md",
+        "visualization_summary_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\visualization_summary.md",
+        "association_graph_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\visualizations\\association_relationship_graph.png",
+        "chart_count": 7,
+        "recheck_rows": 10
       },
-      "web": {
-        "web_manifest_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\orchestrator_web_manifest.md"
+      "final_report": {
+        "final_project_report_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\final_project_report.md",
+        "system_summary_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\system_summary.md",
+        "key_insights_path": "C:\\Users\\26822\\Downloads\\data\\outputs\\key_insights.md",
+        "final_report_ready": true
       }
     },
     "shared": {
       "project_name": "tunnel_robot_inspection",
       "project_root": "C:\\Users\\26822\\Downloads\\data",
-      "dag_config": "C:\\Users\\26822\\Downloads\\data\\config\\dag.yaml"
+      "dag_config": "C:\\Users\\26822\\Downloads\\data\\config\\dag.yaml",
+      "run_id": "run_010"
     },
     "task_status": {
+      "engineering_report": "success",
+      "growth_analysis": "success",
       "memory": "success",
       "association": "success",
-      "web": "success",
-      "doc": "success"
+      "visualization": "success",
+      "final_report": "success"
     }
   }
 }
