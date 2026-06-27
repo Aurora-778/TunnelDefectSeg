@@ -2,7 +2,15 @@
 
 本项目面向机器人隧道巡检场景：机器人在隧道内连续行进并拍摄图像，系统识别病害区域，并结合时间、里程、环号、方位等工程信息，形成可追踪的病害对象、增长分析和重点复检清单。
 
-当前主线不是单张图片分割 Demo，而是把真实图像 mask 几何信息接入仿真巡检流程，验证“图像病害识别 -> 工程化定位描述 -> 时空聚合 -> 跨巡检变化分析 -> 复检建议”的完整原型链路。
+当前主线不是单张图片分割 Demo，而是把真实图像 mask 几何信息接入仿真巡检流程，验证“图像病害识别 -> 工程化定位描述 -> 病害对象记忆 -> 跨巡检关联 -> 增长分析 -> 风险评分 -> Web 展示 -> 最终报告”的完整应用闭环。
+
+当前推荐运行入口：
+
+```bash
+python run.py --mode full_pipeline
+```
+
+该命令会基于仓库中已经生成的 `data/simulated/robot_kict_frame_records.csv`，一键生成工程化报告、增长结果、Disease Memory Bank、病害关联记录、复检清单、可视化图表和最终项目报告。
 
 ## 当前实现功能
 
@@ -17,6 +25,10 @@
 9. 重点复检清单生成。
 10. 图表可视化输出。
 11. Web Dashboard 展示巡检总览、工程报告、增长分析、复检清单和图表。
+12. Disease Memory Bank 病害对象记忆库生成。
+13. 病害对象与机器人巡检帧的关联记录生成。
+14. 一键完整 pipeline 入口与最终项目报告生成。
+15. AI Multi-Agent Engineering Platform 的 run 状态、DAG、run 对比 API 和轻量展示页面。
 
 ## 数据说明
 
@@ -39,7 +51,10 @@ outputs/
 docs/                         # 运行流程、阶段总结、比赛/专利/软著材料
 
 web_demo/                     # 本地 Web Dashboard 前端
+web/                          # Multi-Agent 平台 Dashboard / DAG / Run 对比页面
 web_app.py                    # 本地 Web 服务
+run.py                        # 当前推荐的一键完整应用闭环入口
+orchestrator/                 # Memory/Association Agent、DAG、run 管理和平台 API
 ```
 
 ## 核心脚本
@@ -53,8 +68,42 @@ web_app.py                    # 本地 Web 服务
 | `scripts/generate_engineering_report.py` | 生成按巡检和病害对象组织的工程化中文报告。 |
 | `scripts/analyze_disease_growth.py` | 统计同一病害跨巡检的面积、风险和趋势变化。 |
 | `scripts/generate_visualization_and_recheck_list.py` | 生成可视化图表、重点复检清单和阶段性 Markdown 报告。 |
+| `run.py` | 当前推荐入口，一键串联工程报告、增长分析、Memory Agent、Association Agent、可视化和最终报告。 |
 
-## 快速运行流程
+## 一键运行完整闭环
+
+如果已经存在 `data/simulated/robot_kict_frame_records.csv`，可以直接运行：
+
+```bash
+python run.py --mode full_pipeline
+```
+
+成功后会输出类似：
+
+```text
+engineering rows: 30
+memory rows: 10
+association rows: 30
+growth rows: 10
+recheck rows: 10
+visual artifacts: 7
+final report: outputs/final_project_report.md
+```
+
+完整执行链如下：
+
+```text
+robot_kict_frame_records.csv
+-> disease_engineering_report.csv
+-> disease_growth_results.csv
+-> disease_memory_bank.csv
+-> disease_association_records.csv
+-> priority_recheck_list.csv
+-> outputs/visualizations/*.png
+-> outputs/final_project_report.md
+```
+
+## 从原始 KICT 数据重新生成流程
 
 KICT 数据集目录需要包含：
 
@@ -63,7 +112,7 @@ images/
 masks/
 ```
 
-按以下顺序运行：
+如果需要从 KICT `images/` 和 `masks/` 重新生成全部中间数据，可按以下顺序运行：
 
 ```bash
 python scripts/generate_simulation_tables.py
@@ -73,6 +122,7 @@ python scripts/merge_kict_with_simulation.py
 python scripts/generate_engineering_report.py
 python scripts/analyze_disease_growth.py
 python scripts/generate_visualization_and_recheck_list.py
+python run.py --mode full_pipeline
 ```
 
 Windows 示例：
@@ -95,13 +145,21 @@ python scripts/extract_kict_mask_features.py --dataset-root "C:/path/to/kict_sam
 | `data/simulated/kict_mask_features.csv` | KICT mask 几何特征表。 |
 | `data/simulated/robot_kict_frame_records.csv` | 融合 KICT 与仿真巡检元数据的核心表。 |
 | `data/simulated/disease_engineering_report.csv` | 工程化病害描述表。 |
-| `data/simulated/disease_growth_analysis.csv` | 跨巡检增长分析表。 |
+| `data/simulated/disease_growth_analysis.csv` | Web 兼容用跨巡检增长分析表。 |
+| `data/simulated/disease_growth_results.csv` | 当前完整 pipeline 的标准增长分析输出。 |
+| `data/simulated/disease_memory_bank.csv` | Disease Memory Bank，按 `disease_id` 汇总长期病害对象记忆。 |
+| `data/simulated/disease_association_records.csv` | 当前完整 pipeline 的标准病害关联记录表。 |
+| `data/simulated/association_records.csv` | 旧 orchestrator/Web 兼容用关联记录表。 |
 | `data/simulated/priority_recheck_list.csv` | 重点复检清单。 |
 | `outputs/disease_engineering_report.md` | 工程化病害描述报告。 |
 | `outputs/disease_growth_analysis_report.md` | 增长变化分析报告。 |
 | `outputs/recheck_list_report.md` | 重点复检清单报告。 |
 | `outputs/visualization_report.md` | 可视化生成报告。 |
+| `outputs/final_project_report.md` | 当前完整闭环最终项目报告，适合展示和答辩。 |
+| `outputs/system_summary.md` | 系统闭环摘要。 |
+| `outputs/key_insights.md` | 关键洞察和复检建议摘要。 |
 | `outputs/visualizations/*.png` | 关注等级、增长趋势、风险变化、面积增长率、病害类型、里程风险图表。 |
+| `outputs/visualizations/association_relationship_graph.png` | 病害对象与关联帧数量关系图。 |
 
 ## Web Dashboard
 
@@ -127,6 +185,14 @@ Web 页面当前展示：
 6. 单图检测/现场复核入口。
 7. KICT 静态数据与仿真元数据边界说明。
 
+Multi-Agent 平台页面：
+
+```text
+http://127.0.0.1:8000/platform
+```
+
+平台页面用于查看 orchestrator 的 run 状态、DAG 节点状态和 run 对比。它是工程管理辅助页面，不是病害检测主界面。
+
 ## 单图检测输出
 
 单图检测仍保留原有分割复核能力，便于现场图片拖拽检查和模型结果对照。常见输出包括：
@@ -143,6 +209,14 @@ Web 页面当前展示：
 - `_report.json`
 
 这里的融合、选择和不确定性结果用于辅助复核。若没有人工 GT 标注，页面中的 self-IoU / overlap 指标只能表示不同推理结果之间的一致性，是 not ground-truth mIoU，不能作为真实分割精度。
+
+## 当前创新点
+
+1. 将 KICT 静态裂缝 mask 的几何信息接入机器人巡检时间、里程、环号和方位元数据，形成工程可读的病害对象。
+2. 构建 Disease Memory Bank，把同一 `disease_id` 的跨巡检面积、风险、趋势和代表图像沉淀为长期记忆。
+3. 通过 Association Agent 生成病害对象与机器人巡检帧的关联记录，把“单图识别”收束为“病害跟踪”。
+4. 输出增长分析、风险评分、重点复检清单和最终报告，使系统结果能服务现场复核、课程展示和后续论文/专利论证。
+5. 保留 Web Dashboard 和 Multi-Agent 平台页面，既能展示应用结果，也能展示执行链路。
 
 ## 模型与来源标记
 
@@ -205,3 +279,5 @@ pip install -r requirements.txt
 ```
 
 SegFormer/mmseg 训练和旧单图分割能力属于额外模型环境，不是运行当前机器人巡检表格流程的必需条件。
+
+当前完整 pipeline 已将可视化脚本改为 `stdlib + matplotlib`，不依赖 pandas，避免本地 `pandas/numpy` 二进制版本不兼容导致一键运行失败。
