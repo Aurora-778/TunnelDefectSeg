@@ -222,14 +222,24 @@ def unique_rows_by_key(rows: list[dict[str, str]], *, row_label: str) -> dict[tu
 def association_for_frame(
     frame: dict[str, str],
     association_by_key: dict[tuple[str, str, str], dict[str, str]],
+    frames_by_image: dict[str, list[dict[str, str]]],
     associations_by_image: dict[str, list[dict[str, str]]],
 ) -> dict[str, str]:
     key = record_key(frame)
     if key in association_by_key:
         return association_by_key[key]
-    same_image_associations = associations_by_image.get(frame.get("image_id", ""), [])
-    if len(same_image_associations) == 1:
+    image_id = frame.get("image_id", "")
+    same_image_frames = frames_by_image.get(image_id, [])
+    same_image_associations = associations_by_image.get(image_id, [])
+    # Legacy rows may only have image_id. This fallback is only safe when the
+    # image contains exactly one query frame and one association record.
+    if len(same_image_frames) == 1 and len(same_image_associations) == 1:
         return same_image_associations[0]
+    if same_image_associations:
+        raise ValueError(
+            "Association cannot be matched to a unique query frame; "
+            f"missing or inconsistent frame_id/disease_id for image_id={image_id}"
+        )
     return {}
 
 
@@ -237,6 +247,9 @@ def evaluate_round(query_rows: list[dict[str, str]], memory_rows: list[dict[str,
     memory_by_id = {row.get("memory_id", ""): row for row in memory_rows}
     unique_rows_by_key(query_rows, row_label="query frame")
     association_by_key = unique_rows_by_key(association_rows, row_label="association")
+    frames_by_image: dict[str, list[dict[str, str]]] = {}
+    for row in query_rows:
+        frames_by_image.setdefault(row.get("image_id", ""), []).append(row)
     associations_by_image: dict[str, list[dict[str, str]]] = {}
     for row in association_rows:
         associations_by_image.setdefault(row.get("image_id", ""), []).append(row)
@@ -246,7 +259,7 @@ def evaluate_round(query_rows: list[dict[str, str]], memory_rows: list[dict[str,
 
     for frame in query_rows:
         label = frame.get("disease_id", "")
-        association = association_for_frame(frame, association_by_key, associations_by_image)
+        association = association_for_frame(frame, association_by_key, frames_by_image, associations_by_image)
         predictions = {
             "same_disease_id": next((row.get("disease_id", "") for row in memory_rows if row.get("disease_id") == label), ""),
             "nearest_mileage": nearest_mileage(frame, memory_rows),

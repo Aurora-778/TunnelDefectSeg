@@ -166,6 +166,28 @@ def test_evaluate_round_rejects_duplicate_association_composite_key():
         evaluate_round(query_rows, memory_rows, [association, dict(association)])
 
 
+def test_evaluate_round_rejects_ambiguous_image_only_association_for_same_image_records():
+    query_rows = [
+        frame_row(image_id="I002_same", frame_id="1", disease_id="D001", kict_area_px="1000"),
+        frame_row(image_id="I002_same", frame_id="2", disease_id="D002", kict_area_px="2000"),
+    ]
+    memory_rows = [
+        {"memory_id": "MEM-D001", "disease_id": "D001", "mileage_range": "K12+000.0", "last_area_px": "1000"},
+        {"memory_id": "MEM-D002", "disease_id": "D002", "mileage_range": "K12+000.0", "last_area_px": "2000"},
+    ]
+    association_rows = [
+        {
+            "image_id": "I002_same",
+            "memory_id": "MEM-D001",
+            "association_status": "matched",
+            "needs_manual_review": "false",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="missing or inconsistent frame_id/disease_id"):
+        evaluate_round(query_rows, memory_rows, association_rows)
+
+
 def test_progressive_manifest_uses_relative_paths_for_project_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(progressive, "PROJECT_ROOT", tmp_path)
     input_csv = tmp_path / "data" / "simulated" / "robot_kict_frame_records.csv"
