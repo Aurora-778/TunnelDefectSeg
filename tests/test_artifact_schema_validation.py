@@ -85,6 +85,26 @@ def test_validate_csv_schema_reports_empty_bool_value(tmp_path):
     assert any("needs_manual_review" in error and "true/false" in error for error in errors)
 
 
+def test_validate_csv_schema_accepts_zero_one_bool_values(tmp_path):
+    path = tmp_path / "association.csv"
+    row = valid_association_row()
+    row["use_disease_id_score"] = "0"
+    row["needs_manual_review"] = "1"
+    write_csv(path, list(row), [row])
+
+    assert validate_csv_schema(path, "disease_association_records") == []
+
+
+def test_validate_csv_schema_accepts_titlecase_bool_values(tmp_path):
+    path = tmp_path / "association.csv"
+    row = valid_association_row()
+    row["use_disease_id_score"] = "False"
+    row["needs_manual_review"] = "True"
+    write_csv(path, list(row), [row])
+
+    assert validate_csv_schema(path, "disease_association_records") == []
+
+
 def test_validate_csv_schema_reports_score_out_of_range(tmp_path):
     path = tmp_path / "association.csv"
     row = valid_association_row()
@@ -94,6 +114,26 @@ def test_validate_csv_schema_reports_score_out_of_range(tmp_path):
     errors = validate_csv_schema(path, "disease_association_records")
 
     assert any("association_score" in error and "<= 1.0" in error for error in errors)
+
+
+def test_validate_csv_schema_allows_score_margin_greater_than_one(tmp_path):
+    path = tmp_path / "association.csv"
+    row = valid_association_row()
+    row["score_margin"] = "2.0"
+    write_csv(path, list(row), [row])
+
+    assert validate_csv_schema(path, "disease_association_records") == []
+
+
+def test_validate_csv_schema_reports_negative_score_margin(tmp_path):
+    path = tmp_path / "association.csv"
+    row = valid_association_row()
+    row["score_margin"] = "-0.1"
+    write_csv(path, list(row), [row])
+
+    errors = validate_csv_schema(path, "disease_association_records")
+
+    assert any("score_margin" in error and ">= 0.0" in error for error in errors)
 
 
 def test_validate_csv_schema_reports_non_integer_candidate_count(tmp_path):
@@ -162,6 +202,16 @@ def test_association_schema_requires_candidate_fields(tmp_path):
     errors = validate_csv_schema(path, "disease_association_records")
 
     assert any("candidate_count" in error for error in errors)
+
+
+def test_optional_geometry_fields_are_not_required_when_geometry_unavailable(tmp_path):
+    path = tmp_path / "association.csv"
+    row = valid_association_row()
+    row.pop("bbox_fields_present")
+    row.pop("geometry_score_applied")
+    write_csv(path, list(row), [row])
+
+    assert validate_csv_schema(path, "disease_association_records") == []
 
 
 def test_memory_schema_requires_manual_review_field(tmp_path):
@@ -365,6 +415,27 @@ def test_memory_schema_rejects_empty_requires_manual_review(tmp_path):
     errors = validate_csv_schema(path, "disease_memory_bank")
 
     assert any("requires_manual_review" in error and "true/false" in error for error in errors)
+
+
+def test_memory_schema_rejects_invalid_memory_version(tmp_path):
+    path = tmp_path / "memory.csv"
+    row = valid_memory_row()
+    row["memory_version"] = "1"
+    write_csv(path, list(row), [row])
+
+    errors = validate_csv_schema(path, "disease_memory_bank")
+
+    assert any("memory_version" in error and "must start with 'v'" in error for error in errors)
+
+
+def test_memory_schema_accepts_valid_memory_versions(tmp_path):
+    for version in ["v1", "v1.0", "v2"]:
+        path = tmp_path / f"memory_{version.replace('.', '_')}.csv"
+        row = valid_memory_row()
+        row["memory_version"] = version
+        write_csv(path, list(row), [row])
+
+        assert validate_csv_schema(path, "disease_memory_bank") == []
 
 
 def test_validate_artifacts_reports_main_association_not_no_id(tmp_path):

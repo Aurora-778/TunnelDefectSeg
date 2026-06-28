@@ -116,8 +116,6 @@ REQUIRED_SCHEMAS = {
         "score_margin",
         "conflict_reason",
         "needs_manual_review",
-        "bbox_fields_present",
-        "geometry_score_applied",
         "geometry_feature_available",
         "geometry_limit_note",
     ],
@@ -152,8 +150,6 @@ ENUMS = {
     "match_type": {"hard", "soft", "uncertain"},
     "memory_update_mode": {"batch_rebuild", "incremental_update"},
     "memory_confidence": {"medium", "low", "very_low"},
-    "needs_manual_review": {"true", "false"},
-    "requires_manual_review": {"true", "false"},
     "association_mode": {"no_id", "with_id_upper_bound"},
     "claim_level": {"baseline_only", "rule_evidence_only", "suspected_growth"},
     "comparability_status": {"insufficient_history", "simulated_metadata_comparable", "verified_comparable"},
@@ -175,7 +171,6 @@ SCORE_FIELDS = {
     "area_similarity_score",
     "temporal_continuity_score",
     "risk_similarity_score",
-    "score_margin",
 }
 
 NON_NEGATIVE_INTEGER_FIELDS = {
@@ -193,11 +188,18 @@ NON_NEGATIVE_FLOAT_FIELDS = {
     "total_area_px",
     "first_area_px",
     "last_area_px",
+    "score_margin",
 }
 
 NUMERIC_FIELDS = {
     "area_growth_px",
 }
+
+MEMORY_VERSION_FIELDS = {
+    "memory_version",
+}
+
+VALID_BOOL_VALUES = {"true", "false", "0", "1"}
 
 
 def validate_csv_schema(path: Path, schema_name: str) -> list[str]:
@@ -232,8 +234,8 @@ def validate_csv_schema(path: Path, schema_name: str) -> list[str]:
         for column in BOOL_FIELDS:
             if column in fieldnames:
                 value = str(row.get(column, "")).strip()
-                if value.lower() not in {"true", "false"}:
-                    errors.append(f"{schema_name} line {line_number}: {column}={value!r} must be true/false")
+                if value.lower() not in VALID_BOOL_VALUES:
+                    errors.append(f"{schema_name} line {line_number}: {column}={value!r} must be true/false/0/1")
         for column in SCORE_FIELDS:
             if column in fieldnames:
                 errors.extend(_validate_float_range(schema_name, line_number, column, row.get(column, ""), 0.0, 1.0))
@@ -246,6 +248,9 @@ def validate_csv_schema(path: Path, schema_name: str) -> list[str]:
         for column in NUMERIC_FIELDS:
             if column in fieldnames:
                 errors.extend(_validate_float(schema_name, line_number, column, row.get(column, "")))
+        for column in MEMORY_VERSION_FIELDS:
+            if column in fieldnames:
+                errors.extend(_validate_memory_version(schema_name, line_number, column, row.get(column, "")))
     return errors
 
 
@@ -289,4 +294,13 @@ def _validate_non_negative_integer(schema_name: str, line_number: int, column: s
         return [f"{schema_name} line {line_number}: {column}={value!r} is not an integer"]
     if number < 0:
         return [f"{schema_name} line {line_number}: {column}={number!r} must be >= 0"]
+    return []
+
+
+def _validate_memory_version(schema_name: str, line_number: int, column: str, raw_value: object) -> list[str]:
+    value = str(raw_value).strip()
+    if not value:
+        return [f"{schema_name} line {line_number}: {column} is empty; expected value starting with 'v'"]
+    if not value.startswith("v"):
+        return [f"{schema_name} line {line_number}: {column}={value!r} must start with 'v'"]
     return []

@@ -187,7 +187,9 @@ def test_explicit_default_sim_dir_does_not_use_fallback(tmp_path):
     )
 
     assert result.returncode != 0
-    assert "Input file not found: data\\simulated\\inspection_sequence.csv" in result.stderr
+    stderr = result.stderr.replace("\\", "/")
+    assert "Input file not found:" in stderr
+    assert "data/simulated/inspection_sequence.csv" in stderr
 
 
 def test_merge_fails_when_mapping_image_id_has_no_engineering_metadata(tmp_path):
