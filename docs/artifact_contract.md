@@ -9,7 +9,7 @@
 - 修改字段含义时必须提升 schema version，并同步更新 producer、consumer 和测试。
 - `data/simulated/disease_growth_analysis.csv` 与 `data/simulated/association_records.csv` 为旧 Web / Orchestrator 兼容文件。
 - 当前跨巡检增长结果基于 KICT 静态 mask + 仿真巡检元数据，不可描述为真实线路长期病害增长。
-- `memory_version` 必须以 `v` 开头，例如 `v1`、`v1.0`、`v2`。
+- `memory_version` 必须匹配 `v数字` 或 `v数字.数字`，例如 `v1`、`v1.0`、`v2`；`1`、`version1`、`v`、`vabc`、空值均不合法。
 - schema 兼容 bool 输入 `true`、`false`、`True`、`False`、`0`、`1`；正式产物输出必须统一为小写 `true` / `false`，便于 mode 校验和跨工具读取。
 - 分数类字段默认要求 `0 <= score <= 1`；`score_margin` 表示候选差距，只要求 `score_margin >= 0`。
 
