@@ -101,6 +101,7 @@ def test_association_agent_outputs_explainable_match_scores(tmp_path):
     assert rows[0]["label_disease_id"] == "D001"
     assert rows[0]["bbox_fields_present"] == "false"
     assert rows[0]["geometry_score_applied"] == "false"
+    assert rows[0]["geometry_feature_available"] == "false"
     assert rows[0]["geometry_limit_note"] == "missing bbox/mask shape fields in current artifacts"
 
     assert rows[1]["match_type"] == "soft"
@@ -371,9 +372,38 @@ def test_no_id_mode_disease_id_equivariance(tmp_path):
         "conflict_reason",
         "association_mode",
         "use_disease_id_score",
+        "candidate_count",
+        "score_margin",
     ]:
         assert row_a[field] == row_b[field], f"disease_id equivariance violated on '{field}': {row_a[field]} != {row_b[field]}"
 
     # label_disease_id 允许不同
     assert row_a["label_disease_id"] == "D001"
     assert row_b["label_disease_id"] == "D999"
+
+
+def test_no_id_mode_does_not_compute_same_id_for_scoring(tmp_path):
+    """no-id 模式下，即使 frame.disease_id == memory.disease_id，空间/面积冲突也不能 hard match 或提高 score。"""
+    frame_path = tmp_path / "frames.csv"
+    memory_path = tmp_path / "memory.csv"
+    output_path = tmp_path / "association.csv"
+    # frame 与 memory disease_id 相同，但空间完全冲突
+    write_csv(memory_path, [memory_row(disease_id="D001", mileage_range="K12+000.0 - K12+010.0")])
+    write_csv(frame_path, [frame_row(disease_id="D001", mileage_text="K99+000.0", kict_area_px="1000")])
+    context = {
+        "inputs": {"association": {"frame_records": str(frame_path), "memory_bank": str(memory_path), "output_path": str(output_path)}},
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+    AssociationAgent().run(context)
+    row = read_csv(output_path)[0]
+
+    assert row["use_disease_id_score"] == "false"
+    assert row["association_mode"] == "no_id"
+    # disease_id 相同也不得 hard match
+    assert row["match_type"] != "hard"
+    assert "same disease_id" not in row["rule_basis"]
+    # 空间冲突应触发 review
+    assert row["needs_manual_review"] == "true"
+    assert "spatial mismatch" in row["conflict_reason"]

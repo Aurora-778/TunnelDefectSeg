@@ -74,6 +74,7 @@ class AssociationAgent(BaseAgent):
                     "needs_manual_review": "true" if needs_manual_review else "false",
                     "bbox_fields_present": "true" if geometry_available else "false",
                     "geometry_score_applied": "false",
+                    "geometry_feature_available": "false",
                     "geometry_limit_note": geometry_note,
                     "mileage_text": frame.get("mileage_text", ""),
                     "clock_direction": frame.get("clock_direction", ""),
@@ -111,6 +112,7 @@ class AssociationAgent(BaseAgent):
             "needs_manual_review",
             "bbox_fields_present",
             "geometry_score_applied",
+            "geometry_feature_available",
             "geometry_limit_note",
             "mileage_text",
             "clock_direction",
@@ -155,18 +157,17 @@ class AssociationAgent(BaseAgent):
         *,
         use_disease_id_score: bool = False,
     ) -> tuple[dict[str, str], dict[str, float], list[tuple[dict[str, str], dict[str, float]]]]:
-        scored = [
-            (
-                memory,
-                self._scores(
-                    frame,
-                    memory,
-                    same_id=frame.get("disease_id", "") == memory.get("disease_id", ""),
-                    use_disease_id_score=use_disease_id_score,
-                ),
+        scored = []
+        for memory in memory_rows:
+            # no-id 模式下完全不读取 disease_id 计算 same_id
+            same_id = (
+                frame.get("disease_id", "") == memory.get("disease_id", "")
+                if use_disease_id_score
+                else False
             )
-            for memory in memory_rows
-        ]
+            scored.append(
+                (memory, self._scores(frame, memory, same_id=same_id, use_disease_id_score=use_disease_id_score))
+            )
         scored.sort(key=lambda item: item[1]["association_score"], reverse=True)
         if not scored:
             return {}, self._empty_scores(), []
