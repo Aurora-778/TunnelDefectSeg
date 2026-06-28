@@ -209,6 +209,10 @@ def key_label(key: tuple[str, str, str]) -> str:
     return "|".join(key)
 
 
+def is_image_only_association(row: dict[str, str]) -> bool:
+    return not row.get("frame_id") and not row.get("disease_id")
+
+
 def unique_rows_by_key(rows: list[dict[str, str]], *, row_label: str) -> dict[tuple[str, str, str], dict[str, str]]:
     keyed_rows: dict[tuple[str, str, str], dict[str, str]] = {}
     for row in rows:
@@ -233,7 +237,11 @@ def association_for_frame(
     same_image_associations = associations_by_image.get(image_id, [])
     # Legacy rows may only have image_id. This fallback is only safe when the
     # image contains exactly one query frame and one association record.
-    if len(same_image_frames) == 1 and len(same_image_associations) == 1:
+    if (
+        len(same_image_frames) == 1
+        and len(same_image_associations) == 1
+        and is_image_only_association(same_image_associations[0])
+    ):
         return same_image_associations[0]
     if same_image_associations:
         raise ValueError(
