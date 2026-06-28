@@ -418,14 +418,15 @@ def test_memory_schema_rejects_empty_requires_manual_review(tmp_path):
 
 
 def test_memory_schema_rejects_invalid_memory_version(tmp_path):
-    path = tmp_path / "memory.csv"
-    row = valid_memory_row()
-    row["memory_version"] = "1"
-    write_csv(path, list(row), [row])
+    for version in ["1", "version1", "v", "vabc", ""]:
+        path = tmp_path / f"memory_invalid_{version or 'empty'}.csv"
+        row = valid_memory_row()
+        row["memory_version"] = version
+        write_csv(path, list(row), [row])
 
-    errors = validate_csv_schema(path, "disease_memory_bank")
+        errors = validate_csv_schema(path, "disease_memory_bank")
 
-    assert any("memory_version" in error and "must start with 'v'" in error for error in errors)
+        assert any("memory_version" in error for error in errors)
 
 
 def test_memory_schema_accepts_valid_memory_versions(tmp_path):
@@ -448,6 +449,18 @@ def test_validate_artifacts_reports_main_association_not_no_id(tmp_path):
     errors = validate_artifacts(tmp_path)
 
     assert any("association_mode" in error and "no_id" in error for error in errors["disease_association_records"])
+
+
+def test_validate_artifacts_requires_canonical_main_association_bool(tmp_path):
+    association_path = tmp_path / "data" / "simulated" / "disease_association_records.csv"
+    row = valid_association_row()
+    row["use_disease_id_score"] = "0"
+    row["association_mode"] = "no_id"
+    write_csv(association_path, list(row), [row])
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("use_disease_id_score='0' expected 'false'" in error for error in errors["disease_association_records"])
 
 
 def test_validate_artifacts_reports_progressive_no_id_mode_error(tmp_path):

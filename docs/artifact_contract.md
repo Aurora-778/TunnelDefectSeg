@@ -10,7 +10,7 @@
 - `data/simulated/disease_growth_analysis.csv` 与 `data/simulated/association_records.csv` 为旧 Web / Orchestrator 兼容文件。
 - 当前跨巡检增长结果基于 KICT 静态 mask + 仿真巡检元数据，不可描述为真实线路长期病害增长。
 - `memory_version` 必须以 `v` 开头，例如 `v1`、`v1.0`、`v2`。
-- bool 字段允许 `true`、`false`、`True`、`False`、`0`、`1`；输出建议统一为小写 `true` / `false`。
+- schema 兼容 bool 输入 `true`、`false`、`True`、`False`、`0`、`1`；正式产物输出必须统一为小写 `true` / `false`，便于 mode 校验和跨工具读取。
 - 分数类字段默认要求 `0 <= score <= 1`；`score_margin` 表示候选差距，只要求 `score_margin >= 0`。
 
 ## 执行入口
@@ -118,8 +118,6 @@ Consumer：`MemoryAgent`, `scripts/generate_visualization_and_recheck_list.py`, 
 - `measurement_basis`
 - `claim_level`
 - `comparability_status`
-- `first_mileage_range`
-- `last_mileage_range`
 - `main_clock_direction`
 - `growth_description`
 
@@ -263,8 +261,7 @@ Consumer：Web Dashboard, final report
 - `first_inspection`
 - `last_inspection`
 - `area_growth_rate`
-- `last_mileage_range`
-- `main_clock_direction`
+- `last_risk_level`
 - `recheck_reason`
 - `recheck_suggestion`
 

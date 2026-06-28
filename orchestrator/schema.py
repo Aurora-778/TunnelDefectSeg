@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+import re
 
 
 REQUIRED_SCHEMAS = {
@@ -199,6 +200,7 @@ MEMORY_VERSION_FIELDS = {
     "memory_version",
 }
 
+MEMORY_VERSION_PATTERN = re.compile(r"^v\d+(?:\.\d+)?$")
 VALID_BOOL_VALUES = {"true", "false", "0", "1"}
 
 
@@ -300,7 +302,7 @@ def _validate_non_negative_integer(schema_name: str, line_number: int, column: s
 def _validate_memory_version(schema_name: str, line_number: int, column: str, raw_value: object) -> list[str]:
     value = str(raw_value).strip()
     if not value:
-        return [f"{schema_name} line {line_number}: {column} is empty; expected value starting with 'v'"]
-    if not value.startswith("v"):
-        return [f"{schema_name} line {line_number}: {column}={value!r} must start with 'v'"]
+        return [f"{schema_name} line {line_number}: {column} is empty; expected v<number> or v<number>.<number>"]
+    if not MEMORY_VERSION_PATTERN.fullmatch(value):
+        return [f"{schema_name} line {line_number}: {column}={value!r} must match v<number> or v<number>.<number>"]
     return []
