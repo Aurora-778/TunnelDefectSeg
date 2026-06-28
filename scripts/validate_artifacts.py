@@ -92,6 +92,7 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
                     "association_records",
                     "no_id_association_records",
                     "with_id_association_records",
+                    "allowed_inputs",
                     "memory_after",
                     "metrics",
                 ]:
@@ -101,7 +102,9 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
                 if not isinstance(allowed_inputs, list):
                     errors.append(f"progressive manifest round {index} allowed_inputs must be a list")
                     allowed_inputs = []
-                if source_dataset and source_dataset in allowed_inputs:
+                if source_dataset and any(
+                    manifest_paths_equal(project_root, source_dataset, allowed_path) for allowed_path in allowed_inputs
+                ):
                     errors.append(f"progressive manifest round {index} allowed_inputs must not contain source_dataset")
                 errors.extend(validate_manifest_file(project_root, round_info, index, "memory_before", "disease_memory_bank"))
                 errors.extend(validate_manifest_file(project_root, round_info, index, "association_records", "progressive_association_records"))
@@ -135,6 +138,18 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
 def resolve_manifest_path(project_root: Path, value: object) -> Path:
     path = Path(str(value))
     return path if path.is_absolute() else project_root / path
+
+
+def normalize_manifest_path(project_root: Path, value: object) -> Path:
+    # Normalize manifest paths for semantic comparisons without requiring files to exist.
+    path_text = str(value).strip().replace("\\", "/")
+    path = Path(path_text)
+    candidate = path if path.is_absolute() else project_root / path
+    return candidate.resolve(strict=False)
+
+
+def manifest_paths_equal(project_root: Path, left: object, right: object) -> bool:
+    return normalize_manifest_path(project_root, left) == normalize_manifest_path(project_root, right)
 
 
 def validate_manifest_file(project_root: Path, round_info: dict, round_index: int, key: str, schema_name: str) -> list[str]:

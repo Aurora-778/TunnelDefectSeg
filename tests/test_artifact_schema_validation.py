@@ -74,6 +74,17 @@ def test_validate_csv_schema_reports_invalid_bool_value(tmp_path):
     assert any("needs_manual_review" in error and "true/false" in error for error in errors)
 
 
+def test_validate_csv_schema_reports_empty_bool_value(tmp_path):
+    path = tmp_path / "association.csv"
+    row = valid_association_row()
+    row["needs_manual_review"] = ""
+    write_csv(path, list(row), [row])
+
+    errors = validate_csv_schema(path, "disease_association_records")
+
+    assert any("needs_manual_review" in error and "true/false" in error for error in errors)
+
+
 def test_validate_csv_schema_reports_score_out_of_range(tmp_path):
     path = tmp_path / "association.csv"
     row = valid_association_row()
@@ -94,6 +105,37 @@ def test_validate_csv_schema_reports_non_integer_candidate_count(tmp_path):
     errors = validate_csv_schema(path, "disease_association_records")
 
     assert any("candidate_count" in error and "integer" in error for error in errors)
+
+
+def test_validate_csv_schema_allows_negative_area_growth(tmp_path):
+    path = tmp_path / "growth.csv"
+    row = valid_growth_row()
+    row["area_growth_px"] = "-10"
+    write_csv(path, list(row), [row])
+
+    assert validate_csv_schema(path, "disease_growth_results") == []
+
+
+def test_validate_csv_schema_reports_non_numeric_area_growth(tmp_path):
+    path = tmp_path / "growth.csv"
+    row = valid_growth_row()
+    row["area_growth_px"] = "not-a-number"
+    write_csv(path, list(row), [row])
+
+    errors = validate_csv_schema(path, "disease_growth_results")
+
+    assert any("area_growth_px" in error and "not a number" in error for error in errors)
+
+
+def test_validate_csv_schema_reports_negative_non_growth_area(tmp_path):
+    path = tmp_path / "growth.csv"
+    row = valid_growth_row()
+    row["first_area_px"] = "-1"
+    write_csv(path, list(row), [row])
+
+    errors = validate_csv_schema(path, "disease_growth_results")
+
+    assert any("first_area_px" in error and ">= 0.0" in error for error in errors)
 
 
 def test_association_schema_requires_candidate_fields(tmp_path):
@@ -231,6 +273,30 @@ def valid_progressive_association_row() -> dict[str, str]:
     return row
 
 
+def valid_growth_row() -> dict[str, str]:
+    return {
+        "disease_id": "D001",
+        "disease_type": "crack",
+        "inspection_count": "2",
+        "first_inspection": "I001",
+        "last_inspection": "I002",
+        "first_area_px": "100",
+        "last_area_px": "90",
+        "area_growth_px": "-10",
+        "area_growth_rate": "-0.1",
+        "first_risk_level": "低",
+        "last_risk_level": "低",
+        "risk_level_change": "stable",
+        "growth_trend": "面积减小",
+        "attention_level": "常规记录",
+        "measurement_basis": "mask_area",
+        "claim_level": "rule_evidence_only",
+        "comparability_status": "simulated_metadata_comparable",
+        "main_clock_direction": "3点",
+        "growth_description": "面积减小。",
+    }
+
+
 def write_progressive_report(project_root: Path) -> None:
     report_path = project_root / "outputs" / "association_evaluation_report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,12 +308,14 @@ def write_progressive_manifest(
     round_info: dict[str, str],
     *,
     include_mode_association_records: bool = True,
+    include_allowed_inputs: bool = True,
     source_dataset: str = "data/source.csv",
 ) -> None:
     manifest_path = project_root / "data" / "simulated" / "progressive" / "progressive_evaluation_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     full_round_info = dict(round_info)
-    full_round_info.setdefault("allowed_inputs", [])
+    if include_allowed_inputs:
+        full_round_info.setdefault("allowed_inputs", [])
     if include_mode_association_records and "association_records" in full_round_info:
         full_round_info.setdefault("no_id_association_records", full_round_info["association_records"])
         full_round_info.setdefault("with_id_association_records", full_round_info["association_records"])
@@ -286,6 +354,17 @@ def test_memory_schema_rejects_invalid_requires_manual_review_enum(tmp_path):
     errors = validate_csv_schema(path, "disease_memory_bank")
 
     assert any("requires_manual_review" in error for error in errors)
+
+
+def test_memory_schema_rejects_empty_requires_manual_review(tmp_path):
+    path = tmp_path / "memory.csv"
+    row = valid_memory_row()
+    row["requires_manual_review"] = ""
+    write_csv(path, list(row), [row])
+
+    errors = validate_csv_schema(path, "disease_memory_bank")
+
+    assert any("requires_manual_review" in error and "true/false" in error for error in errors)
 
 
 def test_validate_artifacts_reports_main_association_not_no_id(tmp_path):
@@ -389,6 +468,52 @@ def test_validate_artifacts_reports_source_dataset_inside_allowed_inputs(tmp_pat
     errors = validate_artifacts(tmp_path)
 
     assert any("allowed_inputs must not contain source_dataset" in error for error in errors["progressive_evaluation"])
+
+
+def test_validate_artifacts_reports_equivalent_source_dataset_inside_allowed_inputs(tmp_path):
+    memory_path = tmp_path / "memory.csv"
+    association_path = tmp_path / "association.csv"
+    source_dataset = "data/source.csv"
+    write_csv(memory_path, list(valid_memory_row()), [valid_memory_row()])
+    write_csv(association_path, list(valid_progressive_association_row()), [valid_progressive_association_row()])
+    write_valid_progressive_outputs(tmp_path)
+    write_progressive_report(tmp_path)
+    write_progressive_manifest(
+        tmp_path,
+        {
+            "memory_before": memory_path.as_posix(),
+            "association_records": association_path.as_posix(),
+            "memory_after": memory_path.as_posix(),
+            "allowed_inputs": [(tmp_path / "data" / "source.csv").resolve().as_posix()],
+        },
+        source_dataset=source_dataset,
+    )
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("allowed_inputs must not contain source_dataset" in error for error in errors["progressive_evaluation"])
+
+
+def test_validate_artifacts_reports_missing_allowed_inputs(tmp_path):
+    memory_path = tmp_path / "memory.csv"
+    association_path = tmp_path / "association.csv"
+    write_csv(memory_path, list(valid_memory_row()), [valid_memory_row()])
+    write_csv(association_path, list(valid_progressive_association_row()), [valid_progressive_association_row()])
+    write_valid_progressive_outputs(tmp_path)
+    write_progressive_report(tmp_path)
+    write_progressive_manifest(
+        tmp_path,
+        {
+            "memory_before": memory_path.as_posix(),
+            "association_records": association_path.as_posix(),
+            "memory_after": memory_path.as_posix(),
+        },
+        include_allowed_inputs=False,
+    )
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("missing allowed_inputs" in error for error in errors["progressive_evaluation"])
 
 
 def test_validate_artifacts_reports_progressive_association_schema_errors(tmp_path):

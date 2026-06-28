@@ -232,7 +232,7 @@ def validate_csv_schema(path: Path, schema_name: str) -> list[str]:
         for column in BOOL_FIELDS:
             if column in fieldnames:
                 value = str(row.get(column, "")).strip()
-                if value and value.lower() not in {"true", "false"}:
+                if value.lower() not in {"true", "false"}:
                     errors.append(f"{schema_name} line {line_number}: {column}={value!r} must be true/false")
         for column in SCORE_FIELDS:
             if column in fieldnames:
