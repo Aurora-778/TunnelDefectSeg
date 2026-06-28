@@ -229,26 +229,53 @@ def valid_association_row() -> dict[str, str]:
     }
 
 
+def valid_progressive_association_row() -> dict[str, str]:
+    row = valid_association_row()
+    row["matched_disease_id"] = "D001"
+    return row
+
+
 def write_progressive_report(project_root: Path) -> None:
     report_path = project_root / "outputs" / "association_evaluation_report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# Report\n\n禁用 disease_id\n\n### Baseline / Ablation\n", encoding="utf-8")
 
 
-def write_progressive_manifest(project_root: Path, round_info: dict[str, str]) -> None:
+def write_progressive_manifest(
+    project_root: Path,
+    round_info: dict[str, str],
+    *,
+    include_mode_association_records: bool = True,
+) -> None:
     manifest_path = project_root / "data" / "simulated" / "progressive" / "progressive_evaluation_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    full_round_info = dict(round_info)
+    if include_mode_association_records and "association_records" in full_round_info:
+        full_round_info.setdefault("no_id_association_records", full_round_info["association_records"])
+        full_round_info.setdefault("with_id_association_records", full_round_info["association_records"])
     manifest = {
         "rounds": [
             {
                 "history_inspections": ["I001"],
                 "query_inspection": "I002",
                 "metrics": {},
-                **round_info,
+                **full_round_info,
             }
         ]
     }
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def write_valid_progressive_outputs(project_root: Path) -> tuple[Path, Path]:
+    no_id_path = project_root / "data" / "simulated" / "disease_association_records_no_id.csv"
+    with_id_path = project_root / "data" / "simulated" / "disease_association_records_with_id.csv"
+    row = valid_progressive_association_row()
+    write_csv(no_id_path, list(row), [row])
+    row_with_id = dict(row)
+    row_with_id["use_disease_id_score"] = "true"
+    row_with_id["association_mode"] = "with_id_upper_bound"
+    write_csv(with_id_path, list(row_with_id), [row_with_id])
+    return no_id_path, with_id_path
 
 
 def test_memory_schema_rejects_invalid_requires_manual_review_enum(tmp_path):
@@ -265,6 +292,7 @@ def test_memory_schema_rejects_invalid_requires_manual_review_enum(tmp_path):
 def test_validate_artifacts_reports_missing_progressive_referenced_file(tmp_path):
     memory_path = tmp_path / "memory.csv"
     write_csv(memory_path, list(valid_memory_row()), [valid_memory_row()])
+    write_valid_progressive_outputs(tmp_path)
     write_progressive_report(tmp_path)
     write_progressive_manifest(
         tmp_path,
@@ -280,11 +308,35 @@ def test_validate_artifacts_reports_missing_progressive_referenced_file(tmp_path
     assert any("association_records missing file" in error for error in errors["progressive_evaluation"])
 
 
+def test_validate_artifacts_reports_missing_round_no_id_or_with_id_records(tmp_path):
+    memory_path = tmp_path / "memory.csv"
+    association_path = tmp_path / "association.csv"
+    write_csv(memory_path, list(valid_memory_row()), [valid_memory_row()])
+    write_csv(association_path, list(valid_progressive_association_row()), [valid_progressive_association_row()])
+    write_valid_progressive_outputs(tmp_path)
+    write_progressive_report(tmp_path)
+    write_progressive_manifest(
+        tmp_path,
+        {
+            "memory_before": memory_path.as_posix(),
+            "association_records": association_path.as_posix(),
+            "memory_after": memory_path.as_posix(),
+        },
+        include_mode_association_records=False,
+    )
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("missing no_id_association_records" in error for error in errors["progressive_evaluation"])
+    assert any("missing with_id_association_records" in error for error in errors["progressive_evaluation"])
+
+
 def test_validate_artifacts_reports_progressive_association_schema_errors(tmp_path):
     memory_path = tmp_path / "memory.csv"
     bad_association_path = tmp_path / "bad_association.csv"
     write_csv(memory_path, list(valid_memory_row()), [valid_memory_row()])
     write_csv(bad_association_path, ["association_id"], [{"association_id": "A1"}])
+    write_valid_progressive_outputs(tmp_path)
     write_progressive_report(tmp_path)
     write_progressive_manifest(
         tmp_path,
@@ -300,6 +352,32 @@ def test_validate_artifacts_reports_progressive_association_schema_errors(tmp_pa
     assert any("association_records" in error and "missing required columns" in error for error in errors["progressive_evaluation"])
 
 
+def test_validate_artifacts_reports_progressive_association_missing_matched_disease_id(tmp_path):
+    memory_path = tmp_path / "memory.csv"
+    association_path = tmp_path / "association.csv"
+    row = valid_progressive_association_row()
+    fieldnames = [field for field in row if field != "matched_disease_id"]
+    write_csv(memory_path, list(valid_memory_row()), [valid_memory_row()])
+    write_csv(association_path, fieldnames, [{field: row[field] for field in fieldnames}])
+    write_valid_progressive_outputs(tmp_path)
+    write_progressive_report(tmp_path)
+    write_progressive_manifest(
+        tmp_path,
+        {
+            "memory_before": memory_path.as_posix(),
+            "association_records": association_path.as_posix(),
+            "memory_after": memory_path.as_posix(),
+        },
+    )
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any(
+        "association_records" in error and "matched_disease_id" in error
+        for error in errors["progressive_evaluation"]
+    )
+
+
 def test_validate_artifacts_reports_progressive_memory_after_schema_errors(tmp_path):
     memory_before = tmp_path / "memory_before.csv"
     memory_after = tmp_path / "memory_after.csv"
@@ -308,7 +386,8 @@ def test_validate_artifacts_reports_progressive_memory_after_schema_errors(tmp_p
     memory_after_fields = [field for field in memory_after_row if field != "requires_manual_review"]
     write_csv(memory_before, list(valid_memory_row()), [valid_memory_row()])
     write_csv(memory_after, memory_after_fields, [{field: memory_after_row[field] for field in memory_after_fields}])
-    write_csv(association_path, list(valid_association_row()), [valid_association_row()])
+    write_csv(association_path, list(valid_progressive_association_row()), [valid_progressive_association_row()])
+    write_valid_progressive_outputs(tmp_path)
     write_progressive_report(tmp_path)
     write_progressive_manifest(
         tmp_path,

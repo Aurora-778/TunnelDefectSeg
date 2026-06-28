@@ -106,7 +106,11 @@ def normalize_association_records(records: list[dict[str, str]], memory_rows: li
         row.setdefault("bbox_fields_present", row.get("geometry_feature_available", "false"))
         row.setdefault("geometry_score_applied", "false")
         row.setdefault("geometry_feature_available", row.get("bbox_fields_present", "false"))
-        row.setdefault("geometry_limit_note", "bbox fields present but not used in scoring")
+        if not row.get("geometry_limit_note"):
+            if row.get("bbox_fields_present") == "true":
+                row["geometry_limit_note"] = "bbox fields present but not used in scoring"
+            else:
+                row["geometry_limit_note"] = "missing bbox/mask shape fields in current artifacts"
         normalized.append(row)
     return normalized
 
@@ -413,7 +417,6 @@ def run_progressive(
                 "query_inspection": query_id,
                 "query_frame_count": len(query_rows),
                 "allowed_inputs": [
-                    manifest_display_path(input_csv),
                     manifest_display_path(query_path),
                     manifest_display_path(memory_before),
                 ],
@@ -440,7 +443,7 @@ def run_progressive(
     write_report(report_path, all_no_id_records, all_with_id_records, round_infos)
 
     manifest = {
-        "input_csv": manifest_display_path(input_csv),
+        "source_dataset": manifest_display_path(input_csv),
         "no_id_csv": manifest_display_path(no_id_csv),
         "with_id_csv": manifest_display_path(with_id_csv),
         "report_path": manifest_display_path(report_path),

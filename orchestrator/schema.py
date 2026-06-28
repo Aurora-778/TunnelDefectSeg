@@ -136,6 +136,11 @@ REQUIRED_SCHEMAS = {
     ],
 }
 
+REQUIRED_SCHEMAS["progressive_association_records"] = [
+    *REQUIRED_SCHEMAS["disease_association_records"],
+    "matched_disease_id",
+]
+
 ENUMS = {
     "risk_level": {"低", "中", "高"},
     "first_risk_level": {"低", "中", "高"},

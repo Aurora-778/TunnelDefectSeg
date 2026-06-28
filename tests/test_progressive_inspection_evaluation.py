@@ -85,6 +85,8 @@ def test_progressive_evaluation_splits_history_and_query_without_future_leakage(
     assert saved["rounds"][1]["history_inspections"] == ["I001", "I002"]
     assert saved["rounds"][1]["query_inspection"] == "I003"
     assert all("I003" not in " ".join(round_info["allowed_inputs"]) for round_info in saved["rounds"][:1])
+    assert saved["source_dataset"] == input_csv.as_posix()
+    assert all(input_csv.as_posix() not in round_info["allowed_inputs"] for round_info in saved["rounds"])
     report_text = report_path.read_text(encoding="utf-8")
     assert "future memory leakage" in report_text
     assert "full pipeline batch" in report_text
@@ -207,7 +209,8 @@ def test_progressive_manifest_uses_relative_paths_for_project_outputs(tmp_path, 
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
     first_round = saved["rounds"][0]
 
-    assert saved["input_csv"] == "data/simulated/robot_kict_frame_records.csv"
+    assert saved["source_dataset"] == "data/simulated/robot_kict_frame_records.csv"
     assert first_round["memory_before"].startswith("data/simulated/progressive/")
     assert first_round["association_records"].startswith("data/simulated/progressive/")
+    assert "data/simulated/robot_kict_frame_records.csv" not in first_round["allowed_inputs"]
     assert not Path(first_round["memory_before"]).is_absolute()

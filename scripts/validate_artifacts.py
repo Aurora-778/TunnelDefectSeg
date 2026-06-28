@@ -59,7 +59,7 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
 
     for relative_path in PROGRESSIVE_ASSOCIATION_OUTPUTS:
         path = project_root / relative_path
-        errors.extend(f"{relative_path}: {error}" for error in validate_csv_schema(path, "disease_association_records"))
+        errors.extend(f"{relative_path}: {error}" for error in validate_csv_schema(path, "progressive_association_records"))
 
     if not manifest_path.exists():
         errors.append(f"missing file: {manifest_path}")
@@ -76,11 +76,22 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
                 if not isinstance(round_info, dict):
                     errors.append(f"progressive manifest round {index} must be an object")
                     continue
-                for key in ["history_inspections", "query_inspection", "memory_before", "association_records", "memory_after", "metrics"]:
+                for key in [
+                    "history_inspections",
+                    "query_inspection",
+                    "memory_before",
+                    "association_records",
+                    "no_id_association_records",
+                    "with_id_association_records",
+                    "memory_after",
+                    "metrics",
+                ]:
                     if key not in round_info:
                         errors.append(f"progressive manifest round {index} missing {key}")
                 errors.extend(validate_manifest_file(project_root, round_info, index, "memory_before", "disease_memory_bank"))
-                errors.extend(validate_manifest_file(project_root, round_info, index, "association_records", "disease_association_records"))
+                errors.extend(validate_manifest_file(project_root, round_info, index, "association_records", "progressive_association_records"))
+                errors.extend(validate_manifest_file(project_root, round_info, index, "no_id_association_records", "progressive_association_records"))
+                errors.extend(validate_manifest_file(project_root, round_info, index, "with_id_association_records", "progressive_association_records"))
                 errors.extend(validate_manifest_file(project_root, round_info, index, "memory_after", "disease_memory_bank"))
 
     if not report_path.exists():

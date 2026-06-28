@@ -1,5 +1,5 @@
 {
-  "input_csv": "data/simulated/robot_kict_frame_records.csv",
+  "source_dataset": "data/simulated/robot_kict_frame_records.csv",
   "no_id_csv": "data/simulated/disease_association_records_no_id.csv",
   "with_id_csv": "data/simulated/disease_association_records_with_id.csv",
   "report_path": "outputs/association_evaluation_report.md",
@@ -12,7 +12,6 @@
       "query_inspection": "I002",
       "query_frame_count": 10,
       "allowed_inputs": [
-        "data/simulated/robot_kict_frame_records.csv",
         "data/simulated/progressive/round_001/query_frames.csv",
         "data/simulated/progressive/round_001/memory.csv"
       ],
@@ -51,7 +50,6 @@
       "query_inspection": "I003",
       "query_frame_count": 10,
       "allowed_inputs": [
-        "data/simulated/robot_kict_frame_records.csv",
         "data/simulated/progressive/round_002/query_frames.csv",
         "data/simulated/progressive/round_001/memory_after_query.csv"
       ],
