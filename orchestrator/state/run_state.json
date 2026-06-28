@@ -1,5 +1,5 @@
 {
-  "run_id": "run_018",
+  "run_id": "run_020",
   "task_status": {
     "engineering_report": "success",
     "growth_analysis": "success",
@@ -44,7 +44,9 @@
         "frame_records": "data/simulated/robot_kict_frame_records.csv",
         "memory_bank": "data/simulated/disease_memory_bank.csv",
         "output_path": "data/simulated/disease_association_records.csv",
-        "legacy_output_path": "data/simulated/association_records.csv"
+        "legacy_output_path": "data/simulated/association_records.csv",
+        "use_disease_id_score": false,
+        "association_mode": "no_id"
       },
       "visualization": {
         "engineering_report": "data/simulated/disease_engineering_report.csv",
@@ -116,7 +118,7 @@
       "project_name": "tunnel_robot_inspection",
       "project_root": "C:\\Users\\26822\\Downloads\\data",
       "dag_config": "C:\\Users\\26822\\Downloads\\data\\config\\dag.yaml",
-      "run_id": "run_018"
+      "run_id": "run_020"
     },
     "task_status": {
       "engineering_report": "success",

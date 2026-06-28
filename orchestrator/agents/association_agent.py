@@ -20,7 +20,8 @@ class AssociationAgent(BaseAgent):
         memory_path = self._memory_path(context, inputs)
         output_path = self.resolve_path(context, self._required_input(inputs, "output_path"))
         legacy_output_path = self.resolve_path(context, inputs["legacy_output_path"]) if inputs.get("legacy_output_path") else None
-        use_disease_id_score = self._as_bool(inputs.get("use_disease_id_score", True))
+        use_disease_id_score = self._as_bool(inputs.get("use_disease_id_score", False))
+        association_mode = self._association_mode(inputs.get("association_mode"), use_disease_id_score)
 
         frame_rows = self.read_csv(frame_path)
         memory_rows = self.read_csv(memory_path)
@@ -33,6 +34,7 @@ class AssociationAgent(BaseAgent):
             association_score = scores["association_score"]
             conflict_reason = self._conflict_reason(scores)
             score_margin = self._score_margin(candidates)
+            geometry_available, geometry_note = self._geometry_summary(frame)
             match_type = self._match_type(
                 frame,
                 memory,
@@ -49,9 +51,12 @@ class AssociationAgent(BaseAgent):
                     "frame_id": frame.get("frame_id", ""),
                     "image_id": frame.get("image_id", ""),
                     "disease_id": disease_id,
+                    "label_disease_id": disease_id,
                     "memory_id": memory.get("memory_id", ""),
                     "association_status": "matched" if matched else "unmatched",
                     "rule_basis": self._rule_basis(frame, memory, match_type, use_disease_id_score=use_disease_id_score),
+                    "use_disease_id_score": "true" if use_disease_id_score else "false",
+                    "association_mode": association_mode,
                     "association_score": f"{association_score:.4f}",
                     "spatial_distance_score": f"{scores['spatial_distance_score']:.4f}",
                     "area_similarity_score": f"{scores['area_similarity_score']:.4f}",
@@ -64,6 +69,8 @@ class AssociationAgent(BaseAgent):
                     "score_margin": f"{score_margin:.4f}",
                     "conflict_reason": conflict_reason,
                     "needs_manual_review": "true" if needs_manual_review else "false",
+                    "geometry_feature_available": "true" if geometry_available else "false",
+                    "geometry_limit_note": geometry_note,
                     "mileage_text": frame.get("mileage_text", ""),
                     "clock_direction": frame.get("clock_direction", ""),
                     "disease_type": frame.get("disease_type", ""),
@@ -81,9 +88,12 @@ class AssociationAgent(BaseAgent):
             "frame_id",
             "image_id",
             "disease_id",
+            "label_disease_id",
             "memory_id",
             "association_status",
             "rule_basis",
+            "use_disease_id_score",
+            "association_mode",
             "association_score",
             "spatial_distance_score",
             "area_similarity_score",
@@ -96,6 +106,8 @@ class AssociationAgent(BaseAgent):
             "score_margin",
             "conflict_reason",
             "needs_manual_review",
+            "geometry_feature_available",
+            "geometry_limit_note",
             "mileage_text",
             "clock_direction",
             "disease_type",
@@ -344,6 +356,27 @@ class AssociationAgent(BaseAgent):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+    def _association_mode(self, value: object, use_disease_id_score: bool) -> str:
+        if not use_disease_id_score:
+            return "no_id"
+        requested = str(value).strip() if value else ""
+        return requested if requested and requested != "no_id" else "with_id_upper_bound"
+
+    def _geometry_summary(self, frame: dict[str, str]) -> tuple[bool, str]:
+        # Round1 records whether bbox/mask geometry is present; scoring still uses the existing coarse signals.
+        required_fields = [
+            "kict_bbox_x1",
+            "kict_bbox_y1",
+            "kict_bbox_x2",
+            "kict_bbox_y2",
+            "kict_mask_width",
+            "kict_mask_height",
+        ]
+        has_geometry = all(str(frame.get(field, "")).strip() for field in required_fields)
+        if has_geometry:
+            return True, ""
+        return False, "missing bbox/mask shape fields in current artifacts"
 
     def _path_from_context(self, context: dict[str, Any], key: str):
         # Compatibility helper for older callers that passed flat context paths.

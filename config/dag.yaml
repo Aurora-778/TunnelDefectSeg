@@ -65,6 +65,8 @@ inputs:
     memory_bank: data/simulated/disease_memory_bank.csv
     output_path: data/simulated/disease_association_records.csv
     legacy_output_path: data/simulated/association_records.csv
+    use_disease_id_score: false
+    association_mode: no_id
 
   visualization:
     engineering_report: data/simulated/disease_engineering_report.csv

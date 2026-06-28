@@ -93,9 +93,14 @@ def test_association_agent_outputs_explainable_match_scores(tmp_path):
     rows = read_csv(output_path)
 
     assert result["association_rows"] == 3
-    assert rows[0]["match_type"] == "hard"
+    assert rows[0]["match_type"] == "soft"
     assert rows[0]["confidence_level"] == "high"
-    assert float(rows[0]["association_score"]) >= 0.9
+    assert float(rows[0]["association_score"]) >= 0.8
+    assert rows[0]["use_disease_id_score"] == "false"
+    assert rows[0]["association_mode"] == "no_id"
+    assert rows[0]["label_disease_id"] == "D001"
+    assert rows[0]["geometry_feature_available"] == "false"
+    assert rows[0]["geometry_limit_note"] == "missing bbox/mask shape fields in current artifacts"
 
     assert rows[1]["match_type"] == "soft"
     assert rows[1]["memory_id"] == "MEM-D001"
@@ -108,6 +113,7 @@ def test_association_agent_outputs_explainable_match_scores(tmp_path):
     assert "candidate_count" in rows[0]
     assert "score_margin" in rows[0]
     assert "needs_manual_review" in rows[0]
+    assert "same disease_id" not in rows[0]["rule_basis"]
 
 
 def test_same_id_with_spatial_conflict_is_not_high_confidence(tmp_path):
@@ -233,6 +239,58 @@ def test_disabled_disease_id_score_does_not_create_hard_match_or_rule_basis(tmp_
     assert row["memory_id"] == "MEM-D001"
     assert row["match_type"] == "soft"
     assert "same disease_id" not in row["rule_basis"]
+
+
+def test_default_association_mode_is_no_id(tmp_path):
+    frame_path = tmp_path / "frames.csv"
+    memory_path = tmp_path / "memory.csv"
+    output_path = tmp_path / "association.csv"
+    write_csv(memory_path, [memory_row()])
+    write_csv(frame_path, [frame_row(disease_id="D001", mileage_text="K12+006.0", kict_area_px="1000")])
+    context = {
+        "inputs": {"association": {"frame_records": str(frame_path), "memory_bank": str(memory_path), "output_path": str(output_path)}},
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+    AssociationAgent().run(context)
+    row = read_csv(output_path)[0]
+
+    assert row["use_disease_id_score"] == "false"
+    assert row["association_mode"] == "no_id"
+    assert row["label_disease_id"] == "D001"
+    assert row["match_type"] == "soft"
+    assert "same disease_id" not in row["rule_basis"]
+
+
+def test_with_id_upper_bound_still_rejects_spatial_conflict_as_hard_match(tmp_path):
+    frame_path = tmp_path / "frames.csv"
+    memory_path = tmp_path / "memory.csv"
+    output_path = tmp_path / "association.csv"
+    write_csv(memory_path, [memory_row(disease_id="D001", mileage_range="K12+000.0 - K12+010.0")])
+    write_csv(frame_path, [frame_row(disease_id="D001", mileage_text="K99+000.0", kict_area_px="1000")])
+    context = {
+        "inputs": {
+            "association": {
+                "frame_records": str(frame_path),
+                "memory_bank": str(memory_path),
+                "output_path": str(output_path),
+                "use_disease_id_score": "true",
+                "association_mode": "with_id_upper_bound",
+            }
+        },
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+    AssociationAgent().run(context)
+    row = read_csv(output_path)[0]
+
+    assert row["use_disease_id_score"] == "true"
+    assert row["association_mode"] == "with_id_upper_bound"
+    assert row["match_type"] != "hard"
+    assert row["needs_manual_review"] == "true"
+    assert "spatial mismatch" in row["conflict_reason"]
 
 
 def test_top_candidate_ids_use_memory_ids_when_disease_id_score_disabled(tmp_path):

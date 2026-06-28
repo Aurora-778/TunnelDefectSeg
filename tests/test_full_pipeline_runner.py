@@ -110,7 +110,13 @@ def test_full_pipeline_runner_creates_end_to_end_outputs(tmp_path, monkeypatch):
     data_dir = tmp_path / "data" / "simulated"
     output_dir = tmp_path / "outputs"
     assert read_csv(data_dir / "disease_memory_bank.csv")[0]["disease_id"] == "D001"
-    assert read_csv(data_dir / "disease_association_records.csv")[0]["association_status"] == "matched"
+    association_row = read_csv(data_dir / "disease_association_records.csv")[0]
+    assert association_row["association_status"] == "matched"
+    assert association_row["use_disease_id_score"] == "false"
+    assert association_row["association_mode"] == "no_id"
+    assert association_row["label_disease_id"] == "D001"
+    assert association_row["geometry_feature_available"] == "true"
+    assert association_row["top_candidate_ids"].startswith("MEM-D001:")
     assert read_csv(data_dir / "disease_growth_results.csv")[0]["growth_trend"] == "明显增长"
     assert (data_dir / "disease_growth_analysis.csv").exists()
     assert (data_dir / "association_records.csv").exists()
