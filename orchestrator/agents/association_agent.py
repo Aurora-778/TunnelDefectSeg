@@ -42,15 +42,18 @@ class AssociationAgent(BaseAgent):
                 conflict_reason,
                 use_disease_id_score=use_disease_id_score,
             )
-            needs_manual_review = self._needs_manual_review(matched, match_type, conflict_reason, score_margin)
-            confidence_level = self._confidence_level(association_score, matched, needs_manual_review)
+            needs_manual_review = self._needs_manual_review(
+                matched, match_type, conflict_reason, score_margin, use_disease_id_score=use_disease_id_score
+            )
+            confidence_level = self._confidence_level(
+                association_score, matched, needs_manual_review, use_disease_id_score=use_disease_id_score
+            )
             rows.append(
                 {
-                    "association_id": f"ASSOC-{frame.get('inspection_id', '')}-{frame.get('frame_id', '')}-{disease_id}",
+                    "association_id": f"ASSOC-{frame.get('inspection_id', '')}-{frame.get('image_id', '')}",
                     "inspection_id": frame.get("inspection_id", ""),
                     "frame_id": frame.get("frame_id", ""),
                     "image_id": frame.get("image_id", ""),
-                    "disease_id": disease_id,
                     "label_disease_id": disease_id,
                     "memory_id": memory.get("memory_id", ""),
                     "association_status": "matched" if matched else "unmatched",
@@ -69,7 +72,8 @@ class AssociationAgent(BaseAgent):
                     "score_margin": f"{score_margin:.4f}",
                     "conflict_reason": conflict_reason,
                     "needs_manual_review": "true" if needs_manual_review else "false",
-                    "geometry_feature_available": "true" if geometry_available else "false",
+                    "bbox_fields_present": "true" if geometry_available else "false",
+                    "geometry_score_applied": "false",
                     "geometry_limit_note": geometry_note,
                     "mileage_text": frame.get("mileage_text", ""),
                     "clock_direction": frame.get("clock_direction", ""),
@@ -87,7 +91,6 @@ class AssociationAgent(BaseAgent):
             "inspection_id",
             "frame_id",
             "image_id",
-            "disease_id",
             "label_disease_id",
             "memory_id",
             "association_status",
@@ -106,7 +109,8 @@ class AssociationAgent(BaseAgent):
             "score_margin",
             "conflict_reason",
             "needs_manual_review",
-            "geometry_feature_available",
+            "bbox_fields_present",
+            "geometry_score_applied",
             "geometry_limit_note",
             "mileage_text",
             "clock_direction",
@@ -149,7 +153,7 @@ class AssociationAgent(BaseAgent):
         frame: dict[str, str],
         memory_rows: list[dict[str, str]],
         *,
-        use_disease_id_score: bool = True,
+        use_disease_id_score: bool = False,
     ) -> tuple[dict[str, str], dict[str, float], list[tuple[dict[str, str], dict[str, float]]]]:
         scored = [
             (
@@ -167,7 +171,9 @@ class AssociationAgent(BaseAgent):
         if not scored:
             return {}, self._empty_scores(), []
         memory, scores = scored[0]
-        if scores["association_score"] < 0.45:
+        # no-id 归一化后阈值同步上调，保持匹配行为与归一化前一致
+        threshold = 0.45 / 0.85 if not use_disease_id_score else 0.45
+        if scores["association_score"] < threshold:
             return {}, scores, scored
         return memory, scores, scored
 
@@ -177,14 +183,18 @@ class AssociationAgent(BaseAgent):
         memory: dict[str, str],
         *,
         same_id: bool,
-        use_disease_id_score: bool = True,
+        use_disease_id_score: bool = False,
     ) -> dict[str, float]:
         spatial = self._spatial_distance_score(frame, memory)
         area = self._area_similarity_score(frame, memory)
         temporal = self._temporal_continuity_score(frame, memory)
         risk = self._risk_similarity_score(frame, memory)
         id_score = 1.0 if same_id and use_disease_id_score else 0.0
-        score = 0.25 * spatial + 0.25 * area + 0.20 * temporal + 0.15 * risk + 0.15 * id_score
+        if use_disease_id_score:
+            score = 0.25 * spatial + 0.25 * area + 0.20 * temporal + 0.15 * risk + 0.15 * id_score
+        else:
+            # no-id 模式：四项特征权重和为 0.85，归一化到 1.0 使完美匹配可达满分
+            score = (0.25 * spatial + 0.25 * area + 0.20 * temporal + 0.15 * risk) / 0.85
         return {
             "association_score": min(score, 1.0),
             "spatial_distance_score": spatial,
@@ -241,12 +251,20 @@ class AssociationAgent(BaseAgent):
             return 0.5
         return 1.0 - min(abs(self._risk_score(frame_risk) - self._risk_score(memory_risk)) / 2.0, 1.0)
 
-    def _confidence_level(self, score: float, matched: bool, needs_manual_review: bool) -> str:
+    def _confidence_level(
+        self, score: float, matched: bool, needs_manual_review: bool, *, use_disease_id_score: bool = False
+    ) -> str:
         if not matched:
             return "low"
-        if score >= 0.8 and not needs_manual_review:
+        # no-id 归一化后 high 阈值同步调整，保持与 with-id 同尺度
+        # with-id high 需 raw4+id>=0.8，id=1 时 raw4>=0.65；no-id 归一化后 0.65/0.85
+        high_threshold = 0.65 / 0.85 if not use_disease_id_score else 0.8
+        if score >= high_threshold and not needs_manual_review:
             return "high"
-        if score >= 0.6:
+        # no-id 归一化后 medium 阈值同步调整
+        # with-id medium 需 raw4+id>=0.6，id=1 时 raw4>=0.45；no-id 归一化后 0.45/0.85
+        medium_threshold = 0.45 / 0.85 if not use_disease_id_score else 0.6
+        if score >= medium_threshold:
             return "medium"
         return "low"
 
@@ -257,14 +275,17 @@ class AssociationAgent(BaseAgent):
         score: float,
         conflict_reason: str,
         *,
-        use_disease_id_score: bool = True,
+        use_disease_id_score: bool = False,
     ) -> str:
         if not memory:
             return "uncertain"
         same_id_allowed = use_disease_id_score and frame.get("disease_id", "") == memory.get("disease_id", "")
         if same_id_allowed and not conflict_reason and score >= 0.75:
             return "hard"
-        if score >= 0.65:
+        # no-id 归一化后 soft 阈值同步调整，保持与 with-id 同尺度
+        # with-id soft 需 raw4+id>=0.65，id=1 时 raw4>=0.5；no-id 归一化后 0.5/0.85
+        soft_threshold = 0.5 / 0.85 if not use_disease_id_score else 0.65
+        if score >= soft_threshold:
             return "soft"
         return "uncertain"
 
@@ -274,7 +295,7 @@ class AssociationAgent(BaseAgent):
         memory: dict[str, str],
         match_type: str,
         *,
-        use_disease_id_score: bool = True,
+        use_disease_id_score: bool = False,
     ) -> str:
         if not memory:
             return "no candidate above score threshold"
@@ -297,14 +318,24 @@ class AssociationAgent(BaseAgent):
             reasons.append("risk mismatch")
         return "; ".join(reasons)
 
-    def _needs_manual_review(self, matched: bool, match_type: str, conflict_reason: str, score_margin: float) -> bool:
+    def _needs_manual_review(
+        self,
+        matched: bool,
+        match_type: str,
+        conflict_reason: str,
+        score_margin: float,
+        *,
+        use_disease_id_score: bool = False,
+    ) -> bool:
         if not matched:
             return True
         if conflict_reason:
             return True
         if match_type == "uncertain":
             return True
-        return score_margin < 0.15
+        # no-id 归一化后候选差值被放大 1/0.85 倍，阈值同步放大保持等价
+        margin_threshold = 0.15 / 0.85 if not use_disease_id_score else 0.15
+        return score_margin < margin_threshold
 
     def _score_margin(self, candidates: list[tuple[dict[str, str], dict[str, float]]]) -> float:
         if len(candidates) < 2:
@@ -375,7 +406,7 @@ class AssociationAgent(BaseAgent):
         ]
         has_geometry = all(str(frame.get(field, "")).strip() for field in required_fields)
         if has_geometry:
-            return True, ""
+            return True, "bbox fields present but not used in scoring"
         return False, "missing bbox/mask shape fields in current artifacts"
 
     def _path_from_context(self, context: dict[str, Any], key: str):

@@ -31,7 +31,7 @@ def test_final_report_agent_writes_reports_and_validates_outputs(tmp_path):
         [{"disease_id": "D001", "growth_trend": "明显增长", "last_risk_level": "高", "area_growth_rate": "1.0"}],
     )
     write_csv(memory_bank, [{"memory_id": "MEM-D001", "disease_id": "D001"}])
-    write_csv(association_records, [{"association_status": "matched", "disease_id": "D001"}])
+    write_csv(association_records, [{"association_status": "matched", "label_disease_id": "D001"}])
     write_csv(
         recheck_list,
         [{"disease_id": "D001", "attention_level": "重点关注", "recheck_reason": "需复核"}],

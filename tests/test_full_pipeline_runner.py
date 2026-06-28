@@ -115,7 +115,8 @@ def test_full_pipeline_runner_creates_end_to_end_outputs(tmp_path, monkeypatch):
     assert association_row["use_disease_id_score"] == "false"
     assert association_row["association_mode"] == "no_id"
     assert association_row["label_disease_id"] == "D001"
-    assert association_row["geometry_feature_available"] == "true"
+    assert association_row["bbox_fields_present"] == "true"
+    assert association_row["geometry_score_applied"] == "false"
     assert association_row["top_candidate_ids"].startswith("MEM-D001:")
     assert read_csv(data_dir / "disease_growth_results.csv")[0]["growth_trend"] == "明显增长"
     assert (data_dir / "disease_growth_analysis.csv").exists()

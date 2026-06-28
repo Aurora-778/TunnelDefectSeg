@@ -85,7 +85,7 @@ class VisualizationAgent(BaseAgent):
     def _write_association_graph(self, association_csv: Path, output_path: Path) -> Path:
         rows = self._read_csv(association_csv)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        counts = Counter(row.get("disease_id", "") for row in rows if row.get("association_status") == "matched")
+        counts = Counter(row.get("label_disease_id", "") for row in rows if row.get("association_status") == "matched")
         labels = list(counts)[:12] or ["no_match"]
         values = [counts[label] for label in labels] or [0]
 

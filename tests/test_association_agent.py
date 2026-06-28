@@ -99,7 +99,8 @@ def test_association_agent_outputs_explainable_match_scores(tmp_path):
     assert rows[0]["use_disease_id_score"] == "false"
     assert rows[0]["association_mode"] == "no_id"
     assert rows[0]["label_disease_id"] == "D001"
-    assert rows[0]["geometry_feature_available"] == "false"
+    assert rows[0]["bbox_fields_present"] == "false"
+    assert rows[0]["geometry_score_applied"] == "false"
     assert rows[0]["geometry_limit_note"] == "missing bbox/mask shape fields in current artifacts"
 
     assert rows[1]["match_type"] == "soft"
@@ -317,3 +318,62 @@ def test_top_candidate_ids_use_memory_ids_when_disease_id_score_disabled(tmp_pat
 
     assert row["top_candidate_ids"].startswith("MEM-D001:")
     assert not row["top_candidate_ids"].startswith("D001:")
+
+
+def test_no_id_mode_disease_id_equivariance(tmp_path):
+    """no-id 模式下 disease_id 任意取值都不改变输出（除 label_disease_id）。"""
+    base_memory = memory_row(disease_id="D001")
+    base_frame = frame_row(disease_id="D001", mileage_text="K12+006.0", kict_area_px="1000")
+
+    # 第一份：原始 disease_id
+    frame_a = tmp_path / "frames_a.csv"
+    memory_a = tmp_path / "memory_a.csv"
+    output_a = tmp_path / "assoc_a.csv"
+    write_csv(memory_a, [base_memory])
+    write_csv(frame_a, [base_frame])
+
+    # 第二份：所有 disease_id 重排为完全不同的值
+    frame_b = tmp_path / "frames_b.csv"
+    memory_b = tmp_path / "memory_b.csv"
+    output_b = tmp_path / "assoc_b.csv"
+    write_csv(memory_b, [memory_row(disease_id="D777")])
+    write_csv(frame_b, [frame_row(disease_id="D999", mileage_text="K12+006.0", kict_area_px="1000")])
+
+    context_a = {
+        "inputs": {"association": {"frame_records": str(frame_a), "memory_bank": str(memory_a), "output_path": str(output_a)}},
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+    context_b = {
+        "inputs": {"association": {"frame_records": str(frame_b), "memory_bank": str(memory_b), "output_path": str(output_b)}},
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+    AssociationAgent().run(context_a)
+    AssociationAgent().run(context_b)
+
+    row_a = read_csv(output_a)[0]
+    row_b = read_csv(output_b)[0]
+
+    # 这些字段必须完全一致
+    for field in [
+        "association_id",
+        "association_score",
+        "spatial_distance_score",
+        "area_similarity_score",
+        "temporal_continuity_score",
+        "risk_similarity_score",
+        "match_type",
+        "confidence_level",
+        "needs_manual_review",
+        "rule_basis",
+        "conflict_reason",
+        "association_mode",
+        "use_disease_id_score",
+    ]:
+        assert row_a[field] == row_b[field], f"disease_id equivariance violated on '{field}': {row_a[field]} != {row_b[field]}"
+
+    # label_disease_id 允许不同
+    assert row_a["label_disease_id"] == "D001"
+    assert row_b["label_disease_id"] == "D999"

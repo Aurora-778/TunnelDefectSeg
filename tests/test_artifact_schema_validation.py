@@ -62,10 +62,12 @@ def test_validate_csv_schema_accepts_valid_association_record(tmp_path):
         "inspection_id",
         "frame_id",
         "image_id",
-        "disease_id",
+        "label_disease_id",
         "memory_id",
         "association_status",
         "rule_basis",
+        "use_disease_id_score",
+        "association_mode",
         "association_score",
         "spatial_distance_score",
         "area_similarity_score",
@@ -78,6 +80,9 @@ def test_validate_csv_schema_accepts_valid_association_record(tmp_path):
         "score_margin",
         "conflict_reason",
         "needs_manual_review",
+        "bbox_fields_present",
+        "geometry_score_applied",
+        "geometry_limit_note",
     ]
     row = {name: "" for name in fieldnames}
     row.update(
@@ -101,7 +106,7 @@ def test_association_schema_requires_candidate_fields(tmp_path):
         "inspection_id",
         "frame_id",
         "image_id",
-        "disease_id",
+        "label_disease_id",
         "memory_id",
         "association_status",
         "rule_basis",
@@ -198,10 +203,12 @@ def valid_association_row() -> dict[str, str]:
         "inspection_id": "I002",
         "frame_id": "1",
         "image_id": "I002_000001",
-        "disease_id": "D001",
+        "label_disease_id": "D001",
         "memory_id": "MEM-D001",
         "association_status": "matched",
         "rule_basis": "best scored candidate",
+        "use_disease_id_score": "false",
+        "association_mode": "no_id",
         "association_score": "0.8",
         "spatial_distance_score": "0.8",
         "area_similarity_score": "0.8",
@@ -214,6 +221,9 @@ def valid_association_row() -> dict[str, str]:
         "score_margin": "1.0",
         "conflict_reason": "",
         "needs_manual_review": "false",
+        "bbox_fields_present": "false",
+        "geometry_score_applied": "false",
+        "geometry_limit_note": "missing bbox/mask shape fields in current artifacts",
     }
 
 

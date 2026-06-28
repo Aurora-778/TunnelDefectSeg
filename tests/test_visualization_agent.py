@@ -77,7 +77,7 @@ def test_visualization_agent_generates_charts_recheck_and_graph(tmp_path, monkey
     write_csv(engineering_report, [engineering_row()])
     write_csv(
         association_records,
-        [{"disease_id": "D001", "association_status": "matched"}],
+        [{"label_disease_id": "D001", "association_status": "matched"}],
     )
     context = {
         "inputs": {
