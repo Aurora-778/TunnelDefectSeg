@@ -9,6 +9,9 @@ from typing import Any
 
 from orchestrator.agents.base import BaseAgent
 
+# 用于在 final report 中查找 progressive evaluation report
+PROJECT_ROOT_FOR_REPORT = Path(__file__).resolve().parents[2]
+
 
 class FinalReportAgent(BaseAgent):
     """Write final Markdown reports after all pipeline artifacts exist."""
@@ -76,6 +79,7 @@ class FinalReportAgent(BaseAgent):
         trend_counts = Counter(row.get("growth_trend", "") for row in growth_rows)
         association_rows = self._read_csv(association_records)
         chart_lines = "\n".join(f"- `{path.as_posix()}`" for path in chart_paths)
+        progressive_summary = self._progressive_evaluation_summary()
         return f"""# 隧道巡检病害监测系统完整报告
 
 ## 系统能力总结
@@ -93,6 +97,8 @@ class FinalReportAgent(BaseAgent):
 - 关联记录数：{len(association_rows)}
 - 关联依据：Association Agent 综合空间距离、面积相似度、巡检时间连续性、风险相似度和 disease_id 辅助信息进行评分，并输出 candidate、margin、conflict 和 manual review 标记；该结果属于规则证据，需要人工复核闭环确认。
 - 输出文件：`{association_records.as_posix()}`
+
+{progressive_summary}
 
 ## 风险分布
 
@@ -130,6 +136,28 @@ class FinalReportAgent(BaseAgent):
 - 引入视觉相似度、人工确认机制或真实位姿约束增强跨巡检关联。
 - 增加真实长期时间序列数据后，再扩展为更严格的病害变化分析。
 """
+
+    def _progressive_evaluation_summary(self) -> str:
+        """Return a markdown block summarizing progressive evaluation if the report exists."""
+        report_path = PROJECT_ROOT_FOR_REPORT / "outputs" / "association_evaluation_report.md"
+        if report_path.exists():
+            return """## Progressive Evaluation Summary
+
+Progressive evaluation (no-id vs with-id) has been run. See `outputs/association_evaluation_report.md` for full details.
+
+- no-id is the **primary evaluation**; disease_id does not participate in matching.
+- with-id is only an **upper-bound / sanity check**.
+- Progressive evaluation avoids **future memory leakage** by incrementally updating memory per inspection round.
+- Full pipeline batch memory is **not** used as initial memory."""
+        return """## Progressive Evaluation Summary
+
+Progressive evaluation has not been run yet.
+
+Run:
+
+```bash
+python scripts/run_progressive_inspection_evaluation.py
+```"""
 
     def _system_summary_text(
         self,
