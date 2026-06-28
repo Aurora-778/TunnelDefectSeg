@@ -154,8 +154,49 @@ ENUMS = {
     "memory_confidence": {"medium", "low", "very_low"},
     "needs_manual_review": {"true", "false"},
     "requires_manual_review": {"true", "false"},
+    "association_mode": {"no_id", "with_id_upper_bound"},
     "claim_level": {"baseline_only", "rule_evidence_only", "suspected_growth"},
     "comparability_status": {"insufficient_history", "simulated_metadata_comparable", "verified_comparable"},
+}
+
+BOOL_FIELDS = {
+    "use_disease_id_score",
+    "needs_manual_review",
+    "requires_manual_review",
+    "bbox_fields_present",
+    "geometry_score_applied",
+    "geometry_feature_available",
+    "has_crack",
+}
+
+SCORE_FIELDS = {
+    "association_score",
+    "spatial_distance_score",
+    "area_similarity_score",
+    "temporal_continuity_score",
+    "risk_similarity_score",
+    "score_margin",
+}
+
+NON_NEGATIVE_INTEGER_FIELDS = {
+    "candidate_count",
+    "source_record_count",
+    "inspection_count",
+    "frame_count",
+    "priority_rank",
+}
+
+NON_NEGATIVE_FLOAT_FIELDS = {
+    "kict_area_px",
+    "max_area_px",
+    "mean_area_px",
+    "total_area_px",
+    "first_area_px",
+    "last_area_px",
+}
+
+NUMERIC_FIELDS = {
+    "area_growth_px",
 }
 
 
@@ -188,4 +229,64 @@ def validate_csv_schema(path: Path, schema_name: str) -> list[str]:
             value = str(row.get(column, "")).strip()
             if value and value not in allowed:
                 errors.append(f"{schema_name} line {line_number}: {column}={value!r} not in {sorted(allowed)}")
+        for column in BOOL_FIELDS:
+            if column in fieldnames:
+                value = str(row.get(column, "")).strip()
+                if value and value.lower() not in {"true", "false"}:
+                    errors.append(f"{schema_name} line {line_number}: {column}={value!r} must be true/false")
+        for column in SCORE_FIELDS:
+            if column in fieldnames:
+                errors.extend(_validate_float_range(schema_name, line_number, column, row.get(column, ""), 0.0, 1.0))
+        for column in NON_NEGATIVE_INTEGER_FIELDS:
+            if column in fieldnames:
+                errors.extend(_validate_non_negative_integer(schema_name, line_number, column, row.get(column, "")))
+        for column in NON_NEGATIVE_FLOAT_FIELDS:
+            if column in fieldnames:
+                errors.extend(_validate_float_range(schema_name, line_number, column, row.get(column, ""), 0.0, None))
+        for column in NUMERIC_FIELDS:
+            if column in fieldnames:
+                errors.extend(_validate_float(schema_name, line_number, column, row.get(column, "")))
     return errors
+
+
+def _validate_float(schema_name: str, line_number: int, column: str, raw_value: object) -> list[str]:
+    value = str(raw_value).strip()
+    if not value:
+        return [f"{schema_name} line {line_number}: {column} is empty; expected number"]
+    try:
+        float(value)
+    except ValueError:
+        return [f"{schema_name} line {line_number}: {column}={value!r} is not a number"]
+    return []
+
+
+def _validate_float_range(
+    schema_name: str,
+    line_number: int,
+    column: str,
+    raw_value: object,
+    minimum: float | None,
+    maximum: float | None,
+) -> list[str]:
+    errors = _validate_float(schema_name, line_number, column, raw_value)
+    if errors:
+        return errors
+    value = float(str(raw_value).strip())
+    if minimum is not None and value < minimum:
+        return [f"{schema_name} line {line_number}: {column}={value!r} must be >= {minimum}"]
+    if maximum is not None and value > maximum:
+        return [f"{schema_name} line {line_number}: {column}={value!r} must be <= {maximum}"]
+    return []
+
+
+def _validate_non_negative_integer(schema_name: str, line_number: int, column: str, raw_value: object) -> list[str]:
+    value = str(raw_value).strip()
+    if not value:
+        return [f"{schema_name} line {line_number}: {column} is empty; expected non-negative integer"]
+    try:
+        number = int(value)
+    except ValueError:
+        return [f"{schema_name} line {line_number}: {column}={value!r} is not an integer"]
+    if number < 0:
+        return [f"{schema_name} line {line_number}: {column}={number!r} must be >= 0"]
+    return []

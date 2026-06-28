@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from pathlib import Path
 import sys
@@ -26,8 +27,8 @@ ARTIFACTS = {
 PROGRESSIVE_MANIFEST = Path("data/simulated/progressive/progressive_evaluation_manifest.json")
 ASSOCIATION_EVALUATION_REPORT = Path("outputs/association_evaluation_report.md")
 PROGRESSIVE_ASSOCIATION_OUTPUTS = [
-    Path("data/simulated/disease_association_records_no_id.csv"),
-    Path("data/simulated/disease_association_records_with_id.csv"),
+    (Path("data/simulated/disease_association_records_no_id.csv"), "false", "no_id"),
+    (Path("data/simulated/disease_association_records_with_id.csv"), "true", "with_id_upper_bound"),
 ]
 
 
@@ -46,6 +47,10 @@ def validate_artifacts(project_root: Path) -> dict[str, list[str]]:
         schema_errors = validate_csv_schema(path, schema_name)
         if schema_errors:
             errors[schema_name] = schema_errors
+    main_association_path = project_root / ARTIFACTS["disease_association_records"]
+    main_mode_errors = validate_association_mode(main_association_path, "false", "no_id")
+    if main_mode_errors:
+        errors.setdefault("disease_association_records", []).extend(main_mode_errors)
     progressive_errors = validate_progressive_artifacts(project_root)
     if progressive_errors:
         errors["progressive_evaluation"] = progressive_errors
@@ -57,9 +62,10 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
     manifest_path = project_root / PROGRESSIVE_MANIFEST
     report_path = project_root / ASSOCIATION_EVALUATION_REPORT
 
-    for relative_path in PROGRESSIVE_ASSOCIATION_OUTPUTS:
+    for relative_path, expected_use_id, expected_mode in PROGRESSIVE_ASSOCIATION_OUTPUTS:
         path = project_root / relative_path
         errors.extend(f"{relative_path}: {error}" for error in validate_csv_schema(path, "progressive_association_records"))
+        errors.extend(f"{relative_path}: {error}" for error in validate_association_mode(path, expected_use_id, expected_mode))
 
     if not manifest_path.exists():
         errors.append(f"missing file: {manifest_path}")
@@ -69,6 +75,9 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
         except json.JSONDecodeError as exc:
             errors.append(f"invalid JSON: {manifest_path}: {exc}")
         else:
+            source_dataset = manifest.get("source_dataset")
+            if not source_dataset:
+                errors.append("progressive manifest missing source_dataset")
             rounds = manifest.get("rounds")
             if not isinstance(rounds, list) or not rounds:
                 errors.append("progressive manifest must contain non-empty rounds")
@@ -88,10 +97,28 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
                 ]:
                     if key not in round_info:
                         errors.append(f"progressive manifest round {index} missing {key}")
+                allowed_inputs = round_info.get("allowed_inputs", [])
+                if not isinstance(allowed_inputs, list):
+                    errors.append(f"progressive manifest round {index} allowed_inputs must be a list")
+                    allowed_inputs = []
+                if source_dataset and source_dataset in allowed_inputs:
+                    errors.append(f"progressive manifest round {index} allowed_inputs must not contain source_dataset")
                 errors.extend(validate_manifest_file(project_root, round_info, index, "memory_before", "disease_memory_bank"))
                 errors.extend(validate_manifest_file(project_root, round_info, index, "association_records", "progressive_association_records"))
                 errors.extend(validate_manifest_file(project_root, round_info, index, "no_id_association_records", "progressive_association_records"))
                 errors.extend(validate_manifest_file(project_root, round_info, index, "with_id_association_records", "progressive_association_records"))
+                errors.extend(validate_manifest_association_mode(project_root, round_info, index, "association_records", "false", "no_id"))
+                errors.extend(validate_manifest_association_mode(project_root, round_info, index, "no_id_association_records", "false", "no_id"))
+                errors.extend(
+                    validate_manifest_association_mode(
+                        project_root,
+                        round_info,
+                        index,
+                        "with_id_association_records",
+                        "true",
+                        "with_id_upper_bound",
+                    )
+                )
                 errors.extend(validate_manifest_file(project_root, round_info, index, "memory_after", "disease_memory_bank"))
 
     if not report_path.exists():
@@ -117,6 +144,41 @@ def validate_manifest_file(project_root: Path, round_info: dict, round_index: in
     if not path.exists():
         return [f"progressive manifest round {round_index} {key} missing file: {path}"]
     return [f"progressive manifest round {round_index} {key}: {error}" for error in validate_csv_schema(path, schema_name)]
+
+
+def validate_manifest_association_mode(
+    project_root: Path,
+    round_info: dict,
+    round_index: int,
+    key: str,
+    expected_use_id: str,
+    expected_mode: str,
+) -> list[str]:
+    if key not in round_info:
+        return []
+    path = resolve_manifest_path(project_root, round_info.get(key, ""))
+    return [
+        f"progressive manifest round {round_index} {key}: {error}"
+        for error in validate_association_mode(path, expected_use_id, expected_mode)
+    ]
+
+
+def validate_association_mode(path: Path, expected_use_id: str, expected_mode: str) -> list[str]:
+    if not path.exists():
+        return []
+    errors: list[str] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for line_number, row in enumerate(reader, start=2):
+            use_value = str(row.get("use_disease_id_score", "")).strip().lower()
+            mode_value = str(row.get("association_mode", "")).strip()
+            if use_value != expected_use_id:
+                errors.append(
+                    f"line {line_number}: use_disease_id_score={use_value!r} expected {expected_use_id!r}"
+                )
+            if mode_value != expected_mode:
+                errors.append(f"line {line_number}: association_mode={mode_value!r} expected {expected_mode!r}")
+    return errors
 
 
 def main() -> int:

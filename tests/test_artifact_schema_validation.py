@@ -57,47 +57,43 @@ def test_validate_csv_schema_reports_enum_errors(tmp_path):
 
 def test_validate_csv_schema_accepts_valid_association_record(tmp_path):
     path = tmp_path / "association.csv"
-    fieldnames = [
-        "association_id",
-        "inspection_id",
-        "frame_id",
-        "image_id",
-        "label_disease_id",
-        "memory_id",
-        "association_status",
-        "rule_basis",
-        "use_disease_id_score",
-        "association_mode",
-        "association_score",
-        "spatial_distance_score",
-        "area_similarity_score",
-        "temporal_continuity_score",
-        "risk_similarity_score",
-        "confidence_level",
-        "match_type",
-        "candidate_count",
-        "top_candidate_ids",
-        "score_margin",
-        "conflict_reason",
-        "needs_manual_review",
-        "bbox_fields_present",
-        "geometry_score_applied",
-        "geometry_feature_available",
-        "geometry_limit_note",
-    ]
-    row = {name: "" for name in fieldnames}
-    row.update(
-        {
-            "association_id": "A1",
-            "association_status": "matched",
-            "confidence_level": "medium",
-            "match_type": "soft",
-            "needs_manual_review": "false",
-        }
-    )
-    write_csv(path, fieldnames, [row])
+    row = valid_association_row()
+    write_csv(path, list(row), [row])
 
     assert validate_csv_schema(path, "disease_association_records") == []
+
+
+def test_validate_csv_schema_reports_invalid_bool_value(tmp_path):
+    path = tmp_path / "association.csv"
+    row = valid_association_row()
+    row["needs_manual_review"] = "maybe"
+    write_csv(path, list(row), [row])
+
+    errors = validate_csv_schema(path, "disease_association_records")
+
+    assert any("needs_manual_review" in error and "true/false" in error for error in errors)
+
+
+def test_validate_csv_schema_reports_score_out_of_range(tmp_path):
+    path = tmp_path / "association.csv"
+    row = valid_association_row()
+    row["association_score"] = "1.5"
+    write_csv(path, list(row), [row])
+
+    errors = validate_csv_schema(path, "disease_association_records")
+
+    assert any("association_score" in error and "<= 1.0" in error for error in errors)
+
+
+def test_validate_csv_schema_reports_non_integer_candidate_count(tmp_path):
+    path = tmp_path / "association.csv"
+    row = valid_association_row()
+    row["candidate_count"] = "1.2"
+    write_csv(path, list(row), [row])
+
+    errors = validate_csv_schema(path, "disease_association_records")
+
+    assert any("candidate_count" in error and "integer" in error for error in errors)
 
 
 def test_association_schema_requires_candidate_fields(tmp_path):
@@ -246,14 +242,17 @@ def write_progressive_manifest(
     round_info: dict[str, str],
     *,
     include_mode_association_records: bool = True,
+    source_dataset: str = "data/source.csv",
 ) -> None:
     manifest_path = project_root / "data" / "simulated" / "progressive" / "progressive_evaluation_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     full_round_info = dict(round_info)
+    full_round_info.setdefault("allowed_inputs", [])
     if include_mode_association_records and "association_records" in full_round_info:
         full_round_info.setdefault("no_id_association_records", full_round_info["association_records"])
         full_round_info.setdefault("with_id_association_records", full_round_info["association_records"])
     manifest = {
+        "source_dataset": source_dataset,
         "rounds": [
             {
                 "history_inspections": ["I001"],
@@ -287,6 +286,43 @@ def test_memory_schema_rejects_invalid_requires_manual_review_enum(tmp_path):
     errors = validate_csv_schema(path, "disease_memory_bank")
 
     assert any("requires_manual_review" in error for error in errors)
+
+
+def test_validate_artifacts_reports_main_association_not_no_id(tmp_path):
+    association_path = tmp_path / "data" / "simulated" / "disease_association_records.csv"
+    row = valid_association_row()
+    row["use_disease_id_score"] = "true"
+    row["association_mode"] = "with_id_upper_bound"
+    write_csv(association_path, list(row), [row])
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("association_mode" in error and "no_id" in error for error in errors["disease_association_records"])
+
+
+def test_validate_artifacts_reports_progressive_no_id_mode_error(tmp_path):
+    no_id_path, _ = write_valid_progressive_outputs(tmp_path)
+    rows = [valid_progressive_association_row()]
+    rows[0]["use_disease_id_score"] = "true"
+    write_csv(no_id_path, list(rows[0]), rows)
+    write_progressive_report(tmp_path)
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("disease_association_records_no_id.csv" in error and "false" in error for error in errors["progressive_evaluation"])
+
+
+def test_validate_artifacts_reports_progressive_with_id_mode_error(tmp_path):
+    _, with_id_path = write_valid_progressive_outputs(tmp_path)
+    rows = [valid_progressive_association_row()]
+    rows[0]["use_disease_id_score"] = "true"
+    rows[0]["association_mode"] = "no_id"
+    write_csv(with_id_path, list(rows[0]), rows)
+    write_progressive_report(tmp_path)
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("disease_association_records_with_id.csv" in error and "with_id_upper_bound" in error for error in errors["progressive_evaluation"])
 
 
 def test_validate_artifacts_reports_missing_progressive_referenced_file(tmp_path):
@@ -329,6 +365,30 @@ def test_validate_artifacts_reports_missing_round_no_id_or_with_id_records(tmp_p
 
     assert any("missing no_id_association_records" in error for error in errors["progressive_evaluation"])
     assert any("missing with_id_association_records" in error for error in errors["progressive_evaluation"])
+
+
+def test_validate_artifacts_reports_source_dataset_inside_allowed_inputs(tmp_path):
+    memory_path = tmp_path / "memory.csv"
+    association_path = tmp_path / "association.csv"
+    source_dataset = "data/source.csv"
+    write_csv(memory_path, list(valid_memory_row()), [valid_memory_row()])
+    write_csv(association_path, list(valid_progressive_association_row()), [valid_progressive_association_row()])
+    write_valid_progressive_outputs(tmp_path)
+    write_progressive_report(tmp_path)
+    write_progressive_manifest(
+        tmp_path,
+        {
+            "memory_before": memory_path.as_posix(),
+            "association_records": association_path.as_posix(),
+            "memory_after": memory_path.as_posix(),
+            "allowed_inputs": [source_dataset],
+        },
+        source_dataset=source_dataset,
+    )
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("allowed_inputs must not contain source_dataset" in error for error in errors["progressive_evaluation"])
 
 
 def test_validate_artifacts_reports_progressive_association_schema_errors(tmp_path):
