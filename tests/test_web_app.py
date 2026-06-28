@@ -484,3 +484,16 @@ def test_web_demo_has_robot_dashboard_and_preserves_single_image_review():
     assert "mask" in html
     assert "GT" in html
     assert "uncertainty" in html
+
+
+def test_web_demo_hides_inactive_detect_grids_and_expands_dashboard_evidence():
+    html = Path("web_demo/index.html").read_text(encoding="utf-8")
+
+    assert ".dashboard.app-view:not(.active-view)" in html
+    assert ".lower.app-view:not(.active-view)" in html
+    assert ".dashboard.app-view.active-view" in html
+    assert ".lower.app-view.active-view" in html
+    assert "display: none;" in html
+    assert "grid-template-rows: auto auto;" in html
+    assert "overflow: visible;" in html
+    assert "height: auto;" in html

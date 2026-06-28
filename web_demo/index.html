@@ -121,6 +121,11 @@
       display: grid;
     }
 
+    .dashboard.app-view:not(.active-view),
+    .lower.app-view:not(.active-view) {
+      display: none;
+    }
+
     .hero-chapter {
       position: relative;
       min-height: 560px;
@@ -1606,11 +1611,25 @@
     .robot-workspace {
       gap: 16px;
       padding: 0 22px 22px;
+      height: auto;
+      align-items: start;
+    }
+
+    .robot-workspace .recheck-panel,
+    .robot-workspace .defect-detail {
+      grid-template-rows: auto auto;
     }
 
     .recheck-list {
       padding: 14px;
+      overflow: visible;
+      min-height: auto;
       scrollbar-color: rgba(0,182,199,.55) transparent;
+    }
+
+    .robot-workspace .detail-body {
+      overflow: visible;
+      min-height: auto;
     }
 
     .recheck-item {
