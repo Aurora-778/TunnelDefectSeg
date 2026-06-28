@@ -206,6 +206,24 @@ def test_evaluate_round_rejects_inconsistent_single_image_association_key():
         evaluate_round(query_rows, memory_rows, association_rows)
 
 
+def test_evaluate_round_allows_legacy_image_only_association_for_single_frame():
+    query_rows = [frame_row(image_id="I002_legacy", frame_id="1", disease_id="D001", kict_area_px="1000")]
+    memory_rows = [{"memory_id": "MEM-D001", "disease_id": "D001", "mileage_range": "K12+000.0", "last_area_px": "1000"}]
+    association_rows = [
+        {
+            "image_id": "I002_legacy",
+            "memory_id": "MEM-D001",
+            "association_status": "matched",
+            "needs_manual_review": "false",
+        }
+    ]
+
+    metrics = evaluate_round(query_rows, memory_rows, association_rows)
+
+    assert metrics["strategy_accuracy"]["weighted_score_no_id"] == 1.0
+    assert metrics["failure_examples"] == []
+
+
 def test_progressive_manifest_uses_relative_paths_for_project_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(progressive, "PROJECT_ROOT", tmp_path)
     input_csv = tmp_path / "data" / "simulated" / "robot_kict_frame_records.csv"
