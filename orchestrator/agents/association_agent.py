@@ -35,6 +35,8 @@ class AssociationAgent(BaseAgent):
             conflict_reason = self._conflict_reason(scores)
             score_margin = self._score_margin(candidates)
             geometry_available, geometry_note = self._geometry_summary(frame)
+            # 当前未接入 bbox 几何评分，两字段共用此变量，未来动态化时只改一处
+            geometry_score_applied = False
             match_type = self._match_type(
                 frame,
                 memory,
@@ -73,8 +75,8 @@ class AssociationAgent(BaseAgent):
                     "conflict_reason": conflict_reason,
                     "needs_manual_review": "true" if needs_manual_review else "false",
                     "bbox_fields_present": "true" if geometry_available else "false",
-                    "geometry_score_applied": "false",
-                    "geometry_feature_available": "false",
+                    "geometry_score_applied": "true" if geometry_score_applied else "false",
+                    "geometry_feature_available": "true" if geometry_score_applied else "false",
                     "geometry_limit_note": geometry_note,
                     "mileage_text": frame.get("mileage_text", ""),
                     "clock_direction": frame.get("clock_direction", ""),
