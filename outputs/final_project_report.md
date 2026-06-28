@@ -16,6 +16,15 @@
 - 关联依据：Association Agent 综合空间距离、面积相似度、巡检时间连续性、风险相似度和 disease_id 辅助信息进行评分，并输出 candidate、margin、conflict 和 manual review 标记；该结果属于规则证据，需要人工复核闭环确认。
 - 输出文件：`C:/Users/26822/Downloads/data/data/simulated/disease_association_records.csv`
 
+## Progressive Evaluation Summary
+
+Progressive evaluation (no-id vs with-id) has been run. See `outputs/association_evaluation_report.md` for full details.
+
+- no-id is the **primary evaluation**; disease_id does not participate in matching.
+- with-id is only an **upper-bound / sanity check**.
+- Progressive evaluation avoids **future memory leakage** by incrementally updating memory per inspection round.
+- Full pipeline batch memory is **not** used as initial memory.
+
 ## 风险分布
 
 - 高：10

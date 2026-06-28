@@ -25,6 +25,10 @@ ARTIFACTS = {
 
 PROGRESSIVE_MANIFEST = Path("data/simulated/progressive/progressive_evaluation_manifest.json")
 ASSOCIATION_EVALUATION_REPORT = Path("outputs/association_evaluation_report.md")
+PROGRESSIVE_ASSOCIATION_OUTPUTS = [
+    Path("data/simulated/disease_association_records_no_id.csv"),
+    Path("data/simulated/disease_association_records_with_id.csv"),
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +56,10 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
     errors: list[str] = []
     manifest_path = project_root / PROGRESSIVE_MANIFEST
     report_path = project_root / ASSOCIATION_EVALUATION_REPORT
+
+    for relative_path in PROGRESSIVE_ASSOCIATION_OUTPUTS:
+        path = project_root / relative_path
+        errors.extend(f"{relative_path}: {error}" for error in validate_csv_schema(path, "disease_association_records"))
 
     if not manifest_path.exists():
         errors.append(f"missing file: {manifest_path}")

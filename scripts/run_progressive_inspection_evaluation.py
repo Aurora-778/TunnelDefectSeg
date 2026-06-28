@@ -94,6 +94,23 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def normalize_association_records(records: list[dict[str, str]], memory_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Fill Round2.5 artifact fields without changing AssociationAgent scoring."""
+
+    disease_by_memory = {row.get("memory_id", ""): row.get("disease_id", "") for row in memory_rows}
+    normalized: list[dict[str, str]] = []
+    for record in records:
+        row = dict(record)
+        row.setdefault("label_disease_id", row.get("disease_id", ""))
+        row.setdefault("matched_disease_id", disease_by_memory.get(row.get("memory_id", ""), ""))
+        row.setdefault("bbox_fields_present", row.get("geometry_feature_available", "false"))
+        row.setdefault("geometry_score_applied", "false")
+        row.setdefault("geometry_feature_available", row.get("bbox_fields_present", "false"))
+        row.setdefault("geometry_limit_note", "bbox fields present but not used in scoring")
+        normalized.append(row)
+    return normalized
+
+
 def inspection_key(inspection_id: str) -> tuple[int, str]:
     digits = "".join(ch for ch in str(inspection_id) if ch.isdigit())
     return (int(digits) if digits else 0, inspection_id)
@@ -279,6 +296,12 @@ def write_report(
         f"- manual_review_difference (no-id - with-id): {manual_review_diff}",
         f"- score_difference (no-id - with-id): {score_diff}",
         "",
+        "## Baseline / Ablation",
+        "",
+        "- no-id baseline: disabled disease_id scoring; disease_id is also disabled during ranking, match typing, confidence, and conflict checks.",
+        "- with-id ablation: disease_id is enabled only as an upper-bound / sanity check.",
+        "- 主结论以 no-id baseline 为准，with-id ablation 不覆盖主 pipeline 输出。",
+        "",
         "## Leakage Control",
         "",
         "明确说明：本 progressive evaluation 没有使用 full pipeline batch memory 作为初始 memory。",
@@ -357,19 +380,25 @@ def run_progressive(
         if current_memory is None:
             engineering_path, growth_path = build_engineering_and_growth(history_rows, round_dir)
             current_memory = run_memory_batch(project_root, engineering_path, growth_path, round_dir)
+        memory_before = current_memory
+        memory_rows = read_csv(memory_before)
 
         # no-id evaluation (primary)
         no_id_assoc_path = run_association(
             project_root, query_path, current_memory, round_dir, use_disease_id_score=False
         )
-        no_id_records = read_csv(no_id_assoc_path)
+        no_id_records = normalize_association_records(read_csv(no_id_assoc_path), memory_rows)
+        write_csv(no_id_assoc_path, no_id_records)
+        round_assoc_path = round_dir / "association_records.csv"
+        write_csv(round_assoc_path, no_id_records)
         all_no_id_records.extend(no_id_records)
 
         # with-id evaluation (upper-bound / sanity check)
         with_id_assoc_path = run_association(
             project_root, query_path, current_memory, round_dir, use_disease_id_score=True
         )
-        with_id_records = read_csv(with_id_assoc_path)
+        with_id_records = normalize_association_records(read_csv(with_id_assoc_path), memory_rows)
+        write_csv(with_id_assoc_path, with_id_records)
         all_with_id_records.extend(with_id_records)
 
         # association 完成后才用 current_frames 更新 memory（no future leakage）
@@ -383,6 +412,20 @@ def run_progressive(
                 "history_inspections": history_ids,
                 "query_inspection": query_id,
                 "query_frame_count": len(query_rows),
+                "allowed_inputs": [
+                    manifest_display_path(input_csv),
+                    manifest_display_path(query_path),
+                    manifest_display_path(memory_before),
+                ],
+                "memory_before": manifest_display_path(memory_before),
+                "association_records": manifest_display_path(round_assoc_path),
+                "no_id_association_records": manifest_display_path(no_id_assoc_path),
+                "with_id_association_records": manifest_display_path(with_id_assoc_path),
+                "memory_after": manifest_display_path(next_memory),
+                "metrics": {
+                    "no_id": compute_metrics(no_id_records),
+                    "with_id": compute_metrics(with_id_records),
+                },
                 "no_id_matched": sum(1 for r in no_id_records if r.get("association_status") == "matched"),
                 "with_id_matched": sum(1 for r in with_id_records if r.get("association_status") == "matched"),
             }

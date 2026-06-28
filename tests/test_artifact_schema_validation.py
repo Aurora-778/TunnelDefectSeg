@@ -82,6 +82,7 @@ def test_validate_csv_schema_accepts_valid_association_record(tmp_path):
         "needs_manual_review",
         "bbox_fields_present",
         "geometry_score_applied",
+        "geometry_feature_available",
         "geometry_limit_note",
     ]
     row = {name: "" for name in fieldnames}
@@ -223,6 +224,7 @@ def valid_association_row() -> dict[str, str]:
         "needs_manual_review": "false",
         "bbox_fields_present": "false",
         "geometry_score_applied": "false",
+        "geometry_feature_available": "false",
         "geometry_limit_note": "missing bbox/mask shape fields in current artifacts",
     }
 

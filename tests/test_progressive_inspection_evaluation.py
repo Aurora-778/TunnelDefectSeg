@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from scripts import run_progressive_inspection_evaluation as progressive
-from scripts.run_progressive_inspection_evaluation import evaluate_round, run_progressive
+from scripts.run_progressive_inspection_evaluation import run_progressive
 
 
 def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -52,6 +52,10 @@ def frame_row(**overrides):
 
 def test_progressive_evaluation_splits_history_and_query_without_future_leakage(tmp_path):
     input_csv = tmp_path / "robot_kict_frame_records.csv"
+    output_dir = tmp_path / "progressive"
+    no_id_csv = tmp_path / "disease_association_records_no_id.csv"
+    with_id_csv = tmp_path / "disease_association_records_with_id.csv"
+    report_path = tmp_path / "association_report.md"
     write_csv(
         input_csv,
         [
@@ -71,8 +75,8 @@ def test_progressive_evaluation_splits_history_and_query_without_future_leakage(
         ],
     )
 
-    manifest = run_progressive(input_csv, tmp_path / "progressive", tmp_path / "association_report.md")
-    manifest_path = tmp_path / "progressive" / "progressive_evaluation_manifest.json"
+    manifest = run_progressive(input_csv, output_dir, no_id_csv, with_id_csv, report_path)
+    manifest_path = output_dir / "progressive_evaluation_manifest.json"
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     assert len(manifest["rounds"]) == 2
@@ -81,7 +85,12 @@ def test_progressive_evaluation_splits_history_and_query_without_future_leakage(
     assert saved["rounds"][1]["history_inspections"] == ["I001", "I002"]
     assert saved["rounds"][1]["query_inspection"] == "I003"
     assert all("I003" not in " ".join(round_info["allowed_inputs"]) for round_info in saved["rounds"][:1])
-    assert (tmp_path / "association_report.md").read_text(encoding="utf-8").count("Baseline / Ablation") == 2
+    report_text = report_path.read_text(encoding="utf-8")
+    assert "future memory leakage" in report_text
+    assert "full pipeline batch" in report_text
+    assert "Baseline / Ablation" in report_text
+    assert no_id_csv.exists()
+    assert with_id_csv.exists()
 
 
 def test_progressive_evaluation_cleans_old_round_outputs(tmp_path):
@@ -101,7 +110,13 @@ def test_progressive_evaluation_cleans_old_round_outputs(tmp_path):
         ],
     )
 
-    run_progressive(input_csv, output_dir, report_path)
+    run_progressive(
+        input_csv,
+        output_dir,
+        tmp_path / "disease_association_records_no_id.csv",
+        tmp_path / "disease_association_records_with_id.csv",
+        report_path,
+    )
 
     assert not old_round.exists()
     assert "stale" not in (output_dir / "progressive_evaluation_manifest.json").read_text(encoding="utf-8")
@@ -113,115 +128,61 @@ def test_progressive_evaluation_requires_inspection_id(tmp_path):
     write_csv(input_csv, [{"image_id": "x"}])
 
     with pytest.raises(ValueError, match="inspection_id"):
-        run_progressive(input_csv, tmp_path / "progressive", tmp_path / "association_report.md")
+        run_progressive(
+            input_csv,
+            tmp_path / "progressive",
+            tmp_path / "disease_association_records_no_id.csv",
+            tmp_path / "disease_association_records_with_id.csv",
+            tmp_path / "association_report.md",
+        )
 
 
-def test_evaluate_round_uses_composite_key_for_same_image_records():
-    query_rows = [
-        frame_row(image_id="I002_same", frame_id="1", disease_id="D001", kict_area_px="1000"),
-        frame_row(image_id="I002_same", frame_id="2", disease_id="D002", kict_area_px="2000"),
-    ]
-    memory_rows = [
-        {"memory_id": "MEM-D001", "disease_id": "D001", "mileage_range": "K12+000.0", "last_area_px": "1000"},
-        {"memory_id": "MEM-D002", "disease_id": "D002", "mileage_range": "K12+000.0", "last_area_px": "2000"},
-    ]
-    association_rows = [
-        {
-            "image_id": "I002_same",
-            "frame_id": "1",
-            "disease_id": "D001",
-            "memory_id": "MEM-D001",
-            "association_status": "matched",
-            "needs_manual_review": "false",
-        },
-        {
-            "image_id": "I002_same",
-            "frame_id": "2",
-            "disease_id": "D002",
-            "memory_id": "MEM-D002",
-            "association_status": "matched",
-            "needs_manual_review": "false",
-        },
-    ]
+def test_progressive_round_artifacts_use_current_association_schema(tmp_path):
+    input_csv = tmp_path / "robot_kict_frame_records.csv"
+    output_dir = tmp_path / "progressive"
+    write_csv(
+        input_csv,
+        [
+            frame_row(),
+            frame_row(image_id="I002_000001", inspection_id="I002", frame_id="1", disease_id="D001"),
+            frame_row(image_id="I002_000002", inspection_id="I002", frame_id="2", disease_id="D002", kict_area_px="2000"),
+        ],
+    )
 
-    metrics = evaluate_round(query_rows, memory_rows, association_rows)
+    run_progressive(
+        input_csv,
+        output_dir,
+        tmp_path / "disease_association_records_no_id.csv",
+        tmp_path / "disease_association_records_with_id.csv",
+        tmp_path / "association_report.md",
+    )
 
-    assert metrics["strategy_accuracy"]["weighted_score_no_id"] == 1.0
-    assert metrics["failure_examples"] == []
+    round_assoc = output_dir / "round_001" / "association_records.csv"
+    with round_assoc.open("r", encoding="utf-8-sig", newline="") as handle:
+        fieldnames = csv.DictReader(handle).fieldnames or []
 
-
-def test_evaluate_round_rejects_duplicate_association_composite_key():
-    query_rows = [frame_row(image_id="I002_same", frame_id="1", disease_id="D001")]
-    memory_rows = [{"memory_id": "MEM-D001", "disease_id": "D001", "mileage_range": "K12+000.0", "last_area_px": "1000"}]
-    association = {
-        "image_id": "I002_same",
-        "frame_id": "1",
-        "disease_id": "D001",
-        "memory_id": "MEM-D001",
-        "association_status": "matched",
-        "needs_manual_review": "false",
-    }
-
-    with pytest.raises(ValueError, match="Duplicate association composite key"):
-        evaluate_round(query_rows, memory_rows, [association, dict(association)])
-
-
-def test_evaluate_round_rejects_ambiguous_image_only_association_for_same_image_records():
-    query_rows = [
-        frame_row(image_id="I002_same", frame_id="1", disease_id="D001", kict_area_px="1000"),
-        frame_row(image_id="I002_same", frame_id="2", disease_id="D002", kict_area_px="2000"),
-    ]
-    memory_rows = [
-        {"memory_id": "MEM-D001", "disease_id": "D001", "mileage_range": "K12+000.0", "last_area_px": "1000"},
-        {"memory_id": "MEM-D002", "disease_id": "D002", "mileage_range": "K12+000.0", "last_area_px": "2000"},
-    ]
-    association_rows = [
-        {
-            "image_id": "I002_same",
-            "memory_id": "MEM-D001",
-            "association_status": "matched",
-            "needs_manual_review": "false",
-        }
-    ]
-
-    with pytest.raises(ValueError, match="missing or inconsistent frame_id/disease_id"):
-        evaluate_round(query_rows, memory_rows, association_rows)
-
-
-def test_evaluate_round_rejects_inconsistent_single_image_association_key():
-    query_rows = [frame_row(image_id="I002_same", frame_id="1", disease_id="D001", kict_area_px="1000")]
-    memory_rows = [{"memory_id": "MEM-D001", "disease_id": "D001", "mileage_range": "K12+000.0", "last_area_px": "1000"}]
-    association_rows = [
-        {
-            "image_id": "I002_same",
-            "frame_id": "999",
-            "disease_id": "D999",
-            "memory_id": "MEM-D001",
-            "association_status": "matched",
-            "needs_manual_review": "false",
-        }
-    ]
-
-    with pytest.raises(ValueError, match="missing or inconsistent frame_id/disease_id"):
-        evaluate_round(query_rows, memory_rows, association_rows)
-
-
-def test_evaluate_round_allows_legacy_image_only_association_for_single_frame():
-    query_rows = [frame_row(image_id="I002_legacy", frame_id="1", disease_id="D001", kict_area_px="1000")]
-    memory_rows = [{"memory_id": "MEM-D001", "disease_id": "D001", "mileage_range": "K12+000.0", "last_area_px": "1000"}]
-    association_rows = [
-        {
-            "image_id": "I002_legacy",
-            "memory_id": "MEM-D001",
-            "association_status": "matched",
-            "needs_manual_review": "false",
-        }
-    ]
-
-    metrics = evaluate_round(query_rows, memory_rows, association_rows)
-
-    assert metrics["strategy_accuracy"]["weighted_score_no_id"] == 1.0
-    assert metrics["failure_examples"] == []
+    for field in [
+        "frame_id",
+        "inspection_id",
+        "label_disease_id",
+        "matched_disease_id",
+        "association_status",
+        "association_score",
+        "confidence_level",
+        "match_type",
+        "candidate_count",
+        "top_candidate_ids",
+        "score_margin",
+        "conflict_reason",
+        "needs_manual_review",
+        "use_disease_id_score",
+        "association_mode",
+        "bbox_fields_present",
+        "geometry_score_applied",
+        "geometry_feature_available",
+        "geometry_limit_note",
+    ]:
+        assert field in fieldnames
 
 
 def test_progressive_manifest_uses_relative_paths_for_project_outputs(tmp_path, monkeypatch):
@@ -238,6 +199,8 @@ def test_progressive_manifest_uses_relative_paths_for_project_outputs(tmp_path, 
     progressive.run_progressive(
         Path("data/simulated/robot_kict_frame_records.csv"),
         Path("data/simulated/progressive"),
+        Path("data/simulated/disease_association_records_no_id.csv"),
+        Path("data/simulated/disease_association_records_with_id.csv"),
         Path("outputs/association_evaluation_report.md"),
     )
     manifest_path = tmp_path / "data" / "simulated" / "progressive" / "progressive_evaluation_manifest.json"

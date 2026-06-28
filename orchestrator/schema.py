@@ -118,6 +118,7 @@ REQUIRED_SCHEMAS = {
         "needs_manual_review",
         "bbox_fields_present",
         "geometry_score_applied",
+        "geometry_feature_available",
         "geometry_limit_note",
     ],
     "priority_recheck_list": [

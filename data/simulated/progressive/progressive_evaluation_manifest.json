@@ -1,5 +1,8 @@
 {
   "input_csv": "data/simulated/robot_kict_frame_records.csv",
+  "no_id_csv": "data/simulated/disease_association_records_no_id.csv",
+  "with_id_csv": "data/simulated/disease_association_records_with_id.csv",
+  "report_path": "outputs/association_evaluation_report.md",
   "rounds": [
     {
       "round_index": 1,
@@ -7,62 +10,37 @@
         "I001"
       ],
       "query_inspection": "I002",
-      "allowed_inputs": [
-        "data/simulated/progressive/round_001/memory.csv",
-        "data/simulated/progressive/round_001/query_frames.csv"
-      ],
       "query_frame_count": 10,
+      "allowed_inputs": [
+        "data/simulated/robot_kict_frame_records.csv",
+        "data/simulated/progressive/round_001/query_frames.csv",
+        "data/simulated/progressive/round_001/memory.csv"
+      ],
       "memory_before": "data/simulated/progressive/round_001/memory.csv",
       "association_records": "data/simulated/progressive/round_001/association_records.csv",
+      "no_id_association_records": "data/simulated/progressive/round_001/association_records_no_id.csv",
+      "with_id_association_records": "data/simulated/progressive/round_001/association_records_with_id.csv",
       "memory_after": "data/simulated/progressive/round_001/memory_after_query.csv",
       "metrics": {
-        "strategy_accuracy": {
-          "area_only": 0.5,
-          "nearest_mileage": 1.0,
-          "same_disease_id": 1.0,
-          "weighted_score_no_id": 1.0
+        "no_id": {
+          "total_records": 10,
+          "matched_count": 10,
+          "unmatched_count": 0,
+          "uncertain_count": 0,
+          "manual_review_count": 10,
+          "mean_association_score": 0.9216
         },
-        "manual_review_rate": 1.0,
-        "unmatched_rate": 0.0,
-        "conflict_count": 0,
-        "failure_examples": [
-          {
-            "image_id": "I002_000040",
-            "label": "D001",
-            "weighted_prediction": "D001",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          },
-          {
-            "image_id": "I002_000041",
-            "label": "D002",
-            "weighted_prediction": "D002",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          },
-          {
-            "image_id": "I002_000018",
-            "label": "D003",
-            "weighted_prediction": "D003",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          },
-          {
-            "image_id": "I002_000180",
-            "label": "D004",
-            "weighted_prediction": "D004",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          },
-          {
-            "image_id": "I002_000013",
-            "label": "D005",
-            "weighted_prediction": "D005",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          }
-        ]
-      }
+        "with_id": {
+          "total_records": 10,
+          "matched_count": 10,
+          "unmatched_count": 0,
+          "uncertain_count": 0,
+          "manual_review_count": 0,
+          "mean_association_score": 0.9333
+        }
+      },
+      "no_id_matched": 10,
+      "with_id_matched": 10
     },
     {
       "round_index": 2,
@@ -71,62 +49,53 @@
         "I002"
       ],
       "query_inspection": "I003",
-      "allowed_inputs": [
-        "data/simulated/progressive/round_001/memory_after_query.csv",
-        "data/simulated/progressive/round_002/query_frames.csv"
-      ],
       "query_frame_count": 10,
+      "allowed_inputs": [
+        "data/simulated/robot_kict_frame_records.csv",
+        "data/simulated/progressive/round_002/query_frames.csv",
+        "data/simulated/progressive/round_001/memory_after_query.csv"
+      ],
       "memory_before": "data/simulated/progressive/round_001/memory_after_query.csv",
       "association_records": "data/simulated/progressive/round_002/association_records.csv",
+      "no_id_association_records": "data/simulated/progressive/round_002/association_records_no_id.csv",
+      "with_id_association_records": "data/simulated/progressive/round_002/association_records_with_id.csv",
       "memory_after": "data/simulated/progressive/round_002/memory_after_query.csv",
       "metrics": {
-        "strategy_accuracy": {
-          "area_only": 0.5,
-          "nearest_mileage": 1.0,
-          "same_disease_id": 1.0,
-          "weighted_score_no_id": 1.0
+        "no_id": {
+          "total_records": 10,
+          "matched_count": 10,
+          "unmatched_count": 0,
+          "uncertain_count": 0,
+          "manual_review_count": 10,
+          "mean_association_score": 0.9094
         },
-        "manual_review_rate": 1.0,
-        "unmatched_rate": 0.0,
-        "conflict_count": 0,
-        "failure_examples": [
-          {
-            "image_id": "I003_000040",
-            "label": "D001",
-            "weighted_prediction": "D001",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          },
-          {
-            "image_id": "I003_000041",
-            "label": "D002",
-            "weighted_prediction": "D002",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          },
-          {
-            "image_id": "I003_000018",
-            "label": "D003",
-            "weighted_prediction": "D003",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          },
-          {
-            "image_id": "I003_000180",
-            "label": "D004",
-            "weighted_prediction": "D004",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          },
-          {
-            "image_id": "I003_000013",
-            "label": "D005",
-            "weighted_prediction": "D005",
-            "needs_manual_review": "true",
-            "score": "0.7833"
-          }
-        ]
-      }
+        "with_id": {
+          "total_records": 10,
+          "matched_count": 10,
+          "unmatched_count": 0,
+          "uncertain_count": 0,
+          "manual_review_count": 0,
+          "mean_association_score": 0.9229
+        }
+      },
+      "no_id_matched": 10,
+      "with_id_matched": 10
     }
-  ]
+  ],
+  "no_id_metrics": {
+    "total_records": 20,
+    "matched_count": 20,
+    "unmatched_count": 0,
+    "uncertain_count": 0,
+    "manual_review_count": 20,
+    "mean_association_score": 0.9155
+  },
+  "with_id_metrics": {
+    "total_records": 20,
+    "matched_count": 20,
+    "unmatched_count": 0,
+    "uncertain_count": 0,
+    "manual_review_count": 0,
+    "mean_association_score": 0.9281
+  }
 }
