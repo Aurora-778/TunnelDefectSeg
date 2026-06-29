@@ -41,12 +41,13 @@
 - 操作系统：Windows 10 / Windows 11，兼容常见 Linux Python 环境
 - Python 版本：Python 3.8 及以上
 - 浏览器：Microsoft Edge、Chrome 或其他现代浏览器
-- 硬件环境：普通 PC 可运行表格分析与 Web 展示；模型推理或训练功能建议使用具备 NVIDIA GPU 的设备
+- 硬件环境：普通 PC 可运行表格分析、报告生成和已生成结果展示；模型推理或训练功能建议使用具备 NVIDIA GPU 的设备
 
 ### 8. 开发语言与主要依赖
 
 - 编程语言：Python、HTML、CSS、JavaScript
-- 主要依赖：Pillow、NumPy、Matplotlib、PyTorch、OpenCV、mmcv / mmsegmentation 相关环境
+- 基础分析依赖：pandas、NumPy、Pillow、Matplotlib
+- 模型推理相关依赖：PyTorch、OpenCV、mmcv / mmsegmentation 相关环境，主要用于单图检测、SegFormer 推理或训练相关能力
 - 前端形式：本地 Web Dashboard
 - 数据格式：CSV、JSON、Markdown、PNG
 
@@ -71,8 +72,8 @@
 | 开发工具 | Python 运行环境、代码编辑器、Git、浏览器调试工具。 |
 | 编程语言 | Python、HTML、CSS、JavaScript。 |
 | 源程序量估计 | 核心 Python 源码约 6000 行，最终以提交材料统计为准。 |
-| 硬件环境 | 普通 PC 可运行表格处理与 Web 展示；涉及模型推理时建议具备 NVIDIA GPU。 |
-| 软件环境 | Python、Pillow、NumPy、Matplotlib、PyTorch、OpenCV、mmcv / mmsegmentation 相关环境。 |
+| 硬件环境 | 普通 PC 可运行表格处理、报告生成和已生成结果展示；涉及模型推理时建议具备 NVIDIA GPU。 |
+| 软件环境 | Python、pandas、NumPy、Pillow、Matplotlib；单图检测或 SegFormer 推理相关功能需要 PyTorch、OpenCV、mmcv / mmsegmentation 等环境。 |
 | 权利取得方式 | 建议填写原创取得。 |
 | 发表状态建议 | 若已在课堂、答辩或项目展示中公开演示，可按实际情况填写已发表；若未正式公开发布，可填写未发表。 |
 | 适用范围 | 隧道病害巡检数据分析原型验证、课程展示、科研项目阶段性展示、软著申报材料支撑。 |

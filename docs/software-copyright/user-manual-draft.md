@@ -17,13 +17,13 @@
 
 ### 1.2 Python 依赖
 
-在项目根目录下安装轻量依赖：
+在项目根目录下安装基础分析依赖：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-如果使用 SegFormer / mmsegmentation 相关模型推理能力，需要单独准备对应深度学习环境。当前机器人巡检表格分析流程不强制依赖训练环境。
+该依赖主要用于表格分析、报告生成和可视化产物生成。若需要启动 Web Dashboard 中的单图检测 / 上传图片复核能力，可能还需要准备 PyTorch、OpenCV、SegFormer / mmsegmentation 等模型推理相关环境。当前机器人巡检表格分析流程不强制依赖训练环境。
 
 ### 1.3 数据准备
 
@@ -56,6 +56,8 @@ python run.py --mode full_pipeline
 ```bash
 python web_app.py --host 127.0.0.1 --port 8000
 ```
+
+如果仅查看已生成的 demo 分析结果，应先确保完整 pipeline 已生成对应 CSV、Markdown 和 PNG 产物。若使用单图检测或上传图片复核功能，需要当前 Python 环境能够加载项目中的模型推理依赖。
 
 浏览器打开：
 

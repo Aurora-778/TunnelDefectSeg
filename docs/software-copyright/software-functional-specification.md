@@ -27,7 +27,7 @@
 - Python：3.8 及以上
 - 浏览器：Microsoft Edge、Chrome 或其他现代浏览器
 - 数据文件：CSV、JSON、Markdown、PNG
-- 推荐硬件：普通 PC 可运行表格处理与 Web 展示；涉及模型推理时建议使用具备 NVIDIA GPU 的设备
+- 推荐硬件：普通 PC 可运行表格分析、报告生成、可视化产物生成和已生成结果展示；涉及模型推理或训练相关功能时建议使用具备 NVIDIA GPU 的设备
 
 ## 4. 软件总体架构
 
