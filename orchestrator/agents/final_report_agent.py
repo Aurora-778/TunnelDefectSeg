@@ -187,6 +187,8 @@ Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Assoc
 - 规则面积变化病害：{len(growth_rows)}
 - 重点复检病害：{len(recheck_rows)}
 
+数据边界：当前输出基于 KICT 静态 mask 与仿真机器人巡检元数据。
+
 ## Web 展示
 
 启动原有 Web 服务后，可通过 Dashboard 查看工程报告、规则面积变化提示、重点复检清单和可视化图表。
@@ -213,7 +215,7 @@ Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Assoc
 
 ## 一句话结论
 
-当前系统已经能把机器人连续巡检数据整理成病害对象、规则面积变化提示、风险等级和复检清单，适合用于课程展示、项目答辩和后续论文/专利方向论证。
+当前系统已经能把 KICT 静态 mask 与仿真机器人巡检元数据整理成病害对象、规则面积变化提示、风险等级和复检清单，适合用于课程展示、项目答辩和后续论文/专利方向论证。
 """
 
     def _validate_outputs(

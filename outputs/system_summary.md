@@ -16,6 +16,8 @@ Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Assoc
 - 规则面积变化病害：10
 - 重点复检病害：10
 
+数据边界：当前输出基于 KICT 静态 mask 与仿真机器人巡检元数据。
+
 ## Web 展示
 
 启动原有 Web 服务后，可通过 Dashboard 查看工程报告、规则面积变化提示、重点复检清单和可视化图表。
