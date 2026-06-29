@@ -251,7 +251,9 @@ http://127.0.0.1:8000/platform
 - DAG 多阶段工程闭环。
 - 可视化报告和重点复检清单。
 
-Association Agent 会输出 `spatial_distance_score`、`area_similarity_score`、`temporal_continuity_score`、`risk_similarity_score`、`association_score`、`confidence_level`、`match_type`、`candidate_count`、`top_candidate_ids`、`score_margin`、`conflict_reason` 和 `needs_manual_review`。其中 `disease_id` 只是辅助信息，不能一票决定高置信匹配。
+Association Agent 会输出 `spatial_distance_score`、`area_similarity_score`、`temporal_continuity_score`、`risk_similarity_score`、`association_score`、`confidence_level`、`match_type`、`candidate_count`、`top_candidate_ids`、`score_margin`、`conflict_reason` 和 `needs_manual_review`。当前主 pipeline 使用 no-id matching：`disease_id` 只作为标签和评估对照，不参与主流程匹配评分，也不能一票决定高置信匹配。with-id 结果仅用于 progressive evaluation 的 upper-bound / sanity check。
+
+更详细的关联规则设计见 `docs/association_rule_design.md`。
 
 ## 模型与来源标记
 

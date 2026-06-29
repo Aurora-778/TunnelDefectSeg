@@ -231,6 +231,7 @@ Progressive evaluation 专用字段：
 - 主 pipeline 默认 `use_disease_id_score=false`、`association_mode=no_id`。
 - `label_disease_id` 是数据集 / 仿真标签，不参与主 pipeline 的真实 matching 打分。
 - `with_id_upper_bound` 只用于 progressive evaluation 的上界 / sanity check，不进入主 DAG。
+- 可以把 `label_disease_id` 理解为“做完题后对答案用的答案标签”，不能在主流程匹配时当作解题线索。
 - `hard`: 候选在 no-id 评分下达到高置信匹配要求，不能由 `label_disease_id` 一票决定。
 - `soft`: 通过空间距离、面积相似、时间连续、风险相似等非 ID 证据综合评分选择候选。
 - `uncertain`: 没有候选达到最低阈值，或候选存在明显冲突，需人工复核。

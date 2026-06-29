@@ -13,7 +13,7 @@
 ## 关联分析结果
 
 - 关联记录数：30
-- 关联依据：Association Agent 综合空间距离、面积相似度、巡检时间连续性、风险相似度和 disease_id 辅助信息进行评分，并输出 candidate、margin、conflict 和 manual review 标记；该结果属于规则证据，需要人工复核闭环确认。
+- 关联依据：Association Agent 在主 pipeline 中使用 no-id matching，综合空间距离、面积相似度、巡检时间连续性和风险相似度等非 ID 规则证据进行评分，并输出 candidate、margin、conflict 和 manual review 标记；`disease_id` 只作为标签和评估对照，不参与主流程匹配评分。该结果属于规则证据，需要人工复核闭环确认。
 - 输出文件：`C:/Users/26822/Downloads/data/data/simulated/disease_association_records.csv`
 
 ## Progressive Evaluation Summary
@@ -48,19 +48,20 @@ Progressive evaluation (no-id vs with-id) has been run. See `outputs/association
 
 - 面向机器人巡检的病害对象级建模。
 - Disease Memory Bank 批处理记忆表，并提供时间递进评估使用的增量更新路径。
-- 基于空间、面积、时间和风险的规则关联评分，配套 baseline/ablation 报告说明收益和失败点。
+- 基于空间、面积、时间和风险的 no-id 规则关联评分，配套 baseline/ablation 报告说明收益和失败点；with-id 只作为 progressive evaluation 的 upper-bound / sanity check。
 - DAG 多阶段工程闭环。
 - 可视化报告和重点复检清单。
 
 ## 数据边界
 
-当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。系统可以验证病害对象建模、跨巡检关联、规则面积变化提示和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
+当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。KICT 提供图像和 mask 几何特征；时间、里程、环号、方位、`disease_id` 和跨巡检关系来自仿真元数据。系统可以验证病害对象建模、跨巡检关联、规则面积变化提示和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
 
 ## 局限性
 
 - 当前关联评分仍主要依赖仿真元数据和 mask 几何特征，尚未接入真实机器人位姿、深度或视觉重识别。
 - 当前面积变化提示是基于面积和风险规则的工程判断，不等同于结构安全结论。
 - KICT 数据主要提供静态裂缝 mask，真实跨时间病害演化仍需要长期巡检数据支撑。
+- Web Dashboard 是本地展示 Demo，用于说明数据链路和复检证据，不代表生产级巡检平台。
 
 ## 未来扩展
 
