@@ -297,6 +297,105 @@ python web_app.py --host 127.0.0.1 --port 8000 --model-source segformer
 5. 当前重点是验证系统流程，而不是替代工程检测结论。
 6. 如果用于论文、比赛或专利材料，需要明确标注“仿真验证”和“静态公开数据集”的边界。
 
+## 后续接入真实巡检数据的要求
+
+当前系统使用 KICT 静态裂缝图像 / mask 作为病害图像来源，并通过仿真巡检元数据补充巡检时间、里程、环号、方位、`disease_id` 和跨巡检关系。该设置能够支撑病害分析工程闭环的原型验证，但不能直接证明真实连续机器人巡检场景下的长期病害演化规律。
+
+如果后续要把 KICT demo 数据替换为真实机器人巡检数据，真实数据集建议至少包含以下内容：
+
+1. 图像或视频帧：真实数据最好包含隧道巡检图像或机器人巡检视频帧。连续巡检序列比随机静态图片更适合验证跨巡检关联和病害变化分析。
+2. 病害标注：真实数据最好提供 mask 标注、bbox 标注、点位标注或病害类别标签。mask 最适合面积计算和 Growth Analysis；bbox 可用于位置和尺寸估计；如果只有类别标签，则只能支持较弱的工程报告分析。
+3. 巡检元数据：建议包含 `inspection_id`、`frame_id`、`timestamp`、`mileage`、`ring_id`、`position_angle`、`camera_id` 和 `robot_pose`。这些字段可以替代当前仿真巡检元数据，使 Memory Bank、Association 和 Growth Analysis 更接近真实巡检流程。
+4. 跨巡检 ground truth：如果需要严格评估 Association，最好提供同一处病害在不同巡检中的对应关系。例如 `inspection_001` 中的 `crack_03` 与 `inspection_002` 中的 `crack_07` 对应同一处裂缝。若缺少跨巡检 GT，系统仍可以运行，但 Association 结果只能作为工程原型演示，不能严格证明真实跨巡检匹配准确率。
+
+真实数据建议作为另一个数据入口接入，不需要删除当前 KICT demo 数据。推荐新增目录：
+
+```text
+data/real_inspection/images/
+data/real_inspection/masks/
+data/real_inspection/metadata.csv
+data/real_inspection/inspection_sequence.csv
+```
+
+后续可以新增或改造以下脚本：
+
+| 脚本 | 规划作用 |
+|---|---|
+| `scripts/extract_real_inspection_features.py` | 从真实 mask / bbox 中提取面积、位置、类别等字段。 |
+| `scripts/merge_real_inspection_metadata.py` | 将真实巡检 metadata 转换为 pipeline 统一输入格式。 |
+| `scripts/validate_uploaded_dataset.py` | 校验真实数据目录、标注文件和 metadata 字段是否完整。 |
+| `scripts/run_real_inspection_pipeline.py` | 在真实数据入口上运行分析流程。 |
+
+后续也可以通过配置切换数据源，避免大改核心 pipeline。示例：
+
+```yaml
+dataset:
+  type: kict_simulated
+  image_root: data/kict/images
+  mask_root: data/kict/masks
+  metadata_csv: data/simulated/inspection_sequence.csv
+```
+
+真实数据入口示例：
+
+```yaml
+dataset:
+  type: real_inspection
+  image_root: data/real_inspection/images
+  mask_root: data/real_inspection/masks
+  metadata_csv: data/real_inspection/inspection_sequence.csv
+```
+
+## 后续 Web 上传真实数据集分析
+
+当前 Web Dashboard 主要用于展示已经生成的 demo 分析结果，不代表当前版本已经支持 Web 上传真实数据集后实时分析。真实数据上传分析属于后续 Web 工程化扩展方向。
+
+后续可以扩展为“Web 上传 + 数据校验 + 异步分析 + 结果展示”的模式：
+
+```text
+用户上传真实数据集 zip
+        ↓
+后端保存到 data/uploads/
+        ↓
+数据格式校验
+        ↓
+转换为统一 inspection_sequence.csv
+        ↓
+运行 full_pipeline
+        ↓
+生成工程报告、Memory Bank、Association、Growth Analysis 和 Final Report
+        ↓
+Web 展示结果
+```
+
+推荐上传 zip 结构：
+
+```text
+dataset.zip
+├─ images/
+│  ├─ frame_001.jpg
+│  ├─ frame_002.jpg
+│
+├─ masks/
+│  ├─ frame_001.png
+│  ├─ frame_002.png
+│
+└─ metadata.csv
+```
+
+“实时分析”需要明确边界：如果上传数据已经包含 mask 和巡检元数据，系统可以较快完成分析；如果上传的是原始视频或未标注图片，则需要先增加抽帧和模型推理模块。因此更准确的说法是上传后自动分析或异步批处理分析，而不是严格意义上的实时分析。
+
+后续如果进行 Web 工程化，可以规划以下接口：
+
+```text
+POST /datasets/upload
+POST /jobs/run
+GET  /jobs/{job_id}/status
+GET  /jobs/{job_id}/result
+```
+
+这些接口属于后续扩展规划，不代表当前版本已完整实现。
+
 ## 后续扩展方向
 
 1. 接入真实机器人连续巡检数据。
