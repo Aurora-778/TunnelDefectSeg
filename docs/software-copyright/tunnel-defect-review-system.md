@@ -1,4 +1,6 @@
-# 隧道病害智能分割与可信复核分析系统 V1.0
+# 机器人隧道巡检病害时空分析与复检管理系统 V1.0
+
+> 说明：本文件保留早期“单图分割与可信复核”能力说明，仅作为源代码节选、界面截图和历史功能补充参考。本次软著主提交材料以 `software-copyright-registration-draft.md`、`software-functional-specification.md`、`user-manual-draft.md` 和 `source-code-submission-guide.md` 为准。
 
 ## 软件概述
 
@@ -6,7 +8,7 @@
 
 软件名称建议：
 
-- 隧道病害智能分割与可信复核分析系统 V1.0
+- 机器人隧道巡检病害时空分析与复检管理系统 V1.0
 
 软件定位：
 
