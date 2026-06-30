@@ -152,7 +152,7 @@ disagreement_available=false
 - 缺少 prediction dict 必需字段时给出明确错误；
 - 当前已有报告字段不变。
 
-### Unit 2：保留 SegFormer adapter，避免重复抽象
+### Unit 2：把 SegFormer adapter 作为只读兼容参考
 
 文件：
 
@@ -160,13 +160,15 @@ disagreement_available=false
 
 计划：
 
-- 不重写该文件；
-- 只在必要时确认它返回的对象支持 `predict_confidence_inputs()`；
-- 如果缺少 `mask_source` 能力字段，仅补最小字段，不改变推理逻辑。
+- 本轮默认不修改该文件；
+- 只把它作为现有 SegFormer 输出行为的兼容参考；
+- 统一 prediction dict 字段校验和缺省字段处理优先放在 `run_confidence_risk.py`；
+- 避免把统一契约分散到多个模型文件。
 
 约束：
 
 - 不改 SegFormer 权重、config、环境路径；
+- 不改 SegFormer 推理逻辑；
 - 不训练、不下载。
 
 验收：
@@ -174,28 +176,31 @@ disagreement_available=false
 - SegFormer 仍通过 `model_source=segformer` 加载；
 - SegFormer 输出仍可进入 `write_result_artifacts()`。
 
-### Unit 3：必要时扩展 Web 参数枚举
+### Unit 3：保持 Web 不变
 
 文件：
 
-- `web_app.py`
+- 无默认修改文件
 
 计划：
 
-- 本轮原则上不改 Web UI；
-- 只有当 adapter 分发需要更明确的 `model_source` 选项时，才少量调整 `--model-source` 的 choices；
-- 当前 `legacy` 和 `segformer` 必须保留。
+- 本轮不改 Web 参数；
+- 本轮不改 `/api/detect`；
+- 本轮不改前端；
+- 当前 `legacy` 和 `segformer` 已满足本轮 adapter 收敛需求；
+- 只有未来真正新增 `model_source` 时，才在后续计划中考虑 `web_app.py`。
 
 约束：
 
+- 不改 `web_app.py`；
 - 不改前端布局；
 - 不改 `/api/detect` JSON 结构；
 - 不改其他 API。
 
 验收：
 
-- `web_app.py --model-source legacy` 参数仍可解析；
-- `web_app.py --model-source segformer` 参数仍可解析；
+- 现有 `web_app.py --model-source legacy` 参数仍可解析；
+- 现有 `web_app.py --model-source segformer` 参数仍可解析；
 - 默认行为不变。
 
 ### Unit 4：补最小测试
@@ -203,15 +208,13 @@ disagreement_available=false
 文件：
 
 - `tests/test_model_adapter.py`
-- `tests/test_confidence_risk_outputs.py`
-- `tests/test_web_app.py`
 
 计划：
 
 - 新增一个小测试文件覆盖 prediction dict 契约；
 - 用 mock / fake model 测试分发，不真实加载模型；
 - 补无 uncertainty 模型的 artifact/report 行为；
-- 补 Web model_source 参数解析检查。
+- `tests/test_confidence_risk_outputs.py` 和 `tests/test_web_app.py` 仅在实现实际触及对应行为时再改。
 
 约束：
 
@@ -269,13 +272,13 @@ disagreement_available=false
 - report 中不把占位图解释为真实 uncertainty；
 - Web 仍能展示“不可用”状态。
 
-### 6.4 Web 参数测试
+### 6.4 Web 参数回归
 
 场景：
 
-- 解析 `--model-source legacy`；
-- 解析 `--model-source segformer`；
-- 如果未来新增选项，测试同步更新。
+- 本轮不新增 Web 参数测试；
+- 如实现意外触及 `web_app.py`，必须补充 `--model-source legacy` 和 `--model-source segformer` 解析回归；
+- 如未来新增 `model_source`，测试同步更新。
 
 验收：
 
@@ -288,7 +291,6 @@ disagreement_available=false
 
 ```text
 python -m pytest tests/test_model_adapter.py -q
-python -m pytest tests/test_confidence_risk_outputs.py tests/test_web_app.py -q
 pytest -q
 ```
 
@@ -368,7 +370,7 @@ pytest -q
 
 ## 10. 推荐执行顺序
 
-1. 先补 characterization tests，锁住当前 `legacy` / `segformer` 分发和 `/api/detect` 返回结构；
+1. 先补 `tests/test_model_adapter.py`，锁住当前 `legacy` / `segformer` 分发和 prediction dict 契约；
 2. 在 `run_confidence_risk.py` 中加入最小 prediction dict 校验；
 3. 整理 `_predict_confidence_inputs()` 的 adapter 边界，不改变输出；
 4. 补无 uncertainty fake model 测试；
@@ -381,9 +383,12 @@ pytest -q
 执行时只允许围绕以下文件：
 
 - `run_confidence_risk.py`
+- `tests/test_model_adapter.py`
+
+以下文件默认不修改，只有实现中实际触及对应行为且重新 review 后才考虑：
+
 - `segformer_inference_adapter.py`
 - `web_app.py`
-- `tests/test_model_adapter.py`
 - `tests/test_confidence_risk_outputs.py`
 - `tests/test_web_app.py`
 
