@@ -30,6 +30,12 @@ def test_validate_prediction_dict_accepts_complete_prediction():
     assert _validate_prediction_dict(prediction) is prediction
 
 
+@pytest.mark.parametrize("prediction", [None, "not-a-dict"])
+def test_validate_prediction_dict_rejects_non_dict_prediction(prediction):
+    with pytest.raises(ValueError, match="Model adapter prediction must be a dict"):
+        _validate_prediction_dict(prediction)
+
+
 @pytest.mark.parametrize("missing_field", ["single_mask", "mask_source"])
 def test_validate_prediction_dict_reports_missing_required_field(missing_field):
     prediction = _prediction()
@@ -37,6 +43,19 @@ def test_validate_prediction_dict_reports_missing_required_field(missing_field):
 
     with pytest.raises(ValueError, match=missing_field):
         _validate_prediction_dict(prediction)
+
+
+def test_validate_prediction_dict_reports_all_missing_required_fields():
+    prediction = _prediction()
+    prediction.pop("single_mask")
+    prediction.pop("mask_source")
+
+    with pytest.raises(ValueError) as exc_info:
+        _validate_prediction_dict(prediction)
+
+    message = str(exc_info.value)
+    assert "single_mask" in message
+    assert "mask_source" in message
 
 
 def test_load_model_dispatches_segformer_source(monkeypatch, tmp_path):

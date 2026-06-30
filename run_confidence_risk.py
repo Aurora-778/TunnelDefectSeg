@@ -148,6 +148,8 @@ def _available_uncertainty_summary(uncertainty: np.ndarray, mask: np.ndarray | N
 
 
 def _validate_prediction_dict(prediction: dict) -> dict:
+    if not isinstance(prediction, dict):
+        raise ValueError("Model adapter prediction must be a dict.")
     missing = sorted(REQUIRED_PREDICTION_FIELDS.difference(prediction))
     if missing:
         raise ValueError(f"Model adapter prediction missing required field(s): {', '.join(missing)}")
