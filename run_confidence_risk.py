@@ -40,6 +40,15 @@ DEFAULT_PALETTE = [
 ]
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+REQUIRED_PREDICTION_FIELDS = {
+    "raw_resized",
+    "single_mask",
+    "fused_mask",
+    "entropy_uncertainty",
+    "disagreement_uncertainty",
+    "tta_specs",
+    "mask_source",
+}
 
 
 def colorize_mask(mask: np.ndarray, palette: list[list[int]] | None = None) -> np.ndarray:
@@ -136,6 +145,13 @@ def _available_uncertainty_summary(uncertainty: np.ndarray, mask: np.ndarray | N
     summary = uncertainty_summary(uncertainty, mask=mask)
     summary["available"] = True
     return summary
+
+
+def _validate_prediction_dict(prediction: dict) -> dict:
+    missing = sorted(REQUIRED_PREDICTION_FIELDS.difference(prediction))
+    if missing:
+        raise ValueError(f"Model adapter prediction missing required field(s): {', '.join(missing)}")
+    return prediction
 
 
 def write_result_artifacts(
@@ -392,7 +408,9 @@ def _predict_confidence_inputs(model, config, image_path: Path, tta_mode: str) -
 
 
 def process_image(model, config, image_path: Path, output_dir: Path, tta_mode: str = "light") -> dict:
-    prediction = _predict_confidence_inputs(model, config, image_path, tta_mode=tta_mode)
+    prediction = _validate_prediction_dict(
+        _predict_confidence_inputs(model, config, image_path, tta_mode=tta_mode)
+    )
 
     report = write_result_artifacts(
         stem=image_path.stem,
