@@ -199,6 +199,54 @@ def test_extract_video_mask_features_rejects_missing_mask(tmp_path):
     assert "mask not found for frame_id: frame_000002" in result.stderr
 
 
+def test_extract_video_mask_features_accepts_dash_cli_aliases(tmp_path):
+    manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/extract_video_mask_features.py",
+            "--frames-manifest",
+            str(manifest),
+            "--metadata-csv",
+            str(metadata),
+            "--masks-dir",
+            str(masks_dir),
+            "--output-csv",
+            str(output_csv),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert len(read_csv(output_csv)) == 2
+
+
+def test_extract_video_mask_features_rejects_duplicate_manifest_frame_id(tmp_path):
+    manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
+    rows = base_manifest_rows()
+    rows[1]["frame_id"] = "frame_000001"
+    write_csv(manifest, rows, manifest_fields())
+
+    result = run_extract(manifest, metadata, masks_dir, output_csv)
+
+    assert result.returncode != 0
+    assert "frames_manifest duplicate frame_id: frame_000001" in result.stderr
+
+
+def test_extract_video_mask_features_rejects_empty_manifest_required_value(tmp_path):
+    manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
+    rows = base_manifest_rows()
+    rows[0]["image_path"] = ""
+    write_csv(manifest, rows, manifest_fields())
+
+    result = run_extract(manifest, metadata, masks_dir, output_csv)
+
+    assert result.returncode != 0
+    assert "frames_manifest row 1 missing image_path" in result.stderr
+
+
 def test_extract_video_mask_features_rejects_metadata_missing_frame_id(tmp_path):
     manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
     fields = [field for field in metadata_fields() if field != "frame_id"]
@@ -209,6 +257,18 @@ def test_extract_video_mask_features_rejects_metadata_missing_frame_id(tmp_path)
 
     assert result.returncode != 0
     assert "metadata_csv missing required fields: frame_id" in result.stderr
+
+
+def test_extract_video_mask_features_rejects_empty_metadata_required_value(tmp_path):
+    manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
+    rows = base_metadata_rows()
+    rows[0]["timestamp"] = ""
+    write_csv(metadata, rows, metadata_fields())
+
+    result = run_extract(manifest, metadata, masks_dir, output_csv)
+
+    assert result.returncode != 0
+    assert "metadata_csv row 1 missing timestamp" in result.stderr
 
 
 def test_extract_video_mask_features_rejects_duplicate_metadata_frame_id(tmp_path):
@@ -231,3 +291,27 @@ def test_extract_video_mask_features_rejects_manifest_frame_missing_from_metadat
 
     assert result.returncode != 0
     assert "metadata not found for frame_id: frame_000002" in result.stderr
+
+
+def test_extract_video_mask_features_rejects_manifest_metadata_image_path_mismatch(tmp_path):
+    manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
+    rows = base_metadata_rows()
+    rows[0]["image_path"] = "data/video_frames/video_001/other_frame.jpg"
+    write_csv(metadata, rows, metadata_fields())
+
+    result = run_extract(manifest, metadata, masks_dir, output_csv)
+
+    assert result.returncode != 0
+    assert "frame_id frame_000001 image_path mismatch" in result.stderr
+
+
+def test_extract_video_mask_features_rejects_manifest_metadata_video_time_mismatch(tmp_path):
+    manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
+    rows = base_metadata_rows()
+    rows[0]["video_time_sec"] = "0.250000"
+    write_csv(metadata, rows, metadata_fields())
+
+    result = run_extract(manifest, metadata, masks_dir, output_csv)
+
+    assert result.returncode != 0
+    assert "frame_id frame_000001 video_time_sec mismatch" in result.stderr

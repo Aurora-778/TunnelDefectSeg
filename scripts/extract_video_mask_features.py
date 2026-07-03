@@ -104,7 +104,24 @@ def read_csv_rows(path: Path, required_fields: list[str], label: str) -> list[di
         rows = list(reader)
     if not rows:
         raise ValueError(f"{label} contains no rows")
+    validate_required_values(rows, required_fields, label)
     return rows
+
+
+def validate_required_values(rows: list[dict[str, str]], required_fields: list[str], label: str) -> None:
+    for row_number, row in enumerate(rows, start=1):
+        for field in required_fields:
+            if not (row.get(field) or "").strip():
+                raise ValueError(f"{label} row {row_number} missing {field}")
+
+
+def validate_manifest_frame_ids(rows: list[dict[str, str]]) -> None:
+    seen_frame_ids: set[str] = set()
+    for row_number, row in enumerate(rows, start=1):
+        frame_id = row["frame_id"].strip()
+        if frame_id in seen_frame_ids:
+            raise ValueError(f"frames_manifest duplicate frame_id: {frame_id}")
+        seen_frame_ids.add(frame_id)
 
 
 def index_metadata_rows(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
@@ -136,8 +153,33 @@ def area_to_risk_level(area: int) -> str:
     return "low"
 
 
+def parse_video_time(value: str, label: str, row_number: int, frame_id: str) -> float:
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} row {row_number} frame_id {frame_id} has invalid video_time_sec: {value}") from exc
+
+
+def assert_manifest_metadata_consistent(
+    manifest_row: dict[str, str],
+    metadata: dict[str, str],
+    row_number: int,
+) -> None:
+    frame_id = manifest_row["frame_id"].strip()
+    manifest_image_path = manifest_row["image_path"].strip()
+    metadata_image_path = metadata["image_path"].strip()
+    if manifest_image_path != metadata_image_path:
+        raise ValueError(f"frame_id {frame_id} image_path mismatch between frames_manifest and metadata_csv")
+
+    manifest_time = parse_video_time(manifest_row["video_time_sec"].strip(), "frames_manifest", row_number, frame_id)
+    metadata_time = parse_video_time(metadata["video_time_sec"].strip(), "metadata_csv", row_number, frame_id)
+    if abs(manifest_time - metadata_time) > 1e-6:
+        raise ValueError(f"frame_id {frame_id} video_time_sec mismatch between frames_manifest and metadata_csv")
+
+
 def extract_mask_features(mask_path: Path) -> dict[str, int | str]:
-    mask_array = np.array(Image.open(mask_path).convert("L"))
+    with Image.open(mask_path) as image:
+        mask_array = np.array(image.convert("L"))
     mask = mask_array > 0
     height, width = mask_array.shape[:2]
     area = int(mask.sum())
@@ -188,6 +230,7 @@ def build_feature_rows(
         metadata = metadata_by_frame.get(frame_id)
         if metadata is None:
             raise ValueError(f"metadata not found for frame_id: {frame_id}")
+        assert_manifest_metadata_consistent(manifest_row, metadata, row_number)
 
         mask_path = find_mask_path(masks_dir, frame_id)
         features = extract_mask_features(mask_path)
@@ -231,6 +274,7 @@ def extract_video_mask_features(
 ) -> list[dict[str, str | int]]:
     manifest_rows = read_csv_rows(frames_manifest, REQUIRED_MANIFEST_FIELDS, "frames_manifest")
     metadata_rows = read_csv_rows(metadata_csv, REQUIRED_METADATA_FIELDS, "metadata_csv")
+    validate_manifest_frame_ids(manifest_rows)
     metadata_by_frame = index_metadata_rows(metadata_rows)
     rows = build_feature_rows(manifest_rows, metadata_by_frame, masks_dir)
     write_feature_rows(output_csv, rows)
