@@ -239,7 +239,8 @@ def test_software_copyright_materials_document_scope_and_boundaries():
     checklist = (ROOT / "docs" / "software-copyright" / "source-material-checklist.md").read_text(encoding="utf-8")
 
     assert "docs/software-copyright/tunnel-defect-review-system.md" in readme
-    assert "隧道病害智能分割与可信复核分析系统 V1.0" in guide
+    assert "机器人隧道巡检病害时空分析与复检管理系统 V1.0" in guide
+    assert "历史功能补充参考" in guide
     assert "不提供结构安全诊断" in guide
     assert "第三方依赖" in guide
     assert "web_app.py" in checklist
