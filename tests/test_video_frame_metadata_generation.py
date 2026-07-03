@@ -214,6 +214,117 @@ def test_generate_video_frame_metadata_rejects_invalid_ring_length(tmp_path):
     assert "ring_length_m must be greater than 0" in result.stderr
 
 
+def test_generate_video_frame_metadata_rejects_negative_start_mileage(tmp_path):
+    manifest = tmp_path / "frames_manifest.csv"
+    output_csv = tmp_path / "metadata.csv"
+    write_manifest(
+        manifest,
+        [
+            {
+                "video_id": "tunnel_demo",
+                "frame_id": "frame_000001",
+                "frame_index": "0",
+                "video_time_sec": "0",
+                "image_path": "frame.jpg",
+                "fps": "10",
+                "sample_interval": "1",
+            }
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/generate_video_frame_metadata.py",
+            "--frames_manifest",
+            str(manifest),
+            "--output_csv",
+            str(output_csv),
+            "--start_mileage_m",
+            "-1",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "start_mileage_m must be non-negative" in result.stderr
+
+
+def test_generate_video_frame_metadata_rejects_negative_robot_speed(tmp_path):
+    manifest = tmp_path / "frames_manifest.csv"
+    output_csv = tmp_path / "metadata.csv"
+    write_manifest(
+        manifest,
+        [
+            {
+                "video_id": "tunnel_demo",
+                "frame_id": "frame_000001",
+                "frame_index": "0",
+                "video_time_sec": "0",
+                "image_path": "frame.jpg",
+                "fps": "10",
+                "sample_interval": "1",
+            }
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/generate_video_frame_metadata.py",
+            "--frames_manifest",
+            str(manifest),
+            "--output_csv",
+            str(output_csv),
+            "--robot_speed_mps",
+            "-1",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "robot_speed_mps must be non-negative" in result.stderr
+
+
+def test_generate_video_frame_metadata_rejects_invalid_start_timestamp(tmp_path):
+    manifest = tmp_path / "frames_manifest.csv"
+    output_csv = tmp_path / "metadata.csv"
+    write_manifest(
+        manifest,
+        [
+            {
+                "video_id": "tunnel_demo",
+                "frame_id": "frame_000001",
+                "frame_index": "0",
+                "video_time_sec": "0",
+                "image_path": "frame.jpg",
+                "fps": "10",
+                "sample_interval": "1",
+            }
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/generate_video_frame_metadata.py",
+            "--frames_manifest",
+            str(manifest),
+            "--output_csv",
+            str(output_csv),
+            "--start_timestamp",
+            "invalid-time",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "start_timestamp must be ISO-like datetime" in result.stderr
+
+
 def test_generate_video_frame_metadata_rejects_invalid_video_time(tmp_path):
     manifest = tmp_path / "frames_manifest.csv"
     output_csv = tmp_path / "metadata.csv"
@@ -247,3 +358,38 @@ def test_generate_video_frame_metadata_rejects_invalid_video_time(tmp_path):
 
     assert result.returncode != 0
     assert "row 1 has invalid video_time_sec" in result.stderr
+
+
+def test_generate_video_frame_metadata_rejects_negative_video_time(tmp_path):
+    manifest = tmp_path / "frames_manifest.csv"
+    output_csv = tmp_path / "metadata.csv"
+    write_manifest(
+        manifest,
+        [
+            {
+                "video_id": "tunnel_demo",
+                "frame_id": "frame_000001",
+                "frame_index": "0",
+                "video_time_sec": "-1",
+                "image_path": "frame.jpg",
+                "fps": "10",
+                "sample_interval": "1",
+            }
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/generate_video_frame_metadata.py",
+            "--frames_manifest",
+            str(manifest),
+            "--output_csv",
+            str(output_csv),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "row 1 video_time_sec must be non-negative" in result.stderr

@@ -63,7 +63,11 @@ def parse_start_timestamp(value: str) -> datetime:
         raise ValueError(f"start_timestamp must be ISO-like datetime, got: {value}") from exc
 
 
-def validate_numeric_args(ring_length_m: float) -> None:
+def validate_numeric_args(start_mileage_m: float, robot_speed_mps: float, ring_length_m: float) -> None:
+    if start_mileage_m < 0:
+        raise ValueError("start_mileage_m must be non-negative")
+    if robot_speed_mps < 0:
+        raise ValueError("robot_speed_mps must be non-negative")
     if ring_length_m <= 0:
         raise ValueError("ring_length_m must be greater than 0")
 
@@ -93,9 +97,12 @@ def read_manifest(path: Path) -> list[dict[str, str]]:
 def parse_video_time(row: dict[str, str], row_number: int) -> float:
     value = row.get("video_time_sec", "")
     try:
-        return float(value)
+        video_time_sec = float(value)
     except ValueError as exc:
         raise ValueError(f"row {row_number} has invalid video_time_sec: {value}") from exc
+    if video_time_sec < 0:
+        raise ValueError(f"row {row_number} video_time_sec must be non-negative")
+    return video_time_sec
 
 
 def build_metadata_rows(
@@ -167,7 +174,7 @@ def generate_video_frame_metadata(
     camera_id: str = "camera_01",
     position_angle: str = "unknown",
 ) -> list[dict[str, str]]:
-    validate_numeric_args(ring_length_m)
+    validate_numeric_args(start_mileage_m, robot_speed_mps, ring_length_m)
     manifest_rows = read_manifest(frames_manifest)
     rows = build_metadata_rows(
         manifest_rows=manifest_rows,
