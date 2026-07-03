@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import numpy as np
 from PIL import Image
@@ -124,15 +124,15 @@ def validate_manifest_frame_ids(rows: list[dict[str, str]]) -> None:
         seen_frame_ids.add(frame_id)
 
 
-def index_metadata_rows(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
-    metadata_by_frame: dict[str, dict[str, str]] = {}
+def index_metadata_rows(rows: list[dict[str, str]]) -> dict[str, tuple[int, dict[str, str]]]:
+    metadata_by_frame: dict[str, tuple[int, dict[str, str]]] = {}
     for row_number, row in enumerate(rows, start=1):
         frame_id = (row.get("frame_id") or "").strip()
         if not frame_id:
             raise ValueError(f"metadata_csv row {row_number} missing frame_id")
         if frame_id in metadata_by_frame:
             raise ValueError(f"metadata_csv duplicate frame_id: {frame_id}")
-        metadata_by_frame[frame_id] = row
+        metadata_by_frame[frame_id] = (row_number, row)
     return metadata_by_frame
 
 
@@ -160,19 +160,25 @@ def parse_video_time(value: str, label: str, row_number: int, frame_id: str) -> 
         raise ValueError(f"{label} row {row_number} frame_id {frame_id} has invalid video_time_sec: {value}") from exc
 
 
+def normalize_csv_path(value: str) -> str:
+    normalized = value.strip().replace("\\", "/")
+    return PurePosixPath(normalized).as_posix()
+
+
 def assert_manifest_metadata_consistent(
     manifest_row: dict[str, str],
     metadata: dict[str, str],
     row_number: int,
+    metadata_row_number: int,
 ) -> None:
     frame_id = manifest_row["frame_id"].strip()
     manifest_image_path = manifest_row["image_path"].strip()
     metadata_image_path = metadata["image_path"].strip()
-    if manifest_image_path != metadata_image_path:
+    if normalize_csv_path(manifest_image_path) != normalize_csv_path(metadata_image_path):
         raise ValueError(f"frame_id {frame_id} image_path mismatch between frames_manifest and metadata_csv")
 
     manifest_time = parse_video_time(manifest_row["video_time_sec"].strip(), "frames_manifest", row_number, frame_id)
-    metadata_time = parse_video_time(metadata["video_time_sec"].strip(), "metadata_csv", row_number, frame_id)
+    metadata_time = parse_video_time(metadata["video_time_sec"].strip(), "metadata_csv", metadata_row_number, frame_id)
     if abs(manifest_time - metadata_time) > 1e-6:
         raise ValueError(f"frame_id {frame_id} video_time_sec mismatch between frames_manifest and metadata_csv")
 
@@ -216,7 +222,7 @@ def extract_mask_features(mask_path: Path) -> dict[str, int | str]:
 
 def build_feature_rows(
     manifest_rows: list[dict[str, str]],
-    metadata_by_frame: dict[str, dict[str, str]],
+    metadata_by_frame: dict[str, tuple[int, dict[str, str]]],
     masks_dir: Path,
 ) -> list[dict[str, str | int]]:
     if not masks_dir.is_dir():
@@ -227,10 +233,11 @@ def build_feature_rows(
         frame_id = (manifest_row.get("frame_id") or "").strip()
         if not frame_id:
             raise ValueError(f"frames_manifest row {row_number} missing frame_id")
-        metadata = metadata_by_frame.get(frame_id)
-        if metadata is None:
+        metadata_entry = metadata_by_frame.get(frame_id)
+        if metadata_entry is None:
             raise ValueError(f"metadata not found for frame_id: {frame_id}")
-        assert_manifest_metadata_consistent(manifest_row, metadata, row_number)
+        metadata_row_number, metadata = metadata_entry
+        assert_manifest_metadata_consistent(manifest_row, metadata, row_number, metadata_row_number)
 
         mask_path = find_mask_path(masks_dir, frame_id)
         features = extract_mask_features(mask_path)

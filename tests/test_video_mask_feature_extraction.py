@@ -305,6 +305,18 @@ def test_extract_video_mask_features_rejects_manifest_metadata_image_path_mismat
     assert "frame_id frame_000001 image_path mismatch" in result.stderr
 
 
+def test_extract_video_mask_features_accepts_equivalent_image_path_formats(tmp_path):
+    manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
+    rows = base_metadata_rows()
+    rows[0]["image_path"] = ".\\data\\video_frames\\video_001\\frame_000001.jpg"
+    write_csv(metadata, rows, metadata_fields())
+
+    result = run_extract(manifest, metadata, masks_dir, output_csv)
+
+    assert result.returncode == 0, result.stderr
+    assert len(read_csv(output_csv)) == 2
+
+
 def test_extract_video_mask_features_rejects_manifest_metadata_video_time_mismatch(tmp_path):
     manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
     rows = base_metadata_rows()
@@ -315,3 +327,27 @@ def test_extract_video_mask_features_rejects_manifest_metadata_video_time_mismat
 
     assert result.returncode != 0
     assert "frame_id frame_000001 video_time_sec mismatch" in result.stderr
+
+
+def test_extract_video_mask_features_rejects_invalid_manifest_video_time(tmp_path):
+    manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
+    rows = base_manifest_rows()
+    rows[0]["video_time_sec"] = "abc"
+    write_csv(manifest, rows, manifest_fields())
+
+    result = run_extract(manifest, metadata, masks_dir, output_csv)
+
+    assert result.returncode != 0
+    assert "frames_manifest row 1 frame_id frame_000001 has invalid video_time_sec: abc" in result.stderr
+
+
+def test_extract_video_mask_features_rejects_invalid_metadata_video_time_with_metadata_row(tmp_path):
+    manifest, metadata, masks_dir, output_csv = write_valid_inputs(tmp_path)
+    rows = base_metadata_rows()
+    rows[1]["video_time_sec"] = "abc"
+    write_csv(metadata, rows, metadata_fields())
+
+    result = run_extract(manifest, metadata, masks_dir, output_csv)
+
+    assert result.returncode != 0
+    assert "metadata_csv row 2 frame_id frame_000002 has invalid video_time_sec: abc" in result.stderr
