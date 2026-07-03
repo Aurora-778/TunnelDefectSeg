@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 from pathlib import Path
 
 
@@ -60,6 +61,13 @@ def validate_args(video_path: Path, sample_interval: int, max_frames: int | None
         raise ValueError("jpg_quality must be between 1 and 100")
 
 
+def safe_video_id(video_id: str) -> str:
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", video_id).strip("._-")
+    if not safe_id:
+        raise ValueError("video_id must contain at least one letter or number")
+    return safe_id
+
+
 def default_output_dir(video_path: Path, video_id: str) -> Path:
     return Path("data") / "video_frames" / video_id
 
@@ -76,6 +84,14 @@ def write_manifest(manifest_path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def ensure_clean_output_dir(output_dir: Path) -> None:
+    manifest_path = output_dir / "frames_manifest.csv"
+    if manifest_path.exists():
+        raise FileExistsError(
+            f"frames_manifest.csv already exists in {output_dir}; remove the old output directory before rerunning"
+        )
+
+
 def extract_video_frames(
     video_path: Path,
     output_dir: Path | None = None,
@@ -86,7 +102,7 @@ def extract_video_frames(
 ) -> tuple[list[Path], Path]:
     """Extract sampled video frames and write a manifest for downstream inspection metadata generation."""
     video_path = video_path.resolve()
-    video_id = video_id or video_path.stem
+    video_id = safe_video_id(video_id or video_path.stem)
     output_dir = output_dir or default_output_dir(video_path, video_id)
     validate_args(video_path, sample_interval, max_frames, jpg_quality)
 
@@ -96,7 +112,11 @@ def extract_video_frames(
         raise ValueError(f"unable to open video: {video_path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_clean_output_dir(output_dir)
     fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+    if fps <= 0:
+        capture.release()
+        raise ValueError(f"unable to determine video fps: {video_path}")
     saved_paths: list[Path] = []
     manifest_rows: list[dict[str, str]] = []
     frame_index = 0
@@ -116,7 +136,7 @@ def extract_video_frames(
             if not saved:
                 raise OSError(f"failed to write frame image: {image_path}")
 
-            video_time_sec = frame_index / fps if fps > 0 else 0.0
+            video_time_sec = frame_index / fps
             saved_paths.append(image_path)
             manifest_rows.append(
                 {
@@ -160,7 +180,7 @@ def main() -> None:
 
     print("video frame extraction completed")
     print(f"video_path: {args.video_path}")
-    print(f"output_dir: {args.output_dir or default_output_dir(args.video_path, args.video_id or args.video_path.stem)}")
+    print(f"output_dir: {args.output_dir or default_output_dir(args.video_path, safe_video_id(args.video_id or args.video_path.stem))}")
     print(f"saved_frame_count: {len(saved_paths)}")
     print(f"manifest_file: {manifest_path}")
 
