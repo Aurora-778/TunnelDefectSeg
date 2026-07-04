@@ -5,7 +5,7 @@ import csv
 import shutil
 from pathlib import Path
 
-from extract_video_frames import extract_video_frames
+from extract_video_frames import extract_video_frames, safe_video_id
 from generate_video_frame_metadata import generate_video_frame_metadata
 from extract_video_mask_features import extract_video_mask_features
 
@@ -231,8 +231,9 @@ def run_video_inspection_pipeline(
     if masks_dir is None:
         raise ValueError("masks_dir is required when mode=mask_input")
 
-    frames_dir = frames_root / video_id
-    inspection_dir = output_root / video_id
+    resolved_video_id = safe_video_id(video_id)
+    frames_dir = frames_root / resolved_video_id
+    inspection_dir = output_root / resolved_video_id
     metadata_csv = inspection_dir / "metadata.csv"
     disease_features_csv = inspection_dir / "disease_features.csv"
     inspection_sequence_csv = inspection_dir / "inspection_sequence.csv"
@@ -243,12 +244,12 @@ def run_video_inspection_pipeline(
         output_dir=frames_dir,
         sample_interval=sample_interval,
         max_frames=max_frames,
-        video_id=video_id,
+        video_id=resolved_video_id,
     )
     generate_video_frame_metadata(
         frames_manifest=frames_manifest,
         output_csv=metadata_csv,
-        inspection_id=video_id,
+        inspection_id=resolved_video_id,
         start_timestamp=start_timestamp,
         start_mileage_m=start_mileage_m,
         robot_speed_mps=robot_speed_mps,

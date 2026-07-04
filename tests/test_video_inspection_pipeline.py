@@ -23,11 +23,12 @@ def write_test_video(path: Path, frame_count: int = 4, fps: float = 10.0) -> Non
     writer.release()
 
 
-def write_mask(path: Path, nonzero: bool = True) -> None:
+def write_mask(path: Path, bbox: tuple[int, int, int, int] | None = (3, 2, 8, 6)) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     mask = np.zeros((12, 16), dtype=np.uint8)
-    if nonzero:
-        mask[2:6, 3:8] = 255
+    if bbox is not None:
+        x1, y1, x2, y2 = bbox
+        mask[y1:y2, x1:x2] = 255
     Image.fromarray(mask).save(path)
 
 
@@ -37,8 +38,14 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 
 
 def write_video_masks(masks_dir: Path, frame_count: int = 4) -> None:
+    boxes = [
+        (1, 1, 4, 3),
+        (3, 2, 8, 6),
+        (2, 1, 10, 8),
+        (5, 4, 12, 10),
+    ]
     for index in range(frame_count):
-        write_mask(masks_dir / f"frame_{index + 1:06d}.png", nonzero=index % 2 == 0)
+        write_mask(masks_dir / f"frame_{index + 1:06d}.png", bbox=boxes[index % len(boxes)])
 
 
 def run_pipeline(
@@ -137,6 +144,53 @@ def test_run_video_inspection_pipeline_generates_video_inspection_sequence(tmp_p
     assert rows[0]["feature_source"] == "mask_nonzero_pixels"
     assert "not model inference" in rows[0]["feature_limit_note"]
     assert (inspection_dir / "sampled_masks" / "frame_000002.png").is_file()
+    assert rows[0]["disease_area"] == "6"
+    assert rows[1]["disease_area"] == "56"
+    assert rows[1]["bbox_x"] == "2"
+    assert rows[1]["bbox_y"] == "1"
+
+
+def test_run_video_inspection_pipeline_sanitizes_video_id_for_output_paths(tmp_path):
+    video_path = tmp_path / "data" / "videos" / "tunnel_demo.mp4"
+    masks_dir = tmp_path / "data" / "video_masks" / "tunnel_demo"
+    output_root = tmp_path / "data" / "video_inspection"
+    frames_root = tmp_path / "data" / "video_frames"
+    write_test_video(video_path)
+    write_video_masks(masks_dir)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_video_inspection_pipeline.py",
+            "--video_path",
+            str(video_path),
+            "--video_id",
+            "../../bad id",
+            "--sample_interval",
+            "2",
+            "--max_frames",
+            "2",
+            "--mode",
+            "mask_input",
+            "--masks_dir",
+            str(masks_dir),
+            "--output_root",
+            str(output_root),
+            "--frames_root",
+            str(frames_root),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (frames_root / "bad_id" / "frames_manifest.csv").is_file()
+    sequence_csv = output_root / "bad_id" / "inspection_sequence.csv"
+    assert sequence_csv.is_file()
+    assert not (tmp_path / "data" / "bad id").exists()
+    assert not (tmp_path / "bad id").exists()
+    rows = read_csv(sequence_csv)
+    assert rows[0]["inspection_id"] == "bad_id"
 
 
 def test_run_video_inspection_pipeline_rejects_missing_masks_dir(tmp_path):
