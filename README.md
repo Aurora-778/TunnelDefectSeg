@@ -79,6 +79,8 @@ orchestrator/                 # Memory/Association Agent、DAG、run 管理和�
 | `scripts/analyze_disease_growth.py` | 统计同一病害跨巡检的面积、风险和趋势变化。 |
 | `scripts/generate_visualization_and_recheck_list.py` | 生成可视化图表、重点复检清单和阶段性 Markdown 报告。 |
 | `scripts/run_progressive_inspection_evaluation.py` | 按巡检顺序做历史 memory -> 当前 query -> 关联评估 -> 增量 memory 更新。 |
+| `scripts/create_demo_tunnel_video_from_kict.py` | 从 KICT 静态图像和 mask 合成可复现的 demo video，并同步生成 video masks 和来源 manifest。 |
+| `scripts/run_video_inspection_pipeline.py` | 串联视频抽帧、metadata 生成、已有 mask 几何特征提取，并生成 video 版 `inspection_sequence.csv`。 |
 | `run.py` | 当前推荐入口，作为 Orchestrator DAG 的薄封装运行完整 pipeline。 |
 
 ## 一键运行完整闭环
@@ -134,6 +136,12 @@ python scripts/run_progressive_inspection_evaluation.py
 - `outputs/association_evaluation_report.md`
 
 说明：该评估中 `disease_id` 只作为评估标签，匹配打分会禁用 `disease_id` 得分。
+
+## Demo 视频来源说明
+
+本项目中的 `tunnel_demo.mp4` 并非真实机器人连续巡检视频，而是由 KICT 静态裂缝图像和 mask 按序合成的演示视频。该 demo 主要用于验证视频输入、抽帧、逐帧 mask 特征提取、`inspection_sequence.csv` 生成以及后续 pipeline 接入流程。
+
+真实机器人巡检视频、在线模型推理和实时视频流分析仍属于后续扩展方向。视频相关输出使用 `data/videos/`、`data/video_demo/`、`data/video_frames/`、`data/video_masks/` 和 `data/video_inspection/`，不会覆盖 `data/simulated/` 下的原有 KICT simulated pipeline 产物。
 
 ## 从原始 KICT 数据重新生成流程
 
