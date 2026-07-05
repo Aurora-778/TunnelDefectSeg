@@ -49,6 +49,11 @@ ROBOT_KICT_FRAME_RECORDS_FILE = SIMULATED_ROOT / "robot_kict_frame_records.csv"
 ORCHESTRATOR_STATE_FILE = ROOT / "orchestrator" / "state" / "run_state.json"
 VISUALIZATION_ROOT = ROOT / "outputs" / "visualizations"
 EVIDENCE_OVERLAY_ROOT = ROOT / "outputs" / "evidence_overlays"
+VIDEO_DATA_ROOT = ROOT / "data" / "videos"
+VIDEO_INSPECTION_ROOT = ROOT / "data" / "video_inspection"
+VIDEO_OUTPUT_ROOT = ROOT / "outputs" / "video_inspection"
+DEFAULT_VIDEO_ID = "tunnel_demo"
+VIDEO_MISSING_MESSAGE = "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。"
 KICT_DATASET_ROOTS = [
     ROOT / "kict_sample",
     ROOT.parent / "kict_sample",
@@ -340,6 +345,116 @@ def _load_visualization_assets() -> dict:
     }
 
 
+def _safe_video_id(video_id: str | None) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", video_id or DEFAULT_VIDEO_ID).strip("._")
+    return safe or DEFAULT_VIDEO_ID
+
+
+def _video_url(video_id: str, filename: str) -> str:
+    return f"/static-video/{video_id}/{filename}"
+
+
+def _video_table_payload(title: str, path: Path, missing: list[str], errors: dict, row_limit: int = 24) -> dict:
+    if not path.exists():
+        missing.append(str(path).replace("\\", "/"))
+        return {
+            "title": title,
+            "path": str(path).replace("\\", "/"),
+            "exists": False,
+            "columns": [],
+            "rows": [],
+            "row_count": 0,
+            "missing_message": VIDEO_MISSING_MESSAGE,
+        }
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError as exc:
+        errors[title] = str(exc)
+        return {
+            "title": title,
+            "path": str(path).replace("\\", "/"),
+            "exists": False,
+            "columns": [],
+            "rows": [],
+            "row_count": 0,
+            "missing_message": VIDEO_MISSING_MESSAGE,
+        }
+    return {
+        "title": title,
+        "path": str(path).replace("\\", "/"),
+        "exists": True,
+        "columns": list(rows[0].keys()) if rows else [],
+        "rows": rows[:row_limit],
+        "row_count": len(rows),
+        "row_limit": row_limit,
+        "missing_message": "",
+    }
+
+
+def _load_video_dashboard(video_id: str = DEFAULT_VIDEO_ID) -> dict:
+    safe_id = _safe_video_id(video_id)
+    missing: list[str] = []
+    errors: dict[str, str] = {}
+    video_files = [
+        {
+            "key": "demo_video",
+            "title": "原始 demo video",
+            "path": VIDEO_DATA_ROOT / f"{safe_id}.mp4",
+            "filename": f"{safe_id}.mp4",
+        },
+        {
+            "key": "opencv_annotated_video",
+            "title": "OpenCV annotated video",
+            "path": VIDEO_OUTPUT_ROOT / safe_id / "annotated_video.mp4",
+            "filename": "annotated_video.mp4",
+        },
+        {
+            "key": "supervision_annotated_video",
+            "title": "Supervision annotated video",
+            "path": VIDEO_OUTPUT_ROOT / safe_id / "supervision_annotated_video.mp4",
+            "filename": "supervision_annotated_video.mp4",
+        },
+    ]
+    videos = []
+    for item in video_files:
+        exists = item["path"].exists()
+        if not exists:
+            missing.append(str(item["path"]).replace("\\", "/"))
+        videos.append({
+            "key": item["key"],
+            "title": item["title"],
+            "exists": exists,
+            "path": str(item["path"]).replace("\\", "/"),
+            "url": _video_url(safe_id, item["filename"]) if exists else "",
+            "missing_message": "" if exists else VIDEO_MISSING_MESSAGE,
+        })
+
+    tables = [
+        _video_table_payload("disease_features.csv", VIDEO_INSPECTION_ROOT / safe_id / "disease_features.csv", missing, errors),
+        _video_table_payload("inspection_sequence.csv", VIDEO_INSPECTION_ROOT / safe_id / "inspection_sequence.csv", missing, errors),
+        _video_table_payload("video_visualization_manifest.csv", VIDEO_OUTPUT_ROOT / safe_id / "video_visualization_manifest.csv", missing, errors),
+        _video_table_payload("supervision_visualization_manifest.csv", VIDEO_OUTPUT_ROOT / safe_id / "supervision_visualization_manifest.csv", missing, errors),
+    ]
+    return {
+        "ok": True,
+        "video_id": safe_id,
+        "source": "generated-video-artifacts" if any(video["exists"] for video in videos) or any(table["exists"] for table in tables) else "fallback",
+        "missing_message": VIDEO_MISSING_MESSAGE,
+        "boundary_notes": [
+            "tunnel_demo.mp4 是由 KICT 静态裂缝图像和 mask 合成的 demo video。",
+            "该视频用于验证视频输入 pipeline 和可视化展示。",
+            "它不是真实机器人连续巡检视频。",
+            "当前系统不是实时视频流分析系统。",
+            "supervision 只是可选可视化工具层，不参与 Disease Memory Bank、no-id Association 和 Growth Analysis 核心逻辑。",
+        ],
+        "videos": videos,
+        "tables": tables,
+        "missing": missing,
+        "errors": errors,
+    }
+
+
 def _inspection_count_from_growth(rows: list[dict]) -> int:
     inspection_counts = [int(value) for value in (_to_float(row.get("inspection_count")) for row in rows) if value]
     inspection_ids = {
@@ -616,6 +731,14 @@ class DetectionHandler(SimpleHTTPRequestHandler):
         if path.startswith("/static-outputs/evidence-overlays/"):
             self._serve_evidence_overlay_file(path.removeprefix("/static-outputs/evidence-overlays/"))
             return
+        if path.startswith("/static-video/"):
+            video_path = path.removeprefix("/static-video/")
+            parts = [part for part in video_path.split("/") if part]
+            if len(parts) != 2:
+                self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+                return
+            self._serve_video_file(parts[0], parts[1])
+            return
         if path.startswith("/outputs/"):
             self._serve_file(OUTPUT_ROOT / path.removeprefix("/outputs/"))
             return
@@ -665,6 +788,9 @@ class DetectionHandler(SimpleHTTPRequestHandler):
         if path == "/api/visualization-assets":
             self._send_json(_load_visualization_assets())
             return
+        if path == "/api/video-dashboard":
+            self._send_json(_load_video_dashboard(DEFAULT_VIDEO_ID))
+            return
 
         self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
@@ -697,6 +823,8 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             OUTPUT_ROOT.resolve(),
             VISUALIZATION_ROOT.resolve(),
             EVIDENCE_OVERLAY_ROOT.resolve(),
+            VIDEO_DATA_ROOT.resolve(),
+            VIDEO_OUTPUT_ROOT.resolve(),
         ]
         if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
             self._send_json({"error": "Forbidden"}, HTTPStatus.FORBIDDEN)
@@ -725,6 +853,21 @@ class DetectionHandler(SimpleHTTPRequestHandler):
         safe_name = Path(filename).name
         path = EVIDENCE_OVERLAY_ROOT / safe_name
         if filename != safe_name or path.suffix.lower() != ".png":
+            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            return
+        self._serve_file(path)
+
+    def _serve_video_file(self, video_id: str, filename: str) -> None:
+        safe_id = _safe_video_id(video_id)
+        safe_name = Path(filename).name
+        if video_id != safe_id or filename != safe_name or Path(safe_name).suffix.lower() != ".mp4":
+            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            return
+        if safe_name == f"{safe_id}.mp4":
+            path = VIDEO_DATA_ROOT / safe_name
+        elif safe_name in {"annotated_video.mp4", "supervision_annotated_video.mp4"}:
+            path = VIDEO_OUTPUT_ROOT / safe_id / safe_name
+        else:
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
             return
         self._serve_file(path)

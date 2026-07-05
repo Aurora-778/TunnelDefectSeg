@@ -258,8 +258,11 @@ Web 页面当前展示：
 3. 跨巡检规则面积变化提示。
 4. 重点复检清单。
 5. 6 张可视化图表。
-6. 单图检测/现场复核入口。
-7. KICT 静态数据与仿真元数据边界说明。
+6. 视频分析结果：展示 `tunnel_demo.mp4`、OpenCV 标注视频、Supervision 标注视频以及对应 CSV 表格；缺少产物时会提示先运行 Step 1 / Step 2 / Step 3。
+7. 单图检测/现场复核入口。
+8. KICT 静态数据与仿真元数据边界说明。
+
+视频分析页只读取已经生成的本地产物，不执行 Web 上传、实时视频流分析或模型自动推理。`tunnel_demo.mp4` 是由 KICT 静态裂缝图像和 mask 合成的 demo video，用于验证视频输入 pipeline 和可视化展示；它不是真实机器人连续巡检视频。`supervision` 仍只是可选可视化工具层，不参与 Disease Memory Bank、no-id Association 和 Growth Analysis 核心逻辑。
 
 Multi-Agent 平台页面：
 

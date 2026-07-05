@@ -1861,9 +1861,47 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .video-card video {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border-radius: 18px;
+      background: rgba(11,17,24,.9);
+      object-fit: contain;
+    }
+
+    .video-boundary {
+      display: grid;
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 14px 16px;
+      border: 1px solid rgba(0,166,166,.22);
+      border-radius: 18px;
+      background: rgba(0,166,166,.07);
+      color: #2c485e;
+      line-height: 1.65;
+    }
+
+    .video-table-block {
+      margin-top: 18px;
+      overflow-x: auto;
+    }
+
+    .video-table-block table {
+      min-width: 760px;
+      width: 100%;
+    }
+
     @media (max-width: 920px) {
       #robotRouteGrid,
-      #robotTrackGrid {
+      #robotTrackGrid,
+      .video-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -1879,6 +1917,7 @@
         <a href="#growth-analysis" data-view-link="growth-analysis">增长分析</a>
         <a href="#recheck-list" data-view-link="recheck-list">复检清单</a>
         <a href="#visualizations" data-view-link="visualizations">可视化图表</a>
+        <a href="#video-analysis" data-view-link="video-analysis">视频分析</a>
         <a href="#detect" data-view-link="detect">单图检测</a>
         <a href="#data-note" data-view-link="data-note">数据说明</a>
       </div>
@@ -1960,6 +1999,23 @@
       <div class="panel-body">
         <div class="visualization-grid" id="visualizationGrid">
           <div class="robot-empty">等待图表。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section app-view" id="video-analysis" data-app-view="video-analysis">
+      <div class="panel-title">视频分析结果 <span id="videoDashboardSource">/api/video-dashboard</span></div>
+      <div class="panel-body">
+        <div class="video-boundary" id="videoBoundaryNotes">
+          <span>tunnel_demo.mp4 是由 KICT 静态裂缝图像和 mask 合成的 demo video。</span>
+          <span>它用于验证视频输入 pipeline 和可视化展示，不是真实机器人连续巡检视频；当前系统不是实时视频流分析系统。</span>
+          <span>supervision 只是可选可视化工具层，不参与 Disease Memory Bank、no-id Association 和 Growth Analysis 核心逻辑。</span>
+        </div>
+        <div class="video-grid" id="videoCards">
+          <div class="robot-empty">等待视频分析产物。</div>
+        </div>
+        <div id="videoTables">
+          <div class="robot-empty">等待视频分析表格。</div>
         </div>
       </div>
     </section>
@@ -2790,6 +2846,68 @@
       }
     }
 
+    function renderVideoTable(table = {}) {
+      if (!table.exists) {
+        return `<section class="video-table-block">
+          <h3>${escapeHtml(table.title || "CSV")}</h3>
+          <div class="robot-empty">${escapeHtml(table.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>
+        </section>`;
+      }
+      const columns = table.columns || [];
+      const rows = table.rows || [];
+      if (!columns.length || !rows.length) {
+        return `<section class="video-table-block">
+          <h3>${escapeHtml(table.title || "CSV")}</h3>
+          <div class="robot-empty">表格已生成，但当前没有可展示行。</div>
+        </section>`;
+      }
+      return `<section class="video-table-block">
+        <h3>${escapeHtml(table.title || "CSV")} <span class="tag">${escapeHtml(table.row_count || rows.length)} rows</span></h3>
+        <table>
+          <thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+          <tbody>
+            ${rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row[column] ?? "")}</td>`).join("")}</tr>`).join("")}
+          </tbody>
+        </table>
+      </section>`;
+    }
+
+    function renderVideoDashboard(payload = {}) {
+      document.querySelector("#videoDashboardSource").textContent = payload.source || "fallback";
+      const notes = payload.boundary_notes || [];
+      document.querySelector("#videoBoundaryNotes").innerHTML = notes.length
+        ? notes.map((note) => `<span>${escapeHtml(note)}</span>`).join("")
+        : `<span>tunnel_demo.mp4 是由 KICT 静态裂缝图像和 mask 合成的 demo video。</span>`;
+
+      const videos = payload.videos || [];
+      document.querySelector("#videoCards").innerHTML = videos.length ? videos.map((video) => {
+        const body = video.exists
+          ? `<video controls preload="metadata" src="${escapeHtml(video.url)}"></video>
+             <p>${escapeHtml(video.path || "")}</p>`
+          : `<div class="robot-empty">${escapeHtml(video.missing_message || payload.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>`;
+        return `<article class="data-card video-card">
+          <b>${escapeHtml(video.title || video.key || "video")}</b>
+          ${body}
+        </article>`;
+      }).join("") : `<div class="robot-empty">${escapeHtml(payload.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>`;
+
+      const tables = payload.tables || [];
+      document.querySelector("#videoTables").innerHTML = tables.length
+        ? tables.map(renderVideoTable).join("")
+        : `<div class="robot-empty">${escapeHtml(payload.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>`;
+    }
+
+    async function loadVideoDashboard() {
+      try {
+        const response = await fetch("/api/video-dashboard");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        renderVideoDashboard(await response.json());
+      } catch (error) {
+        document.querySelector("#videoDashboardSource").textContent = "video dashboard unavailable";
+        document.querySelector("#videoCards").innerHTML = `<div class="robot-empty">视频分析结果不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
 
     function shortLocation(location = {}) {
       let mileage = "里程 N/A";
@@ -3012,7 +3130,7 @@
       uploadStatus.className = `upload-status ${type}`.trim();
     }
 
-    const appViewIds = ["dashboard", "engineering-report", "growth-analysis", "recheck-list", "visualizations", "detect", "data-note"];
+    const appViewIds = ["dashboard", "engineering-report", "growth-analysis", "recheck-list", "visualizations", "video-analysis", "detect", "data-note"];
 
     function currentAppViewFromHash() {
       const hash = window.location.hash.replace("#", "");
@@ -3520,6 +3638,7 @@
     loadGrowthAnalysis();
     loadFullRecheckList();
     loadVisualizationAssets();
+    loadVideoDashboard();
     loadRobotRouteReport();
     renderReport(sampleReport, sampleViews);
     initAppNavigation();
