@@ -22,8 +22,14 @@
 | `scripts/generate_engineering_report.py` | 工程化中文病害描述生成逻辑。 |
 | `scripts/analyze_disease_growth.py` | 规则面积变化提示生成逻辑。 |
 | `scripts/generate_visualization_and_recheck_list.py` | 图表与重点复检清单生成逻辑。 |
+| `scripts/create_demo_tunnel_video_from_kict.py` | KICT demo video 合成逻辑，体现视频展示支路的数据准备能力。 |
+| `scripts/run_video_inspection_pipeline.py` | 视频抽帧、视频巡检元数据和视频 mask 特征串联逻辑。 |
+| `scripts/annotate_video_frames.py` | OpenCV 标注帧生成逻辑。 |
+| `scripts/export_annotated_video.py` | 标注视频导出逻辑。 |
+| `scripts/validate_video_artifacts.py` | 视频 demo 产物完整性校验逻辑。 |
+| `scripts/run_demo_showcase.py` | 本地视频 demo 展示闭环一键串联逻辑。 |
 
-若需要提交前后连续页，可从上述文件中选择连续代码页，重点覆盖入口、数据处理、核心分析和展示接口。
+若需要提交前后连续页，可从上述文件中选择连续代码页，重点覆盖入口、数据处理、核心分析、视频 demo 展示和 Web 展示接口。
 
 ## 3. 不建议作为主要提交材料的内容
 
@@ -32,6 +38,7 @@
 - 模型权重文件，例如 `.pth`、`.pt`、`.onnx`；
 - 数据集原图、mask 和压缩包；
 - `outputs/` 下生成的报告、图表和中间结果；
+- `data/videos/`、`data/video_frames/`、`data/video_inspection/`、`data/video_masks/`、`outputs/video_inspection/` 下生成的视频、抽帧图片、CSV 和标注视频产物；
 - `experiments/` 下的大型实验产物；
 - `__pycache__/`、`.pytest_cache/`、日志文件；
 - `.codegraph/`、`.codebase-memory/` 等本地索引；
@@ -90,9 +97,10 @@
 4. Disease Memory Bank 代码；
 5. Association 规则评分代码；
 6. 规则面积变化提示和复检清单代码；
-7. Web 服务和接口代码；
-8. 最终报告生成代码。
+7. 视频 demo 生成、视频标注和视频产物校验代码；
+8. Web 服务和接口代码；
+9. 最终报告生成代码。
 
 ## 7. 当前版本边界说明
 
-当前版本基于 KICT 静态图像 / mask 与仿真巡检元数据进行工程原型验证。源代码提交材料应体现软件功能实现，不应把 demo 数据和仿真元数据描述为真实线路长期巡检验证结果。
+当前版本基于 KICT 静态图像 / mask 与仿真巡检元数据进行工程原型验证。视频 demo 由 KICT 静态图像 / mask 合成，用于展示视频输入处理和可视化流程。源代码提交材料应体现软件功能实现，不应把 demo 数据、合成视频和仿真元数据描述为真实线路长期巡检验证结果。

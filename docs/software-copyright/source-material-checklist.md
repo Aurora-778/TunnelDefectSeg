@@ -30,7 +30,7 @@
 - 封面和页眉不写版本号，版本号保留在登记信息或正文说明中。
 - 页眉只放软件名称，不放“V1.0”等版本号。
 - 页码放在页面右上端，与页眉同一行。
-- 正式 Word / PDF 版至少包含一张图片，可使用系统流程图或 Web Dashboard 界面截图。
+- 正式 Word / PDF 版至少包含一张图片，可使用系统流程图、Web Dashboard 系统总览截图或视频分析结果页面截图。
 - 图片编号建议按章编号，例如 `图2.1 系统总览界面`。
 - 标题、正文、图名应按规范模板统一字体、字号、段前段后和行距。
 
@@ -48,6 +48,27 @@
 ## 源代码页建议范围
 
 优先选择本仓库自研、能体现软件功能闭环的代码：
+
+- `run.py`
+- `web_app.py`
+- `orchestrator/agents/engineering_report_agent.py`
+- `orchestrator/agents/memory_agent.py`
+- `orchestrator/agents/association_agent.py`
+- `orchestrator/agents/visualization_agent.py`
+- `orchestrator/agents/final_report_agent.py`
+- `scripts/extract_kict_mask_features.py`
+- `scripts/merge_kict_with_simulation.py`
+- `scripts/generate_engineering_report.py`
+- `scripts/analyze_disease_growth.py`
+- `scripts/generate_visualization_and_recheck_list.py`
+- `scripts/create_demo_tunnel_video_from_kict.py`
+- `scripts/run_video_inspection_pipeline.py`
+- `scripts/annotate_video_frames.py`
+- `scripts/export_annotated_video.py`
+- `scripts/validate_video_artifacts.py`
+- `scripts/run_demo_showcase.py`
+
+以下早期单图检测相关文件可作为补充材料，但不建议覆盖主线：
 
 - `web_app.py`
 - `web_demo/index.html`
@@ -67,6 +88,7 @@
 - `experiments/` 下大体积运行产物。
 - 模型权重 `.pth`。
 - 数据集图片和人工 mask。
+- 生成的视频、抽帧图片、视频巡检 CSV 和标注视频产物，例如 `data/videos/`、`data/video_frames/`、`data/video_inspection/`、`data/video_masks/`、`outputs/video_inspection/`。
 - `.codegraph/`、`.understand-anything/` 等本地索引文件。
 
 ## 说明书应包含的内容
@@ -77,6 +99,7 @@
 - 功能模块说明。
 - 操作流程。
 - 主要界面截图。
+- 视频分析结果页面或系统总览界面截图。
 - 输出结果说明。
 - 第三方依赖说明。
 - 非结构安全诊断边界说明。
@@ -84,8 +107,10 @@
 ## 仓库提交前检查
 
 - README 中能找到 Web 启动方式。
-- Web 页面能打开并展示拖拽检测入口。
-- `docs/software-copyright/tunnel-defect-review-system.md` 已更新到当前功能。
+- Web 页面能打开并展示系统总览、视频分析结果或拖拽检测入口。
+- `run_demo_showcase.bat` 可作为本地视频 demo 展示入口；若未安装 Supervision，可使用 `--skip_supervision`。
+- `docs/software-copyright/tunnel-defect-review-system.md` 已标记为早期单图分割与可信复核能力的历史补充参考，不作为本次主提交材料。
 - 源代码材料不包含第三方库源码或模型权重。
+- 源代码材料不包含本地生成的视频 demo 产物。
 - `.codegraph/` 未提交。
 - 大体积 `experiments/web_live/` 未提交。
