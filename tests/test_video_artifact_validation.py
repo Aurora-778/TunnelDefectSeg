@@ -15,6 +15,8 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 def write_valid_artifacts(root: Path, video_id: str = "demo") -> None:
     (root / "data" / "videos").mkdir(parents=True)
     (root / "data" / "videos" / f"{video_id}.mp4").write_bytes(b"mp4")
+    (root / "data" / "video_frames" / video_id).mkdir(parents=True)
+    (root / "data" / "video_frames" / video_id / "frame_000001.jpg").write_bytes(b"jpg")
     write_csv(
         root / "data" / "video_frames" / video_id / "frames_manifest.csv",
         [{"video_id": video_id, "frame_id": "frame_000001", "frame_index": "0", "video_time_sec": "0", "image_path": "x.jpg"}],
@@ -93,6 +95,16 @@ def test_validate_video_artifacts_reports_missing_outputs(tmp_path):
     assert "annotated_video: missing/error" in result.stdout
 
 
+def test_validate_video_artifacts_reports_missing_source_frames(tmp_path):
+    write_valid_artifacts(tmp_path)
+    (tmp_path / "data" / "video_frames" / "demo" / "frame_000001.jpg").unlink()
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "source_frames: missing/error" in result.stdout
+
+
 def test_validate_video_artifacts_reports_missing_annotated_frames(tmp_path):
     write_valid_artifacts(tmp_path)
     (tmp_path / "outputs" / "video_inspection" / "demo" / "annotated_frames" / "frame_000001.jpg").unlink()
@@ -111,3 +123,53 @@ def test_validate_video_artifacts_reports_bad_csv_schema(tmp_path):
 
     assert result.returncode != 0
     assert "disease_features missing required fields" in result.stdout
+
+
+def test_validate_video_artifacts_reports_video_id_mismatch(tmp_path):
+    write_valid_artifacts(tmp_path)
+    write_csv(
+        tmp_path / "data" / "video_frames" / "demo" / "frames_manifest.csv",
+        [{"video_id": "other", "frame_id": "frame_000001", "frame_index": "0", "video_time_sec": "0", "image_path": "x.jpg"}],
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "frames_manifest row 2 video_id mismatch" in result.stdout
+    assert "actual=other, expected=demo" in result.stdout
+
+
+def test_validate_video_artifacts_reports_inspection_id_mismatch(tmp_path):
+    write_valid_artifacts(tmp_path)
+    write_csv(
+        tmp_path / "data" / "video_inspection" / "demo" / "metadata.csv",
+        [
+            {
+                "inspection_id": "other",
+                "frame_id": "frame_000001",
+                "timestamp": "2026-07-03T00:00:00",
+                "video_time_sec": "0",
+                "image_path": "x.jpg",
+            }
+        ],
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "metadata row 2 inspection_id mismatch" in result.stdout
+    assert "actual=other, expected=demo" in result.stdout
+
+
+def test_validate_video_artifacts_reports_inspection_sequence_id_mismatch(tmp_path):
+    write_valid_artifacts(tmp_path)
+    write_csv(
+        tmp_path / "data" / "video_inspection" / "demo" / "inspection_sequence.csv",
+        [{"inspection_id": "other", "frame_id": "frame_000001", "image_id": "demo_frame_000001", "image_path": "x.jpg", "mask_path": "m.png"}],
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "inspection_sequence row 2 inspection_id mismatch" in result.stdout
+    assert "actual=other, expected=demo" in result.stdout

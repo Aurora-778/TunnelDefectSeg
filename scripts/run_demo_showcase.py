@@ -72,7 +72,8 @@ def run_demo_showcase(
     video_path = Path("data") / "videos" / f"{resolved_video_id}.mp4"
     video_masks_dir = Path("data") / "video_masks" / resolved_video_id
     source_manifest = Path("data") / "video_demo" / f"{resolved_video_id}_source_manifest.csv"
-    frames_manifest = Path("data") / "video_frames" / resolved_video_id / "frames_manifest.csv"
+    source_frames_dir = Path("data") / "video_frames" / resolved_video_id
+    frames_manifest = source_frames_dir / "frames_manifest.csv"
     inspection_dir = Path("data") / "video_inspection" / resolved_video_id
     output_dir = Path("outputs") / "video_inspection" / resolved_video_id
 
@@ -109,6 +110,7 @@ def run_demo_showcase(
     pipeline_ready = require_all_or_none(
         "video inspection CSV stage",
         [
+            source_frames_dir / "frame_000001.jpg",
             frames_manifest,
             inspection_dir / "metadata.csv",
             inspection_dir / "disease_features.csv",
@@ -139,7 +141,7 @@ def run_demo_showcase(
     opencv_ready = require_all_or_none(
         "OpenCV visualization stage",
         [
-            output_dir / "annotated_frames",
+            output_dir / "annotated_frames" / "frame_000001.jpg",
             output_dir / "video_visualization_manifest.csv",
             output_dir / "annotated_video.mp4",
         ],
@@ -154,7 +156,7 @@ def run_demo_showcase(
         supervision_ready = require_all_or_none(
             "Supervision visualization stage",
             [
-                output_dir / "supervision_annotated_frames",
+                output_dir / "supervision_annotated_frames" / "frame_000001.jpg",
                 output_dir / "supervision_detections_manifest.csv",
                 output_dir / "supervision_visualization_manifest.csv",
                 output_dir / "supervision_annotated_video.mp4",

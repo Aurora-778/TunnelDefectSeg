@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+echo Supervision is optional. If it is not installed, run: run_demo_showcase.bat --skip_supervision
 python scripts\run_demo_showcase.py %*
 if errorlevel 1 (
   echo.

@@ -36,7 +36,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def read_csv_rows(path: Path, label: str, required_fields: list[str]) -> tuple[list[dict[str, str]], list[str]]:
+def read_csv_rows(
+    path: Path,
+    label: str,
+    required_fields: list[str],
+    expected_values: dict[str, str] | None = None,
+) -> tuple[list[dict[str, str]], list[str]]:
     errors: list[str] = []
     if not path.is_file():
         return [], [f"{label} missing: {path}"]
@@ -53,6 +58,13 @@ def read_csv_rows(path: Path, label: str, required_fields: list[str]) -> tuple[l
         return [], [f"{label} unreadable: {path} ({exc})"]
     if not rows:
         errors.append(f"{label} contains no rows: {path}")
+    for row_number, row in enumerate(rows, start=2):
+        for field, expected in (expected_values or {}).items():
+            if field not in row:
+                continue
+            actual = (row.get(field) or "").strip()
+            if actual != expected:
+                errors.append(f"{label} row {row_number} {field} mismatch: actual={actual}, expected={expected}")
     return rows, errors
 
 
@@ -84,8 +96,13 @@ def directory_status(path: Path, label: str, pattern: str = "frame_*.jpg") -> di
     }
 
 
-def csv_status(path: Path, label: str, required_fields: list[str]) -> dict[str, str | bool | int | list[str]]:
-    rows, errors = read_csv_rows(path, label, required_fields)
+def csv_status(
+    path: Path,
+    label: str,
+    required_fields: list[str],
+    expected_values: dict[str, str] | None = None,
+) -> dict[str, str | bool | int | list[str]]:
+    rows, errors = read_csv_rows(path, label, required_fields, expected_values)
     return {
         "label": label,
         "path": path.as_posix(),
@@ -109,14 +126,31 @@ def validate_video_artifacts(
     output_dir = output_root / resolved_video_id
     checks = [
         file_status(video_root / f"{resolved_video_id}.mp4", "demo_video"),
-        csv_status(frames_root / resolved_video_id / "frames_manifest.csv", "frames_manifest", CSV_REQUIREMENTS["frames_manifest"]),
-        csv_status(inspection_dir / "metadata.csv", "metadata", CSV_REQUIREMENTS["metadata"]),
+        directory_status(frames_root / resolved_video_id, "source_frames"),
+        csv_status(
+            frames_root / resolved_video_id / "frames_manifest.csv",
+            "frames_manifest",
+            CSV_REQUIREMENTS["frames_manifest"],
+            {"video_id": resolved_video_id},
+        ),
+        csv_status(
+            inspection_dir / "metadata.csv",
+            "metadata",
+            CSV_REQUIREMENTS["metadata"],
+            {"inspection_id": resolved_video_id},
+        ),
         csv_status(inspection_dir / "disease_features.csv", "disease_features", CSV_REQUIREMENTS["disease_features"]),
-        csv_status(inspection_dir / "inspection_sequence.csv", "inspection_sequence", CSV_REQUIREMENTS["inspection_sequence"]),
+        csv_status(
+            inspection_dir / "inspection_sequence.csv",
+            "inspection_sequence",
+            CSV_REQUIREMENTS["inspection_sequence"],
+            {"inspection_id": resolved_video_id},
+        ),
         csv_status(
             output_dir / "video_visualization_manifest.csv",
             "video_visualization_manifest",
             CSV_REQUIREMENTS["video_visualization_manifest"],
+            {"video_id": resolved_video_id},
         ),
         directory_status(output_dir / "annotated_frames", "annotated_frames"),
         file_status(output_dir / "annotated_video.mp4", "annotated_video"),
@@ -128,11 +162,13 @@ def validate_video_artifacts(
                     output_dir / "supervision_detections_manifest.csv",
                     "supervision_detections_manifest",
                     CSV_REQUIREMENTS["supervision_detections_manifest"],
+                    {"video_id": resolved_video_id},
                 ),
                 csv_status(
                     output_dir / "supervision_visualization_manifest.csv",
                     "supervision_visualization_manifest",
                     CSV_REQUIREMENTS["supervision_visualization_manifest"],
+                    {"video_id": resolved_video_id},
                 ),
                 directory_status(output_dir / "supervision_annotated_frames", "supervision_annotated_frames"),
                 file_status(output_dir / "supervision_annotated_video.mp4", "supervision_annotated_video"),

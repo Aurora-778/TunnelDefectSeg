@@ -8,6 +8,7 @@ def test_demo_showcase_bat_invokes_python_script():
 
     assert "python scripts\\run_demo_showcase.py %*" in launcher
     assert "http://127.0.0.1:8000/#video-analysis" in launcher
+    assert "run_demo_showcase.bat --skip_supervision" in launcher
 
 
 def test_demo_showcase_rejects_partial_demo_stage(tmp_path):
@@ -62,6 +63,7 @@ def test_demo_showcase_skips_complete_existing_artifacts(tmp_path, monkeypatch):
     ]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("ok\n", encoding="utf-8")
+    (tmp_path / "data" / "video_frames" / "demo" / "frame_000001.jpg").write_bytes(b"jpg")
     (tmp_path / "outputs" / "video_inspection" / "demo" / "annotated_frames").mkdir(parents=True)
     (tmp_path / "outputs" / "video_inspection" / "demo" / "annotated_frames" / "frame_000001.jpg").write_bytes(b"jpg")
     simulated_sentinel = tmp_path / "data" / "simulated" / "inspection_sequence.csv"
@@ -95,6 +97,7 @@ def test_demo_showcase_rejects_missing_annotated_frame_directory(tmp_path, monke
     ]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("ok\n", encoding="utf-8")
+    (tmp_path / "data" / "video_frames" / "demo" / "frame_000001.jpg").write_bytes(b"jpg")
     (tmp_path / "data" / "video_masks" / "demo").mkdir(parents=True)
     (tmp_path / "data" / "video_masks" / "demo" / "frame_000001.png").write_bytes(b"mask")
 
@@ -105,3 +108,31 @@ def test_demo_showcase_rejects_missing_annotated_frame_directory(tmp_path, monke
         assert "annotated_frames" in str(exc)
     else:
         raise AssertionError("expected partial OpenCV visualization stage to fail")
+
+
+def test_demo_showcase_rejects_missing_source_frame_directory(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path.cwd() / "scripts"))
+    import run_demo_showcase as showcase
+
+    monkeypatch.chdir(tmp_path)
+    for path in [
+        tmp_path / "data" / "videos" / "demo.mp4",
+        tmp_path / "data" / "video_demo" / "demo_source_manifest.csv",
+        tmp_path / "data" / "video_frames" / "demo" / "frames_manifest.csv",
+        tmp_path / "data" / "video_inspection" / "demo" / "metadata.csv",
+        tmp_path / "data" / "video_inspection" / "demo" / "disease_features.csv",
+        tmp_path / "data" / "video_inspection" / "demo" / "inspection_sequence.csv",
+    ]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("ok\n", encoding="utf-8")
+    (tmp_path / "data" / "video_masks" / "demo").mkdir(parents=True)
+    (tmp_path / "data" / "video_masks" / "demo" / "frame_000001.png").write_bytes(b"mask")
+
+    try:
+        showcase.run_demo_showcase(video_id="demo", skip_supervision=True)
+    except FileExistsError as exc:
+        message = str(exc).replace("\\", "/")
+        assert "video inspection CSV stage is partially generated" in message
+        assert "data/video_frames/demo" in message
+    else:
+        raise AssertionError("expected partial video inspection CSV stage to fail")
