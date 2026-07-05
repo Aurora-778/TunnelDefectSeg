@@ -1,0 +1,99 @@
+import csv
+import subprocess
+import sys
+from pathlib import Path
+
+
+def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_valid_artifacts(root: Path, video_id: str = "demo") -> None:
+    (root / "data" / "videos").mkdir(parents=True)
+    (root / "data" / "videos" / f"{video_id}.mp4").write_bytes(b"mp4")
+    write_csv(
+        root / "data" / "video_frames" / video_id / "frames_manifest.csv",
+        [{"video_id": video_id, "frame_id": "frame_000001", "frame_index": "0", "video_time_sec": "0", "image_path": "x.jpg"}],
+    )
+    write_csv(
+        root / "data" / "video_inspection" / video_id / "metadata.csv",
+        [{"inspection_id": video_id, "frame_id": "frame_000001", "timestamp": "2026-07-03T00:00:00", "video_time_sec": "0", "image_path": "x.jpg"}],
+    )
+    write_csv(
+        root / "data" / "video_inspection" / video_id / "disease_features.csv",
+        [{"inspection_id": video_id, "frame_id": "frame_000001", "image_path": "x.jpg", "mask_path": "m.png", "disease_area": "1"}],
+    )
+    write_csv(
+        root / "data" / "video_inspection" / video_id / "inspection_sequence.csv",
+        [{"inspection_id": video_id, "frame_id": "frame_000001", "image_id": "demo_frame_000001", "image_path": "x.jpg", "mask_path": "m.png"}],
+    )
+    write_csv(
+        root / "outputs" / "video_inspection" / video_id / "video_visualization_manifest.csv",
+        [{"video_id": video_id, "frame_id": "frame_000001", "annotated_frame_path": "a.jpg", "overlay_available": "true"}],
+    )
+    (root / "outputs" / "video_inspection" / video_id / "annotated_video.mp4").write_bytes(b"annotated")
+    write_csv(
+        root / "outputs" / "video_inspection" / video_id / "supervision_detections_manifest.csv",
+        [{"video_id": video_id, "frame_id": "frame_000001", "bbox_x1": "1", "bbox_y1": "1", "bbox_x2": "2", "bbox_y2": "2"}],
+    )
+    write_csv(
+        root / "outputs" / "video_inspection" / video_id / "supervision_visualization_manifest.csv",
+        [{"video_id": video_id, "frame_id": "frame_000001", "output_annotated_frame_path": "s.jpg", "visualization_source": "supervision_optional_layer"}],
+    )
+    (root / "outputs" / "video_inspection" / video_id / "supervision_annotated_video.mp4").write_bytes(b"supervision")
+
+
+def run_validator(root: Path, video_id: str = "demo") -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_video_artifacts.py",
+            "--video_id",
+            video_id,
+            "--video_root",
+            str(root / "data" / "videos"),
+            "--frames_root",
+            str(root / "data" / "video_frames"),
+            "--inspection_root",
+            str(root / "data" / "video_inspection"),
+            "--output_root",
+            str(root / "outputs" / "video_inspection"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_validate_video_artifacts_passes_for_complete_outputs(tmp_path):
+    write_valid_artifacts(tmp_path)
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "video artifact validation: passed" in result.stdout
+    assert "supervision_annotated_video: ok" in result.stdout
+
+
+def test_validate_video_artifacts_reports_missing_outputs(tmp_path):
+    write_valid_artifacts(tmp_path)
+    (tmp_path / "outputs" / "video_inspection" / "demo" / "annotated_video.mp4").unlink()
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "video artifact validation: failed" in result.stdout
+    assert "annotated_video: missing/error" in result.stdout
+
+
+def test_validate_video_artifacts_reports_bad_csv_schema(tmp_path):
+    write_valid_artifacts(tmp_path)
+    write_csv(tmp_path / "data" / "video_inspection" / "demo" / "disease_features.csv", [{"frame_id": "frame_000001"}])
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "disease_features missing required fields" in result.stdout
