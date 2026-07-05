@@ -68,9 +68,8 @@
 - `scripts/validate_video_artifacts.py`
 - `scripts/run_demo_showcase.py`
 
-以下早期单图检测相关文件可作为补充材料，但不建议覆盖主线：
+以下早期单图检测相关文件可作为补充材料，但不建议覆盖主线；`web_app.py` 已在主线代码列表中体现，此处不重复列出：
 
-- `web_app.py`
 - `web_demo/index.html`
 - `run_confidence_risk.py`
 - `adaptive_fusion.py`

@@ -114,7 +114,7 @@ python scripts/validate_video_artifacts.py --video_id tunnel_demo
 - `data/video_inspection/tunnel_demo/metadata.csv`
 - `data/video_inspection/tunnel_demo/disease_features.csv`
 - `outputs/video_inspection/tunnel_demo/annotated_video.mp4`
-- `outputs/video_inspection/tunnel_demo/supervision_annotated_video.mp4`
+- `outputs/video_inspection/tunnel_demo/supervision_annotated_video.mp4`：仅在启用 Supervision 可选视觉层且未使用 `--skip_supervision` 时生成
 
 需要注意：该视频由 KICT 静态图像 / mask 合成，用于演示视频输入和可视化展示流程，不是真实机器人连续巡检视频，也不是实时视频流分析。
 

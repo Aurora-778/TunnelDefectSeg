@@ -221,7 +221,7 @@ Web Dashboard 支持以下展示功能：
 | 项目 | 建议填写内容 |
 |---|---|
 | 硬件环境 | 普通 PC 可运行表格分析、报告生成、可视化产物生成和已生成结果展示；模型推理或训练相关功能建议使用具备 NVIDIA GPU 的设备。 |
-| 软件环境 | Windows 10 / Windows 11，Python 3.8 及以上，Microsoft Edge / Chrome 等现代浏览器；基础分析依赖包括 pandas、NumPy、Pillow、Matplotlib。 |
+| 软件环境 | Windows 10 / Windows 11，Python 3.8 及以上，Microsoft Edge / Chrome 等现代浏览器；基础分析依赖包括 pandas、NumPy、Pillow、Matplotlib、OpenCV；Supervision 为可选视频标注展示层依赖，不属于核心算法必需依赖。 |
 | 编程语言 | Python、HTML、CSS、JavaScript。 |
 | 源程序量 | 核心 Python 源码约 10000 行，正式申请时以最终整理的源程序页为准。 |
 | 主要功能和技术特点 | 软件将 KICT 静态图像 / mask 几何特征与仿真机器人巡检元数据整理为统一数据表，生成工程化病害描述、Disease Memory Bank、no-id Association 记录、规则面积变化提示、重点复检清单、可视化图表、视频 demo 标注产物和本地 Web Dashboard 展示结果。 |
