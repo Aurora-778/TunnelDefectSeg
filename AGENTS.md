@@ -232,6 +232,17 @@ Remove-Item -LiteralPath $tmp -Force
 - `experiments/segformer_b1`, the ResNet experiment folders, `best_model.pth`, and `resnet50_caffe-788b5fa3.pth` are large, but preserve them unless the user explicitly approves deleting training artifacts or old baselines.
 - `.codegraph/` and `.codebase-memory/` are local code intelligence indexes. They are ignored by Git, but do not remove them during routine cleanup unless index rebuild is acceptable.
 
+## Engineering Working Principles
+
+- When developing features, apply razor-law simplicity: choose the smallest coherent implementation that satisfies the requirement, avoid unnecessary abstraction, and cut scope that does not directly serve the current goal.
+- When testing and accepting work, apply Murphy's law: assume likely failure modes will happen, and verify invalid input, missing files, stale artifacts, path issues, dependency absence, and degraded states.
+- Prefer high cohesion and low coupling: keep modules focused, avoid spreading one contract across unrelated files, and do not make Web, pipeline, model inference, and reporting depend on each other unless the task explicitly requires it.
+- Follow established best practices from the local codebase first, then general engineering best practices; do not invent a heavier pattern when the existing project style is enough.
+- Ask "What would an OpenAI/Anthropic engineer do here?": favor clear boundaries, explicit contracts, robust tests, truthful claims, and maintainable small changes over clever but fragile implementations.
+- Use adversarial multi-agent-style review even when working alone: actively challenge the design, look for counterexamples, and test whether another reviewer could break the change.
+- Treat stable lessons as durable memory: once a pattern repeatedly proves useful, record it in `AGENTS.md`, project docs, or available long-term memory so future work does not relearn it.
+- For important designs or reviews, use two-agent challenge thinking: one side proposes the simplest viable solution, the other attacks hidden risks, overengineering, missing tests, and claim inflation before accepting the result.
+
 ## Repository Rules
 
 - Use `rg` / `rg --files` for search.
