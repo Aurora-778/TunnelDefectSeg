@@ -143,6 +143,41 @@ python scripts/run_progressive_inspection_evaluation.py
 
 真实机器人巡检视频、在线模型推理和实时视频流分析仍属于后续扩展方向。视频相关输出使用 `data/videos/`、`data/video_demo/`、`data/video_frames/`、`data/video_masks/` 和 `data/video_inspection/`，不会覆盖 `data/simulated/` 下的原有 KICT simulated pipeline 产物。
 
+## Supervision 可选视频可视化层
+
+`supervision` 只作为可选视觉工具层，用于把 Step 1 / Step 2 已生成的视频帧、mask 和 `disease_features.csv` 转换成标准化 detections manifest，并导出增强版标注帧和标注视频。它不参与 Disease Memory Bank、no-id Association、Growth Analysis 或主 pipeline。
+
+运行前需要先准备好：
+
+```text
+data/video_frames/tunnel_demo/
+data/video_masks/tunnel_demo/
+data/video_inspection/tunnel_demo/disease_features.csv
+```
+
+可选依赖单独安装，不写入主 `requirements.txt`：
+
+```bash
+python -m pip install -r requirements-video.txt
+```
+
+Step 3 可视化命令：
+
+```bash
+python scripts/convert_video_features_to_detections.py --video_id tunnel_demo --overwrite
+python scripts/annotate_video_frames_supervision.py --video_id tunnel_demo --overwrite
+python scripts/export_supervision_annotated_video.py --video_id tunnel_demo --overwrite
+```
+
+输出包括：
+
+- `outputs/video_inspection/tunnel_demo/supervision_detections_manifest.csv`
+- `outputs/video_inspection/tunnel_demo/supervision_annotated_frames/`
+- `outputs/video_inspection/tunnel_demo/supervision_visualization_manifest.csv`
+- `outputs/video_inspection/tunnel_demo/supervision_annotated_video.mp4`
+
+其中 `confidence=1.0` 是 mask-input demo 的固定结构化值，不代表模型置信度。`supervision_annotated_video.mp4` 是展示产物，不代表真实工业在线分析结果。如果未安装 supervision，主 pipeline 和 Step 1 / Step 2 不受影响。
+
 ## 从原始 KICT 数据重新生成流程
 
 KICT 数据集目录需要包含：

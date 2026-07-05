@@ -1,2 +1,2 @@
-supervision
+supervision>=0.20
 opencv-python

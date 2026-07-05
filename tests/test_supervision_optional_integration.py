@@ -159,6 +159,7 @@ def test_convert_video_features_to_detections_generates_manifest(tmp_path):
         ],
         capture_output=True,
         text=True,
+        timeout=30,
     )
 
     assert result.returncode == 0, result.stderr
@@ -171,6 +172,10 @@ def test_convert_video_features_to_detections_generates_manifest(tmp_path):
         "bbox_y",
         "bbox_w",
         "bbox_h",
+        "bbox_x1",
+        "bbox_y1",
+        "bbox_x2",
+        "bbox_y2",
         "center_x",
         "center_y",
         "disease_area",
@@ -183,16 +188,84 @@ def test_convert_video_features_to_detections_generates_manifest(tmp_path):
     }
     assert len(rows) == 2
     assert required.issubset(rows[0])
+    assert rows[0]["video_id"] == "demo"
+    assert rows[0]["bbox_x1"] == "4"
+    assert rows[0]["bbox_y1"] == "5"
+    assert rows[0]["bbox_x2"] == "14"
+    assert rows[0]["bbox_y2"] == "13"
     assert rows[0]["confidence"] == "1.0"
     assert rows[0]["source"] == "mask_input_demo"
     assert "not model inference" in rows[0]["note"]
     assert sentinel.read_text(encoding="utf-8") == "do not touch"
 
 
+def test_convert_video_features_to_detections_requires_overwrite(tmp_path):
+    _, _, features_csv, output_root = prepare_inputs(tmp_path)
+    output_manifest = output_root / "supervision_detections_manifest.csv"
+    output_manifest.parent.mkdir(parents=True)
+    output_manifest.write_text("old", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/convert_video_features_to_detections.py",
+            "--video_id",
+            "demo",
+            "--features_csv",
+            str(features_csv),
+            "--output_manifest",
+            str(output_manifest),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "--overwrite" in result.stderr
+
+    overwrite_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/convert_video_features_to_detections.py",
+            "--video_id",
+            "demo",
+            "--features_csv",
+            str(features_csv),
+            "--output_manifest",
+            str(output_manifest),
+            "--overwrite",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert overwrite_result.returncode == 0, overwrite_result.stderr
+    assert len(read_csv(output_manifest)) == 2
+
+
 def test_supervision_missing_dependency_reports_clear_error(tmp_path):
     if has_supervision():
         pytest.skip("supervision is installed in this environment")
     frames_dir, masks_dir, features_csv, output_root = prepare_inputs(tmp_path)
+    detections_manifest = output_root / "supervision_detections_manifest.csv"
+    convert_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/convert_video_features_to_detections.py",
+            "--video_id",
+            "demo",
+            "--features_csv",
+            str(features_csv),
+            "--output_manifest",
+            str(detections_manifest),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert convert_result.returncode == 0, convert_result.stderr
     result = subprocess.run(
         [
             sys.executable,
@@ -201,8 +274,8 @@ def test_supervision_missing_dependency_reports_clear_error(tmp_path):
             "demo",
             "--frames_dir",
             str(frames_dir),
-            "--features_csv",
-            str(features_csv),
+            "--detections_manifest",
+            str(detections_manifest),
             "--masks_dir",
             str(masks_dir),
             "--output_dir",
@@ -210,6 +283,7 @@ def test_supervision_missing_dependency_reports_clear_error(tmp_path):
         ],
         capture_output=True,
         text=True,
+        timeout=30,
     )
 
     assert result.returncode != 0
@@ -219,8 +293,27 @@ def test_supervision_missing_dependency_reports_clear_error(tmp_path):
 @pytest.mark.skipif(not has_supervision(), reason="supervision optional dependency is not installed")
 def test_supervision_annotation_and_video_export(tmp_path):
     frames_dir, masks_dir, features_csv, output_root = prepare_inputs(tmp_path)
+    detections_manifest = output_root / "supervision_detections_manifest.csv"
     annotated_dir = output_root / "supervision_annotated_frames"
+    visualization_manifest = output_root / "supervision_visualization_manifest.csv"
     output_video = output_root / "supervision_annotated_video.mp4"
+
+    convert_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/convert_video_features_to_detections.py",
+            "--video_id",
+            "demo",
+            "--features_csv",
+            str(features_csv),
+            "--output_manifest",
+            str(detections_manifest),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert convert_result.returncode == 0, convert_result.stderr
 
     annotation_result = subprocess.run(
         [
@@ -230,20 +323,27 @@ def test_supervision_annotation_and_video_export(tmp_path):
             "demo",
             "--frames_dir",
             str(frames_dir),
-            "--features_csv",
-            str(features_csv),
+            "--detections_manifest",
+            str(detections_manifest),
             "--masks_dir",
             str(masks_dir),
             "--output_dir",
             str(annotated_dir),
+            "--visualization_manifest",
+            str(visualization_manifest),
         ],
         capture_output=True,
         text=True,
+        timeout=30,
     )
 
     assert annotation_result.returncode == 0, annotation_result.stderr
     assert (annotated_dir / "frame_000001.jpg").is_file()
     assert (annotated_dir / "frame_000002.jpg").is_file()
+    vis_rows = read_csv(visualization_manifest)
+    assert len(vis_rows) == 2
+    assert vis_rows[0]["visualization_source"] == "supervision_optional_layer"
+    assert "not model inference" in vis_rows[0]["note"]
 
     export_result = subprocess.run(
         [
@@ -260,8 +360,171 @@ def test_supervision_annotation_and_video_export(tmp_path):
         ],
         capture_output=True,
         text=True,
+        timeout=30,
     )
 
     assert export_result.returncode == 0, export_result.stderr
     assert output_video.is_file()
     assert output_video.stat().st_size > 0
+
+
+@pytest.mark.skipif(not has_supervision(), reason="supervision optional dependency is not installed")
+def test_supervision_annotation_and_export_overwrite(tmp_path):
+    frames_dir, masks_dir, features_csv, output_root = prepare_inputs(tmp_path)
+    detections_manifest = output_root / "supervision_detections_manifest.csv"
+    annotated_dir = output_root / "supervision_annotated_frames"
+    output_video = output_root / "supervision_annotated_video.mp4"
+    visualization_manifest = output_root / "supervision_visualization_manifest.csv"
+
+    convert_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/convert_video_features_to_detections.py",
+            "--video_id",
+            "demo",
+            "--features_csv",
+            str(features_csv),
+            "--output_manifest",
+            str(detections_manifest),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert convert_result.returncode == 0, convert_result.stderr
+    annotated_dir.mkdir(parents=True)
+    (annotated_dir / "frame_999999.jpg").write_text("old", encoding="utf-8")
+
+    blocked_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/annotate_video_frames_supervision.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(frames_dir),
+            "--detections_manifest",
+            str(detections_manifest),
+            "--masks_dir",
+            str(masks_dir),
+            "--output_dir",
+            str(annotated_dir),
+            "--visualization_manifest",
+            str(visualization_manifest),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert blocked_result.returncode != 0
+    assert "--overwrite" in blocked_result.stderr
+
+    overwrite_result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/annotate_video_frames_supervision.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(frames_dir),
+            "--detections_manifest",
+            str(detections_manifest),
+            "--masks_dir",
+            str(masks_dir),
+            "--output_dir",
+            str(annotated_dir),
+            "--visualization_manifest",
+            str(visualization_manifest),
+            "--overwrite",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert overwrite_result.returncode == 0, overwrite_result.stderr
+    assert not (annotated_dir / "frame_999999.jpg").exists()
+
+    first_export = subprocess.run(
+        [
+            sys.executable,
+            "scripts/export_supervision_annotated_video.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(annotated_dir),
+            "--output_video",
+            str(output_video),
+            "--fps",
+            "5",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert first_export.returncode == 0, first_export.stderr
+    second_export = subprocess.run(
+        [
+            sys.executable,
+            "scripts/export_supervision_annotated_video.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(annotated_dir),
+            "--output_video",
+            str(output_video),
+            "--fps",
+            "5",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert second_export.returncode != 0
+    assert "--overwrite" in second_export.stderr
+
+    overwrite_export = subprocess.run(
+        [
+            sys.executable,
+            "scripts/export_supervision_annotated_video.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(annotated_dir),
+            "--output_video",
+            str(output_video),
+            "--fps",
+            "5",
+            "--overwrite",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert overwrite_export.returncode == 0, overwrite_export.stderr
+
+
+@pytest.mark.skipif(not has_supervision(), reason="supervision optional dependency is not installed")
+def test_supervision_annotation_requires_detection_manifest(tmp_path):
+    frames_dir, masks_dir, _, output_root = prepare_inputs(tmp_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/annotate_video_frames_supervision.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(frames_dir),
+            "--detections_manifest",
+            str(output_root / "missing_manifest.csv"),
+            "--masks_dir",
+            str(masks_dir),
+            "--output_dir",
+            str(output_root / "supervision_annotated_frames"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "convert_video_features_to_detections.py" in result.stderr

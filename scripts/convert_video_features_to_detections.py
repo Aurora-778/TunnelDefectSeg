@@ -21,6 +21,7 @@ REQUIRED_FEATURE_FIELDS = [
     "risk_level",
 ]
 OUTPUT_FIELDS = [
+    "video_id",
     "frame_id",
     "image_path",
     "mask_path",
@@ -28,6 +29,10 @@ OUTPUT_FIELDS = [
     "bbox_y",
     "bbox_w",
     "bbox_h",
+    "bbox_x1",
+    "bbox_y1",
+    "bbox_x2",
+    "bbox_y2",
     "center_x",
     "center_y",
     "disease_area",
@@ -47,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--video_id", "--video-id", dest="video_id", required=True)
     parser.add_argument("--features_csv", "--features-csv", dest="features_csv", type=Path, default=None)
     parser.add_argument("--output_manifest", "--output-manifest", dest="output_manifest", type=Path, default=None)
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing detection manifest.")
     return parser.parse_args()
 
 
@@ -83,6 +89,7 @@ def parse_number(row: dict[str, str], field: str, frame_id: str) -> float:
 
 
 def normalize_number(value: float) -> str:
+    value = float(value)
     if value.is_integer():
         return str(int(value))
     return f"{value:.3f}"
@@ -93,7 +100,7 @@ def class_name_for_row(row: dict[str, str]) -> str:
     return class_name if class_name else "defect"
 
 
-def convert_rows(feature_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+def convert_rows(feature_rows: list[dict[str, str]], video_id: str) -> list[dict[str, str]]:
     class_ids: dict[str, int] = {}
     output_rows: list[dict[str, str]] = []
     for row in feature_rows:
@@ -103,15 +110,26 @@ def convert_rows(feature_rows: list[dict[str, str]]) -> list[dict[str, str]]:
         class_name = class_name_for_row(row)
         if class_name not in class_ids:
             class_ids[class_name] = len(class_ids)
+        bbox_x = parse_number(row, "bbox_x", frame_id)
+        bbox_y = parse_number(row, "bbox_y", frame_id)
+        bbox_w = parse_number(row, "bbox_w", frame_id)
+        bbox_h = parse_number(row, "bbox_h", frame_id)
+        bbox_x2 = bbox_x + bbox_w if bbox_x >= 0 and bbox_w > 0 else -1
+        bbox_y2 = bbox_y + bbox_h if bbox_y >= 0 and bbox_h > 0 else -1
         output_rows.append(
             {
+                "video_id": video_id,
                 "frame_id": frame_id,
                 "image_path": (row.get("image_path") or "").strip(),
                 "mask_path": (row.get("mask_path") or "").strip(),
-                "bbox_x": normalize_number(parse_number(row, "bbox_x", frame_id)),
-                "bbox_y": normalize_number(parse_number(row, "bbox_y", frame_id)),
-                "bbox_w": normalize_number(parse_number(row, "bbox_w", frame_id)),
-                "bbox_h": normalize_number(parse_number(row, "bbox_h", frame_id)),
+                "bbox_x": normalize_number(bbox_x),
+                "bbox_y": normalize_number(bbox_y),
+                "bbox_w": normalize_number(bbox_w),
+                "bbox_h": normalize_number(bbox_h),
+                "bbox_x1": normalize_number(bbox_x if bbox_x >= 0 else -1),
+                "bbox_y1": normalize_number(bbox_y if bbox_y >= 0 else -1),
+                "bbox_x2": normalize_number(bbox_x2),
+                "bbox_y2": normalize_number(bbox_y2),
                 "center_x": normalize_number(parse_number(row, "center_x", frame_id)),
                 "center_y": normalize_number(parse_number(row, "center_y", frame_id)),
                 "disease_area": normalize_number(parse_number(row, "disease_area", frame_id)),
@@ -138,12 +156,15 @@ def convert_video_features_to_detections(
     video_id: str,
     features_csv: Path | None = None,
     output_manifest: Path | None = None,
+    overwrite: bool = False,
 ) -> list[dict[str, str]]:
     resolved_video_id = safe_video_id(video_id)
     default_features, default_manifest = default_paths(resolved_video_id)
     features_csv = features_csv or default_features
     output_manifest = output_manifest or default_manifest
-    rows = convert_rows(read_feature_rows(features_csv))
+    if output_manifest.exists() and not overwrite:
+        raise FileExistsError(f"detection manifest already exists; rerun with --overwrite: {output_manifest}")
+    rows = convert_rows(read_feature_rows(features_csv), resolved_video_id)
     write_manifest(output_manifest, rows)
     return rows
 
@@ -155,6 +176,7 @@ def main() -> None:
             video_id=args.video_id,
             features_csv=args.features_csv,
             output_manifest=args.output_manifest,
+            overwrite=args.overwrite,
         )
     except Exception as exc:
         raise SystemExit(f"error: {exc}") from exc

@@ -14,6 +14,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames_dir", "--frames-dir", dest="frames_dir", type=Path, default=None)
     parser.add_argument("--output_video", "--output-video", dest="output_video", type=Path, default=None)
     parser.add_argument("--fps", type=float, default=10.0)
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing supervision annotated video.")
     return parser.parse_args()
 
 
@@ -50,6 +51,7 @@ def export_supervision_annotated_video(
     frames_dir: Path | None = None,
     output_video: Path | None = None,
     fps: float = 10.0,
+    overwrite: bool = False,
 ) -> Path:
     if fps <= 0:
         raise ValueError("fps must be greater than 0")
@@ -62,6 +64,10 @@ def export_supervision_annotated_video(
     width, height = frame_size(frames[0])
     cv2 = load_cv2()
     output_video.parent.mkdir(parents=True, exist_ok=True)
+    if output_video.exists() and not overwrite:
+        raise FileExistsError(f"supervision annotated video already exists; rerun with --overwrite: {output_video}")
+    if output_video.exists() and overwrite:
+        output_video.unlink()
     writer = cv2.VideoWriter(str(output_video), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
     if not writer.isOpened():
         raise RuntimeError(f"unable to open video writer: {output_video}")
@@ -86,6 +92,7 @@ def main() -> None:
             frames_dir=args.frames_dir,
             output_video=args.output_video,
             fps=args.fps,
+            overwrite=args.overwrite,
         )
     except Exception as exc:
         raise SystemExit(f"error: {exc}") from exc
