@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +70,28 @@ def run_validator(root: Path, video_id: str = "demo") -> subprocess.CompletedPro
             str(root / "data" / "video_inspection"),
             "--output_root",
             str(root / "outputs" / "video_inspection"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+
+def run_validator_allowing_different_inspection_id(root: Path, video_id: str = "demo") -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_video_artifacts.py",
+            "--video_id",
+            video_id,
+            "--video_root",
+            str(root / "data" / "videos"),
+            "--frames_root",
+            str(root / "data" / "video_frames"),
+            "--inspection_root",
+            str(root / "data" / "video_inspection"),
+            "--output_root",
+            str(root / "outputs" / "video_inspection"),
+            "--allow_different_inspection_id",
         ],
         capture_output=True,
         text=True,
@@ -173,3 +197,153 @@ def test_validate_video_artifacts_reports_inspection_sequence_id_mismatch(tmp_pa
     assert result.returncode != 0
     assert "inspection_sequence row 2 inspection_id mismatch" in result.stdout
     assert "actual=other, expected=demo" in result.stdout
+
+
+def test_validate_video_artifacts_can_allow_different_inspection_id_via_cli(tmp_path):
+    write_valid_artifacts(tmp_path)
+    write_csv(
+        tmp_path / "data" / "video_inspection" / "demo" / "metadata.csv",
+        [
+            {
+                "inspection_id": "inspection_20260705_A",
+                "frame_id": "frame_000001",
+                "timestamp": "2026-07-03T00:00:00",
+                "video_time_sec": "0",
+                "image_path": "x.jpg",
+            }
+        ],
+    )
+    write_csv(
+        tmp_path / "data" / "video_inspection" / "demo" / "inspection_sequence.csv",
+        [
+            {
+                "inspection_id": "inspection_20260705_A",
+                "frame_id": "frame_000001",
+                "image_id": "inspection_20260705_A_frame_000001",
+                "image_path": "x.jpg",
+                "mask_path": "m.png",
+            }
+        ],
+    )
+
+    result = run_validator_allowing_different_inspection_id(tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "video artifact validation: passed" in result.stdout
+
+
+def test_validate_video_artifacts_can_allow_different_inspection_id_via_function(tmp_path, monkeypatch):
+    write_valid_artifacts(tmp_path)
+    write_csv(
+        tmp_path / "data" / "video_inspection" / "demo" / "metadata.csv",
+        [
+            {
+                "inspection_id": "inspection_20260705_A",
+                "frame_id": "frame_000001",
+                "timestamp": "2026-07-03T00:00:00",
+                "video_time_sec": "0",
+                "image_path": "x.jpg",
+            }
+        ],
+    )
+    write_csv(
+        tmp_path / "data" / "video_inspection" / "demo" / "inspection_sequence.csv",
+        [
+            {
+                "inspection_id": "inspection_20260705_A",
+                "frame_id": "frame_000001",
+                "image_id": "inspection_20260705_A_frame_000001",
+                "image_path": "x.jpg",
+                "mask_path": "m.png",
+            }
+        ],
+    )
+    monkeypatch.syspath_prepend(str(Path.cwd() / "scripts"))
+    from validate_video_artifacts import validate_video_artifacts
+
+    result = validate_video_artifacts(
+        "demo",
+        video_root=tmp_path / "data" / "videos",
+        frames_root=tmp_path / "data" / "video_frames",
+        inspection_root=tmp_path / "data" / "video_inspection",
+        output_root=tmp_path / "outputs" / "video_inspection",
+        strict_inspection_id=False,
+    )
+
+    assert result["ok"] is True
+
+
+def test_validate_video_artifacts_still_rejects_video_id_mismatch_when_inspection_id_is_allowed(tmp_path):
+    write_valid_artifacts(tmp_path)
+    write_csv(
+        tmp_path / "outputs" / "video_inspection" / "demo" / "video_visualization_manifest.csv",
+        [{"video_id": "other", "frame_id": "frame_000001", "annotated_frame_path": "a.jpg", "overlay_available": "true"}],
+    )
+
+    result = run_validator_allowing_different_inspection_id(tmp_path)
+
+    assert result.returncode != 0
+    assert "video_visualization_manifest row 2 video_id mismatch" in result.stdout
+    assert "actual=other, expected=demo" in result.stdout
+
+
+def test_validate_video_artifacts_allow_flag_still_requires_inspection_fields(tmp_path):
+    write_valid_artifacts(tmp_path)
+    write_csv(tmp_path / "data" / "video_inspection" / "demo" / "metadata.csv", [{"frame_id": "frame_000001"}])
+
+    result = run_validator_allowing_different_inspection_id(tmp_path)
+
+    assert result.returncode != 0
+    assert "metadata missing required fields" in result.stdout
+    assert "inspection_id" in result.stdout
+
+
+@pytest.mark.parametrize("flag", ["--allow_different_inspection_id", "--allow-different-inspection-id"])
+def test_validate_video_artifacts_accepts_allow_inspection_id_flag_aliases(tmp_path, flag):
+    write_valid_artifacts(tmp_path)
+    write_csv(
+        tmp_path / "data" / "video_inspection" / "demo" / "metadata.csv",
+        [
+            {
+                "inspection_id": "inspection_20260705_A",
+                "frame_id": "frame_000001",
+                "timestamp": "2026-07-03T00:00:00",
+                "video_time_sec": "0",
+                "image_path": "x.jpg",
+            }
+        ],
+    )
+    write_csv(
+        tmp_path / "data" / "video_inspection" / "demo" / "inspection_sequence.csv",
+        [
+            {
+                "inspection_id": "inspection_20260705_A",
+                "frame_id": "frame_000001",
+                "image_id": "inspection_20260705_A_frame_000001",
+                "image_path": "x.jpg",
+                "mask_path": "m.png",
+            }
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_video_artifacts.py",
+            "--video_id",
+            "demo",
+            "--video_root",
+            str(tmp_path / "data" / "videos"),
+            "--frames_root",
+            str(tmp_path / "data" / "video_frames"),
+            "--inspection_root",
+            str(tmp_path / "data" / "video_inspection"),
+            "--output_root",
+            str(tmp_path / "outputs" / "video_inspection"),
+            flag,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr

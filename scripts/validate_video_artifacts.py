@@ -33,6 +33,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output_root", "--output-root", dest="output_root", type=Path, default=Path("outputs/video_inspection"))
     parser.add_argument("--skip_supervision", "--skip-supervision", dest="skip_supervision", action="store_true")
+    parser.add_argument(
+        "--allow_different_inspection_id",
+        "--allow-different-inspection-id",
+        dest="allow_different_inspection_id",
+        action="store_true",
+        help="Allow metadata/inspection_sequence inspection_id to differ from video_id for non-demo datasets.",
+    )
     return parser.parse_args()
 
 
@@ -120,10 +127,12 @@ def validate_video_artifacts(
     inspection_root: Path = Path("data/video_inspection"),
     output_root: Path = Path("outputs/video_inspection"),
     require_supervision: bool = True,
+    strict_inspection_id: bool = True,
 ) -> dict:
     resolved_video_id = safe_video_id(video_id)
     inspection_dir = inspection_root / resolved_video_id
     output_dir = output_root / resolved_video_id
+    inspection_expected = {"inspection_id": resolved_video_id} if strict_inspection_id else None
     checks = [
         file_status(video_root / f"{resolved_video_id}.mp4", "demo_video"),
         directory_status(frames_root / resolved_video_id, "source_frames"),
@@ -137,14 +146,14 @@ def validate_video_artifacts(
             inspection_dir / "metadata.csv",
             "metadata",
             CSV_REQUIREMENTS["metadata"],
-            {"inspection_id": resolved_video_id},
+            inspection_expected,
         ),
         csv_status(inspection_dir / "disease_features.csv", "disease_features", CSV_REQUIREMENTS["disease_features"]),
         csv_status(
             inspection_dir / "inspection_sequence.csv",
             "inspection_sequence",
             CSV_REQUIREMENTS["inspection_sequence"],
-            {"inspection_id": resolved_video_id},
+            inspection_expected,
         ),
         csv_status(
             output_dir / "video_visualization_manifest.csv",
@@ -192,6 +201,7 @@ def main() -> None:
         inspection_root=args.inspection_root,
         output_root=args.output_root,
         require_supervision=not args.skip_supervision,
+        strict_inspection_id=not args.allow_different_inspection_id,
     )
     print(f"video artifact validation: {'passed' if result['ok'] else 'failed'}")
     print(f"video_id: {result['video_id']}")
