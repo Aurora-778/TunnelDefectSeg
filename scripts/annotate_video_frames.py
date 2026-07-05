@@ -98,9 +98,9 @@ def load_frame(frame_path: Path) -> Image.Image:
         return image.convert("RGB")
 
 
-def load_mask(mask_path: Path, size: tuple[int, int]) -> np.ndarray | None:
+def load_mask(mask_path: Path, size: tuple[int, int], frame_id: str) -> np.ndarray:
     if not mask_path.is_file():
-        return None
+        raise FileNotFoundError(f"mask file not found for frame_id {frame_id}: {mask_path}")
     with Image.open(mask_path) as image:
         mask = image.convert("L")
         if mask.size != size:
@@ -160,6 +160,12 @@ def write_manifest(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def ensure_no_stale_annotated_frames(output_dir: Path) -> None:
+    stale_frames = sorted(output_dir.glob("frame_*.jpg")) if output_dir.exists() else []
+    if stale_frames:
+        raise FileExistsError(f"remove old annotated frames before rerunning: {output_dir}")
+
+
 def annotate_video_frames(
     video_id: str,
     frames_dir: Path | None = None,
@@ -178,6 +184,7 @@ def annotate_video_frames(
         raise FileNotFoundError(f"frames_dir not found: {frames_dir}")
 
     rows = read_feature_rows(features_csv)
+    ensure_no_stale_annotated_frames(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_rows: list[dict[str, str]] = []
 
@@ -197,7 +204,7 @@ def annotate_video_frames(
         risk_level = (row.get("risk_level") or "unknown").strip() or "unknown"
 
         image = load_frame(frame_path)
-        mask = load_mask(mask_path, image.size)
+        mask = load_mask(mask_path, image.size, frame_id)
         image, overlay_available = draw_mask_overlay(image, mask)
         image = draw_contour(image, mask)
         image = draw_labels(image, frame_id, risk_level, disease_area, bbox)

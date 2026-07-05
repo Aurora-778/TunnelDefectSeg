@@ -122,6 +122,15 @@ def write_disease_features(path: Path, masks_dir: Path) -> None:
         writer.writerows(rows)
 
 
+def rewrite_first_mask_path(features_csv: Path, missing_mask_path: Path) -> None:
+    rows = read_csv(features_csv)
+    rows[0]["mask_path"] = missing_mask_path.as_posix()
+    with features_csv.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def prepare_visualization_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     frames_dir = tmp_path / "data" / "video_frames" / "demo"
     masks_dir = tmp_path / "data" / "video_inspection" / "demo" / "sampled_masks"
@@ -257,3 +266,108 @@ def test_annotate_video_frames_reports_missing_features_csv(tmp_path):
 
     assert result.returncode != 0
     assert "disease_features.csv not found" in result.stderr
+
+
+def test_annotate_video_frames_reports_missing_mask_file(tmp_path):
+    frames_dir, features_csv, output_dir, output_manifest, _ = prepare_visualization_inputs(tmp_path)
+    missing_mask = tmp_path / "missing" / "frame_000001.png"
+    rewrite_first_mask_path(features_csv, missing_mask)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/annotate_video_frames.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(frames_dir),
+            "--features_csv",
+            str(features_csv),
+            "--output_dir",
+            str(output_dir),
+            "--output_manifest",
+            str(output_manifest),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "mask file not found for frame_id frame_000001" in result.stderr
+
+
+def test_annotate_video_frames_rejects_stale_annotated_frames(tmp_path):
+    frames_dir, features_csv, output_dir, output_manifest, _ = prepare_visualization_inputs(tmp_path)
+    simulated_dir = tmp_path / "data" / "simulated"
+    simulated_dir.mkdir(parents=True)
+    sentinel = simulated_dir / "inspection_sequence.csv"
+    sentinel.write_text("do not touch", encoding="utf-8")
+    output_dir.mkdir(parents=True)
+    (output_dir / "frame_999999.jpg").write_bytes(b"stale")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/annotate_video_frames.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(frames_dir),
+            "--features_csv",
+            str(features_csv),
+            "--output_dir",
+            str(output_dir),
+            "--output_manifest",
+            str(output_manifest),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "remove old annotated frames before rerunning" in result.stderr
+    assert not output_manifest.exists()
+    assert sentinel.read_text(encoding="utf-8") == "do not touch"
+
+
+def test_export_annotated_video_rejects_invalid_fps(tmp_path):
+    frames_dir, features_csv, output_dir, output_manifest, output_root = prepare_visualization_inputs(tmp_path)
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/annotate_video_frames.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(frames_dir),
+            "--features_csv",
+            str(features_csv),
+            "--output_dir",
+            str(output_dir),
+            "--output_manifest",
+            str(output_manifest),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/export_annotated_video.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(output_dir),
+            "--output_video",
+            str(output_root / "annotated_video.mp4"),
+            "--fps",
+            "0",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "fps must be greater than 0" in result.stderr
