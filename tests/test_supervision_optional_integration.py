@@ -37,6 +37,14 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def write_disease_features(path: Path, frames_dir: Path, masks_dir: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     write_frame(frames_dir / "frame_000001.jpg", (40, 80, 120))
@@ -136,6 +144,26 @@ def prepare_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     output_root = tmp_path / "outputs" / "video_inspection" / "demo"
     write_disease_features(features_csv, frames_dir, masks_dir)
     return frames_dir, masks_dir, features_csv, output_root
+
+
+def convert_features(features_csv: Path, output_manifest: Path, video_id: str = "demo") -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/convert_video_features_to_detections.py",
+            "--video_id",
+            video_id,
+            "--features_csv",
+            str(features_csv),
+            "--output_manifest",
+            str(output_manifest),
+            "--overwrite",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_convert_video_features_to_detections_generates_manifest(tmp_path):
@@ -366,6 +394,120 @@ def test_supervision_annotation_and_video_export(tmp_path):
     assert export_result.returncode == 0, export_result.stderr
     assert output_video.is_file()
     assert output_video.stat().st_size > 0
+
+
+@pytest.mark.skipif(not has_supervision(), reason="supervision optional dependency is not installed")
+def test_supervision_annotation_rejects_mismatched_manifest_video_id(tmp_path):
+    frames_dir, masks_dir, features_csv, output_root = prepare_inputs(tmp_path)
+    detections_manifest = output_root / "supervision_detections_manifest.csv"
+    convert_features(features_csv, detections_manifest)
+    rows = read_csv(detections_manifest)
+    rows[0]["video_id"] = "other_demo"
+    write_csv(detections_manifest, rows)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/annotate_video_frames_supervision.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(frames_dir),
+            "--detections_manifest",
+            str(detections_manifest),
+            "--masks_dir",
+            str(masks_dir),
+            "--output_dir",
+            str(output_root / "supervision_annotated_frames"),
+            "--visualization_manifest",
+            str(output_root / "supervision_visualization_manifest.csv"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "frame_id frame_000001" in result.stderr
+    assert "manifest video_id other_demo" in result.stderr
+    assert "expected video_id demo" in result.stderr
+
+
+@pytest.mark.skipif(not has_supervision(), reason="supervision optional dependency is not installed")
+def test_supervision_annotation_requires_overwrite_for_existing_visualization_manifest(tmp_path):
+    frames_dir, masks_dir, features_csv, output_root = prepare_inputs(tmp_path)
+    detections_manifest = output_root / "supervision_detections_manifest.csv"
+    visualization_manifest = output_root / "supervision_visualization_manifest.csv"
+    convert_features(features_csv, detections_manifest)
+    visualization_manifest.parent.mkdir(parents=True, exist_ok=True)
+    visualization_manifest.write_text("old", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/annotate_video_frames_supervision.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(frames_dir),
+            "--detections_manifest",
+            str(detections_manifest),
+            "--masks_dir",
+            str(masks_dir),
+            "--output_dir",
+            str(output_root / "supervision_annotated_frames"),
+            "--visualization_manifest",
+            str(visualization_manifest),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "--overwrite" in result.stderr
+    assert "visualization manifest" in result.stderr
+
+
+@pytest.mark.skipif(not has_supervision(), reason="supervision optional dependency is not installed")
+def test_supervision_annotation_uses_bbox_when_mask_is_missing(tmp_path):
+    frames_dir, masks_dir, features_csv, output_root = prepare_inputs(tmp_path)
+    detections_manifest = output_root / "supervision_detections_manifest.csv"
+    annotated_dir = output_root / "supervision_annotated_frames"
+    visualization_manifest = output_root / "supervision_visualization_manifest.csv"
+    convert_features(features_csv, detections_manifest)
+    rows = read_csv(detections_manifest)[:1]
+    rows[0]["mask_path"] = (masks_dir / "missing_mask.png").as_posix()
+    write_csv(detections_manifest, rows)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/annotate_video_frames_supervision.py",
+            "--video_id",
+            "demo",
+            "--frames_dir",
+            str(frames_dir),
+            "--detections_manifest",
+            str(detections_manifest),
+            "--masks_dir",
+            str(masks_dir),
+            "--output_dir",
+            str(annotated_dir),
+            "--visualization_manifest",
+            str(visualization_manifest),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (annotated_dir / "frame_000001.jpg").is_file()
+    vis_rows = read_csv(visualization_manifest)
+    assert len(vis_rows) == 1
+    assert "mask missing" in vis_rows[0]["note"]
+    assert "bbox-only visualization" in vis_rows[0]["note"]
 
 
 @pytest.mark.skipif(not has_supervision(), reason="supervision optional dependency is not installed")

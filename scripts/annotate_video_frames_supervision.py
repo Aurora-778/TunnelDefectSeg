@@ -116,9 +116,10 @@ def parse_int(row: dict[str, str], field: str, frame_id: str) -> int:
 
 
 def resolve_mask_path(row: dict[str, str], masks_dir: Path, frame_id: str) -> Path | None:
-    mask_path = Path((row.get("mask_path") or "").strip())
-    if mask_path.is_file():
-        return mask_path
+    mask_value = (row.get("mask_path") or "").strip()
+    if mask_value:
+        mask_path = Path(mask_value)
+        return mask_path if mask_path.is_file() else None
     for suffix in [".png", ".jpg", ".jpeg", ".bmp"]:
         candidate = masks_dir / f"{frame_id}{suffix}"
         if candidate.is_file():
@@ -190,16 +191,12 @@ def draw_fallback_label(image: np.ndarray, label: str) -> np.ndarray:
     return np.array(pil_image)
 
 
-def ensure_no_stale_frames(output_dir: Path) -> None:
-    stale_frames = sorted(output_dir.glob("frame_*.jpg")) if output_dir.exists() else []
-    if stale_frames:
-        raise FileExistsError(f"remove old supervision annotated frames before rerunning: {output_dir}")
-
-
 def prepare_output(output_dir: Path, visualization_manifest: Path, overwrite: bool) -> None:
     stale_frames = sorted(output_dir.glob("frame_*.jpg")) if output_dir.exists() else []
     if stale_frames and not overwrite:
         raise FileExistsError(f"remove old supervision annotated frames before rerunning or use --overwrite: {output_dir}")
+    if visualization_manifest.exists() and not overwrite:
+        raise FileExistsError(f"remove old supervision visualization manifest before rerunning or use --overwrite: {visualization_manifest}")
     if overwrite:
         for frame_path in stale_frames:
             frame_path.unlink()
@@ -244,6 +241,12 @@ def annotate_video_frames_supervision(
         frame_id = (row.get("frame_id") or "").strip()
         if not frame_id:
             raise ValueError("supervision_detections_manifest.csv row missing frame_id")
+        manifest_video_id = (row.get("video_id") or "").strip()
+        if manifest_video_id != resolved_video_id:
+            raise ValueError(
+                f"frame_id {frame_id} has manifest video_id {manifest_video_id}; "
+                f"expected video_id {resolved_video_id}"
+            )
         frame_path = frames_dir / f"{frame_id}.jpg"
         if not frame_path.is_file():
             raise FileNotFoundError(f"frame image not found for frame_id {frame_id}: {frame_path}")
