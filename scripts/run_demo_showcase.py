@@ -40,12 +40,18 @@ def require_kict_sources(image_root: Path, mask_root: Path) -> None:
         raise FileNotFoundError(f"mask_root not found: {mask_root}")
 
 
+def path_ready(path: Path) -> bool:
+    if path.is_dir():
+        return any(path.iterdir())
+    return path.is_file() and path.stat().st_size > 0
+
+
 def require_all_or_none(label: str, paths: list[Path]) -> bool:
-    existing = [path for path in paths if path.exists()]
-    if not existing:
+    ready = [path for path in paths if path_ready(path)]
+    if not ready:
         return False
-    if len(existing) != len(paths):
-        missing = [path.as_posix() for path in paths if not path.exists()]
+    if len(ready) != len(paths):
+        missing = [path.as_posix() for path in paths if not path_ready(path)]
         raise FileExistsError(f"{label} is partially generated; missing: {', '.join(missing)}")
     return True
 
@@ -70,7 +76,7 @@ def run_demo_showcase(
     inspection_dir = Path("data") / "video_inspection" / resolved_video_id
     output_dir = Path("outputs") / "video_inspection" / resolved_video_id
 
-    demo_ready = require_all_or_none("demo video stage", [video_path, source_manifest])
+    demo_ready = require_all_or_none("demo video stage", [video_path, video_masks_dir, source_manifest])
     if not demo_ready:
         require_kict_sources(image_root, mask_root)
         run_command(
@@ -133,6 +139,7 @@ def run_demo_showcase(
     opencv_ready = require_all_or_none(
         "OpenCV visualization stage",
         [
+            output_dir / "annotated_frames",
             output_dir / "video_visualization_manifest.csv",
             output_dir / "annotated_video.mp4",
         ],
@@ -147,6 +154,7 @@ def run_demo_showcase(
         supervision_ready = require_all_or_none(
             "Supervision visualization stage",
             [
+                output_dir / "supervision_annotated_frames",
                 output_dir / "supervision_detections_manifest.csv",
                 output_dir / "supervision_visualization_manifest.csv",
                 output_dir / "supervision_annotated_video.mp4",

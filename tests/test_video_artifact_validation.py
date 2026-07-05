@@ -35,6 +35,8 @@ def write_valid_artifacts(root: Path, video_id: str = "demo") -> None:
         root / "outputs" / "video_inspection" / video_id / "video_visualization_manifest.csv",
         [{"video_id": video_id, "frame_id": "frame_000001", "annotated_frame_path": "a.jpg", "overlay_available": "true"}],
     )
+    (root / "outputs" / "video_inspection" / video_id / "annotated_frames").mkdir(parents=True)
+    (root / "outputs" / "video_inspection" / video_id / "annotated_frames" / "frame_000001.jpg").write_bytes(b"jpg")
     (root / "outputs" / "video_inspection" / video_id / "annotated_video.mp4").write_bytes(b"annotated")
     write_csv(
         root / "outputs" / "video_inspection" / video_id / "supervision_detections_manifest.csv",
@@ -44,6 +46,8 @@ def write_valid_artifacts(root: Path, video_id: str = "demo") -> None:
         root / "outputs" / "video_inspection" / video_id / "supervision_visualization_manifest.csv",
         [{"video_id": video_id, "frame_id": "frame_000001", "output_annotated_frame_path": "s.jpg", "visualization_source": "supervision_optional_layer"}],
     )
+    (root / "outputs" / "video_inspection" / video_id / "supervision_annotated_frames").mkdir(parents=True)
+    (root / "outputs" / "video_inspection" / video_id / "supervision_annotated_frames" / "frame_000001.jpg").write_bytes(b"jpg")
     (root / "outputs" / "video_inspection" / video_id / "supervision_annotated_video.mp4").write_bytes(b"supervision")
 
 
@@ -87,6 +91,16 @@ def test_validate_video_artifacts_reports_missing_outputs(tmp_path):
     assert result.returncode != 0
     assert "video artifact validation: failed" in result.stdout
     assert "annotated_video: missing/error" in result.stdout
+
+
+def test_validate_video_artifacts_reports_missing_annotated_frames(tmp_path):
+    write_valid_artifacts(tmp_path)
+    (tmp_path / "outputs" / "video_inspection" / "demo" / "annotated_frames" / "frame_000001.jpg").unlink()
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "annotated_frames: missing/error" in result.stdout
 
 
 def test_validate_video_artifacts_reports_bad_csv_schema(tmp_path):

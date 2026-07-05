@@ -70,6 +70,20 @@ def file_status(path: Path, label: str) -> dict[str, str | bool | int]:
     }
 
 
+def directory_status(path: Path, label: str, pattern: str = "frame_*.jpg") -> dict[str, str | bool | int]:
+    exists = path.is_dir()
+    file_count = len(list(path.glob(pattern))) if exists else 0
+    ok = exists and file_count > 0
+    return {
+        "label": label,
+        "path": path.as_posix(),
+        "exists": exists,
+        "file_count": file_count,
+        "ok": ok,
+        "message": "" if ok else f"{label} missing or contains no {pattern} files: {path}",
+    }
+
+
 def csv_status(path: Path, label: str, required_fields: list[str]) -> dict[str, str | bool | int | list[str]]:
     rows, errors = read_csv_rows(path, label, required_fields)
     return {
@@ -104,6 +118,7 @@ def validate_video_artifacts(
             "video_visualization_manifest",
             CSV_REQUIREMENTS["video_visualization_manifest"],
         ),
+        directory_status(output_dir / "annotated_frames", "annotated_frames"),
         file_status(output_dir / "annotated_video.mp4", "annotated_video"),
     ]
     if require_supervision:
@@ -119,6 +134,7 @@ def validate_video_artifacts(
                     "supervision_visualization_manifest",
                     CSV_REQUIREMENTS["supervision_visualization_manifest"],
                 ),
+                directory_status(output_dir / "supervision_annotated_frames", "supervision_annotated_frames"),
                 file_status(output_dir / "supervision_annotated_video.mp4", "supervision_annotated_video"),
             ]
         )
