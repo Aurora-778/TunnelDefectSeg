@@ -1,4 +1,5 @@
 import csv
+import io
 import json
 from http import HTTPStatus
 from pathlib import Path
@@ -97,6 +98,49 @@ def test_video_dashboard_static_route_rejects_path_traversal():
     web_app.DetectionHandler._serve_video_file(handler, "../bad", "annotated_video.mp4")
 
     assert captured["status"] == HTTPStatus.NOT_FOUND
+
+
+def test_video_dashboard_static_route_rejects_filename_traversal():
+    captured = {}
+    handler = object.__new__(web_app.DetectionHandler)
+    handler._send_json = lambda payload, status=HTTPStatus.OK: captured.update(payload=payload, status=status)
+
+    web_app.DetectionHandler._serve_video_file(handler, "tunnel_demo", "../bad.mp4")
+
+    assert captured["status"] == HTTPStatus.NOT_FOUND
+
+
+def test_video_dashboard_static_route_serves_annotated_video(tmp_path, monkeypatch):
+    _, _, output_root = _patch_video_roots(monkeypatch, tmp_path)
+    video_path = output_root / "tunnel_demo" / "annotated_video.mp4"
+    video_path.parent.mkdir(parents=True)
+    video_path.write_bytes(b"fake-mp4")
+    captured = {"headers": []}
+    handler = object.__new__(web_app.DetectionHandler)
+    handler.send_response = lambda status: captured.update(status=status)
+    handler.send_header = lambda key, value: captured["headers"].append((key, value))
+    handler.end_headers = lambda: captured.update(ended=True)
+    handler.wfile = io.BytesIO()
+
+    web_app.DetectionHandler._serve_video_file(handler, "tunnel_demo", "annotated_video.mp4")
+
+    assert captured["status"] == HTTPStatus.OK
+    assert ("Content-Type", "video/mp4") in captured["headers"]
+    assert handler.wfile.getvalue() == b"fake-mp4"
+
+
+def test_video_dashboard_bad_csv_does_not_crash(tmp_path, monkeypatch):
+    _, inspection_root, _ = _patch_video_roots(monkeypatch, tmp_path)
+    bad_csv = inspection_root / "tunnel_demo" / "disease_features.csv"
+    bad_csv.parent.mkdir(parents=True)
+    bad_csv.write_bytes(b"\xff\xfe\xfa")
+
+    payload = web_app._load_video_dashboard("tunnel_demo")
+
+    disease_table = next(table for table in payload["tables"] if table["title"] == "disease_features.csv")
+    assert disease_table["exists"] is False
+    assert "disease_features.csv" in payload["errors"]
+    assert "尚未生成该视频分析产物" in disease_table["missing_message"]
 
 
 def test_video_dashboard_html_contains_nav_and_boundary_copy():

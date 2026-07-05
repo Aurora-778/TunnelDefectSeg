@@ -101,6 +101,14 @@ def _safe_filename(filename: str) -> str:
     return f"{stem}{suffix}"
 
 
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _json_bytes(payload: dict, status: HTTPStatus = HTTPStatus.OK) -> tuple[int, bytes, str]:
     return int(status), json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8"
 
@@ -369,7 +377,7 @@ def _video_table_payload(title: str, path: Path, missing: list[str], errors: dic
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             rows = list(csv.DictReader(handle))
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
         errors[title] = str(exc)
         return {
             "title": title,
@@ -826,7 +834,7 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             VIDEO_DATA_ROOT.resolve(),
             VIDEO_OUTPUT_ROOT.resolve(),
         ]
-        if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+        if not any(_is_relative_to(resolved, root) for root in allowed_roots):
             self._send_json({"error": "Forbidden"}, HTTPStatus.FORBIDDEN)
             return
         if not resolved.exists() or not resolved.is_file():
