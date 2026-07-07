@@ -84,12 +84,19 @@ The design is intentionally one-way. Existing pipeline artifacts are read to gen
 - **Goal:** Create a small artifact generator that produces a stable ordered event stream for the current project flow.
 - **Files:** `scripts/generate_algorithm_events.py`, `tests/test_algorithm_event_generation.py`
 - **Patterns:** Follow existing script style from `scripts/validate_video_artifacts.py` and `scripts/generate_video_frame_metadata.py`: argparse entrypoint, clear validation errors, pathlib, no new dependencies.
-- **Event shape:** Include `event_id`, `stage`, `title`, `description`, `inputs`, `outputs`, `claim_boundary`, `status`, and optional `metrics`.
+- **Event shape:** Keep the schema small and explicit. The JSON root should include `schema_version`, `generated_at`, `source_artifacts`, and `events`. Each event should include `event_id`, `stage`, `title`, `description`, `inputs`, `outputs`, `claim_boundary`, `status`, and optional `metrics`.
+- **Artifact references:** `inputs` and `outputs` should be lists of artifact references. Each reference should include at least `label`, `path`, and `exists`; optional fields such as `kind` or `row_count` are allowed only when they come from existing artifacts.
+- **Status values:** Limit `status` to `available`, `missing`, `optional_missing`, or `error` so the renderer can handle empty states without inventing meanings.
 - **Expected output:** `outputs/algorithm_visualization/algorithm_events.json`
+- **Generation command:** `python scripts/generate_algorithm_events.py`
+- **Stale artifact policy:** The generator may overwrite only its own `outputs/algorithm_visualization/algorithm_events.json`. It must write `generated_at` and `source_artifacts` so reviewers can see when the event stream was produced and which current artifacts shaped it. Do not wire this into `run.py --mode full_pipeline` in the first implementation.
 - **Test scenarios:**
   - Generates a non-empty event list when standard demo artifacts exist.
   - Missing optional artifacts are represented as unavailable events, not crashes.
   - Required event fields are present for every event.
+  - Root metadata includes `schema_version`, `generated_at`, and `source_artifacts`.
+  - Artifact references include `label`, `path`, and `exists`.
+  - Invalid `status` values are rejected by tests.
   - Event order is stable and starts with data input / feature extraction.
   - Claim boundaries include no-id Association, rule-based Growth, and demo video limitations.
 - **Acceptance criteria:** The generator can run independently and does not modify `data/simulated/` or any existing output other than its own JSON.
@@ -128,13 +135,14 @@ The design is intentionally one-way. Existing pipeline artifacts are read to gen
 ### U4. Documentation and demo instructions
 
 - **Goal:** Document what the algorithm visualization page is and what it is not.
-- **Files:** `README.md`, `docs/artifact_contract.md`, optionally `docs/algorithm_visualization_layer.md`
+- **Files:** `docs/algorithm_visualization_layer.md`, optionally `README.md`
 - **Patterns:** Match existing language around `docs/supervision_visualization_layer.md` and video demo boundaries.
 - **Documentation points:**
   - The page visualizes the current artifact-backed algorithm flow.
   - It does not run arbitrary algorithm code.
   - It does not participate in Disease Memory Bank, no-id Association, Growth Analysis, model inference, or video processing.
   - Generation command is separate from `run.py --mode full_pipeline` unless a later plan explicitly integrates it.
+  - `docs/artifact_contract.md` should remain untouched in the first implementation unless a later plan explicitly decides to make `algorithm_events.json` part of `validate_artifacts.py`; this avoids upgrading a display artifact into a core pipeline contract too early.
 - **Test scenarios:**
   - Documentation mentions the generated event artifact path.
   - Documentation states the no-code-execution boundary.
@@ -203,6 +211,8 @@ The change should be additive. It creates a new explanatory artifact and a new U
 ## Verification Plan
 
 - Run focused generator tests: `python -m pytest tests/test_algorithm_event_generation.py -q -p no:cacheprovider`
+- Run real generator smoke test: `python scripts/generate_algorithm_events.py`
+- Confirm `outputs/algorithm_visualization/algorithm_events.json` exists and contains a non-empty `events` list.
 - Run focused API/page tests: `python -m pytest tests/test_algorithm_visualizer_api.py tests/test_algorithm_visualizer_page.py -q -p no:cacheprovider`
 - Run existing Web tests: `python -m pytest tests/test_web_app.py tests/test_video_dashboard.py -q -p no:cacheprovider`
 - Run artifact validation: `python scripts/validate_artifacts.py --project-root .`
