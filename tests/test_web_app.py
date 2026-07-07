@@ -443,6 +443,13 @@ def test_visualization_static_route_rejects_path_traversal():
     assert sent["status"] == web_app.HTTPStatus.NOT_FOUND
 
 
+def test_web_app_avoids_python39_only_removeprefix_for_segformer_env():
+    source = Path("web_app.py").read_text(encoding="utf-8")
+
+    assert ".removeprefix(" not in source
+    assert "def _strip_prefix" in source
+
+
 def test_evidence_overlay_static_route_rejects_path_traversal():
     sent = {}
     handler = object.__new__(web_app.DetectionHandler)

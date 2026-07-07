@@ -112,6 +112,12 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
+def _strip_prefix(value: str, prefix: str) -> str:
+    if value.startswith(prefix):
+        return value[len(prefix):]
+    return value
+
+
 def _json_bytes(payload: dict, status: HTTPStatus = HTTPStatus.OK) -> tuple[int, bytes, str]:
     return int(status), json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8"
 
@@ -833,19 +839,19 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             self._serve_file(WEB_PLATFORM_ROOT / "dashboard" / "index.html")
             return
         if path.startswith("/web/"):
-            self._serve_file(WEB_PLATFORM_ROOT / path.removeprefix("/web/"))
+            self._serve_file(WEB_PLATFORM_ROOT / _strip_prefix(path, "/web/"))
             return
         if path.startswith("/assets/"):
             self._serve_file(WEB_ROOT / path.lstrip("/"))
             return
         if path.startswith("/static-outputs/visualizations/"):
-            self._serve_visualization_file(path.removeprefix("/static-outputs/visualizations/"))
+            self._serve_visualization_file(_strip_prefix(path, "/static-outputs/visualizations/"))
             return
         if path.startswith("/static-outputs/evidence-overlays/"):
-            self._serve_evidence_overlay_file(path.removeprefix("/static-outputs/evidence-overlays/"))
+            self._serve_evidence_overlay_file(_strip_prefix(path, "/static-outputs/evidence-overlays/"))
             return
         if path.startswith("/static-video/"):
-            video_path = path.removeprefix("/static-video/")
+            video_path = _strip_prefix(path, "/static-video/")
             parts = [part for part in video_path.split("/") if part]
             if len(parts) != 2:
                 self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
@@ -853,7 +859,7 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             self._serve_video_file(parts[0], parts[1])
             return
         if path.startswith("/outputs/"):
-            self._serve_file(OUTPUT_ROOT / path.removeprefix("/outputs/"))
+            self._serve_file(OUTPUT_ROOT / _strip_prefix(path, "/outputs/"))
             return
         if path == "/api/health":
             self._send_json(
@@ -875,7 +881,7 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             self._send_json(runs_payload(ROOT))
             return
         if path.startswith("/api/run/"):
-            self._send_json(run_payload(ROOT, Path(path.removeprefix("/api/run/")).name))
+            self._send_json(run_payload(ROOT, Path(_strip_prefix(path, "/api/run/")).name))
             return
         if path == "/api/evidence":
             self._send_json(_load_evidence_payload())
