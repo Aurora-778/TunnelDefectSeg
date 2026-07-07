@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from generate_algorithm_events import ALLOWED_STATUS, build_algorithm_events, write_algorithm_events
+from generate_algorithm_events import ALLOWED_STATUS, build_algorithm_events, resolve_output_path, write_algorithm_events
 
 
 def write_file(path: Path, content: str = "x") -> None:
@@ -70,6 +70,16 @@ def test_missing_optional_video_artifacts_do_not_crash(tmp_path):
     assert missing_refs[0]["path"].endswith("supervision_annotated_video.mp4")
 
 
+def test_required_input_missing_prevents_available_status(tmp_path):
+    write_minimal_artifacts(tmp_path)
+    (tmp_path / "data" / "simulated" / "inspection_sequence.csv").unlink()
+
+    payload = build_algorithm_events(tmp_path)
+
+    metadata_event = next(event for event in payload["events"] if event["event_id"] == "E02")
+    assert metadata_event["status"] == "missing"
+
+
 def test_write_algorithm_events_only_writes_own_json(tmp_path):
     write_minimal_artifacts(tmp_path)
     sentinel = tmp_path / "data" / "simulated" / "sentinel.csv"
@@ -82,6 +92,17 @@ def test_write_algorithm_events_only_writes_own_json(tmp_path):
     assert output_json.exists()
     assert json.loads(output_json.read_text(encoding="utf-8"))["events"]
     assert sentinel.read_text(encoding="utf-8") == "keep"
+
+
+def test_resolve_output_path_rejects_paths_outside_algorithm_visualization(tmp_path):
+    with pytest.raises(ValueError, match="outputs/algorithm_visualization"):
+        resolve_output_path(tmp_path, tmp_path / "outside.json")
+
+
+def test_resolve_output_path_allows_algorithm_visualization_outputs(tmp_path):
+    output_path = resolve_output_path(tmp_path, Path("outputs/algorithm_visualization/custom.json"))
+
+    assert output_path == (tmp_path / "outputs" / "algorithm_visualization" / "custom.json").resolve()
 
 
 def test_generator_cli_creates_non_empty_events(tmp_path):

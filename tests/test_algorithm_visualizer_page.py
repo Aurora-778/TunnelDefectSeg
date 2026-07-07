@@ -37,6 +37,15 @@ def test_algorithm_flow_missing_state_copy_is_visible():
     assert "尚未生成算法展示事件流，请先运行 python scripts/generate_algorithm_events.py。" in html
 
 
+def test_algorithm_flow_shows_generated_at_and_artifact_summary():
+    html = _html()
+
+    assert 'id="algorithmArtifactSummary"' in html
+    assert "generated_at" in html
+    assert "source artifacts" in html
+    assert "missingArtifacts" in html
+
+
 def test_algorithm_flow_is_registered_in_app_view_switching():
     html = _html()
 

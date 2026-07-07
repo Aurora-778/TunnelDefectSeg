@@ -56,6 +56,7 @@ DEFAULT_VIDEO_ID = "tunnel_demo"
 VIDEO_MISSING_MESSAGE = "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。"
 ALGORITHM_EVENTS_FILE = ROOT / "outputs" / "algorithm_visualization" / "algorithm_events.json"
 ALGORITHM_EVENTS_MISSING_MESSAGE = "尚未生成算法展示事件流，请先运行 python scripts/generate_algorithm_events.py。"
+ALGORITHM_EVENT_STATUS_VALUES = {"available", "missing", "optional_missing", "error"}
 KICT_DATASET_ROOTS = [
     ROOT / "kict_sample",
     ROOT.parent / "kict_sample",
@@ -382,6 +383,19 @@ def _load_algorithm_events() -> dict:
             "missing_message": ALGORITHM_EVENTS_MISSING_MESSAGE,
             "errors": {"algorithm_events": str(exc)},
         }
+    schema_errors = _validate_algorithm_events_payload(payload)
+    if schema_errors:
+        return {
+            "ok": True,
+            "source": "error",
+            "schema_version": "",
+            "generated_at": "",
+            "source_artifacts": [],
+            "events": [],
+            "missing": "",
+            "missing_message": ALGORITHM_EVENTS_MISSING_MESSAGE,
+            "errors": {"algorithm_events": "; ".join(schema_errors)},
+        }
     return {
         "ok": True,
         "source": "generated-json",
@@ -393,6 +407,52 @@ def _load_algorithm_events() -> dict:
         "missing_message": "",
         "errors": {},
     }
+
+
+def _validate_algorithm_artifact_ref(ref: object, label: str) -> list[str]:
+    if not isinstance(ref, dict):
+        return [f"{label} must be an object"]
+    errors = []
+    for field in ("label", "path", "exists"):
+        if field not in ref:
+            errors.append(f"{label} missing {field}")
+    if "exists" in ref and not isinstance(ref["exists"], bool):
+        errors.append(f"{label}.exists must be boolean")
+    return errors
+
+
+def _validate_algorithm_events_payload(payload: object) -> list[str]:
+    if not isinstance(payload, dict):
+        return ["algorithm events payload must be an object"]
+    errors = []
+    if not payload.get("schema_version"):
+        errors.append("missing schema_version")
+    source_artifacts = payload.get("source_artifacts", [])
+    if not isinstance(source_artifacts, list):
+        errors.append("source_artifacts must be a list")
+    events = payload.get("events")
+    if not isinstance(events, list):
+        errors.append("events must be a list")
+        return errors
+    required_event_fields = {"event_id", "stage", "title", "description", "inputs", "outputs", "claim_boundary", "status"}
+    for index, event in enumerate(events, start=1):
+        label = f"event {index}"
+        if not isinstance(event, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        missing = sorted(required_event_fields - set(event))
+        if missing:
+            errors.append(f"{label} missing {', '.join(missing)}")
+        if event.get("status") not in ALGORITHM_EVENT_STATUS_VALUES:
+            errors.append(f"{label} has invalid status")
+        for side in ("inputs", "outputs"):
+            refs = event.get(side)
+            if not isinstance(refs, list):
+                errors.append(f"{label}.{side} must be a list")
+                continue
+            for ref_index, ref in enumerate(refs, start=1):
+                errors.extend(_validate_algorithm_artifact_ref(ref, f"{label}.{side}[{ref_index}]"))
+    return errors
 
 
 def _safe_video_id(video_id: str | None) -> str:

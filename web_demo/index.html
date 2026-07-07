@@ -2029,6 +2029,11 @@
           <span>它不运行任意代码，不做模型推理，也不是真实在线机器人算法执行。</span>
           <span>每个步骤的 claim_boundary 会说明该步骤能证明什么、不能证明什么。</span>
         </div>
+        <div class="claim-row" id="algorithmArtifactSummary">
+          <span class="claim-chip">generated_at N/A</span>
+          <span class="claim-chip">source artifacts 0</span>
+          <span class="claim-chip">missing 0</span>
+        </div>
         <div class="video-grid">
           <div class="data-grid" id="algorithmTimeline">
             <div class="robot-empty">尚未生成算法展示事件流，请先运行 python scripts/generate_algorithm_events.py。</div>
@@ -2966,6 +2971,13 @@
 
     function renderAlgorithmEvents(payload = {}) {
       document.querySelector("#algorithmEventsSource").textContent = `${payload.source || "fallback"} / ${payload.schema_version || "no-schema"}`;
+      const sourceArtifacts = payload.source_artifacts || [];
+      const missingArtifacts = sourceArtifacts.filter((artifact) => !artifact.exists).length;
+      document.querySelector("#algorithmArtifactSummary").innerHTML = [
+        `<span class="claim-chip">generated_at ${escapeHtml(payload.generated_at || "N/A")}</span>`,
+        `<span class="claim-chip">source artifacts ${sourceArtifacts.length}</span>`,
+        `<span class="claim-chip">missing ${missingArtifacts}</span>`
+      ].join("");
       const events = payload.events || [];
       if (!events.length) {
         const message = payload.missing_message || "尚未生成算法展示事件流，请先运行 python scripts/generate_algorithm_events.py。";

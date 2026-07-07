@@ -11,6 +11,7 @@ from typing import Iterable
 SCHEMA_VERSION = "algorithm-events.v1"
 ALLOWED_STATUS = {"available", "missing", "optional_missing", "error"}
 DEFAULT_OUTPUT = Path("outputs/algorithm_visualization/algorithm_events.json")
+OUTPUT_ROOT = Path("outputs/algorithm_visualization")
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,8 +51,11 @@ def artifact_ref(project_root: Path, label: str, path: str, kind: str = "file") 
     return ref
 
 
-def event_status(outputs: Iterable[dict], optional: bool = False) -> str:
+def event_status(inputs: Iterable[dict], outputs: Iterable[dict], optional: bool = False) -> str:
+    inputs = list(inputs)
     outputs = list(outputs)
+    if any(not bool(item.get("exists")) for item in inputs):
+        return "missing"
     if not outputs:
         return "missing"
     if all(bool(item.get("exists")) for item in outputs):
@@ -70,7 +74,7 @@ def build_event(
     optional: bool = False,
     metrics: dict | None = None,
 ) -> dict:
-    status = event_status(outputs, optional=optional)
+    status = event_status(inputs, outputs, optional=optional)
     if status not in ALLOWED_STATUS:
         raise ValueError(f"invalid event status: {status}")
     event = {
@@ -243,12 +247,25 @@ def write_algorithm_events(payload: dict, output_json: Path) -> None:
     output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def resolve_output_path(project_root: Path, output_json: Path) -> Path:
+    project_root = project_root.resolve()
+    output_path = output_json if output_json.is_absolute() else project_root / output_json
+    output_path = output_path.resolve()
+    allowed_root = (project_root / OUTPUT_ROOT).resolve()
+    try:
+        output_path.relative_to(allowed_root)
+    except ValueError as exc:
+        raise ValueError("output_json must be inside outputs/algorithm_visualization") from exc
+    return output_path
+
+
 def main() -> None:
     args = parse_args()
     payload = build_algorithm_events(args.project_root, args.video_id)
-    output_json = args.output_json
-    if not output_json.is_absolute():
-        output_json = args.project_root / output_json
+    try:
+        output_json = resolve_output_path(args.project_root, args.output_json)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     write_algorithm_events(payload, output_json)
     print("Algorithm event replay artifact generated")
     print(f"events: {len(payload['events'])}")

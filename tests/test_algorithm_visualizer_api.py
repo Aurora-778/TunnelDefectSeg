@@ -23,7 +23,16 @@ def test_algorithm_events_payload_reads_generated_json(tmp_path, monkeypatch):
             "schema_version": "algorithm-events.v1",
             "generated_at": "2026-07-07T00:00:00Z",
             "source_artifacts": [{"label": "source", "path": "data/source.csv", "exists": True}],
-            "events": [{"event_id": "E01", "stage": "kict_mask_geometry"}],
+            "events": [{
+                "event_id": "E01",
+                "stage": "kict_mask_geometry",
+                "title": "KICT mask geometry",
+                "description": "Read generated artifact.",
+                "inputs": [],
+                "outputs": [{"label": "source", "path": "data/source.csv", "exists": True}],
+                "claim_boundary": "Read-only artifact replay.",
+                "status": "available",
+            }],
         }),
         encoding="utf-8",
     )
@@ -48,6 +57,82 @@ def test_algorithm_events_payload_reports_broken_json(tmp_path, monkeypatch):
     assert payload["source"] == "error"
     assert payload["events"] == []
     assert "algorithm_events" in payload["errors"]
+
+
+def test_algorithm_events_payload_rejects_missing_schema_version(tmp_path, monkeypatch):
+    events_file = tmp_path / "algorithm_events.json"
+    events_file.write_text(json.dumps({"events": []}), encoding="utf-8")
+    monkeypatch.setattr(web_app, "ALGORITHM_EVENTS_FILE", events_file)
+
+    payload = web_app._load_algorithm_events()
+
+    assert payload["source"] == "error"
+    assert "missing schema_version" in payload["errors"]["algorithm_events"]
+
+
+def test_algorithm_events_payload_rejects_non_list_events(tmp_path, monkeypatch):
+    events_file = tmp_path / "algorithm_events.json"
+    events_file.write_text(json.dumps({"schema_version": "algorithm-events.v1", "events": {}}), encoding="utf-8")
+    monkeypatch.setattr(web_app, "ALGORITHM_EVENTS_FILE", events_file)
+
+    payload = web_app._load_algorithm_events()
+
+    assert payload["source"] == "error"
+    assert "events must be a list" in payload["errors"]["algorithm_events"]
+
+
+def test_algorithm_events_payload_rejects_invalid_status(tmp_path, monkeypatch):
+    events_file = tmp_path / "algorithm_events.json"
+    events_file.write_text(
+        json.dumps({
+            "schema_version": "algorithm-events.v1",
+            "source_artifacts": [],
+            "events": [{
+                "event_id": "E01",
+                "stage": "stage",
+                "title": "title",
+                "description": "description",
+                "inputs": [],
+                "outputs": [],
+                "claim_boundary": "boundary",
+                "status": "done",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "ALGORITHM_EVENTS_FILE", events_file)
+
+    payload = web_app._load_algorithm_events()
+
+    assert payload["source"] == "error"
+    assert "invalid status" in payload["errors"]["algorithm_events"]
+
+
+def test_algorithm_events_payload_rejects_incomplete_artifact_ref(tmp_path, monkeypatch):
+    events_file = tmp_path / "algorithm_events.json"
+    events_file.write_text(
+        json.dumps({
+            "schema_version": "algorithm-events.v1",
+            "source_artifacts": [],
+            "events": [{
+                "event_id": "E01",
+                "stage": "stage",
+                "title": "title",
+                "description": "description",
+                "inputs": [{"label": "input", "path": "input.csv"}],
+                "outputs": [],
+                "claim_boundary": "boundary",
+                "status": "missing",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "ALGORITHM_EVENTS_FILE", events_file)
+
+    payload = web_app._load_algorithm_events()
+
+    assert payload["source"] == "error"
+    assert "missing exists" in payload["errors"]["algorithm_events"]
 
 
 def test_algorithm_events_api_route_can_be_served(monkeypatch):
