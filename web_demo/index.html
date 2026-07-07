@@ -2877,9 +2877,9 @@
 
       const videos = payload.videos || [];
       document.querySelector("#videoCards").innerHTML = videos.length ? videos.map((video) => {
+        const poster = video.poster_url ? ` poster="${escapeHtml(video.poster_url)}"` : "";
         const body = video.exists
-          ? `<video controls preload="metadata" src="${escapeHtml(video.url)}"></video>
-             <p>${escapeHtml(video.path || "")}</p>`
+          ? `<video controls preload="metadata"${poster} src="${escapeHtml(video.url)}"></video>`
           : `<div class="robot-empty">${escapeHtml(video.missing_message || payload.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>`;
         return `<article class="data-card video-card">
           <b>${escapeHtml(video.title || video.key || "video")}</b>

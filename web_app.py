@@ -50,6 +50,7 @@ ORCHESTRATOR_STATE_FILE = ROOT / "orchestrator" / "state" / "run_state.json"
 VISUALIZATION_ROOT = ROOT / "outputs" / "visualizations"
 EVIDENCE_OVERLAY_ROOT = ROOT / "outputs" / "evidence_overlays"
 VIDEO_DATA_ROOT = ROOT / "data" / "videos"
+VIDEO_FRAME_ROOT = ROOT / "data" / "video_frames"
 VIDEO_INSPECTION_ROOT = ROOT / "data" / "video_inspection"
 VIDEO_OUTPUT_ROOT = ROOT / "outputs" / "video_inspection"
 DEFAULT_VIDEO_ID = "tunnel_demo"
@@ -521,23 +522,30 @@ def _load_video_dashboard(video_id: str = DEFAULT_VIDEO_ID) -> dict:
             "title": "原始 demo video",
             "path": VIDEO_DATA_ROOT / f"{safe_id}.mp4",
             "filename": f"{safe_id}.mp4",
+            "poster_path": VIDEO_FRAME_ROOT / safe_id / "frame_000001.jpg",
+            "poster_filename": "demo_poster.jpg",
         },
         {
             "key": "opencv_annotated_video",
             "title": "OpenCV annotated video",
             "path": VIDEO_OUTPUT_ROOT / safe_id / "annotated_video.mp4",
             "filename": "annotated_video.mp4",
+            "poster_path": VIDEO_OUTPUT_ROOT / safe_id / "annotated_frames" / "frame_000001.jpg",
+            "poster_filename": "annotated_poster.jpg",
         },
         {
             "key": "supervision_annotated_video",
             "title": "Supervision annotated video",
             "path": VIDEO_OUTPUT_ROOT / safe_id / "supervision_annotated_video.mp4",
             "filename": "supervision_annotated_video.mp4",
+            "poster_path": VIDEO_OUTPUT_ROOT / safe_id / "supervision_annotated_frames" / "frame_000001.jpg",
+            "poster_filename": "supervision_poster.jpg",
         },
     ]
     videos = []
     for item in video_files:
         exists = item["path"].exists()
+        poster_exists = item["poster_path"].exists()
         if not exists:
             missing.append(str(item["path"]).replace("\\", "/"))
         videos.append({
@@ -546,6 +554,9 @@ def _load_video_dashboard(video_id: str = DEFAULT_VIDEO_ID) -> dict:
             "exists": exists,
             "path": str(item["path"]).replace("\\", "/"),
             "url": _video_url(safe_id, item["filename"]) if exists else "",
+            "poster_exists": poster_exists,
+            "poster_path": str(item["poster_path"]).replace("\\", "/"),
+            "poster_url": _video_url(safe_id, item["poster_filename"]) if poster_exists else "",
             "missing_message": "" if exists else VIDEO_MISSING_MESSAGE,
         })
 
@@ -946,6 +957,7 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             VISUALIZATION_ROOT.resolve(),
             EVIDENCE_OVERLAY_ROOT.resolve(),
             VIDEO_DATA_ROOT.resolve(),
+            VIDEO_FRAME_ROOT.resolve(),
             VIDEO_OUTPUT_ROOT.resolve(),
         ]
         if not any(_is_relative_to(resolved, root) for root in allowed_roots):
@@ -982,13 +994,20 @@ class DetectionHandler(SimpleHTTPRequestHandler):
     def _serve_video_file(self, video_id: str, filename: str) -> None:
         safe_id = _safe_video_id(video_id)
         safe_name = Path(filename).name
-        if video_id != safe_id or filename != safe_name or Path(safe_name).suffix.lower() != ".mp4":
+        suffix = Path(safe_name).suffix.lower()
+        if video_id != safe_id or filename != safe_name or suffix not in {".mp4", ".jpg"}:
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
             return
         if safe_name == f"{safe_id}.mp4":
             path = VIDEO_DATA_ROOT / safe_name
         elif safe_name in {"annotated_video.mp4", "supervision_annotated_video.mp4"}:
             path = VIDEO_OUTPUT_ROOT / safe_id / safe_name
+        elif safe_name == "demo_poster.jpg":
+            path = VIDEO_FRAME_ROOT / safe_id / "frame_000001.jpg"
+        elif safe_name == "annotated_poster.jpg":
+            path = VIDEO_OUTPUT_ROOT / safe_id / "annotated_frames" / "frame_000001.jpg"
+        elif safe_name == "supervision_poster.jpg":
+            path = VIDEO_OUTPUT_ROOT / safe_id / "supervision_annotated_frames" / "frame_000001.jpg"
         else:
             self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
             return

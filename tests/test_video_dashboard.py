@@ -17,12 +17,14 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
 
 def _patch_video_roots(monkeypatch, tmp_path):
     video_root = tmp_path / "data" / "videos"
+    frame_root = tmp_path / "data" / "video_frames"
     inspection_root = tmp_path / "data" / "video_inspection"
     output_root = tmp_path / "outputs" / "video_inspection"
     monkeypatch.setattr(web_app, "VIDEO_DATA_ROOT", video_root)
+    monkeypatch.setattr(web_app, "VIDEO_FRAME_ROOT", frame_root)
     monkeypatch.setattr(web_app, "VIDEO_INSPECTION_ROOT", inspection_root)
     monkeypatch.setattr(web_app, "VIDEO_OUTPUT_ROOT", output_root)
-    return video_root, inspection_root, output_root
+    return video_root, frame_root, inspection_root, output_root
 
 
 def test_video_dashboard_payload_handles_missing_artifacts(tmp_path, monkeypatch):
@@ -39,12 +41,18 @@ def test_video_dashboard_payload_handles_missing_artifacts(tmp_path, monkeypatch
 
 
 def test_video_dashboard_payload_exposes_videos_and_tables(tmp_path, monkeypatch):
-    video_root, inspection_root, output_root = _patch_video_roots(monkeypatch, tmp_path)
+    video_root, frame_root, inspection_root, output_root = _patch_video_roots(monkeypatch, tmp_path)
     video_root.mkdir(parents=True)
     (video_root / "tunnel_demo.mp4").write_bytes(b"demo")
+    (frame_root / "tunnel_demo").mkdir(parents=True)
+    (frame_root / "tunnel_demo" / "frame_000001.jpg").write_bytes(b"poster")
     (output_root / "tunnel_demo").mkdir(parents=True)
     (output_root / "tunnel_demo" / "annotated_video.mp4").write_bytes(b"opencv")
     (output_root / "tunnel_demo" / "supervision_annotated_video.mp4").write_bytes(b"supervision")
+    (output_root / "tunnel_demo" / "annotated_frames").mkdir(parents=True)
+    (output_root / "tunnel_demo" / "annotated_frames" / "frame_000001.jpg").write_bytes(b"poster")
+    (output_root / "tunnel_demo" / "supervision_annotated_frames").mkdir(parents=True)
+    (output_root / "tunnel_demo" / "supervision_annotated_frames" / "frame_000001.jpg").write_bytes(b"poster")
     _write_csv(
         inspection_root / "tunnel_demo" / "disease_features.csv",
         [{"frame_id": "frame_000001", "disease_area": "12", "risk_level": "low"}],
@@ -71,6 +79,12 @@ def test_video_dashboard_payload_exposes_videos_and_tables(tmp_path, monkeypatch
         "supervision_annotated_video": True,
     }
     assert "/static-video/tunnel_demo/annotated_video.mp4" in json.dumps(payload, ensure_ascii=False)
+    assert {video["key"]: video["poster_exists"] for video in payload["videos"]} == {
+        "demo_video": True,
+        "opencv_annotated_video": True,
+        "supervision_annotated_video": True,
+    }
+    assert "/static-video/tunnel_demo/annotated_poster.jpg" in json.dumps(payload, ensure_ascii=False)
     disease_table = next(table for table in payload["tables"] if table["title"] == "disease_features.csv")
     assert disease_table["rows"][0]["disease_area"] == "12"
     assert disease_table["columns"] == ["frame_id", "disease_area", "risk_level"]
@@ -111,7 +125,7 @@ def test_video_dashboard_static_route_rejects_filename_traversal():
 
 
 def test_video_dashboard_static_route_serves_annotated_video(tmp_path, monkeypatch):
-    _, _, output_root = _patch_video_roots(monkeypatch, tmp_path)
+    _, _, _, output_root = _patch_video_roots(monkeypatch, tmp_path)
     video_path = output_root / "tunnel_demo" / "annotated_video.mp4"
     video_path.parent.mkdir(parents=True)
     video_path.write_bytes(b"fake-mp4")
@@ -129,8 +143,27 @@ def test_video_dashboard_static_route_serves_annotated_video(tmp_path, monkeypat
     assert handler.wfile.getvalue() == b"fake-mp4"
 
 
+def test_video_dashboard_static_route_serves_poster_frame(tmp_path, monkeypatch):
+    _, frame_root, _, _ = _patch_video_roots(monkeypatch, tmp_path)
+    poster_path = frame_root / "tunnel_demo" / "frame_000001.jpg"
+    poster_path.parent.mkdir(parents=True)
+    poster_path.write_bytes(b"fake-jpg")
+    captured = {"headers": []}
+    handler = object.__new__(web_app.DetectionHandler)
+    handler.send_response = lambda status: captured.update(status=status)
+    handler.send_header = lambda key, value: captured["headers"].append((key, value))
+    handler.end_headers = lambda: captured.update(ended=True)
+    handler.wfile = io.BytesIO()
+
+    web_app.DetectionHandler._serve_video_file(handler, "tunnel_demo", "demo_poster.jpg")
+
+    assert captured["status"] == HTTPStatus.OK
+    assert ("Content-Type", "image/jpeg") in captured["headers"]
+    assert handler.wfile.getvalue() == b"fake-jpg"
+
+
 def test_video_dashboard_bad_csv_does_not_crash(tmp_path, monkeypatch):
-    _, inspection_root, _ = _patch_video_roots(monkeypatch, tmp_path)
+    _, _, inspection_root, _ = _patch_video_roots(monkeypatch, tmp_path)
     bad_csv = inspection_root / "tunnel_demo" / "disease_features.csv"
     bad_csv.parent.mkdir(parents=True)
     bad_csv.write_bytes(b"\xff\xfe\xfa")
@@ -151,6 +184,7 @@ def test_video_dashboard_html_contains_nav_and_boundary_copy():
     assert "tunnel_demo.mp4 是由 KICT 静态裂缝图像和 mask 合成的 demo video" in html
     assert "当前系统不是实时视频流分析系统" in html
     assert "supervision 只是可选可视化工具层" in html
+    assert "video.poster_url" in html
 
 
 def test_video_dashboard_page_only_renders_video_cards_not_csv_tables():
@@ -159,6 +193,7 @@ def test_video_dashboard_page_only_renders_video_cards_not_csv_tables():
     assert 'id="videoCards"' in html
     assert 'id="videoTables"' not in html
     assert "renderVideoTable" not in html
+    assert "video.path" not in html
 
 
 def test_video_dashboard_does_not_touch_simulated_outputs(tmp_path, monkeypatch):
