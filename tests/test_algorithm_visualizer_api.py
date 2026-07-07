@@ -81,6 +81,44 @@ def test_algorithm_events_payload_rejects_non_list_events(tmp_path, monkeypatch)
     assert "events must be a list" in payload["errors"]["algorithm_events"]
 
 
+def test_algorithm_events_payload_rejects_incomplete_source_artifact(tmp_path, monkeypatch):
+    events_file = tmp_path / "algorithm_events.json"
+    events_file.write_text(
+        json.dumps({
+            "schema_version": "algorithm-events.v1",
+            "source_artifacts": [{"label": "source", "path": "data/source.csv"}],
+            "events": [],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "ALGORITHM_EVENTS_FILE", events_file)
+
+    payload = web_app._load_algorithm_events()
+
+    assert payload["source"] == "error"
+    assert "source_artifacts" in payload["errors"]["algorithm_events"]
+    assert "missing exists" in payload["errors"]["algorithm_events"]
+
+
+def test_algorithm_events_payload_rejects_non_object_source_artifact(tmp_path, monkeypatch):
+    events_file = tmp_path / "algorithm_events.json"
+    events_file.write_text(
+        json.dumps({
+            "schema_version": "algorithm-events.v1",
+            "source_artifacts": ["bad"],
+            "events": [],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "ALGORITHM_EVENTS_FILE", events_file)
+
+    payload = web_app._load_algorithm_events()
+
+    assert payload["source"] == "error"
+    assert "source_artifacts" in payload["errors"]["algorithm_events"]
+    assert "must be an object" in payload["errors"]["algorithm_events"]
+
+
 def test_algorithm_events_payload_rejects_invalid_status(tmp_path, monkeypatch):
     events_file = tmp_path / "algorithm_events.json"
     events_file.write_text(

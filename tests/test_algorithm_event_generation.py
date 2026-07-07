@@ -99,6 +99,29 @@ def test_resolve_output_path_rejects_paths_outside_algorithm_visualization(tmp_p
         resolve_output_path(tmp_path, tmp_path / "outside.json")
 
 
+def test_generator_cli_rejects_output_path_outside_algorithm_visualization(tmp_path):
+    write_minimal_artifacts(tmp_path)
+    outside = tmp_path / "outside.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/generate_algorithm_events.py",
+            "--project-root",
+            str(tmp_path),
+            "--output-json",
+            str(outside),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "output_json must be inside outputs/algorithm_visualization" in result.stderr + result.stdout
+    assert not outside.exists()
+
+
 def test_resolve_output_path_allows_algorithm_visualization_outputs(tmp_path):
     output_path = resolve_output_path(tmp_path, Path("outputs/algorithm_visualization/custom.json"))
 

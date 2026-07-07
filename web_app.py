@@ -430,6 +430,9 @@ def _validate_algorithm_events_payload(payload: object) -> list[str]:
     source_artifacts = payload.get("source_artifacts", [])
     if not isinstance(source_artifacts, list):
         errors.append("source_artifacts must be a list")
+    else:
+        for ref_index, ref in enumerate(source_artifacts, start=1):
+            errors.extend(_validate_algorithm_artifact_ref(ref, f"source_artifacts[{ref_index}]"))
     events = payload.get("events")
     if not isinstance(events, list):
         errors.append("events must be a list")
