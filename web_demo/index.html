@@ -1918,6 +1918,7 @@
         <a href="#recheck-list" data-view-link="recheck-list">复检清单</a>
         <a href="#visualizations" data-view-link="visualizations">可视化图表</a>
         <a href="#video-analysis" data-view-link="video-analysis">视频分析</a>
+        <a href="#algorithm-flow" data-view-link="algorithm-flow">算法展示</a>
         <a href="#detect" data-view-link="detect">单图检测</a>
         <a href="#data-note" data-view-link="data-note">数据说明</a>
       </div>
@@ -2016,6 +2017,25 @@
         </div>
         <div id="videoTables">
           <div class="robot-empty">等待视频分析表格。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section app-view" id="algorithm-flow" data-app-view="algorithm-flow">
+      <div class="panel-title">算法展示 / Algorithm Flow <span id="algorithmEventsSource">/api/algorithm-events</span></div>
+      <div class="panel-body">
+        <div class="video-boundary" id="algorithmBoundaryNotes">
+          <span>这是基于已生成 artifacts 的算法事件流展示。</span>
+          <span>它不运行任意代码，不做模型推理，也不是真实在线机器人算法执行。</span>
+          <span>每个步骤的 claim_boundary 会说明该步骤能证明什么、不能证明什么。</span>
+        </div>
+        <div class="video-grid">
+          <div class="data-grid" id="algorithmTimeline">
+            <div class="robot-empty">尚未生成算法展示事件流，请先运行 python scripts/generate_algorithm_events.py。</div>
+          </div>
+          <div class="data-card" id="algorithmEventDetail">
+            <div class="robot-empty">选择一个算法步骤。</div>
+          </div>
         </div>
       </div>
     </section>
@@ -2908,6 +2928,80 @@
       }
     }
 
+    function renderAlgorithmArtifacts(title, artifacts = []) {
+      if (!artifacts.length) {
+        return `<section class="video-table-block"><h3>${escapeHtml(title)}</h3><div class="robot-empty">无 artifact 引用。</div></section>`;
+      }
+      return `<section class="video-table-block">
+        <h3>${escapeHtml(title)}</h3>
+        <table>
+          <thead><tr><th>Label</th><th>Path</th><th>Status</th><th>Rows</th></tr></thead>
+          <tbody>
+            ${artifacts.map((artifact) => `<tr>
+              <td>${escapeHtml(artifact.label || "")}</td>
+              <td>${escapeHtml(artifact.path || "")}</td>
+              <td>${artifact.exists ? "available" : "missing"}</td>
+              <td>${escapeHtml(artifact.row_count ?? "")}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </section>`;
+    }
+
+    function renderAlgorithmEventDetail(event = {}) {
+      const metrics = event.metrics && Object.keys(event.metrics).length
+        ? `<section class="video-table-block"><h3>Metrics</h3><pre>${escapeHtml(JSON.stringify(event.metrics, null, 2))}</pre></section>`
+        : "";
+      document.querySelector("#algorithmEventDetail").innerHTML = `<b>${escapeHtml(event.title || event.event_id || "algorithm event")}</b>
+        <p>${escapeHtml(event.description || "暂无描述。")}</p>
+        <div class="claim-row">
+          <span class="claim-chip">${escapeHtml(event.stage || "stage")}</span>
+          <span class="claim-chip">${escapeHtml(event.status || "status")}</span>
+        </div>
+        <blockquote>${escapeHtml(event.claim_boundary || "暂无边界说明。")}</blockquote>
+        ${renderAlgorithmArtifacts("Inputs", event.inputs || [])}
+        ${renderAlgorithmArtifacts("Outputs", event.outputs || [])}
+        ${metrics}`;
+    }
+
+    function renderAlgorithmEvents(payload = {}) {
+      document.querySelector("#algorithmEventsSource").textContent = `${payload.source || "fallback"} / ${payload.schema_version || "no-schema"}`;
+      const events = payload.events || [];
+      if (!events.length) {
+        const message = payload.missing_message || "尚未生成算法展示事件流，请先运行 python scripts/generate_algorithm_events.py。";
+        document.querySelector("#algorithmTimeline").innerHTML = `<div class="robot-empty">${escapeHtml(message)}</div>`;
+        document.querySelector("#algorithmEventDetail").innerHTML = `<div class="robot-empty">${escapeHtml(message)}</div>`;
+        return;
+      }
+      document.querySelector("#algorithmTimeline").innerHTML = events.map((event, index) => `<article class="data-card" tabindex="0" data-algorithm-event-index="${index}">
+        <b>${escapeHtml(event.event_id || `E${index + 1}`)} / ${escapeHtml(event.stage || "stage")}</b>
+        <p>${escapeHtml(event.title || "algorithm step")}</p>
+        <span class="tag">${escapeHtml(event.status || "status")}</span>
+      </article>`).join("");
+      document.querySelectorAll("[data-algorithm-event-index]").forEach((node) => {
+        const show = () => renderAlgorithmEventDetail(events[Number(node.dataset.algorithmEventIndex)]);
+        node.addEventListener("click", show);
+        node.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            show();
+          }
+        });
+      });
+      renderAlgorithmEventDetail(events[0]);
+    }
+
+    async function loadAlgorithmEvents() {
+      try {
+        const response = await fetch("/api/algorithm-events");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        renderAlgorithmEvents(await response.json());
+      } catch (error) {
+        document.querySelector("#algorithmEventsSource").textContent = "algorithm events unavailable";
+        document.querySelector("#algorithmTimeline").innerHTML = `<div class="robot-empty">算法展示事件流不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
 
     function shortLocation(location = {}) {
       let mileage = "里程 N/A";
@@ -3130,7 +3224,7 @@
       uploadStatus.className = `upload-status ${type}`.trim();
     }
 
-    const appViewIds = ["dashboard", "engineering-report", "growth-analysis", "recheck-list", "visualizations", "video-analysis", "detect", "data-note"];
+    const appViewIds = ["dashboard", "engineering-report", "growth-analysis", "recheck-list", "visualizations", "video-analysis", "algorithm-flow", "detect", "data-note"];
 
     function currentAppViewFromHash() {
       const hash = window.location.hash.replace("#", "");
@@ -3639,6 +3733,7 @@
     loadFullRecheckList();
     loadVisualizationAssets();
     loadVideoDashboard();
+    loadAlgorithmEvents();
     loadRobotRouteReport();
     renderReport(sampleReport, sampleViews);
     initAppNavigation();

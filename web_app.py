@@ -54,6 +54,8 @@ VIDEO_INSPECTION_ROOT = ROOT / "data" / "video_inspection"
 VIDEO_OUTPUT_ROOT = ROOT / "outputs" / "video_inspection"
 DEFAULT_VIDEO_ID = "tunnel_demo"
 VIDEO_MISSING_MESSAGE = "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。"
+ALGORITHM_EVENTS_FILE = ROOT / "outputs" / "algorithm_visualization" / "algorithm_events.json"
+ALGORITHM_EVENTS_MISSING_MESSAGE = "尚未生成算法展示事件流，请先运行 python scripts/generate_algorithm_events.py。"
 KICT_DATASET_ROOTS = [
     ROOT / "kict_sample",
     ROOT.parent / "kict_sample",
@@ -350,6 +352,46 @@ def _load_visualization_assets() -> dict:
         "source": "generated-png" if items else "fallback",
         "items": items,
         "missing": missing,
+    }
+
+
+def _load_algorithm_events() -> dict:
+    if not ALGORITHM_EVENTS_FILE.exists():
+        return {
+            "ok": True,
+            "source": "fallback",
+            "schema_version": "",
+            "generated_at": "",
+            "source_artifacts": [],
+            "events": [],
+            "missing": str(ALGORITHM_EVENTS_FILE).replace("\\", "/"),
+            "missing_message": ALGORITHM_EVENTS_MISSING_MESSAGE,
+            "errors": {},
+        }
+    try:
+        payload = json.loads(ALGORITHM_EVENTS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "ok": True,
+            "source": "error",
+            "schema_version": "",
+            "generated_at": "",
+            "source_artifacts": [],
+            "events": [],
+            "missing": "",
+            "missing_message": ALGORITHM_EVENTS_MISSING_MESSAGE,
+            "errors": {"algorithm_events": str(exc)},
+        }
+    return {
+        "ok": True,
+        "source": "generated-json",
+        "schema_version": payload.get("schema_version", ""),
+        "generated_at": payload.get("generated_at", ""),
+        "source_artifacts": payload.get("source_artifacts", []),
+        "events": payload.get("events", []),
+        "missing": "",
+        "missing_message": "",
+        "errors": {},
     }
 
 
@@ -795,6 +837,9 @@ class DetectionHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/visualization-assets":
             self._send_json(_load_visualization_assets())
+            return
+        if path == "/api/algorithm-events":
+            self._send_json(_load_algorithm_events())
             return
         if path == "/api/video-dashboard":
             self._send_json(_load_video_dashboard(DEFAULT_VIDEO_ID))
