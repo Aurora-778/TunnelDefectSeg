@@ -2015,9 +2015,6 @@
         <div class="video-grid" id="videoCards">
           <div class="robot-empty">等待视频分析产物。</div>
         </div>
-        <div id="videoTables">
-          <div class="robot-empty">等待视频分析表格。</div>
-        </div>
       </div>
     </section>
 
@@ -2871,32 +2868,6 @@
       }
     }
 
-    function renderVideoTable(table = {}) {
-      if (!table.exists) {
-        return `<section class="video-table-block">
-          <h3>${escapeHtml(table.title || "CSV")}</h3>
-          <div class="robot-empty">${escapeHtml(table.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>
-        </section>`;
-      }
-      const columns = table.columns || [];
-      const rows = table.rows || [];
-      if (!columns.length || !rows.length) {
-        return `<section class="video-table-block">
-          <h3>${escapeHtml(table.title || "CSV")}</h3>
-          <div class="robot-empty">表格已生成，但当前没有可展示行。</div>
-        </section>`;
-      }
-      return `<section class="video-table-block">
-        <h3>${escapeHtml(table.title || "CSV")} <span class="tag">${escapeHtml(table.row_count || rows.length)} rows</span></h3>
-        <table>
-          <thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
-          <tbody>
-            ${rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row[column] ?? "")}</td>`).join("")}</tr>`).join("")}
-          </tbody>
-        </table>
-      </section>`;
-    }
-
     function renderVideoDashboard(payload = {}) {
       document.querySelector("#videoDashboardSource").textContent = payload.source || "fallback";
       const notes = payload.boundary_notes || [];
@@ -2915,11 +2886,6 @@
           ${body}
         </article>`;
       }).join("") : `<div class="robot-empty">${escapeHtml(payload.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>`;
-
-      const tables = payload.tables || [];
-      document.querySelector("#videoTables").innerHTML = tables.length
-        ? tables.map(renderVideoTable).join("")
-        : `<div class="robot-empty">${escapeHtml(payload.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>`;
     }
 
     async function loadVideoDashboard() {

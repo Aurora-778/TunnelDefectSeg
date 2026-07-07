@@ -153,6 +153,14 @@ def test_video_dashboard_html_contains_nav_and_boundary_copy():
     assert "supervision 只是可选可视化工具层" in html
 
 
+def test_video_dashboard_page_only_renders_video_cards_not_csv_tables():
+    html = Path("web_demo/index.html").read_text(encoding="utf-8")
+
+    assert 'id="videoCards"' in html
+    assert 'id="videoTables"' not in html
+    assert "renderVideoTable" not in html
+
+
 def test_video_dashboard_does_not_touch_simulated_outputs(tmp_path, monkeypatch):
     _patch_video_roots(monkeypatch, tmp_path)
     simulated = tmp_path / "data" / "simulated"
