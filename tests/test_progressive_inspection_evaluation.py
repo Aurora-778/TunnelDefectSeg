@@ -45,6 +45,8 @@ def frame_row(**overrides):
         "kict_mask_width": "10",
         "kict_mask_height": "10",
         "has_crack": "True",
+        "observation_source": "verified_fixture",
+        "comparability_status": "verified_comparable",
     }
     row.update(overrides)
     return row
@@ -167,6 +169,7 @@ def test_progressive_round_artifacts_use_current_association_schema(tmp_path):
         "frame_id",
         "inspection_id",
         "label_disease_id",
+        "history_inspection_ids",
         "matched_disease_id",
         "association_status",
         "association_score",
@@ -214,3 +217,41 @@ def test_progressive_manifest_uses_relative_paths_for_project_outputs(tmp_path, 
     assert first_round["association_records"].startswith("data/simulated/progressive/")
     assert "data/simulated/robot_kict_frame_records.csv" not in first_round["allowed_inputs"]
     assert not Path(first_round["memory_before"]).is_absolute()
+
+
+def test_progressive_metrics_use_labels_only_after_matching():
+    records = [
+        {
+            "inspection_id": "I002",
+            "frame_id": "2",
+            "image_id": "I002_000002",
+            "label_disease_id": "D001",
+            "matched_disease_id": "D009",
+            "association_status": "matched",
+            "match_type": "soft",
+            "needs_manual_review": "false",
+            "association_score": "0.8",
+        },
+        {
+            "inspection_id": "I002",
+            "frame_id": "1",
+            "image_id": "I002_000001",
+            "label_disease_id": "",
+            "matched_disease_id": "",
+            "association_status": "unmatched",
+            "match_type": "uncertain",
+            "needs_manual_review": "true",
+            "association_score": "0.0",
+        },
+    ]
+
+    metrics = progressive.compute_metrics(records)
+
+    assert metrics["total_query_records"] == 2
+    assert metrics["label_evaluable_count"] == 1
+    assert metrics["top1_correct_count"] == 0
+    assert metrics["top1_accuracy"] == 0.0
+    assert metrics["rejection_count"] == 1
+    assert metrics["rejection_rate"] == 0.5
+    assert metrics["missing_label_count"] == 1
+    assert metrics["error_cases"][0]["frame_id"] == "2"

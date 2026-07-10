@@ -1,6 +1,6 @@
 # Incremental Memory Update Report
 
-- previous memory: `C:\Users\26822\Downloads\data\data\simulated\progressive\round_001\memory_after_query.csv`
+- previous memory: `C:\Users\26822\Downloads\data\data\simulated\progressive\round_002\memory.csv`
 - frame records: `C:\Users\26822\Downloads\data\data\simulated\progressive\round_002\query_frames.csv`
 - association records: `C:\Users\26822\Downloads\data\data\simulated\progressive\round_002\association_records_no_id.csv`
 - output memory: `C:\Users\26822\Downloads\data\data\simulated\progressive\round_002\memory_after_query.csv`

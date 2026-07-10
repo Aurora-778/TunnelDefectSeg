@@ -19,7 +19,7 @@ tasks:
 
   association:
     agent: association
-    deps: [memory]
+    deps: [growth_analysis]
     retries: 2
     cache: false
 
@@ -62,9 +62,11 @@ inputs:
 
   association:
     frame_records: data/simulated/robot_kict_frame_records.csv
-    memory_bank: data/simulated/disease_memory_bank.csv
     output_path: data/simulated/disease_association_records.csv
     legacy_output_path: data/simulated/association_records.csv
+    history_only: true
+    history_output_dir: data/simulated/main_progressive
+    manifest_path: data/simulated/main_progressive/association_manifest.json
     use_disease_id_score: false
     association_mode: no_id
 

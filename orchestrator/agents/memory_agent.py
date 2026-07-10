@@ -51,6 +51,7 @@ class MemoryAgent(BaseAgent):
             risk_change = self._risk_score(last_risk) - self._risk_score(first_risk)
             growth_trend = growth.get("growth_trend") or self._growth_trend(area_growth_rate)
             attention_level = growth.get("attention_level") or self._attention_level(area_growth_rate, last_risk)
+            comparability_status = growth.get("comparability_status", "")
             total_seen_frames = sum(int(self._to_float(row.get("frame_count"))) for row in disease_rows)
             source_inspection_ids = sorted({row.get("inspection_id", "") for row in disease_rows if row.get("inspection_id", "")})
             first_inspection = first.get("inspection_id", "")
@@ -70,7 +71,7 @@ class MemoryAgent(BaseAgent):
                     "source_inspection_ids": "|".join(source_inspection_ids),
                     "memory_update_mode": "batch_rebuild",
                     "memory_confidence": self._memory_confidence(disease_rows, growth),
-                    "memory_limit_note": "KICT static masks + simulated inspection metadata; not real longitudinal evidence",
+                    "memory_limit_note": "Final batch summary only; not a main Association candidate memory. KICT static masks + simulated inspection metadata are not real longitudinal evidence",
                     "first_seen_inspection": first_inspection,
                     "last_seen_inspection": last_inspection,
                     "inspection_count": len({row.get("inspection_id", "") for row in disease_rows}),
@@ -85,6 +86,7 @@ class MemoryAgent(BaseAgent):
                     "risk_level_change": risk_change,
                     "growth_trend": growth_trend,
                     "attention_level": attention_level,
+                    "comparability_status": comparability_status,
                     "main_clock_direction": main_clock_direction,
                     "mileage_range": self._join_range(first_mileage, last_mileage),
                     "representative_image_path": last.get("representative_image_path", ""),
@@ -127,6 +129,7 @@ class MemoryAgent(BaseAgent):
             "risk_level_change",
             "growth_trend",
             "attention_level",
+            "comparability_status",
             "main_clock_direction",
             "mileage_range",
             "representative_image_path",
@@ -254,6 +257,9 @@ class MemoryAgent(BaseAgent):
         last_risk = self._risk_from_area(last_area)
         first_risk = updated.get("first_risk_level", last_risk)
 
+        comparable = frame.get("comparability_status") == "verified_comparable" and updated.get("comparability_status") == "verified_comparable"
+        trend = self._growth_trend(area_rate) if comparable else "不可比较"
+        attention = self._attention_level(area_rate if comparable else 0.0, last_risk)
         updated.update(
             {
                 "memory_version": version,
@@ -271,8 +277,9 @@ class MemoryAgent(BaseAgent):
                 "area_growth_rate": f"{area_rate:.6f}",
                 "last_risk_level": last_risk,
                 "risk_level_change": str(self._risk_score(last_risk) - self._risk_score(first_risk)),
-                "growth_trend": self._growth_trend(area_rate),
-                "attention_level": self._attention_level(area_rate, last_risk),
+                "growth_trend": trend,
+                "attention_level": attention,
+                "comparability_status": "verified_comparable" if comparable else "not_longitudinally_comparable",
                 "main_clock_direction": frame.get("clock_direction", updated.get("main_clock_direction", "")),
                 "mileage_range": self._join_range(updated.get("mileage_range", ""), frame.get("mileage_text", "")),
                 "representative_image_path": frame.get("kict_image_path", ""),
@@ -320,8 +327,9 @@ class MemoryAgent(BaseAgent):
             "first_risk_level": risk,
             "last_risk_level": risk,
             "risk_level_change": "0",
-            "growth_trend": "数据不足",
+            "growth_trend": "数据不足" if frame.get("comparability_status") == "verified_comparable" else "不可比较",
             "attention_level": "待补充巡检",
+            "comparability_status": frame.get("comparability_status", "not_longitudinally_comparable"),
             "main_clock_direction": frame.get("clock_direction", ""),
             "mileage_range": frame.get("mileage_text", ""),
             "representative_image_path": frame.get("kict_image_path", ""),
@@ -495,6 +503,11 @@ class MemoryAgent(BaseAgent):
             "stable": "基本稳定",
             "decreasing": "下降",
         }.get(growth_trend, growth_trend)
+        if growth_trend == "不可比较":
+            return (
+                f"病害{disease_id}为{type_name}，首次出现于{first_seen}，末次出现于{last_seen}。"
+                "当前静态 mask 面积证据不可作纵向比较，仅保留面积审计，不作跨巡检方向判断。"
+            )
         return (
             f"病害{disease_id}为{type_name}，首次出现于{first_seen}，末次出现于{last_seen}，"
             f"面积变化率约为{area_growth_rate * 100:.1f}%，呈{trend_name}趋势，"
@@ -510,7 +523,7 @@ class MemoryAgent(BaseAgent):
         output_path: Path,
         rows: list[dict[str, Any]],
     ) -> None:
-        increasing_count = sum(1 for row in rows if row.get("growth_trend") in {"明显增长", "increasing"})
+        comparable_count = sum(1 for row in rows if row.get("comparability_status") == "verified_comparable")
         high_attention_count = sum(1 for row in rows if row.get("attention_level") in {"重点关注", "high"})
         high_risk_count = sum(1 for row in rows if str(row.get("last_risk_level", "")).lower() in ("高", "high"))
         lines = [
@@ -518,11 +531,11 @@ class MemoryAgent(BaseAgent):
             f"- 输入增长分析：`{source_growth_path}`",
             f"- 输出记忆库：`{output_path}`",
             f"- disease总数：{len(rows)}",
-            f"- 重点增长病害数量：{increasing_count}",
+            f"- 可纵向比较病害数量：{comparable_count}",
             f"- 高关注病害数量：{high_attention_count}",
             f"- 高风险病害数量：{high_risk_count}",
             "",
-            "统计总结：Memory Agent 已按 disease_id 汇总跨巡检记录，形成首末巡检、面积增长、风险变化、趋势和关注等级等长期记忆字段。",
+            "统计总结：Memory Agent 已按 disease_id 汇总跨巡检记录，形成首末巡检、静态面积审计、风险变化、可比性状态和关注等级等长期记忆字段。",
         ]
         self.write_markdown(summary_path, "Disease Memory Bank Summary", lines)
         self.write_markdown(report_path, "Memory Agent Report", lines)

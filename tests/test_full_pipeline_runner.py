@@ -54,6 +54,8 @@ def frame_row(**overrides):
         "kict_mask_width": "10",
         "kict_mask_height": "10",
         "has_crack": "True",
+        "observation_source": "verified_fixture",
+        "comparability_status": "verified_comparable",
     }
     row.update(overrides)
     return row
@@ -90,8 +92,10 @@ def test_full_pipeline_runner_creates_end_to_end_outputs(tmp_path, monkeypatch):
     assert result["engineering_rows"] == 2
     assert result["growth_rows"] == 1
     assert result["memory_rows"] == 1
-    assert result["association_rows"] == 2
-    assert result["association_matched_rows"] == 2
+    # I001 establishes history only; I002 is the first associable query.
+    assert result["association_rows"] == 1
+    # The query differs strongly in area and remains an explicit unmatched review case.
+    assert result["association_matched_rows"] == 0
     assert result["chart_count"] >= 7
     assert result["task_status"] == {
         "engineering_report": "success",
@@ -111,7 +115,8 @@ def test_full_pipeline_runner_creates_end_to_end_outputs(tmp_path, monkeypatch):
     output_dir = tmp_path / "outputs"
     assert read_csv(data_dir / "disease_memory_bank.csv")[0]["disease_id"] == "D001"
     association_row = read_csv(data_dir / "disease_association_records.csv")[0]
-    assert association_row["association_status"] == "matched"
+    assert association_row["association_status"] == "unmatched"
+    assert association_row["history_inspection_ids"] == "I001"
     assert association_row["use_disease_id_score"] == "false"
     assert association_row["association_mode"] == "no_id"
     assert association_row["label_disease_id"] == "D001"

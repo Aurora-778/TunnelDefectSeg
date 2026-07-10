@@ -5,7 +5,15 @@ import csv
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import sys
 from typing import Iterable
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from orchestrator.dag.builder import build_dag
+from orchestrator.dag.scheduler import execution_layers
 
 
 SCHEMA_VERSION = "algorithm-events.v1"
@@ -73,6 +81,8 @@ def build_event(
     claim_boundary: str,
     optional: bool = False,
     metrics: dict | None = None,
+    deps: list[str] | None = None,
+    execution_layer: int | str | None = None,
 ) -> dict:
     status = event_status(inputs, outputs, optional=optional)
     if status not in ALLOWED_STATUS:
@@ -89,6 +99,10 @@ def build_event(
     }
     if metrics:
         event["metrics"] = metrics
+    if deps is not None:
+        event["deps"] = deps
+    if execution_layer is not None:
+        event["execution_layer"] = execution_layer
     return event
 
 
@@ -127,6 +141,8 @@ def build_algorithm_events(project_root: Path = Path("."), video_id: str = "tunn
             [kict_features],
             "Features come from provided KICT masks, not model inference in this visualization layer.",
             metrics={"row_count": kict_features.get("row_count", 0)},
+            deps=[],
+            execution_layer="pre_dag",
         )
     )
     events.append(
@@ -139,79 +155,77 @@ def build_algorithm_events(project_root: Path = Path("."), video_id: str = "tunn
             [robot_records],
             "Inspection metadata is simulated; it is not real robot localization.",
             metrics={"row_count": robot_records.get("row_count", 0)},
+            deps=[],
+            execution_layer="pre_dag",
         )
     )
-    events.append(
-        build_event(
-            "E03",
-            "engineering_report",
+    task_specs = {
+        "engineering_report": (
             "Engineering disease report",
             "Convert frame records into engineering-oriented disease descriptions and risk context.",
             [robot_records],
-            [engineering_report, final_report],
+            [engineering_report],
             "Reports support review and explanation; they do not replace site inspection or engineering acceptance.",
-            metrics={"row_count": engineering_report.get("row_count", 0)},
-        )
-    )
-    events.append(
-        build_event(
-            "E04",
-            "memory",
-            "Disease Memory Bank",
-            "Summarize defect objects into a memory table for downstream rule-based association and review.",
-            [robot_records],
-            [memory_bank],
-            "Current main memory is artifact-backed batch memory, not verified online visual re-identification.",
-            metrics={"row_count": memory_bank.get("row_count", 0)},
-        )
-    )
-    events.append(
-        build_event(
-            "E05",
-            "association",
-            "no-id Association",
-            "Match current frame records to memory candidates using non-ID rule evidence.",
-            [robot_records, memory_bank],
-            [association_records],
-            "disease_id is a label and evaluation reference; it is not used as the main matching score input.",
-            metrics={"row_count": association_records.get("row_count", 0)},
-        )
-    )
-    events.append(
-        build_event(
-            "E06",
-            "growth",
+        ),
+        "growth_analysis": (
             "Rule-based Growth Analysis",
-            "Compute area and risk change hints from grouped defect records.",
-            [robot_records, association_records],
+            "Summarize audit areas only when observations are longitudinally comparable.",
+            [engineering_report],
             [growth_results],
-            "Growth is a rule-based area-change hint, not a real long-term structural prediction.",
-            metrics={"row_count": growth_results.get("row_count", 0)},
-        )
-    )
-    events.append(
-        build_event(
-            "E07",
-            "recheck",
-            "Priority recheck list",
-            "Rank defects for manual review based on rule evidence, risk level, and change hints.",
-            [growth_results, engineering_report],
-            [recheck_list],
-            "The list is an assistant for manual review, not an automatic maintenance decision.",
-            metrics={"row_count": recheck_list.get("row_count", 0)},
-        )
-    )
-    events.append(
-        build_event(
-            "E08",
-            "visualization",
+            "Growth is a rule-based area-change hint; current cyclic KICT mask evidence is not longitudinally comparable and does not support a directional change claim.",
+        ),
+        "memory": (
+            "Disease Memory Bank",
+            "Build a batch summary for reporting; main association uses separate history-only candidate memory.",
+            [engineering_report, growth_results],
+            [memory_bank],
+            "The final batch memory is a summary artifact and is not a main-association candidate source.",
+        ),
+        "association": (
+            "no-id Association",
+            "For each query inspection, rebuild candidates from earlier inspections before scoring the query records.",
+            [robot_records],
+            [association_records],
+            "disease_id is retained only as a label; main no-id matching uses history-only memory and non-ID scores.",
+        ),
+        "visualization": (
             "Visualization outputs",
-            "Expose generated charts and reports for dashboard review.",
-            [growth_results, recheck_list],
-            [visualization_chart],
-            "Charts visualize generated artifacts and inherit the same KICT static mask plus simulated metadata limits.",
+            "Render charts and the priority recheck list from generated reporting artifacts.",
+            [engineering_report, growth_results, association_records],
+            [recheck_list, visualization_chart],
+            "Charts inherit the KICT static mask plus simulated metadata limits.",
+        ),
+        "final_report": (
+            "Final engineering report",
+            "Collect generated analysis artifacts into a bounded project summary.",
+            [engineering_report, growth_results, memory_bank, association_records, recheck_list],
+            [final_report],
+            "The report is an engineering prototype summary, not a production decision or real long-term prediction.",
+        ),
+    }
+    dag_path = project_root / "config" / "dag.yaml"
+    if not dag_path.exists():
+        dag_path = Path(__file__).resolve().parents[1] / "config" / "dag.yaml"
+    tasks, _ = build_dag(dag_path)
+    layers = execution_layers(tasks)
+    task_layers = {task_name: layer_index for layer_index, layer in enumerate(layers, start=1) for task_name in layer}
+    ordered_core_tasks = [task_name for layer in layers for task_name in layer if task_name in task_specs]
+    for event_index, task_name in enumerate(ordered_core_tasks, start=3):
+        title, description, inputs, outputs, boundary = task_specs[task_name]
+        events.append(
+            build_event(
+                f"E{event_index:02d}",
+                task_name,
+                title,
+                description,
+                inputs,
+                outputs,
+                boundary,
+                metrics={"row_count": outputs[0].get("row_count", 0)} if outputs and "row_count" in outputs[0] else None,
+                deps=list(tasks[task_name].deps),
+                execution_layer=task_layers[task_name],
+            )
         )
-    )
     events.append(
         build_event(
             "E09",
@@ -222,6 +236,8 @@ def build_algorithm_events(project_root: Path = Path("."), video_id: str = "tunn
             [demo_video, video_features, annotated_video, supervision_video],
             "tunnel_demo.mp4 is synthesized from KICT static images and masks; it is not real robot continuous inspection video.",
             optional=True,
+            deps=[],
+            execution_layer="independent_optional",
         )
     )
 

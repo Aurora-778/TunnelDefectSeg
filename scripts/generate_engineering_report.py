@@ -32,6 +32,8 @@ REQUIRED_COLUMNS = [
     "kict_center_x",
     "kict_center_y",
     "has_crack",
+    "observation_source",
+    "comparability_status",
 ]
 
 OUTPUT_COLUMNS = [
@@ -60,6 +62,8 @@ OUTPUT_COLUMNS = [
     "representative_image_path",
     "representative_mask_path",
     "risk_level",
+    "observation_source",
+    "comparability_status",
     "engineering_description",
 ]
 
@@ -181,6 +185,11 @@ def aggregate_group(rows: list[dict[str, str]]) -> dict[str, str]:
     total_area = sum(areas)
     clock_counts = Counter(row["clock_direction"] for row in rows)
     main_clock_direction = clock_counts.most_common(1)[0][0]
+    # Direct helper callers may carry legacy rows; degrade safely instead of inventing comparability.
+    sources = sorted({row.get("observation_source") or "legacy_unverified_source" for row in rows})
+    statuses = {row.get("comparability_status") or "not_longitudinally_comparable" for row in rows}
+    # Directional conclusions require explicit verified comparability for every frame.
+    comparability_status = "verified_comparable" if statuses == {"verified_comparable"} else "not_longitudinally_comparable"
 
     record = {
         "inspection_id": rows[0]["inspection_id"],
@@ -208,6 +217,8 @@ def aggregate_group(rows: list[dict[str, str]]) -> dict[str, str]:
         "representative_image_path": representative["kict_image_path"],
         "representative_mask_path": representative["kict_mask_path"],
         "risk_level": risk_by_area(max_area),
+        "observation_source": sources[0] if len(sources) == 1 else "mixed_sources",
+        "comparability_status": comparability_status,
     }
     record["engineering_description"] = build_description(record)
     return record

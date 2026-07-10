@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from orchestrator.schema import validate_csv_schema
-from scripts.validate_artifacts import validate_artifacts
+from scripts.validate_artifacts import validate_artifacts, validate_main_history_only_association
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
@@ -262,6 +262,56 @@ def test_validate_artifacts_reports_non_object_progressive_round(tmp_path):
     assert any("round 1 must be an object" in error for error in errors["progressive_evaluation"])
 
 
+def test_main_history_validator_rejects_current_inspection_in_history(tmp_path):
+    source_path = tmp_path / "data" / "simulated" / "robot_kict_frame_records.csv"
+    association_path = tmp_path / "data" / "simulated" / "disease_association_records.csv"
+    manifest_path = tmp_path / "data" / "simulated" / "main_progressive" / "association_manifest.json"
+    source_row = {
+        "inspection_id": "I002",
+        "frame_id": "1",
+        "image_id": "I002_000001",
+        "disease_id": "D001",
+    }
+    association_row = valid_association_row()
+    association_row["history_inspection_ids"] = "I001|I002"
+    write_csv(source_path, list(source_row), [source_row])
+    write_csv(association_path, list(association_row), [association_row])
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "mode": "history_only",
+                "rounds": [
+                    {
+                        "query_inspection": "I002",
+                        "history_inspection_ids": ["I001", "I002"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    errors = validate_main_history_only_association(tmp_path)
+
+    assert any("current or future inspection" in error for error in errors)
+
+
+def test_main_history_validator_rejects_duplicate_source_composite_key(tmp_path):
+    source_path = tmp_path / "data" / "simulated" / "robot_kict_frame_records.csv"
+    source_row = {
+        "inspection_id": "I002",
+        "frame_id": "1",
+        "image_id": "I002_000001",
+        "disease_id": "D001",
+    }
+    write_csv(source_path, list(source_row), [source_row, dict(source_row)])
+
+    errors = validate_main_history_only_association(tmp_path)
+
+    assert any("duplicate composite key" in error for error in errors)
+
+
 def valid_memory_row() -> dict[str, str]:
     return {
         "memory_id": "MEM-D001",
@@ -280,6 +330,7 @@ def valid_memory_row() -> dict[str, str]:
         "max_area_px": "1000",
         "growth_trend": "数据不足",
         "attention_level": "待补充巡检",
+        "comparability_status": "insufficient_history",
         "mileage_range": "K12+000.0",
         "requires_manual_review": "false",
         "memory_description": "demo",
@@ -293,6 +344,7 @@ def valid_association_row() -> dict[str, str]:
         "frame_id": "1",
         "image_id": "I002_000001",
         "label_disease_id": "D001",
+        "history_inspection_ids": "I001",
         "memory_id": "MEM-D001",
         "association_status": "matched",
         "rule_basis": "best scored candidate",

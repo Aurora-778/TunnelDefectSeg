@@ -195,11 +195,12 @@ Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Assoc
 """
 
     def _key_insights_text(self, growth_rows: list[dict[str, str]], recheck_rows: list[dict[str, str]]) -> str:
-        top_growth = sorted(growth_rows, key=lambda row: self._to_float(row.get("area_growth_rate")), reverse=True)[:5]
+        comparable_rows = [row for row in growth_rows if row.get("comparability_status") == "verified_comparable"]
+        top_growth = sorted(comparable_rows, key=lambda row: self._to_float(row.get("area_growth_rate")), reverse=True)[:5]
         top_lines = "\n".join(
             f"- {row['disease_id']}：{row['growth_trend']}，增长率 {round(self._to_float(row.get('area_growth_rate')) * 100, 1)}%，风险 {row['last_risk_level']}"
             for row in top_growth
-        )
+        ) or "- 当前没有可纵向比较的规则面积变化记录。"
         recheck_lines = "\n".join(
             f"- {row['disease_id']}：{row['attention_level']}，{row['recheck_reason']}" for row in recheck_rows[:5]
         ) or "- 当前没有重点复检记录。"

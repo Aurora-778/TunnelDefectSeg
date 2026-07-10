@@ -16,7 +16,7 @@ python run.py --mode full_pipeline
 python orchestrator/run.py --dag config/dag.yaml
 ```
 
-两种方式都会基于仓库中已经生成的 `data/simulated/robot_kict_frame_records.csv`，一键生成工程化报告、增长结果、Disease Memory Bank、带评分的病害关联记录、复检清单、可视化图表和最终项目报告。
+两种方式都会基于仓库中已经生成的 `data/simulated/robot_kict_frame_records.csv`，一键生成工程化报告、增长结果、Disease Memory Bank 汇总、history-only no-id 病害关联记录、复检清单、可视化图表和最终项目报告。
 
 ## 当前实现功能
 
@@ -26,7 +26,7 @@ python orchestrator/run.py --dag config/dag.yaml
 4. 图像帧与 `disease_id` 关联。
 5. KICT mask 几何特征与仿真巡检帧合并。
 6. 工程化中文病害描述生成。
-7. 跨巡检增长变化分析。
+7. 规则面积变化提示：循环 KICT 静态 mask 记录被标记为不可纵向比较，不输出方向性变化结论。
 8. 风险等级与关注等级判断。
 9. 重点复检清单生成。
 10. 图表可视化输出。
@@ -35,7 +35,7 @@ python orchestrator/run.py --dag config/dag.yaml
 13. 病害对象与机器人巡检帧的关联记录生成。
 14. 一键完整 pipeline 入口与最终项目报告生成。
 15. AI Multi-Agent Engineering Platform 的 run 状态、DAG、run 对比 API 和轻量展示页面。
-16. 渐进式巡检评估：历史 memory 匹配当前巡检，并生成 Association baseline / ablation 报告。
+16. 主关联与渐进式巡检评估均采用 history-only memory：I001 仅建立 baseline，当前巡检完成关联后才更新记忆；with-id 仅生成 upper-bound / sanity-check 评估产物。
 
 ## 数据边界
 
@@ -115,8 +115,8 @@ final report: outputs/final_project_report.md
 robot_kict_frame_records.csv
 -> disease_engineering_report.csv
 -> disease_growth_results.csv
--> disease_memory_bank.csv
--> disease_association_records.csv
+-> disease_memory_bank.csv (summary only)
+-> disease_association_records.csv (history-only no-id)
 -> priority_recheck_list.csv
 -> outputs/visualizations/*.png
 -> outputs/final_project_report.md

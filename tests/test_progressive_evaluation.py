@@ -60,6 +60,8 @@ def frame_row(**overrides):
         "kict_mask_width": "10",
         "kict_mask_height": "10",
         "has_crack": "True",
+        "observation_source": "verified_fixture",
+        "comparability_status": "verified_comparable",
     }
     row.update(overrides)
     return row

@@ -32,6 +32,8 @@ REQUIRED_COLUMNS = [
     "mean_area_px",
     "total_area_px",
     "risk_level",
+    "observation_source",
+    "comparability_status",
     "engineering_description",
 ]
 
@@ -189,6 +191,14 @@ def build_growth_description(record: dict[str, str]) -> str:
             "由于缺少跨巡检对比数据，当前仅作为基线记录，建议后续巡检继续跟踪。"
         )
 
+    if record["comparability_status"] != "verified_comparable":
+        return (
+            f"病害 {record['disease_id']} 为{type_name}，主要位于 {record['last_mileage_range']}，"
+            f"{record['main_clock_direction']}方向。该病害在 {record['inspection_count']} 次巡检中保留了静态 mask 面积证据，"
+            f"首次/末次面积分别为 {record['first_area_px']} px² 和 {record['last_area_px']} px²。"
+            "由于观测来自不可纵向比较的静态 KICT 样本，面积差仅用于审计，不作跨巡检方向判断。"
+        )
+
     area_growth_percent = round(float(record["area_growth_rate"]) * 100, 1)
     return (
         f"病害 {record['disease_id']} 为{type_name}，主要位于 {record['last_mileage_range']}，"
@@ -222,16 +232,23 @@ def aggregate_disease(rows: list[dict[str, str]]) -> dict[str, str]:
     first_frames = parse_int(first["frame_count"], "first frame_count")
     last_frames = parse_int(last["frame_count"], "last frame_count")
     risk_change = risk_level_change(first["risk_level"], last["risk_level"])
+    all_verified_comparable = all(row.get("comparability_status") == "verified_comparable" for row in ordered)
     trend = growth_trend(len(ordered), area_rate, risk_change)
     attention = attention_level(last["risk_level"], trend)
     if len(ordered) == 1:
         measurement_basis = "single_inspection_area_rule"
         claim_level = "baseline_only"
         comparability_status = "insufficient_history"
+    elif not all_verified_comparable:
+        trend = "不可比较"
+        attention = attention_level(last["risk_level"], "")
+        measurement_basis = "static_mask_area_descriptive_only"
+        claim_level = "rule_evidence_only"
+        comparability_status = "not_longitudinally_comparable"
     else:
         measurement_basis = "cross_inspection_area_rule"
         claim_level = "rule_evidence_only"
-        comparability_status = "simulated_metadata_comparable"
+        comparability_status = "verified_comparable"
 
     record = {
         "disease_id": first["disease_id"],

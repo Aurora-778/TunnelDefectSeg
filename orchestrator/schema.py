@@ -29,6 +29,8 @@ REQUIRED_SCHEMAS = {
         "kict_center_x",
         "kict_center_y",
         "has_crack",
+        "observation_source",
+        "comparability_status",
     ],
     "disease_engineering_report": [
         "inspection_id",
@@ -50,6 +52,8 @@ REQUIRED_SCHEMAS = {
         "mean_area_px",
         "total_area_px",
         "risk_level",
+        "observation_source",
+        "comparability_status",
         "engineering_description",
     ],
     "disease_growth_results": [
@@ -90,6 +94,7 @@ REQUIRED_SCHEMAS = {
         "max_area_px",
         "growth_trend",
         "attention_level",
+        "comparability_status",
         "mileage_range",
         "requires_manual_review",
         "memory_description",
@@ -100,6 +105,7 @@ REQUIRED_SCHEMAS = {
         "frame_id",
         "image_id",
         "label_disease_id",
+        "history_inspection_ids",
         "memory_id",
         "association_status",
         "rule_basis",
@@ -144,7 +150,7 @@ ENUMS = {
     "risk_level": {"低", "中", "高"},
     "first_risk_level": {"低", "中", "高"},
     "last_risk_level": {"低", "中", "高"},
-    "growth_trend": {"明显增长", "轻微增长", "基本稳定", "面积减小", "数据不足"},
+    "growth_trend": {"明显增长", "轻微增长", "基本稳定", "面积减小", "不可比较", "数据不足"},
     "attention_level": {"重点关注", "持续观察", "常规记录", "待补充巡检"},
     "association_status": {"matched", "unmatched"},
     "confidence_level": {"high", "medium", "low"},
@@ -153,7 +159,12 @@ ENUMS = {
     "memory_confidence": {"medium", "low", "very_low"},
     "association_mode": {"no_id", "with_id_upper_bound"},
     "claim_level": {"baseline_only", "rule_evidence_only", "suspected_growth"},
-    "comparability_status": {"insufficient_history", "simulated_metadata_comparable", "verified_comparable"},
+    "comparability_status": {
+        "insufficient_history",
+        "simulated_metadata_comparable",
+        "verified_comparable",
+        "not_longitudinally_comparable",
+    },
 }
 
 BOOL_FIELDS = {
@@ -204,7 +215,7 @@ MEMORY_VERSION_PATTERN = re.compile(r"^v\d+(?:\.\d+)?$")
 VALID_BOOL_VALUES = {"true", "false", "0", "1"}
 
 
-def validate_csv_schema(path: Path, schema_name: str) -> list[str]:
+def validate_csv_schema(path: Path, schema_name: str, *, allow_empty: bool = False) -> list[str]:
     """Return schema validation errors for a CSV artifact."""
 
     errors: list[str] = []
@@ -222,7 +233,7 @@ def validate_csv_schema(path: Path, schema_name: str) -> list[str]:
             errors.append(f"{schema_name} missing required columns: {', '.join(missing)}")
         rows = list(reader)
 
-    if not rows:
+    if not rows and not allow_empty:
         errors.append(f"{schema_name} is empty: {path}")
         return errors
 

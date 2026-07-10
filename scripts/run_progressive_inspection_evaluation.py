@@ -84,17 +84,19 @@ def read_csv(path: Path, *, require_inspection_id: bool = False) -> list[dict[st
     return rows
 
 
-def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
-    if not rows:
-        raise ValueError(f"Refusing to write empty CSV: {path}")
+def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str] | None = None) -> None:
+    if not rows and not fieldnames:
+        raise ValueError(f"Refusing to write empty CSV without schema: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames or list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
 
 
-def normalize_association_records(records: list[dict[str, str]], memory_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+def normalize_association_records(
+    records: list[dict[str, str]], memory_rows: list[dict[str, str]], history_inspection_ids: str
+) -> list[dict[str, str]]:
     """Fill Round2.5 artifact fields without changing AssociationAgent scoring."""
 
     disease_by_memory = {row.get("memory_id", ""): row.get("disease_id", "") for row in memory_rows}
@@ -102,6 +104,7 @@ def normalize_association_records(records: list[dict[str, str]], memory_rows: li
     for record in records:
         row = dict(record)
         row.setdefault("label_disease_id", row.get("disease_id", ""))
+        row["history_inspection_ids"] = history_inspection_ids
         row.setdefault("matched_disease_id", disease_by_memory.get(row.get("memory_id", ""), ""))
         row.setdefault("bbox_fields_present", row.get("geometry_feature_available", "false"))
         row.setdefault("geometry_score_applied", "false")
@@ -163,6 +166,7 @@ def run_association(
     round_dir: Path,
     *,
     use_disease_id_score: bool,
+    history_inspection_ids: str,
 ) -> Path:
     """Run AssociationAgent for one query inspection against historical memory.
 
@@ -181,6 +185,7 @@ def run_association(
                     "output_path": str(output_path),
                     "use_disease_id_score": "true" if use_disease_id_score else "false",
                     "association_mode": "with_id_upper_bound" if use_disease_id_score else "no_id",
+                    "history_inspection_ids": history_inspection_ids,
                 }
             },
             "outputs": {},
@@ -226,13 +231,48 @@ def compute_metrics(records: list[dict[str, str]]) -> dict[str, object]:
     manual = sum(1 for r in records if r.get("needs_manual_review") == "true")
     scores = [float(r.get("association_score", "0")) for r in records]
     mean_score = round(sum(scores) / len(scores), 4) if scores else 0.0
+    evaluable = [record for record in records if record.get("label_disease_id", "").strip()]
+    top1_correct = sum(
+        1
+        for record in evaluable
+        if record.get("association_status") == "matched"
+        and record.get("matched_disease_id", "") == record.get("label_disease_id", "")
+    )
+    error_cases = [
+        {
+            "inspection_id": record.get("inspection_id", ""),
+            "frame_id": record.get("frame_id", ""),
+            "image_id": record.get("image_id", ""),
+            "label_disease_id": record.get("label_disease_id", ""),
+            "matched_disease_id": record.get("matched_disease_id", ""),
+            "association_status": record.get("association_status", ""),
+            "match_type": record.get("match_type", ""),
+            "reason": record.get("conflict_reason", "") or "top-1 mismatch",
+        }
+        for record in evaluable
+        if not (
+            record.get("association_status") == "matched"
+            and record.get("matched_disease_id", "") == record.get("label_disease_id", "")
+        )
+    ]
+    error_cases.sort(key=lambda item: (item["inspection_id"], item["frame_id"], item["image_id"]))
     return {
+        "total_query_records": total,
         "total_records": total,
         "matched_count": matched,
         "unmatched_count": unmatched,
         "uncertain_count": uncertain,
+        "label_evaluable_count": len(evaluable),
+        "top1_correct_count": top1_correct,
+        "top1_accuracy": round(top1_correct / len(evaluable), 4) if evaluable else 0.0,
+        "matched_label_accuracy": round(top1_correct / len(evaluable), 4) if evaluable else 0.0,
+        "rejection_count": unmatched,
+        "rejection_rate": round(unmatched / total, 4) if total else 0.0,
         "manual_review_count": manual,
+        "manual_review_rate": round(manual / total, 4) if total else 0.0,
+        "missing_label_count": total - len(evaluable),
         "mean_association_score": mean_score,
+        "error_cases": error_cases,
     }
 
 
@@ -276,6 +316,9 @@ def write_report(
         "no-id 是 **primary evaluation**，disease_id 不参与真实 matching。",
         "",
         f"- total_records: {no_id_metrics['total_records']}",
+        f"- label_evaluable_count: {no_id_metrics['label_evaluable_count']}",
+        f"- top1_accuracy: {no_id_metrics['top1_accuracy']}",
+        f"- rejection_rate: {no_id_metrics['rejection_rate']}",
         f"- matched_count: {no_id_metrics['matched_count']}",
         f"- unmatched_count: {no_id_metrics['unmatched_count']}",
         f"- uncertain_count: {no_id_metrics['uncertain_count']}",
@@ -288,6 +331,9 @@ def write_report(
         "用于验证 no-id 策略与理想上界的差距。",
         "",
         f"- total_records: {with_id_metrics['total_records']}",
+        f"- label_evaluable_count: {with_id_metrics['label_evaluable_count']}",
+        f"- top1_accuracy: {with_id_metrics['top1_accuracy']}",
+        f"- rejection_rate: {with_id_metrics['rejection_rate']}",
         f"- matched_count: {with_id_metrics['matched_count']}",
         f"- unmatched_count: {with_id_metrics['unmatched_count']}",
         f"- uncertain_count: {with_id_metrics['uncertain_count']}",
@@ -333,6 +379,18 @@ def write_report(
             ]
         )
 
+    for title, metrics in (("No-ID Error Cases (first 20)", no_id_metrics), ("With-ID Error Cases (first 20)", with_id_metrics)):
+        lines.extend([f"## {title}", ""])
+        errors = metrics["error_cases"]
+        if not errors:
+            lines.append("- none")
+        else:
+            for item in errors[:20]:
+                lines.append(
+                    "- {inspection_id}/{frame_id}/{image_id}: label={label_disease_id}, matched={matched_disease_id}, {association_status}".format(**item)
+                )
+        lines.append("")
+
     report_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -360,14 +418,10 @@ def run_progressive(
 
     rows = read_csv(input_csv, require_inspection_id=True)
     inspections = sorted({row["inspection_id"] for row in rows}, key=inspection_key)
-    if len(inspections) < 2:
-        raise ValueError("progressive evaluation requires at least two inspection_id values")
 
     all_no_id_records: list[dict[str, str]] = []
     all_with_id_records: list[dict[str, str]] = []
     round_infos: list[dict[str, object]] = []
-
-    current_memory: Path | None = None
 
     for index in range(1, len(inspections)):
         history_ids = inspections[:index]
@@ -380,18 +434,17 @@ def run_progressive(
         query_path = round_dir / "query_frames.csv"
         write_csv(query_path, query_rows)
 
-        # 首轮用 batch rebuild 构建初始 memory，后续用 incremental update
-        if current_memory is None:
-            engineering_path, growth_path = build_engineering_and_growth(history_rows, round_dir)
-            current_memory = run_memory_batch(project_root, engineering_path, growth_path, round_dir)
-        memory_before = current_memory
+        # 每一轮从完整 history_rows 临时重建，绝不复用包含 query 的 memory。
+        engineering_path, growth_path = build_engineering_and_growth(history_rows, round_dir)
+        memory_before = run_memory_batch(project_root, engineering_path, growth_path, round_dir)
         memory_rows = read_csv(memory_before)
+        history_text = "|".join(history_ids)
 
         # no-id evaluation (primary)
         no_id_assoc_path = run_association(
-            project_root, query_path, current_memory, round_dir, use_disease_id_score=False
+            project_root, query_path, memory_before, round_dir, use_disease_id_score=False, history_inspection_ids=history_text
         )
-        no_id_records = normalize_association_records(read_csv(no_id_assoc_path), memory_rows)
+        no_id_records = normalize_association_records(read_csv(no_id_assoc_path), memory_rows, history_text)
         write_csv(no_id_assoc_path, no_id_records)
         round_assoc_path = round_dir / "association_records.csv"
         write_csv(round_assoc_path, no_id_records)
@@ -399,15 +452,15 @@ def run_progressive(
 
         # with-id evaluation (upper-bound / sanity check)
         with_id_assoc_path = run_association(
-            project_root, query_path, current_memory, round_dir, use_disease_id_score=True
+            project_root, query_path, memory_before, round_dir, use_disease_id_score=True, history_inspection_ids=history_text
         )
-        with_id_records = normalize_association_records(read_csv(with_id_assoc_path), memory_rows)
+        with_id_records = normalize_association_records(read_csv(with_id_assoc_path), memory_rows, history_text)
         write_csv(with_id_assoc_path, with_id_records)
         all_with_id_records.extend(with_id_records)
 
         # association 完成后才用 current_frames 更新 memory（no future leakage）
         next_memory = run_memory_incremental(
-            project_root, current_memory, query_path, no_id_assoc_path, round_dir
+            project_root, memory_before, query_path, no_id_assoc_path, round_dir
         )
 
         round_infos.append(
@@ -415,6 +468,7 @@ def run_progressive(
                 "round_index": index,
                 "history_inspections": history_ids,
                 "query_inspection": query_id,
+                "history_inspection_ids": history_ids,
                 "query_frame_count": len(query_rows),
                 "allowed_inputs": [
                     manifest_display_path(query_path),
@@ -433,11 +487,10 @@ def run_progressive(
                 "with_id_matched": sum(1 for r in with_id_records if r.get("association_status") == "matched"),
             }
         )
-        current_memory = next_memory
-
     # 写最终评估 CSV
-    write_csv(no_id_csv, all_no_id_records)
-    write_csv(with_id_csv, all_with_id_records)
+    progressive_fields = [*AssociationAgent.fieldnames(), "matched_disease_id"]
+    write_csv(no_id_csv, all_no_id_records, progressive_fields)
+    write_csv(with_id_csv, all_with_id_records, progressive_fields)
 
     # 写对比报告
     write_report(report_path, all_no_id_records, all_with_id_records, round_infos)

@@ -1,0 +1,46 @@
+{
+  "mode": "history_only",
+  "source_frame_records": "data/simulated/robot_kict_frame_records.csv",
+  "inspection_order": [
+    "I001",
+    "I002",
+    "I003"
+  ],
+  "rounds": [
+    {
+      "round_index": 1,
+      "query_inspection": "I001",
+      "history_inspection_ids": [],
+      "query_frame_count": 10,
+      "query_frames": "data/simulated/main_progressive/round_001/query_frames.csv",
+      "mode": "baseline_only"
+    },
+    {
+      "round_index": 2,
+      "query_inspection": "I002",
+      "history_inspection_ids": [
+        "I001"
+      ],
+      "query_frame_count": 10,
+      "query_frames": "data/simulated/main_progressive/round_002/query_frames.csv",
+      "mode": "history_only",
+      "memory_before": "data/simulated/main_progressive/round_002/memory_before_query.csv",
+      "association_records": "data/simulated/main_progressive/round_002/association_records.csv",
+      "memory_after": "data/simulated/main_progressive/round_002/memory_after_query.csv"
+    },
+    {
+      "round_index": 3,
+      "query_inspection": "I003",
+      "history_inspection_ids": [
+        "I001",
+        "I002"
+      ],
+      "query_frame_count": 10,
+      "query_frames": "data/simulated/main_progressive/round_003/query_frames.csv",
+      "mode": "history_only",
+      "memory_before": "data/simulated/main_progressive/round_003/memory_before_query.csv",
+      "association_records": "data/simulated/main_progressive/round_003/association_records.csv",
+      "memory_after": "data/simulated/main_progressive/round_003/memory_after_query.csv"
+    }
+  ]
+}

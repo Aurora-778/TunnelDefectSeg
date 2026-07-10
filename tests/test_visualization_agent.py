@@ -38,6 +38,7 @@ def growth_row(**overrides):
         "last_mileage_range": "K12+010.0",
         "main_clock_direction": "12点",
         "growth_description": "增长明显",
+        "comparability_status": "verified_comparable",
     }
     row.update(overrides)
     return row

@@ -16,6 +16,11 @@ class AssociationAgent(BaseAgent):
 
     def run(self, context: dict[str, Any]) -> dict[str, Any]:
         inputs = self.agent_inputs(context)
+        if self._as_bool(inputs.get("history_only", False)):
+            # Keep scoring in this agent while the coordinator owns only time ordering.
+            from orchestrator.history_only_association import run_history_only_association
+
+            return run_history_only_association(self, context, inputs)
         frame_path = self.resolve_path(context, self._required_input(inputs, "frame_records"))
         memory_path = self._memory_path(context, inputs)
         output_path = self.resolve_path(context, self._required_input(inputs, "output_path"))
@@ -27,7 +32,7 @@ class AssociationAgent(BaseAgent):
         memory_rows = self.read_csv(memory_path)
 
         rows: list[dict[str, Any]] = []
-        for frame in frame_rows:
+        for row_index, frame in enumerate(frame_rows, start=1):
             disease_id = frame.get("disease_id", "")
             memory, scores, candidates = self._best_memory_match(frame, memory_rows, use_disease_id_score=use_disease_id_score)
             matched = bool(memory)
@@ -52,11 +57,17 @@ class AssociationAgent(BaseAgent):
             )
             rows.append(
                 {
-                    "association_id": f"ASSOC-{frame.get('inspection_id', '')}-{frame.get('image_id', '')}",
+                    "association_id": "ASSOC-{}-{}-{}-{}".format(
+                        frame.get("inspection_id", ""),
+                        frame.get("frame_id", ""),
+                        frame.get("image_id", ""),
+                        row_index,
+                    ),
                     "inspection_id": frame.get("inspection_id", ""),
                     "frame_id": frame.get("frame_id", ""),
                     "image_id": frame.get("image_id", ""),
                     "label_disease_id": disease_id,
+                    "history_inspection_ids": str(inputs.get("history_inspection_ids", "")),
                     "memory_id": memory.get("memory_id", ""),
                     "association_status": "matched" if matched else "unmatched",
                     "rule_basis": self._rule_basis(frame, memory, match_type, use_disease_id_score=use_disease_id_score),
@@ -89,12 +100,28 @@ class AssociationAgent(BaseAgent):
                 }
             )
 
-        fieldnames = [
+        self.write_csv(output_path, rows, self.fieldnames())
+        if legacy_output_path:
+            legacy_output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(output_path, legacy_output_path)
+
+        matched_count = sum(1 for row in rows if row["association_status"] == "matched")
+        result = {
+            "association_records_path": str(output_path),
+            "association_rows": len(rows),
+            "association_matched_rows": matched_count,
+        }
+        return result
+
+    @staticmethod
+    def fieldnames() -> list[str]:
+        return [
             "association_id",
             "inspection_id",
             "frame_id",
             "image_id",
             "label_disease_id",
+            "history_inspection_ids",
             "memory_id",
             "association_status",
             "rule_basis",
@@ -125,18 +152,6 @@ class AssociationAgent(BaseAgent):
             "kict_image_path",
             "kict_mask_path",
         ]
-        self.write_csv(output_path, rows, fieldnames)
-        if legacy_output_path:
-            legacy_output_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(output_path, legacy_output_path)
-
-        matched_count = sum(1 for row in rows if row["association_status"] == "matched")
-        result = {
-            "association_records_path": str(output_path),
-            "association_rows": len(rows),
-            "association_matched_rows": matched_count,
-        }
-        return result
 
     def _memory_path(self, context: dict[str, Any], inputs: dict[str, Any]) -> Path:
         if inputs.get("memory_bank"):

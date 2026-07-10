@@ -49,6 +49,7 @@ REQUIRED_GROWTH_COLUMNS = [
     "last_mileage_range",
     "main_clock_direction",
     "growth_description",
+    "comparability_status",
 ]
 
 ENGINEERING_COLUMNS = [
@@ -90,10 +91,11 @@ RECHECK_COLUMNS = [
     "recheck_reason",
     "recheck_suggestion",
     "growth_description",
+    "comparability_status",
 ]
 
 ATTENTION_ORDER = ["重点关注", "持续观察", "常规记录", "待补充巡检"]
-GROWTH_TREND_ORDER = ["明显增长", "轻微增长", "基本稳定", "面积减小", "数据不足"]
+GROWTH_TREND_ORDER = ["明显增长", "轻微增长", "基本稳定", "面积减小", "不可比较", "数据不足"]
 ATTENTION_RANK = {name: index for index, name in enumerate(ATTENTION_ORDER)}
 DISEASE_TYPE_ZH = {
     "crack": "裂缝",
@@ -112,9 +114,9 @@ CHART_FILES = {
 }
 CHART_TITLES = {
     "attention_level_distribution.png": "关注等级分布图",
-    "growth_trend_distribution.png": "增长趋势分布图",
+    "growth_trend_distribution.png": "跨巡检可比性状态分布图",
     "risk_level_change_distribution.png": "风险等级变化分布图",
-    "top10_area_growth_rate.png": "面积增长率 Top 10",
+    "top10_area_growth_rate.png": "可比跨巡检面积审计 Top 10",
     "disease_type_distribution.png": "病害类型分布图",
     "mileage_risk_distribution.png": "里程段风险统计图",
 }
@@ -240,7 +242,7 @@ def generate_standard_visualizations(growth_rows: list[dict[str, str]], output_d
     paths.append(save_bar_chart(labels, values, "关注等级分布", "关注等级", "病害数量", output_dir / CHART_FILES["attention"]))
 
     labels, values = ordered_counts([row["growth_trend"] for row in growth_rows], GROWTH_TREND_ORDER)
-    paths.append(save_bar_chart(labels, values, "增长趋势分布", "增长趋势", "病害数量", output_dir / CHART_FILES["trend"]))
+    paths.append(save_bar_chart(labels, values, "跨巡检可比性状态分布", "状态", "病害数量", output_dir / CHART_FILES["trend"]))
 
     risk_counts = Counter(parse_int(row["risk_level_change"], "risk_level_change") for row in growth_rows)
     risk_keys = sorted(risk_counts)
@@ -255,17 +257,30 @@ def generate_standard_visualizations(growth_rows: list[dict[str, str]], output_d
         )
     )
 
-    top_growth = sorted(growth_rows, key=lambda row: parse_float(row["area_growth_rate"], "area_growth_rate"), reverse=True)[:10]
-    paths.append(
-        save_bar_chart(
-            [row["disease_id"] for row in top_growth],
-            [round(parse_float(row["area_growth_rate"], "area_growth_rate"), 4) for row in top_growth],
-            "病害面积增长率 Top 10",
-            "病害编号",
-            "面积增长率",
-            output_dir / CHART_FILES["top10_growth"],
+    comparable_rows = [row for row in growth_rows if row.get("comparability_status") == "verified_comparable"]
+    top_growth = sorted(comparable_rows, key=lambda row: parse_float(row["area_growth_rate"], "area_growth_rate"), reverse=True)[:10]
+    if not top_growth:
+        paths.append(
+            save_bar_chart(
+                ["暂无可比数据"],
+                [0],
+                "可比跨巡检面积审计",
+                "病害编号",
+                "可比记录数",
+                output_dir / CHART_FILES["top10_growth"],
+            )
         )
-    )
+    else:
+        paths.append(
+            save_bar_chart(
+                [row["disease_id"] for row in top_growth],
+                [round(parse_float(row["area_growth_rate"], "area_growth_rate"), 4) for row in top_growth],
+                "可比跨巡检面积变化 Top 10",
+                "病害编号",
+                "面积变化率",
+                output_dir / CHART_FILES["top10_growth"],
+            )
+        )
 
     type_labels, type_values = ordered_counts([disease_type_label(row["disease_type"]) for row in growth_rows], [])
     paths.append(save_bar_chart(type_labels, type_values, "病害类型分布", "病害类型", "病害数量", output_dir / CHART_FILES["type"]))
@@ -348,7 +363,7 @@ def recheck_reason(row: dict[str, str]) -> str:
     reasons: list[str] = []
     if row["attention_level"] == "重点关注":
         reasons.append("该病害被判定为重点关注对象")
-    if parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5:
+    if row.get("comparability_status") == "verified_comparable" and parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5:
         reasons.append("面积增长率超过 50%，存在明显扩展趋势")
     if row["last_risk_level"] == "高":
         reasons.append("末次巡检风险等级为高")
@@ -376,7 +391,10 @@ def build_priority_recheck_list(growth_rows: list[dict[str, str]]) -> list[dict[
         if row["attention_level"] == "重点关注"
         or row["growth_trend"] == "明显增长"
         or row["last_risk_level"] == "高"
-        or parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5
+        or (
+            row.get("comparability_status") == "verified_comparable"
+            and parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5
+        )
     ]
     if not selected:
         selected = [
@@ -433,11 +451,11 @@ def write_visualization_report(
 ) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     attention_counts = count_by_order([row["attention_level"] for row in growth_rows], ATTENTION_ORDER)
-    obvious_growth_count = sum(1 for row in growth_rows if row["growth_trend"] == "明显增长")
+    comparable_count = sum(1 for row in growth_rows if row.get("comparability_status") == "verified_comparable")
     high_risk_count = sum(1 for row in growth_rows if row["last_risk_level"] == "高")
     chart_lines = "\n".join(f"- {CHART_TITLES.get(path.name, path.stem)}：`{path.as_posix()}`" for path in chart_paths)
     note_lines = "\n".join(f"- {note}" for note in [font_note, engineering_note] if note) or "- 无"
-    content = f"""# 病害增长结果可视化报告
+    content = f"""# 病害面积审计可视化报告
 
 数据来源：
 - `{growth_path.as_posix()}`
@@ -454,7 +472,7 @@ def write_visualization_report(
 - 持续观察数量：{attention_counts.get('持续观察', 0)}
 - 常规记录数量：{attention_counts.get('常规记录', 0)}
 - 待补充巡检数量：{attention_counts.get('待补充巡检', 0)}
-- 明显增长数量：{obvious_growth_count}
+- 可纵向比较记录数量：{comparable_count}
 - 高风险病害数量：{high_risk_count}
 
 ## 3. 说明
@@ -463,7 +481,7 @@ def write_visualization_report(
 
 ## 4. 简要结论
 
-根据增长率、风险等级变化和关注等级，本阶段生成了可视化图表和复检清单，为后续重点复检和报告展示提供依据。
+根据静态面积审计、风险等级变化、可比性状态和关注等级，本阶段生成了可视化图表和复检清单，为后续重点复检和报告展示提供依据。
 """
     report_path.write_text(content, encoding="utf-8")
 

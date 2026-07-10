@@ -34,6 +34,8 @@ def engineering_row(**overrides):
         "total_area_px": "1000",
         "risk_level": "低",
         "engineering_description": "病害描述",
+        "observation_source": "verified_fixture",
+        "comparability_status": "verified_comparable",
     }
     row.update(overrides)
     return row

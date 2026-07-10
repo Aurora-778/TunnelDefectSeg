@@ -39,6 +39,8 @@ def base_row(**overrides):
         "total_area_px": "900",
         "risk_level": "低",
         "engineering_description": "desc",
+        "observation_source": "verified_fixture",
+        "comparability_status": "verified_comparable",
     }
     row.update(overrides)
     return row
@@ -114,7 +116,7 @@ def test_analyze_disease_growth_outputs_trends_and_attention(tmp_path):
     assert d001["attention_level"] == "重点关注"
     assert d001["measurement_basis"] == "cross_inspection_area_rule"
     assert d001["claim_level"] == "rule_evidence_only"
-    assert d001["comparability_status"] == "simulated_metadata_comparable"
+    assert d001["comparability_status"] == "verified_comparable"
     assert "增长率约为 160.0%" in d001["growth_description"]
     assert d002["growth_trend"] == "数据不足"
     assert d002["attention_level"] == "待补充巡检"
@@ -123,6 +125,46 @@ def test_analyze_disease_growth_outputs_trends_and_attention(tmp_path):
     assert markdown_report.exists()
     assert "涉及巡检次数：3" in markdown_report.read_text(encoding="utf-8")
     assert summary_report.exists()
+
+
+def test_analyze_disease_growth_gates_cyclic_static_masks(tmp_path):
+    input_csv = tmp_path / "disease_engineering_report.csv"
+    output_csv = tmp_path / "disease_growth_analysis.csv"
+    write_csv(
+        input_csv,
+        [
+            base_row(
+                observation_source="kict_static_mask_cyclic_demo",
+                comparability_status="not_longitudinally_comparable",
+            ),
+            base_row(
+                inspection_id="I002",
+                start_time="2026-07-01 10:00:00",
+                end_time="2026-07-01 10:00:00",
+                max_area_px="1600",
+                observation_source="kict_static_mask_cyclic_demo",
+                comparability_status="not_longitudinally_comparable",
+            ),
+        ],
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/analyze_disease_growth.py",
+            "--input-csv",
+            str(input_csv),
+            "--output-csv",
+            str(output_csv),
+        ],
+        check=True,
+    )
+
+    row = read_csv(output_csv)[0]
+    assert row["growth_trend"] == "不可比较"
+    assert row["claim_level"] == "rule_evidence_only"
+    assert row["measurement_basis"] == "static_mask_area_descriptive_only"
+    assert "增长" not in row["growth_description"]
 
 
 def test_analyze_disease_growth_fails_on_missing_required_column(tmp_path):

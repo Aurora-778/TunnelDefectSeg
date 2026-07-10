@@ -40,6 +40,8 @@ OUTPUT_COLUMNS = [
     "kict_mask_width",
     "kict_mask_height",
     "has_crack",
+    "observation_source",
+    "comparability_status",
 ]
 
 
@@ -159,6 +161,9 @@ def build_records(
                 "kict_mask_width": kict.get("mask_width", ""),
                 "kict_mask_height": kict.get("mask_height", ""),
                 "has_crack": "True",
+                # Cyclic KICT assignment is demo evidence, not repeated physical observation.
+                "observation_source": "kict_static_mask_cyclic_demo",
+                "comparability_status": "not_longitudinally_comparable",
             }
         )
     return output_rows, missing_inspection_count, missing_image_ids

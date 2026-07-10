@@ -14,6 +14,9 @@
 no-id 是 **primary evaluation**，disease_id 不参与真实 matching。
 
 - total_records: 20
+- label_evaluable_count: 20
+- top1_accuracy: 1.0
+- rejection_rate: 0.0
 - matched_count: 20
 - unmatched_count: 0
 - uncertain_count: 0
@@ -26,6 +29,9 @@ with-id 仅作为 **upper-bound / sanity check**，不是正式结论。disease_
 用于验证 no-id 策略与理想上界的差距。
 
 - total_records: 20
+- label_evaluable_count: 20
+- top1_accuracy: 1.0
+- rejection_rate: 0.0
 - matched_count: 20
 - unmatched_count: 0
 - uncertain_count: 0
@@ -69,3 +75,11 @@ with-id upper-bound 依赖 disease_id 标签，真实场景中该标签不可用
 - query frame count: 10
 - no-id matched: 10
 - with-id matched: 10
+
+## No-ID Error Cases (first 20)
+
+- none
+
+## With-ID Error Cases (first 20)
+
+- none

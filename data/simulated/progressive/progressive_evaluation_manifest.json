@@ -10,6 +10,9 @@
         "I001"
       ],
       "query_inspection": "I002",
+      "history_inspection_ids": [
+        "I001"
+      ],
       "query_frame_count": 10,
       "allowed_inputs": [
         "data/simulated/progressive/round_001/query_frames.csv",
@@ -22,20 +25,40 @@
       "memory_after": "data/simulated/progressive/round_001/memory_after_query.csv",
       "metrics": {
         "no_id": {
+          "total_query_records": 10,
           "total_records": 10,
           "matched_count": 10,
           "unmatched_count": 0,
           "uncertain_count": 0,
+          "label_evaluable_count": 10,
+          "top1_correct_count": 10,
+          "top1_accuracy": 1.0,
+          "matched_label_accuracy": 1.0,
+          "rejection_count": 0,
+          "rejection_rate": 0.0,
           "manual_review_count": 10,
-          "mean_association_score": 0.9216
+          "manual_review_rate": 1.0,
+          "missing_label_count": 0,
+          "mean_association_score": 0.9216,
+          "error_cases": []
         },
         "with_id": {
+          "total_query_records": 10,
           "total_records": 10,
           "matched_count": 10,
           "unmatched_count": 0,
           "uncertain_count": 0,
+          "label_evaluable_count": 10,
+          "top1_correct_count": 10,
+          "top1_accuracy": 1.0,
+          "matched_label_accuracy": 1.0,
+          "rejection_count": 0,
+          "rejection_rate": 0.0,
           "manual_review_count": 0,
-          "mean_association_score": 0.9333
+          "manual_review_rate": 0.0,
+          "missing_label_count": 0,
+          "mean_association_score": 0.9333,
+          "error_cases": []
         }
       },
       "no_id_matched": 10,
@@ -48,32 +71,56 @@
         "I002"
       ],
       "query_inspection": "I003",
+      "history_inspection_ids": [
+        "I001",
+        "I002"
+      ],
       "query_frame_count": 10,
       "allowed_inputs": [
         "data/simulated/progressive/round_002/query_frames.csv",
-        "data/simulated/progressive/round_001/memory_after_query.csv"
+        "data/simulated/progressive/round_002/memory.csv"
       ],
-      "memory_before": "data/simulated/progressive/round_001/memory_after_query.csv",
+      "memory_before": "data/simulated/progressive/round_002/memory.csv",
       "association_records": "data/simulated/progressive/round_002/association_records.csv",
       "no_id_association_records": "data/simulated/progressive/round_002/association_records_no_id.csv",
       "with_id_association_records": "data/simulated/progressive/round_002/association_records_with_id.csv",
       "memory_after": "data/simulated/progressive/round_002/memory_after_query.csv",
       "metrics": {
         "no_id": {
+          "total_query_records": 10,
           "total_records": 10,
           "matched_count": 10,
           "unmatched_count": 0,
           "uncertain_count": 0,
+          "label_evaluable_count": 10,
+          "top1_correct_count": 10,
+          "top1_accuracy": 1.0,
+          "matched_label_accuracy": 1.0,
+          "rejection_count": 0,
+          "rejection_rate": 0.0,
           "manual_review_count": 10,
-          "mean_association_score": 0.9094
+          "manual_review_rate": 1.0,
+          "missing_label_count": 0,
+          "mean_association_score": 0.9094,
+          "error_cases": []
         },
         "with_id": {
+          "total_query_records": 10,
           "total_records": 10,
           "matched_count": 10,
           "unmatched_count": 0,
           "uncertain_count": 0,
+          "label_evaluable_count": 10,
+          "top1_correct_count": 10,
+          "top1_accuracy": 1.0,
+          "matched_label_accuracy": 1.0,
+          "rejection_count": 0,
+          "rejection_rate": 0.0,
           "manual_review_count": 0,
-          "mean_association_score": 0.9229
+          "manual_review_rate": 0.0,
+          "missing_label_count": 0,
+          "mean_association_score": 0.9229,
+          "error_cases": []
         }
       },
       "no_id_matched": 10,
@@ -81,19 +128,39 @@
     }
   ],
   "no_id_metrics": {
+    "total_query_records": 20,
     "total_records": 20,
     "matched_count": 20,
     "unmatched_count": 0,
     "uncertain_count": 0,
+    "label_evaluable_count": 20,
+    "top1_correct_count": 20,
+    "top1_accuracy": 1.0,
+    "matched_label_accuracy": 1.0,
+    "rejection_count": 0,
+    "rejection_rate": 0.0,
     "manual_review_count": 20,
-    "mean_association_score": 0.9155
+    "manual_review_rate": 1.0,
+    "missing_label_count": 0,
+    "mean_association_score": 0.9155,
+    "error_cases": []
   },
   "with_id_metrics": {
+    "total_query_records": 20,
     "total_records": 20,
     "matched_count": 20,
     "unmatched_count": 0,
     "uncertain_count": 0,
+    "label_evaluable_count": 20,
+    "top1_correct_count": 20,
+    "top1_accuracy": 1.0,
+    "matched_label_accuracy": 1.0,
+    "rejection_count": 0,
+    "rejection_rate": 0.0,
     "manual_review_count": 0,
-    "mean_association_score": 0.9281
+    "manual_review_rate": 0.0,
+    "missing_label_count": 0,
+    "mean_association_score": 0.9281,
+    "error_cases": []
   }
 }

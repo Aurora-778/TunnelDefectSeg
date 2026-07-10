@@ -53,6 +53,12 @@ Consumer：`scripts/generate_engineering_report.py`
 - `kict_center_x`
 - `kict_center_y`
 - `has_crack`
+- `observation_source`
+- `comparability_status`
+
+当前循环分配 KICT 静态 mask 的演示记录固定为
+`observation_source=kict_static_mask_cyclic_demo`、
+`comparability_status=not_longitudinally_comparable`。该状态只保留静态面积审计，不能作为纵向变化证据。
 
 ### disease_engineering_report.csv
 
@@ -83,6 +89,8 @@ Consumer：`scripts/analyze_disease_growth.py`, `run.py`, Web Dashboard
 - `mean_area_px`
 - `total_area_px`
 - `risk_level`
+- `observation_source`
+- `comparability_status`
 - `engineering_description`
 
 枚举：
@@ -123,7 +131,7 @@ Consumer：`MemoryAgent`, `scripts/generate_visualization_and_recheck_list.py`, 
 
 枚举：
 
-- `growth_trend`: `明显增长 | 轻微增长 | 基本稳定 | 面积减小 | 数据不足`
+- `growth_trend`: `明显增长 | 轻微增长 | 基本稳定 | 面积减小 | 不可比较 | 数据不足`
 - `attention_level`: `重点关注 | 持续观察 | 常规记录 | 待补充巡检`
 
 可信性说明：
@@ -131,6 +139,7 @@ Consumer：`MemoryAgent`, `scripts/generate_visualization_and_recheck_list.py`, 
 - `growth_trend` 是基于仿真巡检元数据和 mask 面积规则生成的工程提示。
 - 它不是结构安全结论，也不是真实线路长期演化证据。
 - `claim_level=baseline_only` 表示只有单次巡检基线；`rule_evidence_only` 表示仅有规则证据；强结论需要人工复核或真实可比数据支撑。
+- 任一组成观测为 `not_longitudinally_comparable` 时，聚合结果必须是 `growth_trend=不可比较`、`measurement_basis=static_mask_area_descriptive_only`、`claim_level=rule_evidence_only`；描述、Memory、Final Report 与图表不作方向性表述。
 
 ### disease_memory_bank.csv
 
@@ -158,13 +167,15 @@ Consumer：`AssociationAgent`, final report
 - `max_area_px`
 - `growth_trend`
 - `attention_level`
+- `comparability_status`
 - `mileage_range`
 - `requires_manual_review`
 - `memory_description`
 
 当前限制：
 
-- 主 pipeline 的 v1 memory 仍是批量重建式 memory，`memory_update_mode=batch_rebuild`。
+- 主 pipeline 的 v1 memory 仍是批量重建式 summary memory，`memory_update_mode=batch_rebuild`，仅供汇总与报告。
+- 主 Association 不读取最终 `disease_memory_bank.csv` 作为候选；它按 inspection 顺序从历史帧临时重建 candidate memory。
 - 渐进式评估脚本会使用 `memory_update_mode=incremental_update`，只从历史 memory 与当前巡检关联结果更新记忆库。
 - `memory_confidence` 只表达当前仿真巡检元数据下的记录充分性，不代表真实长期跟踪置信度。
 - conflict handling 当前通过 `requires_manual_review`、`candidate_count`、`score_margin` 和 `conflict_reason` 暴露给人工复核。
@@ -186,6 +197,7 @@ Consumer：final report, Web Dashboard, artifact review
 - `frame_id`
 - `image_id`
 - `label_disease_id`
+- `history_inspection_ids`
 - `memory_id`
 - `association_status`
 - `rule_basis`
@@ -229,6 +241,8 @@ Progressive evaluation 专用字段：
 评分说明：
 
 - 主 pipeline 默认 `use_disease_id_score=false`、`association_mode=no_id`。
+- 主输出中 `history_inspection_ids` 为按 inspection 顺序排列的管道分隔历史证据，例如 `I001|I002`；每个 history inspection 必须早于当前 query inspection。
+- I001 仅建立 baseline，不生成 self-match；当前 query 完成 Association 后才允许用于该轮 memory 更新。
 - `label_disease_id` 是数据集 / 仿真标签，不参与主 pipeline 的真实 matching 打分。
 - `with_id_upper_bound` 只用于 progressive evaluation 的上界 / sanity check，不进入主 DAG。
 - 可以把 `label_disease_id` 理解为“做完题后对答案用的答案标签”，不能在主流程匹配时当作解题线索。

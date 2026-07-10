@@ -8,6 +8,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from generate_algorithm_events import ALLOWED_STATUS, build_algorithm_events, resolve_output_path, write_algorithm_events
+from orchestrator.dag.builder import build_dag
+from orchestrator.dag.scheduler import execution_layers
 
 
 def write_file(path: Path, content: str = "x") -> None:
@@ -154,3 +156,22 @@ def test_event_status_values_are_constrained(tmp_path):
 
     assert {event["status"] for event in payload["events"]} <= ALLOWED_STATUS
     assert "available" in {event["status"] for event in payload["events"]}
+
+
+def test_core_events_follow_real_dag_dependencies_and_layers(tmp_path):
+    write_minimal_artifacts(tmp_path)
+
+    payload = build_algorithm_events(tmp_path)
+    tasks, _ = build_dag(Path("config/dag.yaml"))
+    expected_layers = {
+        name: index
+        for index, layer in enumerate(execution_layers(tasks), start=1)
+        for name in layer
+    }
+    core_events = {event["stage"]: event for event in payload["events"] if event["stage"] in tasks}
+
+    for name, event in core_events.items():
+        assert event["deps"] == tasks[name].deps
+        assert event["execution_layer"] == expected_layers[name]
+    assert next(event for event in payload["events"] if event["event_id"] == "E01")["execution_layer"] == "pre_dag"
+    assert next(event for event in payload["events"] if event["stage"] == "video_demo")["execution_layer"] == "independent_optional"

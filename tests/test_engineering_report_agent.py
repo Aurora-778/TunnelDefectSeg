@@ -34,6 +34,8 @@ def frame_row(**overrides):
         "kict_center_x": "3.0",
         "kict_center_y": "4.0",
         "has_crack": "True",
+        "observation_source": "verified_fixture",
+        "comparability_status": "verified_comparable",
     }
     row.update(overrides)
     return row

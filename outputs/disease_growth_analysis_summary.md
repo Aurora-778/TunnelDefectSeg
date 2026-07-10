@@ -2,32 +2,31 @@
 
 ## 输入文件
 
-- C:/Users/26822/Downloads/data/data/simulated/disease_engineering_report.csv
+- C:/Users/26822/AppData/Local/Temp/pytest-of-26822/pytest-24/test_analyze_disease_growth_ga0/disease_engineering_report.csv
 
 ## 输出文件
 
-- C:/Users/26822/Downloads/data/data/simulated/disease_growth_results.csv
-- C:/Users/26822/Downloads/data/outputs/disease_growth_analysis_report.md
-- C:/Users/26822/Downloads/data/outputs/disease_growth_analysis_summary.md
+- C:/Users/26822/AppData/Local/Temp/pytest-of-26822/pytest-24/test_analyze_disease_growth_ga0/disease_growth_analysis.csv
+- outputs/disease_growth_analysis_report.md
+- outputs/disease_growth_analysis_summary.md
 
 ## 统计信息
 
-- 输入记录行数: 30
-- 输出病害数量: 10
-- 巡检次数: 3
+- 输入记录行数: 2
+- 输出病害数量: 1
+- 巡检次数: 2
 
 ## 增长趋势分布
 
-- 基本稳定: 9
-- 面积减小: 1
+- 不可比较: 1
 
 ## 关注等级分布
 
-- 重点关注: 10
+- 持续观察: 1
 
 ## 风险等级变化统计
 
-- 0: 10
+- 0: 1
 
 ## 说明
 
