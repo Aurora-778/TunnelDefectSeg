@@ -174,4 +174,9 @@ def test_core_events_follow_real_dag_dependencies_and_layers(tmp_path):
         assert event["deps"] == tasks[name].deps
         assert event["execution_layer"] == expected_layers[name]
     assert next(event for event in payload["events"] if event["event_id"] == "E01")["execution_layer"] == "pre_dag"
-    assert next(event for event in payload["events"] if event["stage"] == "video_demo")["execution_layer"] == "independent_optional"
+    video_event = next(event for event in payload["events"] if event["stage"] == "video_demo")
+    assert video_event["execution_layer"] == "independent_optional"
+    assert video_event["deps"] == []
+    assert video_event["inputs"] == []
+    association_event = core_events["association"]
+    assert any(ref["path"].endswith("main_progressive/association_manifest.json") for ref in association_event["inputs"])

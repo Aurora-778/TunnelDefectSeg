@@ -137,3 +137,18 @@ def test_full_pipeline_runner_creates_end_to_end_outputs(tmp_path, monkeypatch):
     assert "## 未来扩展" in final_report
     assert (output_dir / "system_summary.md").exists()
     assert (output_dir / "key_insights.md").exists()
+
+
+def test_full_pipeline_runner_accepts_single_inspection_baseline(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAST_TEST_MODE", "1")
+    runner = load_project_runner()
+    frame_csv = tmp_path / "data" / "simulated" / "robot_kict_frame_records.csv"
+    write_csv(frame_csv, [frame_row()])
+
+    result = runner.run_full_pipeline(tmp_path)
+
+    assert set(result["task_status"].values()) == {"success"}
+    assert result["association_rows"] == 0
+    assert read_csv(tmp_path / "data" / "simulated" / "disease_association_records.csv") == []
+    report = (tmp_path / "outputs" / "final_project_report.md").read_text(encoding="utf-8")
+    assert "当前仅有 baseline，尚无可关联 query inspection" in report

@@ -13,6 +13,7 @@
 ## 关联分析结果
 
 - 关联记录数：20
+
 - 关联依据：Association Agent 在主 pipeline 中使用 no-id matching，综合空间距离、面积相似度、巡检时间连续性和风险相似度等非 ID 规则证据进行评分，并输出 candidate、margin、conflict 和 manual review 标记；`disease_id` 只作为标签和评估对照，不参与主流程匹配评分。该结果属于规则证据，需要人工复核闭环确认。
 - 输出文件：`C:/Users/26822/Downloads/data/data/simulated/disease_association_records.csv`
 
@@ -22,7 +23,7 @@ Progressive evaluation (no-id vs with-id) has been run. See `outputs/association
 
 - no-id is the **primary evaluation**; disease_id does not participate in matching.
 - with-id is only an **upper-bound / sanity check**.
-- Progressive evaluation avoids **future memory leakage** by incrementally updating memory per inspection round.
+- Each progressive round rebuilds candidate memory from history rows only; the post-query incremental memory snapshot is audit-only.
 - Full pipeline batch memory is **not** used as initial memory.
 
 ## 风险分布

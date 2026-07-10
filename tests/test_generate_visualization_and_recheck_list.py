@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.generate_visualization_and_recheck_list import write_recheck_report
+
 
 def write_csv(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +182,39 @@ def test_generate_visualizations_and_recheck_list(tmp_path):
     assert "图表数量: 6" in summary_report.read_text(encoding="utf-8")
     assert "D001 - 裂缝" in recheck_report.read_text(encoding="utf-8")
     assert "病害总数：3" in vis_report.read_text(encoding="utf-8")
+
+
+def test_recheck_report_does_not_describe_noncomparable_records_as_growth(tmp_path):
+    report_path = tmp_path / "recheck.md"
+    rows = [
+        {
+            "priority_rank": "1",
+            "disease_id": "D001",
+            "disease_type": "crack",
+            "attention_level": "重点关注",
+            "comparability_status": "not_longitudinally_comparable",
+            "growth_trend": "不可比较",
+            "first_area_px": "1000",
+            "last_area_px": "500",
+            "area_growth_rate": "-0.5",
+            "first_risk_level": "低",
+            "last_risk_level": "高",
+            "last_mileage_range": "K12+000.0",
+            "main_clock_direction": "12点",
+            "recheck_reason": "高风险",
+            "recheck_suggestion": "人工复核",
+            "growth_description": "静态面积审计。",
+        }
+    ]
+
+    write_recheck_report(rows, report_path, tmp_path / "priority_recheck_list.csv")
+
+    report = report_path.read_text(encoding="utf-8")
+    assert "可比性：不可纵向比较" in report
+    assert "静态面积审计：1000 px² -> 500 px²" in report
+    assert "增长趋势" not in report
+    assert "增长率" not in report
+    assert "明显增长病害" not in report
 
 
 def test_visualization_script_fails_on_missing_growth_column(tmp_path):

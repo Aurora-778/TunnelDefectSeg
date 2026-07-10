@@ -255,3 +255,18 @@ def test_progressive_metrics_use_labels_only_after_matching():
     assert metrics["rejection_rate"] == 0.5
     assert metrics["missing_label_count"] == 1
     assert metrics["error_cases"][0]["frame_id"] == "2"
+
+
+def test_progressive_rejects_duplicate_frame_composite_key(tmp_path):
+    input_csv = tmp_path / "duplicate.csv"
+    row = frame_row()
+    write_csv(input_csv, [row, dict(row)])
+
+    with pytest.raises(ValueError, match="duplicate frame composite key"):
+        run_progressive(
+            input_csv,
+            tmp_path / "progressive",
+            tmp_path / "no_id.csv",
+            tmp_path / "with_id.csv",
+            tmp_path / "report.md",
+        )

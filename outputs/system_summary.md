@@ -2,7 +2,7 @@
 
 ## 执行链
 
-Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Association Agent -> Visualization/Recheck -> Final Report
+Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and History-only Association -> Visualization/Recheck -> Final Report
 
 ## 核心输出
 

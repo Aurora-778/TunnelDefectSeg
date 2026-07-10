@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 
 from orchestrator.agents.memory_agent import MemoryAgent
@@ -143,7 +144,7 @@ def run_history_only_association(
     records: list[dict[str, str]] = []
     rounds: list[dict[str, Any]] = []
 
-    history_root.mkdir(parents=True, exist_ok=True)
+    _prepare_history_output_dir(history_root, manifest_path)
     for index, query_inspection in enumerate(inspections):
         history_ids = inspections[:index]
         query_rows = [row for row in frame_rows if row["inspection_id"] == query_inspection]
@@ -224,3 +225,14 @@ def _display_path(path: Path, project_root: Path) -> str:
         return path.resolve().relative_to(project_root.resolve()).as_posix()
     except ValueError:
         return str(path)
+
+
+def _prepare_history_output_dir(history_root: Path, manifest_path: Path) -> None:
+    """Remove only this coordinator's stale round artifacts before a rerun."""
+
+    history_root.mkdir(parents=True, exist_ok=True)
+    for child in history_root.glob("round_*"):
+        if child.is_dir():
+            shutil.rmtree(child)
+    if manifest_path.exists():
+        manifest_path.unlink()

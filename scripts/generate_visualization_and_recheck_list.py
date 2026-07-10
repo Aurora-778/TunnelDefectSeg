@@ -503,7 +503,7 @@ def write_recheck_report(recheck_rows: list[dict[str, str]], report_path: Path, 
         f"- 重点关注：{sum(1 for row in recheck_rows if row.get('attention_level') == '重点关注')}",
         f"- 持续观察：{sum(1 for row in recheck_rows if row.get('attention_level') == '持续观察')}",
         f"- 高风险病害：{sum(1 for row in recheck_rows if row.get('last_risk_level') == '高')}",
-        f"- 明显增长病害：{sum(1 for row in recheck_rows if row.get('growth_trend') == '明显增长')}",
+        f"- 可纵向比较病害：{sum(1 for row in recheck_rows if row.get('comparability_status') == 'verified_comparable')}",
         "",
         "## 复检清单",
         "",
@@ -513,14 +513,25 @@ def write_recheck_report(recheck_rows: list[dict[str, str]], report_path: Path, 
     else:
         for row in sorted(recheck_rows, key=lambda item: parse_int(item["priority_rank"], "priority_rank")):
             type_name = disease_type_label(row["disease_type"])
+            comparable = row.get("comparability_status") == "verified_comparable"
+            evidence_lines = (
+                [
+                    f"- 增长趋势：{row['growth_trend']}",
+                    f"- 面积变化：{row['first_area_px']} px² -> {row['last_area_px']} px²",
+                    f"- 增长率：{percent_text(parse_float(row['area_growth_rate'], 'area_growth_rate'))}",
+                ]
+                if comparable
+                else [
+                    "- 可比性：不可纵向比较",
+                    f"- 静态面积审计：{row['first_area_px']} px² -> {row['last_area_px']} px²",
+                ]
+            )
             lines.extend(
                 [
                     f"### {int(row['priority_rank'])}. {row['disease_id']} - {type_name}",
                     "",
                     f"- 关注等级：{row['attention_level']}",
-                    f"- 增长趋势：{row['growth_trend']}",
-                    f"- 面积变化：{row['first_area_px']} px² -> {row['last_area_px']} px²",
-                    f"- 增长率：{percent_text(parse_float(row['area_growth_rate'], 'area_growth_rate'))}",
+                    *evidence_lines,
                     f"- 风险变化：{row['first_risk_level']} -> {row['last_risk_level']}",
                     f"- 位置：{row['last_mileage_range']}，{row['main_clock_direction']}方向",
                     f"- 复检原因：{row['recheck_reason']}",

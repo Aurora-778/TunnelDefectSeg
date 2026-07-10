@@ -78,6 +78,11 @@ class FinalReportAgent(BaseAgent):
         risk_counts = Counter(row.get("last_risk_level") or row.get("risk_level", "") for row in growth_rows)
         trend_counts = Counter(row.get("growth_trend", "") for row in growth_rows)
         association_rows = self._read_csv(association_records)
+        association_note = (
+            "- 当前仅有 baseline，尚无可关联 query inspection。"
+            if not association_rows
+            else ""
+        )
         chart_lines = "\n".join(f"- `{path.as_posix()}`" for path in chart_paths)
         progressive_summary = self._progressive_evaluation_summary()
         return f"""# 隧道巡检病害监测系统完整报告
@@ -95,6 +100,7 @@ class FinalReportAgent(BaseAgent):
 ## 关联分析结果
 
 - 关联记录数：{len(association_rows)}
+{association_note}
 - 关联依据：Association Agent 在主 pipeline 中使用 no-id matching，综合空间距离、面积相似度、巡检时间连续性和风险相似度等非 ID 规则证据进行评分，并输出 candidate、margin、conflict 和 manual review 标记；`disease_id` 只作为标签和评估对照，不参与主流程匹配评分。该结果属于规则证据，需要人工复核闭环确认。
 - 输出文件：`{association_records.as_posix()}`
 
@@ -148,7 +154,7 @@ Progressive evaluation (no-id vs with-id) has been run. See `outputs/association
 
 - no-id is the **primary evaluation**; disease_id does not participate in matching.
 - with-id is only an **upper-bound / sanity check**.
-- Progressive evaluation avoids **future memory leakage** by incrementally updating memory per inspection round.
+- Each progressive round rebuilds candidate memory from history rows only; the post-query incremental memory snapshot is audit-only.
 - Full pipeline batch memory is **not** used as initial memory."""
         return """## Progressive Evaluation Summary
 
@@ -173,7 +179,7 @@ python scripts/run_progressive_inspection_evaluation.py
 
 ## 执行链
 
-Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Association Agent -> Visualization/Recheck -> Final Report
+Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and History-only Association -> Visualization/Recheck -> Final Report
 
 ## 核心输出
 
@@ -233,8 +239,6 @@ Engineering Report -> Rule-based Growth Evidence -> Disease Memory Bank -> Assoc
             raise FileNotFoundError(f"Full pipeline missing outputs: {missing}")
         if not engineering_rows or not growth_rows:
             raise ValueError("Full pipeline produced empty core outputs")
-        if len(self._read_csv(association_records)) <= 0:
-            raise ValueError("Association pipeline has no records")
         if len(chart_paths) < 7:
             raise ValueError(f"Expected at least 7 visual artifacts, got {len(chart_paths)}")
         if recheck_rows is None:

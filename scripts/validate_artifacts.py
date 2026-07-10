@@ -145,6 +145,24 @@ def validate_progressive_artifacts(project_root: Path) -> list[str]:
                         source_dataset,
                     )
                 )
+                errors.extend(
+                    validate_association_history_rows(
+                        project_root,
+                        round_info,
+                        index,
+                        "no_id_association_records",
+                        source_dataset,
+                    )
+                )
+                errors.extend(
+                    validate_association_history_rows(
+                        project_root,
+                        round_info,
+                        index,
+                        "with_id_association_records",
+                        source_dataset,
+                    )
+                )
 
     if not report_path.exists():
         errors.append(f"missing file: {report_path}")
@@ -320,7 +338,10 @@ def validate_association_history_rows(
     if not isinstance(history, list):
         return errors + [f"progressive manifest round {round_index} history_inspections must be a list"]
     return errors + _validate_association_rows(
-        _read_rows(artifact_path), source_keys, expected_history=history, label=f"progressive manifest round {round_index}",
+        _read_rows(artifact_path),
+        source_keys,
+        expected_history=history,
+        label=f"progressive manifest round {round_index} {artifact_key}",
     )
 
 
@@ -340,33 +361,114 @@ def validate_main_history_only_association(project_root: Path) -> list[str]:
         return errors + [f"invalid JSON: {manifest_path}: {exc}"]
     if manifest.get("mode") != "history_only":
         errors.append("main association manifest mode must be history_only")
+    declared_source = manifest.get("source_frame_records")
+    expected_source = ARTIFACTS["robot_kict_frame_records"]
+    if not declared_source:
+        errors.append("main association manifest missing source_frame_records")
+    elif not manifest_paths_equal(project_root, declared_source, expected_source):
+        errors.append("main association manifest source_frame_records must match robot_kict_frame_records")
     rounds = manifest.get("rounds")
     if not isinstance(rounds, list):
         return errors + ["main association manifest rounds must be a list"]
     expected_history_by_query: dict[str, list[str]] = {}
-    for round_info in rounds:
+    rounds_by_query: dict[str, dict] = {}
+    for round_index, round_info in enumerate(rounds, start=1):
         if not isinstance(round_info, dict):
-            errors.append("main association manifest round must be an object")
+            errors.append(f"main association manifest round {round_index} must be an object")
             continue
         query = str(round_info.get("query_inspection", ""))
         history = round_info.get("history_inspection_ids")
         if not query or not isinstance(history, list):
-            errors.append("main association manifest round missing query_inspection or history_inspection_ids")
+            errors.append(f"main association manifest round {round_index} missing query_inspection or history_inspection_ids")
+            continue
+        if query in rounds_by_query:
+            errors.append(f"main association manifest duplicate query_inspection: {query}")
             continue
         expected_history_by_query[query] = history
+        rounds_by_query[query] = round_info
     records = _read_rows(association_path)
-    for query, history in expected_history_by_query.items():
-        if history:
-            continue
-        if any(record.get("inspection_id") == query for record in records):
-            errors.append(f"main association baseline {query} must not generate self-matches")
+    records_by_query: dict[str, list[dict[str, str]]] = {}
     for record in records:
+        records_by_query.setdefault(record.get("inspection_id", ""), []).append(record)
+
+    for query, history in expected_history_by_query.items():
+        round_info = rounds_by_query[query]
+        round_index = int(round_info.get("round_index", 0) or 0)
+        errors.extend(
+            validate_main_manifest_file(
+                project_root,
+                round_info,
+                round_index,
+                "query_frames",
+                "robot_kict_frame_records",
+            )
+        )
+        query_value = round_info.get("query_frames")
+        query_path = resolve_manifest_path(project_root, query_value) if query_value else None
+        if query_path and query_path.is_file() and any(row.get("inspection_id") != query for row in _read_rows(query_path)):
+            errors.append(f"main association manifest round {round_index} query_frames contains a different inspection")
+        if history:
+            for key, schema_name in (
+                ("memory_before", "disease_memory_bank"),
+                ("association_records", "disease_association_records"),
+                ("memory_after", "disease_memory_bank"),
+            ):
+                errors.extend(validate_main_manifest_file(project_root, round_info, round_index, key, schema_name, allow_empty=key == "association_records"))
+            association_value = round_info.get("association_records")
+            round_path = resolve_manifest_path(project_root, association_value) if association_value else None
+            round_records = _read_rows(round_path) if round_path and round_path.is_file() else []
+            errors.extend(
+                _validate_association_rows(
+                    round_records,
+                    source_keys,
+                    expected_history=history,
+                    label=f"main association round {round_index}",
+                )
+            )
+            if _record_signatures(round_records) != _record_signatures(records_by_query.get(query, [])):
+                errors.append(f"main association round {round_index} records disagree with main association CSV")
+        elif records_by_query.get(query):
+            errors.append(f"main association baseline {query} must not generate self-matches")
+
+    seen_keys: set[tuple[str, str, str, str]] = set()
+    for line_number, record in enumerate(records, start=2):
+        key = _association_key(record)
+        if key in seen_keys:
+            errors.append(f"main association duplicate association composite key at line {line_number}: {key}")
+        seen_keys.add(key)
         history = expected_history_by_query.get(record.get("inspection_id", ""))
         if history is None:
             errors.append(f"main association query inspection missing from manifest: {record.get('inspection_id', '')}")
             continue
-        errors.extend(_validate_association_rows([record], source_keys, expected_history=history, label="main association"))
+    for query, query_records in records_by_query.items():
+        history = expected_history_by_query.get(query)
+        if history is not None:
+            errors.extend(_validate_association_rows(query_records, source_keys, expected_history=history, label="main association"))
     return errors
+
+
+def validate_main_manifest_file(
+    project_root: Path,
+    round_info: dict,
+    round_index: int,
+    key: str,
+    schema_name: str,
+    *,
+    allow_empty: bool = False,
+) -> list[str]:
+    if key not in round_info:
+        return [f"main association manifest round {round_index} missing {key}"]
+    path = resolve_manifest_path(project_root, round_info.get(key, ""))
+    if not path.exists():
+        return [f"main association manifest round {round_index} {key} missing file: {path}"]
+    return [
+        f"main association manifest round {round_index} {key}: {error}"
+        for error in validate_csv_schema(path, schema_name, allow_empty=allow_empty)
+    ]
+
+
+def _record_signatures(rows: list[dict[str, str]]) -> list[tuple[tuple[str, str], ...]]:
+    return sorted(tuple(sorted((str(key), str(value)) for key, value in row.items())) for row in rows)
 
 
 def main() -> int:

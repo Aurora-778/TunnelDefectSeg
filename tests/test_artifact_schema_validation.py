@@ -722,3 +722,140 @@ def test_validate_artifacts_reports_progressive_memory_after_schema_errors(tmp_p
     errors = validate_artifacts(tmp_path)
 
     assert any("memory_after" in error and "requires_manual_review" in error for error in errors["progressive_evaluation"])
+
+
+def main_source_row(inspection_id: str, **overrides: str) -> dict[str, str]:
+    row = {
+        "image_id": f"{inspection_id}_000001",
+        "inspection_id": inspection_id,
+        "frame_id": "1",
+        "timestamp": "2026-06-01 10:00:00",
+        "mileage_m": "12000",
+        "mileage_text": "K12+000.0",
+        "ring_id": "1000",
+        "clock_direction": "12点",
+        "disease_id": "D001",
+        "disease_type": "crack",
+        "kict_image_path": "images/a.jpg",
+        "kict_mask_path": "masks/a.png",
+        "kict_area_px": "1000",
+        "kict_bbox_x1": "1",
+        "kict_bbox_y1": "1",
+        "kict_bbox_x2": "2",
+        "kict_bbox_y2": "2",
+        "kict_center_x": "1.5",
+        "kict_center_y": "1.5",
+        "has_crack": "true",
+        "observation_source": "verified_fixture",
+        "comparability_status": "verified_comparable",
+    }
+    row.update(overrides)
+    return row
+
+
+def write_main_history_fixture(tmp_path: Path, main_rows: list[dict[str, str]] | None = None) -> None:
+    source_path = tmp_path / "data" / "simulated" / "robot_kict_frame_records.csv"
+    main_path = tmp_path / "data" / "simulated" / "disease_association_records.csv"
+    root = tmp_path / "data" / "simulated" / "main_progressive"
+    baseline_query = root / "round_001" / "query_frames.csv"
+    round_query = root / "round_002" / "query_frames.csv"
+    round_assoc = root / "round_002" / "association_records.csv"
+    memory_before = root / "round_002" / "memory_before.csv"
+    memory_after = root / "round_002" / "memory_after.csv"
+    source_rows = [main_source_row("I001"), main_source_row("I002")]
+    row = valid_association_row()
+    write_csv(source_path, list(source_rows[0]), source_rows)
+    write_csv(baseline_query, list(source_rows[0]), [source_rows[0]])
+    write_csv(round_query, list(source_rows[1]), [source_rows[1]])
+    write_csv(round_assoc, list(row), [row])
+    write_csv(memory_before, list(valid_memory_row()), [valid_memory_row()])
+    write_csv(memory_after, list(valid_memory_row()), [valid_memory_row()])
+    write_csv(main_path, list(row), main_rows or [row])
+    (root / "association_manifest.json").write_text(
+        json.dumps(
+            {
+                "mode": "history_only",
+                "source_frame_records": "data/simulated/robot_kict_frame_records.csv",
+                "rounds": [
+                    {
+                        "round_index": 1,
+                        "query_inspection": "I001",
+                        "history_inspection_ids": [],
+                        "query_frames": "data/simulated/main_progressive/round_001/query_frames.csv",
+                    },
+                    {
+                        "round_index": 2,
+                        "query_inspection": "I002",
+                        "history_inspection_ids": ["I001"],
+                        "query_frames": "data/simulated/main_progressive/round_002/query_frames.csv",
+                        "memory_before": "data/simulated/main_progressive/round_002/memory_before.csv",
+                        "association_records": "data/simulated/main_progressive/round_002/association_records.csv",
+                        "memory_after": "data/simulated/main_progressive/round_002/memory_after.csv",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_main_history_validator_rejects_duplicate_main_association_key(tmp_path):
+    row = valid_association_row()
+    write_main_history_fixture(tmp_path, [row, dict(row)])
+
+    errors = validate_main_history_only_association(tmp_path)
+
+    assert any("duplicate association composite key" in error for error in errors)
+
+
+def test_main_history_validator_rejects_missing_round_memory_after(tmp_path):
+    write_main_history_fixture(tmp_path)
+    (tmp_path / "data" / "simulated" / "main_progressive" / "round_002" / "memory_after.csv").unlink()
+
+    errors = validate_main_history_only_association(tmp_path)
+
+    assert any("memory_after missing file" in error for error in errors)
+
+
+def test_main_history_validator_rejects_round_main_record_mismatch(tmp_path):
+    write_main_history_fixture(tmp_path)
+    main_path = tmp_path / "data" / "simulated" / "disease_association_records.csv"
+    row = valid_association_row()
+    row["association_status"] = "unmatched"
+    write_csv(main_path, list(row), [row])
+
+    errors = validate_main_history_only_association(tmp_path)
+
+    assert any("records disagree with main association CSV" in error for error in errors)
+
+
+def test_progressive_validator_rejects_future_history_in_with_id_artifact(tmp_path):
+    source_path = tmp_path / "data" / "source.csv"
+    memory_path = tmp_path / "memory.csv"
+    association_path = tmp_path / "association.csv"
+    no_id_path, with_id_path = write_valid_progressive_outputs(tmp_path)
+    source_row = {"inspection_id": "I002", "frame_id": "1", "image_id": "I002_000001", "disease_id": "D001"}
+    with_id_row = valid_progressive_association_row()
+    with_id_row["use_disease_id_score"] = "true"
+    with_id_row["association_mode"] = "with_id_upper_bound"
+    with_id_row["history_inspection_ids"] = "I001|I002"
+    write_csv(source_path, list(source_row), [source_row])
+    write_csv(memory_path, list(valid_memory_row()), [valid_memory_row()])
+    write_csv(association_path, list(valid_progressive_association_row()), [valid_progressive_association_row()])
+    write_csv(with_id_path, list(with_id_row), [with_id_row])
+    write_progressive_report(tmp_path)
+    write_progressive_manifest(
+        tmp_path,
+        {
+            "memory_before": memory_path.as_posix(),
+            "association_records": association_path.as_posix(),
+            "no_id_association_records": no_id_path.as_posix(),
+            "with_id_association_records": with_id_path.as_posix(),
+            "memory_after": memory_path.as_posix(),
+        },
+        source_dataset=source_path.as_posix(),
+    )
+
+    errors = validate_artifacts(tmp_path)
+
+    assert any("with_id_association_records" in error and "current or future" in error for error in errors["progressive_evaluation"])

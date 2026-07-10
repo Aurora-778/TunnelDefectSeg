@@ -2,11 +2,11 @@
 
 ## 输入文件
 
-- C:/Users/26822/AppData/Local/Temp/pytest-of-26822/pytest-24/test_analyze_disease_growth_ga0/disease_engineering_report.csv
+- C:/Users/26822/AppData/Local/Temp/pytest-of-26822/pytest-30/test_analyze_disease_growth_ga0/disease_engineering_report.csv
 
 ## 输出文件
 
-- C:/Users/26822/AppData/Local/Temp/pytest-of-26822/pytest-24/test_analyze_disease_growth_ga0/disease_growth_analysis.csv
+- C:/Users/26822/AppData/Local/Temp/pytest-of-26822/pytest-30/test_analyze_disease_growth_ga0/disease_growth_analysis.csv
 - outputs/disease_growth_analysis_report.md
 - outputs/disease_growth_analysis_summary.md
 

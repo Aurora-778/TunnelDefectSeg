@@ -117,6 +117,12 @@ def build_algorithm_events(project_root: Path = Path("."), video_id: str = "tunn
     engineering_report = artifact_ref(project_root, "Engineering disease report", "data/simulated/disease_engineering_report.csv", "csv")
     memory_bank = artifact_ref(project_root, "Disease Memory Bank", "data/simulated/disease_memory_bank.csv", "csv")
     association_records = artifact_ref(project_root, "no-id Association records", "data/simulated/disease_association_records.csv", "csv")
+    association_manifest = artifact_ref(
+        project_root,
+        "History-only association manifest",
+        "data/simulated/main_progressive/association_manifest.json",
+        "json",
+    )
     growth_results = artifact_ref(project_root, "Rule-based Growth Analysis", "data/simulated/disease_growth_results.csv", "csv")
     recheck_list = artifact_ref(project_root, "Priority recheck list", "data/simulated/priority_recheck_list.csv", "csv")
     final_report = artifact_ref(project_root, "Final project report", "outputs/final_project_report.md", "markdown")
@@ -184,7 +190,7 @@ def build_algorithm_events(project_root: Path = Path("."), video_id: str = "tunn
         "association": (
             "no-id Association",
             "For each query inspection, rebuild candidates from earlier inspections before scoring the query records.",
-            [robot_records],
+            [robot_records, association_manifest],
             [association_records],
             "disease_id is retained only as a label; main no-id matching uses history-only memory and non-ID scores.",
         ),
@@ -232,7 +238,7 @@ def build_algorithm_events(project_root: Path = Path("."), video_id: str = "tunn
             "video_demo",
             "Demo video visualization",
             "Show the synthesized KICT demo video, extracted video disease features, and annotated videos.",
-            [kict_features],
+            [],
             [demo_video, video_features, annotated_video, supervision_video],
             "tunnel_demo.mp4 is synthesized from KICT static images and masks; it is not real robot continuous inspection video.",
             optional=True,

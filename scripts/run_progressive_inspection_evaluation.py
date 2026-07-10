@@ -84,6 +84,24 @@ def read_csv(path: Path, *, require_inspection_id: bool = False) -> list[dict[st
     return rows
 
 
+def validate_unique_frame_records(rows: list[dict[str, str]]) -> None:
+    """Reject duplicate query identities before any evaluation artifact is written."""
+
+    seen: set[tuple[str, str, str, str]] = set()
+    for row in rows:
+        key = (
+            row.get("inspection_id", ""),
+            row.get("frame_id", ""),
+            row.get("image_id", ""),
+            row.get("disease_id", ""),
+        )
+        if not all(key):
+            raise ValueError("input CSV requires inspection_id, frame_id, image_id, and disease_id")
+        if key in seen:
+            raise ValueError(f"duplicate frame composite key: {key}")
+        seen.add(key)
+
+
 def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str] | None = None) -> None:
     if not rows and not fieldnames:
         raise ValueError(f"Refusing to write empty CSV without schema: {path}")
@@ -417,6 +435,7 @@ def run_progressive(
     prepare_outputs(output_dir, no_id_csv, with_id_csv, report_path)
 
     rows = read_csv(input_csv, require_inspection_id=True)
+    validate_unique_frame_records(rows)
     inspections = sorted({row["inspection_id"] for row in rows}, key=inspection_key)
 
     all_no_id_records: list[dict[str, str]] = []
