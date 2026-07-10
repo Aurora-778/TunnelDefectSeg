@@ -128,7 +128,18 @@ def test_generate_engineering_report_fails_on_missing_required_column(tmp_path):
     write_csv(input_csv, [row])
 
     result = subprocess.run(
-        [sys.executable, "scripts/generate_engineering_report.py", "--input-csv", str(input_csv)],
+        [
+            sys.executable,
+            "scripts/generate_engineering_report.py",
+            "--input-csv",
+            str(input_csv),
+            "--output-csv",
+            str(tmp_path / "output.csv"),
+            "--markdown-report",
+            str(tmp_path / "report.md"),
+            "--summary-report",
+            str(tmp_path / "summary.md"),
+        ],
         capture_output=True,
         text=True,
     )

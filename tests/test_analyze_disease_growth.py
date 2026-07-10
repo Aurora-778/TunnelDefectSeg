@@ -130,6 +130,8 @@ def test_analyze_disease_growth_outputs_trends_and_attention(tmp_path):
 def test_analyze_disease_growth_gates_cyclic_static_masks(tmp_path):
     input_csv = tmp_path / "disease_engineering_report.csv"
     output_csv = tmp_path / "disease_growth_analysis.csv"
+    markdown_report = tmp_path / "disease_growth_analysis_report.md"
+    summary_report = tmp_path / "disease_growth_analysis_summary.md"
     write_csv(
         input_csv,
         [
@@ -156,6 +158,10 @@ def test_analyze_disease_growth_gates_cyclic_static_masks(tmp_path):
             str(input_csv),
             "--output-csv",
             str(output_csv),
+            "--markdown-report",
+            str(markdown_report),
+            "--summary-report",
+            str(summary_report),
         ],
         check=True,
     )
@@ -165,6 +171,9 @@ def test_analyze_disease_growth_gates_cyclic_static_masks(tmp_path):
     assert row["claim_level"] == "rule_evidence_only"
     assert row["measurement_basis"] == "static_mask_area_descriptive_only"
     assert "增长" not in row["growth_description"]
+    report = markdown_report.read_text(encoding="utf-8")
+    assert "增长率" not in report
+    assert "不具备纵向比较条件" in report
 
 
 def test_analyze_disease_growth_fails_on_missing_required_column(tmp_path):
@@ -174,7 +183,18 @@ def test_analyze_disease_growth_fails_on_missing_required_column(tmp_path):
     write_csv(input_csv, [row])
 
     result = subprocess.run(
-        [sys.executable, "scripts/analyze_disease_growth.py", "--input-csv", str(input_csv)],
+        [
+            sys.executable,
+            "scripts/analyze_disease_growth.py",
+            "--input-csv",
+            str(input_csv),
+            "--output-csv",
+            str(tmp_path / "output.csv"),
+            "--markdown-report",
+            str(tmp_path / "report.md"),
+            "--summary-report",
+            str(tmp_path / "summary.md"),
+        ],
         capture_output=True,
         text=True,
     )

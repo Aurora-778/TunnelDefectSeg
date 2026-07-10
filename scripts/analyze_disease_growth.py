@@ -322,7 +322,7 @@ def write_markdown_report(
     attention_counts = Counter(record["attention_level"] for record in records)
     inspection_ids = {row["inspection_id"] for row in input_rows}
     lines = [
-        "# 机器人隧道巡检病害增长变化分析报告",
+        "# 机器人隧道巡检病害面积审计与可比性报告",
         "",
         f"数据来源：`{input_csv.as_posix()}`",
         "",
@@ -345,14 +345,19 @@ def write_markdown_report(
         lines.extend([f"## {level}病害", ""])
         for record in records_by_attention.get(level, []):
             type_name = disease_type_zh(record["disease_type"])
-            lines.extend(
+            detail_lines = [
+                f"### {record['disease_id']} - {type_name}",
+                "",
+                f"- 首次巡检：{record['first_inspection']}",
+                f"- 末次巡检：{record['last_inspection']}",
+                f"- 面积变化：{record['first_area_px']} px² -> {record['last_area_px']} px²",
+            ]
+            if record["comparability_status"] == "verified_comparable":
+                detail_lines.append(f"- 增长率：{percent_text(record['area_growth_rate'])}")
+            else:
+                detail_lines.append("- 可比性说明：当前记录不具备纵向比较条件；面积差仅作静态描述性审计。")
+            detail_lines.extend(
                 [
-                    f"### {record['disease_id']} - {type_name}",
-                    "",
-                    f"- 首次巡检：{record['first_inspection']}",
-                    f"- 末次巡检：{record['last_inspection']}",
-                    f"- 面积变化：{record['first_area_px']} px² -> {record['last_area_px']} px²",
-                    f"- 增长率：{percent_text(record['area_growth_rate'])}",
                     f"- 风险变化：{record['first_risk_level']} -> {record['last_risk_level']}",
                     f"- 趋势判断：{record['growth_trend']}",
                     f"- 关注等级：{record['attention_level']}",
@@ -366,6 +371,7 @@ def write_markdown_report(
                     "",
                 ]
             )
+            lines.extend(detail_lines)
     report_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -386,7 +392,7 @@ def write_summary_report(
     attention_lines = "\n".join(f"- {name}: {count}" for name, count in sorted(attention_counts.items()))
     risk_change_lines = "\n".join(f"- {name}: {count}" for name, count in sorted(risk_change_counts.items()))
 
-    content = f"""# 病害增长变化分析摘要
+    content = f"""# 病害面积审计与可比性摘要
 
 ## 输入文件
 
@@ -404,7 +410,7 @@ def write_summary_report(
 - 输出病害数量: {len(records)}
 - 巡检次数: {len(inspection_ids)}
 
-## 增长趋势分布
+## 可比性与规则状态分布
 
 {trend_lines}
 
@@ -418,7 +424,7 @@ def write_summary_report(
 
 ## 说明
 
-本阶段基于 disease_engineering_report.csv，对同一 disease_id 在多次巡检中的面积、可见帧数和风险等级进行规则比较，生成工程复检提示。该结果不等同于真实结构安全结论，后续应接入真实连续巡检数据和人工复核。
+本阶段基于 disease_engineering_report.csv，对同一 disease_id 在多次巡检中的面积、可见帧数和风险等级进行规则比较，生成工程复检提示。对不可纵向比较记录，面积数值仅作描述性审计，不构成变化方向判断。该结果不等同于真实结构安全结论，后续应接入真实连续巡检数据和人工复核。
 """
     summary_report.write_text(content, encoding="utf-8")
 

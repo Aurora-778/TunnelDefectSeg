@@ -102,7 +102,7 @@ python orchestrator/run.py --dag config/dag.yaml
 ```text
 engineering rows: 30
 memory rows: 10
-association rows: 30
+association rows: 20
 growth rows: 10
 recheck rows: 10
 visual artifacts: 7
@@ -124,7 +124,9 @@ robot_kict_frame_records.csv
 
 ## 渐进式关联评估
 
-用于检查 temporal leakage 和 Association 规则是否比简单 baseline 更有价值：
+I001 只建立 baseline，因此当前 history-only demo 的主 Association 输出为 `20` 行，而不是旧版本的 `30` 行。
+
+用于检查 temporal leakage；更困难的统一对照评测见下一节：
 
 ```bash
 python scripts/run_progressive_inspection_evaluation.py
@@ -135,7 +137,15 @@ python scripts/run_progressive_inspection_evaluation.py
 - `data/simulated/progressive/progressive_evaluation_manifest.json`
 - `outputs/association_evaluation_report.md`
 
-说明：该评估中 `disease_id` 只作为评估标签，匹配打分会禁用 `disease_id` 得分。
+说明：该评估中 `disease_id` 只作为评估标签，匹配打分会禁用 `disease_id` 得分。with-id 仅用于 upper-bound / sanity check，不是简单 baseline，也不代表可部署策略。
+
+## Association Benchmark
+
+```bash
+python scripts/run_association_benchmark.py
+```
+
+该 benchmark 使用独立的困难 fixture，对比 `nearest_mileage`、`area_only`、`spatial_only`、生产 `weighted_no_id` 和 `with_id_upper_bound`。结果只说明该固定评测集上的规则表现及拒识/人工复核边界，不证明真实连续巡检准确率。
 
 ## Demo 视频来源说明
 

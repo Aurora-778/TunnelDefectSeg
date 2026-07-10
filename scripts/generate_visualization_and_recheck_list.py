@@ -4,16 +4,18 @@ import argparse
 import csv
 import math
 import os
-import warnings
 from collections import Counter
 from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
-warnings.filterwarnings("ignore", message="Glyph .* missing from font")
-from matplotlib import font_manager
 from matplotlib import pyplot as plt
+
+try:  # Direct ``python scripts/...`` execution has scripts/ on sys.path.
+    from scripts.plotting_fonts import configure_chinese_font
+except ModuleNotFoundError:  # pragma: no cover - exercised by CLI subprocesses.
+    from plotting_fonts import configure_chinese_font
 
 
 DEFAULT_GROWTH_CSV = Path("data/simulated/disease_growth_analysis.csv")
@@ -121,6 +123,34 @@ CHART_TITLES = {
     "mileage_risk_distribution.png": "里程段风险统计图",
 }
 
+_CHINESE_FONT_AVAILABLE = True
+_FALLBACK_TEXT = {
+    "关注等级分布": "Attention level distribution",
+    "关注等级": "Attention level",
+    "病害数量": "Defect count",
+    "跨巡检可比性状态分布": "Cross-inspection comparability",
+    "状态": "Status",
+    "风险等级变化分布": "Risk level change distribution",
+    "风险等级变化值": "Risk level change",
+    "可比跨巡检面积审计 Top 10": "Comparable area audit Top 10",
+    "病害类型分布": "Defect type distribution",
+    "病害类型": "Defect type",
+    "里程段风险统计": "Mileage-section risk summary",
+    "里程段": "Mileage section",
+    "风险记录数": "Risk records",
+    "重点复检数": "Priority rechecks",
+    "明显增长": "Marked increase",
+    "轻微增长": "Slight increase",
+    "基本稳定": "Stable",
+    "面积减小": "Area decrease",
+    "不可比较": "Not comparable",
+    "数据不足": "Insufficient history",
+    "重点关注": "Priority attention",
+    "持续观察": "Monitor",
+    "常规记录": "Routine record",
+    "待补充巡检": "Needs follow-up",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate disease growth visualizations and priority recheck list.")
@@ -135,15 +165,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def configure_matplotlib_font() -> str:
-    candidates = ["SimHei", "Microsoft YaHei", "Microsoft JhengHei", "Noto Sans CJK SC", "Arial Unicode MS"]
-    installed = {font.name for font in font_manager.fontManager.ttflist}
-    for font_name in candidates:
-        if font_name in installed:
-            plt.rcParams["font.sans-serif"] = [font_name]
-            plt.rcParams["axes.unicode_minus"] = False
-            return f"已使用中文字体：{font_name}"
-    plt.rcParams["axes.unicode_minus"] = False
-    return "未检测到 SimHei 等中文字体，图表仍已生成，但部分中文可能显示为方框。"
+    global _CHINESE_FONT_AVAILABLE
+    _CHINESE_FONT_AVAILABLE, note = configure_chinese_font(plt)
+    return note
 
 
 def read_growth_csv(path: Path) -> list[dict[str, str]]:
@@ -200,6 +224,11 @@ def ensure_output_dir(path: Path) -> None:
 
 
 def save_bar_chart(labels: list[str], values: list[int | float], title: str, xlabel: str, ylabel: str, output: Path) -> Path:
+    if not _CHINESE_FONT_AVAILABLE:
+        labels = [_FALLBACK_TEXT.get(label, "Item") for label in labels]
+        title = _FALLBACK_TEXT.get(title, "Tunnel defect summary")
+        xlabel = _FALLBACK_TEXT.get(xlabel, "Category")
+        ylabel = _FALLBACK_TEXT.get(ylabel, "Count")
     fig_width = max(7, len(labels) * 1.1)
     dpi = 90 if os.environ.get("FAST_TEST_MODE") == "1" else 150
     fig, ax = plt.subplots(figsize=(fig_width, 4.8), dpi=dpi)
@@ -218,6 +247,12 @@ def save_bar_chart(labels: list[str], values: list[int | float], title: str, xla
     finally:
         plt.close(fig)
     return output
+
+
+def display_text(value: str) -> str:
+    """Use ASCII labels only when no installed font can render Chinese safely."""
+
+    return value if _CHINESE_FONT_AVAILABLE else _FALLBACK_TEXT.get(value, "Item")
 
 
 def ordered_counts(values: list[str], order: list[str]) -> tuple[list[str], list[int]]:
@@ -330,19 +365,19 @@ def generate_mileage_visualization(mileage_rows: list[dict[str, int | str]], out
         [x - width / 2 for x in x_positions],
         [int(row["disease_count"]) for row in mileage_rows],
         width=width,
-        label="病害总数",
+        label=display_text("病害总数"),
         color="#2563eb",
     )
     bars_priority = ax.bar(
         [x + width / 2 for x in x_positions],
         [int(row["priority_count"]) for row in mileage_rows],
         width=width,
-        label="重点关注数",
+        label=display_text("重点复检数"),
         color="#f97316",
     )
-    ax.set_title("里程段风险统计")
-    ax.set_xlabel("里程段")
-    ax.set_ylabel("病害数量")
+    ax.set_title(display_text("里程段风险统计"))
+    ax.set_xlabel(display_text("里程段"))
+    ax.set_ylabel(display_text("病害数量"))
     ax.set_xticks(list(x_positions))
     ax.set_xticklabels(labels, rotation=30, ha="right")
     ax.grid(axis="y", linestyle="--", alpha=0.28)

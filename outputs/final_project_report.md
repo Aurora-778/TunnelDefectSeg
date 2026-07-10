@@ -48,7 +48,7 @@ Progressive evaluation (no-id vs with-id) has been run. See `outputs/association
 
 - 面向机器人巡检的病害对象级建模。
 - Disease Memory Bank 批处理记忆表，并提供时间递进评估使用的增量更新路径。
-- 基于空间、面积、时间和风险的 no-id 规则关联评分，配套 baseline/ablation 报告说明收益和失败点；with-id 只作为 progressive evaluation 的 upper-bound / sanity check。
+- 基于空间、面积、时间和风险的 no-id 规则关联评分。困难 fixture 的统一对照结果由独立 Association benchmark 记录；with-id 只作为 progressive evaluation 的 upper-bound / sanity check，不能替代 no-id 结论。
 - DAG 多阶段工程闭环。
 - 可视化报告和重点复检清单。
 

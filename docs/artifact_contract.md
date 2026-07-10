@@ -289,7 +289,8 @@ Consumer：Web Dashboard, final report
 | `outputs/key_insights.md` | `run.py --mode full_pipeline` | 老师快速阅读 |
 | `outputs/visualizations/*.png` | `scripts/generate_visualization_and_recheck_list.py` | Web Dashboard / 报告 |
 | `outputs/visualizations/association_relationship_graph.png` | `run.py --mode full_pipeline` | 关联关系展示 |
-| `outputs/association_evaluation_report.md` | `scripts/run_progressive_inspection_evaluation.py` | Association baseline / ablation 评估 |
+| `outputs/association_evaluation_report.md` | `scripts/run_progressive_inspection_evaluation.py` | history-only progressive no-id / with-id upper-bound 评估 |
+| `outputs/association_benchmark/*` | `scripts/run_association_benchmark.py` | 独立困难 fixture 上的统一 Association 对照评测 |
 
 ### progressive_evaluation_manifest.json
 
@@ -303,7 +304,8 @@ Producer：`scripts/run_progressive_inspection_evaluation.py`
 - 顶层 `source_dataset` 记录完整源表路径。
 - 每轮 `allowed_inputs` 只记录该轮允许读取的 history / query / memory artifacts，不能包含 `source_dataset`。
 - 每轮必须记录 `association_records`、`no_id_association_records`、`with_id_association_records`、`memory_before`、`memory_after`。
-- 记录 same disease_id、nearest mileage、area only、weighted score no id 的 baseline / ablation 指标。
+- `progressive_evaluation_manifest.json` 不承担简单 baseline 对比；它只记录 history-only no-id 与 with-id upper-bound。
+- `outputs/association_benchmark/` 才记录 nearest-mileage、area-only、spatial-only、weighted no-id 和 with-id upper-bound 的统一指标。
 
 可信性说明：
 
