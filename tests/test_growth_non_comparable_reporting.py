@@ -1,4 +1,5 @@
 from scripts.analyze_disease_growth import aggregate_rows, write_markdown_report
+from scripts.generate_visualization_and_recheck_list import write_summary_report as write_visualization_summary
 
 
 def _row(inspection_id: str, area: str) -> dict[str, str]:
@@ -22,3 +23,24 @@ def test_noncomparable_markdown_uses_static_audit_not_growth_rate(tmp_path):
     assert "增长率" not in text
     assert "不具备纵向比较条件" in text
     assert "静态描述性审计" in text
+
+
+def test_noncomparable_visualization_summary_uses_audit_wording(tmp_path):
+    records = aggregate_rows([_row("I001", "100"), _row("I002", "200")])
+    summary = tmp_path / "visualization_summary.md"
+    write_visualization_summary(
+        tmp_path / "growth.csv",
+        tmp_path / "engineering.csv",
+        tmp_path / "recheck.csv",
+        [],
+        tmp_path / "visualization_report.md",
+        tmp_path / "recheck_report.md",
+        summary,
+        records,
+        [],
+    )
+
+    text = summary.read_text(encoding="utf-8")
+    assert "病害增长结果" not in text
+    assert "增长趋势分布" not in text
+    assert "面积审计与可比性状态" in text

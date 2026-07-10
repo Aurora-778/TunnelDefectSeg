@@ -9,8 +9,8 @@ C07,I002,Q07,nearest_mileage,spatial_near_area_far,manual_review,MEM-A,match,MEM
 C08,I002,Q08,nearest_mileage,new_defect,reject,,reject,,false,true,0.0000,0.0000,0.0000,true,3,below production no-id acceptance threshold
 C09,I002,Q09,nearest_mileage,historical_not_observed,match,MEM-B,match,MEM-B,true,true,1.0000,0.0000,1.0000,false,2,
 C10,I002,Q10,nearest_mileage,one_query_many_candidates,manual_review,MEM-C,manual_review,MEM-C,true,true,1.0000,0.8833,0.1167,true,3,ambiguous baseline candidate
-C11,I002,Q11,nearest_mileage,competing_current_records,match,MEM-B,match,MEM-B,true,true,1.0000,0.1333,0.8667,false,2,
-C12,I002,Q12,nearest_mileage,competing_current_records,manual_review,MEM-B,match,MEM-B,true,false,0.9667,0.1000,0.8667,false,2,
+C11,I002,Q11,nearest_mileage,independent_same_memory_queries,match,MEM-B,match,MEM-B,true,true,1.0000,0.1333,0.8667,false,2,
+C12,I002,Q12,nearest_mileage,independent_same_memory_queries,manual_review,MEM-B,match,MEM-B,true,false,0.9667,0.1000,0.8667,false,2,
 C13,I002,Q13,nearest_mileage,partial_fields,manual_review,MEM-A,reject,,false,false,0.5000,0.5000,0.0000,true,2,below production no-id acceptance threshold
 C14,I002,Q14,nearest_mileage,risk_change,match,MEM-A,match,MEM-A,true,true,1.0000,0.0000,1.0000,false,2,
 C15,I002,Q15,nearest_mileage,future_candidate,match,MEM-A,match,MEM-A,true,true,0.9667,0.0000,1.0000,false,1,
@@ -27,8 +27,8 @@ C07,I002,Q07,area_only,spatial_near_area_far,manual_review,MEM-A,match,MEM-E,fal
 C08,I002,Q08,area_only,new_defect,reject,,match,MEM-B,false,false,0.6000,0.2625,0.3375,false,3,false match
 C09,I002,Q09,area_only,historical_not_observed,match,MEM-B,match,MEM-B,true,true,1.0000,0.4167,0.5833,false,2,
 C10,I002,Q10,area_only,one_query_many_candidates,manual_review,MEM-C,manual_review,MEM-C,true,true,1.0000,0.9524,0.0476,true,3,ambiguous baseline candidate
-C11,I002,Q11,area_only,competing_current_records,match,MEM-B,match,MEM-B,true,true,0.9796,0.4286,0.5510,false,2,
-C12,I002,Q12,area_only,competing_current_records,manual_review,MEM-B,match,MEM-B,true,false,0.9600,0.4200,0.5400,false,2,
+C11,I002,Q11,area_only,independent_same_memory_queries,match,MEM-B,match,MEM-B,true,true,0.9796,0.4286,0.5510,false,2,
+C12,I002,Q12,area_only,independent_same_memory_queries,manual_review,MEM-B,match,MEM-B,true,false,0.9600,0.4200,0.5400,false,2,
 C13,I002,Q13,area_only,partial_fields,manual_review,MEM-A,manual_review,MEM-A,true,true,1.0000,0.9524,0.0476,true,2,ambiguous baseline candidate
 C14,I002,Q14,area_only,risk_change,match,MEM-A,manual_review,MEM-A,true,false,0.6897,0.6042,0.0855,true,2,ambiguous baseline candidate
 C15,I002,Q15,area_only,future_candidate,match,MEM-A,match,MEM-A,true,true,1.0000,0.0000,1.0000,false,1,
@@ -45,8 +45,8 @@ C07,I002,Q07,spatial_only,spatial_near_area_far,manual_review,MEM-A,match,MEM-A,
 C08,I002,Q08,spatial_only,new_defect,reject,,reject,,false,true,0.1000,0.1000,0.0000,true,3,below production no-id acceptance threshold
 C09,I002,Q09,spatial_only,historical_not_observed,match,MEM-B,match,MEM-B,true,true,1.0000,0.1000,0.9000,false,2,
 C10,I002,Q10,spatial_only,one_query_many_candidates,manual_review,MEM-C,manual_review,MEM-C,true,true,1.0000,0.9125,0.0875,true,3,ambiguous baseline candidate
-C11,I002,Q11,spatial_only,competing_current_records,match,MEM-B,match,MEM-B,true,true,1.0000,0.2000,0.8000,false,2,
-C12,I002,Q12,spatial_only,competing_current_records,manual_review,MEM-B,match,MEM-B,true,false,0.8250,0.1750,0.6500,false,2,
+C11,I002,Q11,spatial_only,independent_same_memory_queries,match,MEM-B,match,MEM-B,true,true,1.0000,0.2000,0.8000,false,2,
+C12,I002,Q12,spatial_only,independent_same_memory_queries,manual_review,MEM-B,match,MEM-B,true,false,0.8250,0.1750,0.6500,false,2,
 C13,I002,Q13,spatial_only,partial_fields,manual_review,MEM-A,manual_review,MEM-A,true,true,0.6250,0.6250,0.0000,true,2,ambiguous baseline candidate
 C14,I002,Q14,spatial_only,risk_change,match,MEM-A,match,MEM-A,true,true,1.0000,0.1000,0.9000,false,2,
 C15,I002,Q15,spatial_only,future_candidate,match,MEM-A,match,MEM-A,true,true,0.9750,0.0000,1.0000,false,1,
@@ -63,8 +63,8 @@ C07,I002,Q07,weighted_no_id,spatial_near_area_far,manual_review,MEM-A,manual_rev
 C08,I002,Q08,weighted_no_id,new_defect,reject,,reject,,false,true,0.4510,0.2635,0.1875,true,3,spatial mismatch
 C09,I002,Q09,weighted_no_id,historical_not_observed,match,MEM-B,match,MEM-B,true,true,0.9216,0.3971,0.5245,false,2,
 C10,I002,Q10,weighted_no_id,one_query_many_candidates,manual_review,MEM-C,manual_review,MEM-C,true,true,0.9216,0.8818,0.0397,true,3,production review policy
-C11,I002,Q11,weighted_no_id,competing_current_records,match,MEM-B,match,MEM-B,true,true,0.9156,0.4300,0.4856,false,2,
-C12,I002,Q12,weighted_no_id,competing_current_records,manual_review,MEM-B,match,MEM-B,true,false,0.8583,0.4201,0.4382,false,2,
+C11,I002,Q11,weighted_no_id,independent_same_memory_queries,match,MEM-B,match,MEM-B,true,true,0.9156,0.4300,0.4856,false,2,
+C12,I002,Q12,weighted_no_id,independent_same_memory_queries,manual_review,MEM-B,match,MEM-B,true,false,0.8583,0.4201,0.4382,false,2,
 C13,I002,Q13,weighted_no_id,partial_fields,manual_review,MEM-A,manual_review,MEM-A,true,true,0.8113,0.7973,0.0140,true,2,production review policy
 C14,I002,Q14,weighted_no_id,risk_change,match,MEM-A,match,MEM-A,true,true,0.8303,0.4522,0.3781,false,2,
 C15,I002,Q15,weighted_no_id,future_candidate,match,MEM-A,match,MEM-A,true,true,0.9142,0.0000,1.0000,false,1,
@@ -81,8 +81,8 @@ C07,I002,Q07,with_id_upper_bound,spatial_near_area_far,manual_review,MEM-A,manua
 C08,I002,Q08,with_id_upper_bound,new_defect,reject,,reject,,false,true,0.3833,0.2240,0.1594,true,3,spatial mismatch
 C09,I002,Q09,with_id_upper_bound,historical_not_observed,match,MEM-B,match,MEM-B,true,true,0.9333,0.3375,0.5958,false,2,
 C10,I002,Q10,with_id_upper_bound,one_query_many_candidates,manual_review,MEM-C,match,MEM-C,true,false,0.9333,0.7496,0.1838,false,3,
-C11,I002,Q11,with_id_upper_bound,competing_current_records,match,MEM-B,match,MEM-B,true,true,0.9282,0.3655,0.5628,false,2,
-C12,I002,Q12,with_id_upper_bound,competing_current_records,manual_review,MEM-B,match,MEM-B,true,false,0.8796,0.3571,0.5225,false,2,
+C11,I002,Q11,with_id_upper_bound,independent_same_memory_queries,match,MEM-B,match,MEM-B,true,true,0.9282,0.3655,0.5628,false,2,
+C12,I002,Q12,with_id_upper_bound,independent_same_memory_queries,manual_review,MEM-B,match,MEM-B,true,false,0.8796,0.3571,0.5225,false,2,
 C13,I002,Q13,with_id_upper_bound,partial_fields,manual_review,MEM-A,match,MEM-A,true,false,0.8396,0.6777,0.1619,false,2,
 C14,I002,Q14,with_id_upper_bound,risk_change,match,MEM-A,match,MEM-A,true,true,0.8557,0.3844,0.4714,false,2,
 C15,I002,Q15,with_id_upper_bound,future_candidate,match,MEM-A,match,MEM-A,true,true,0.9271,0.0000,1.0000,false,1,

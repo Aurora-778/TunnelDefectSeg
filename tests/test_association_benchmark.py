@@ -8,9 +8,15 @@ from evaluation.association_benchmark import (
     SUMMARY_FIELDS,
     evaluate_strategy,
     load_fixture,
+    summarize,
     write_benchmark_outputs,
 )
-from orchestrator.agents.association_agent import AssociationAgent
+from orchestrator.agents.association_agent import (
+    AssociationAgent,
+    NO_ID_MARGIN_THRESHOLD,
+    NO_ID_MATCH_THRESHOLD,
+    NO_ID_SOFT_THRESHOLD,
+)
 
 
 FIXTURE = Path("tests/fixtures/association_benchmark/benchmark_fixture.json")
@@ -52,7 +58,22 @@ def test_benchmark_outputs_are_complete_and_repeatable(tmp_path):
     assert first_summary == second["summary"].read_text(encoding="utf-8")
     assert first["summary"].read_text(encoding="utf-8-sig").splitlines()[0].split(",") == SUMMARY_FIELDS
     assert first["cases"].read_text(encoding="utf-8-sig").splitlines()[0].split(",") == CASE_FIELDS
-    assert "with_id_upper_bound" in first["report"].read_text(encoding="utf-8")
+    report = first["report"].read_text(encoding="utf-8")
+    assert "with_id_upper_bound" in report
+    assert "未优于 spatial_only" in report
+    assert "不执行 one-to-one 分配" in report
+
+
+def test_conflict_metric_excludes_rejections_and_uses_shared_thresholds():
+    rows = [
+        {"strategy": "weighted_no_id", "expected_memory_id": "", "predicted_action": "reject", "is_top1_correct": "false", "selected_score": "0.1", "score_margin": "0.0", "candidate_count": "2", "expected_action": "reject"},
+        {"strategy": "weighted_no_id", "expected_memory_id": "MEM-A", "predicted_action": "manual_review", "is_top1_correct": "true", "selected_score": "0.8", "score_margin": f"{NO_ID_MARGIN_THRESHOLD / 2}", "candidate_count": "2", "expected_action": "manual_review"},
+    ]
+
+    summary = summarize(rows)
+
+    assert summary["conflict_count"] == "1"
+    assert NO_ID_MATCH_THRESHOLD < NO_ID_SOFT_THRESHOLD
 
 
 def test_benchmark_cli_refuses_existing_outputs_without_overwrite(tmp_path):

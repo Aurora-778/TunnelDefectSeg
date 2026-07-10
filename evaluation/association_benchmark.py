@@ -14,7 +14,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from orchestrator.agents.association_agent import AssociationAgent
+from orchestrator.agents.association_agent import (
+    AssociationAgent,
+    NO_ID_MARGIN_THRESHOLD,
+    NO_ID_MATCH_THRESHOLD,
+    NO_ID_SOFT_THRESHOLD,
+    WITH_ID_MARGIN_THRESHOLD,
+)
 
 
 ALLOWED_ACTIONS = {"match", "reject", "manual_review"}
@@ -101,12 +107,9 @@ def _decision_from_scores(agent: AssociationAgent, scored: list[tuple[dict[str, 
     memory, selected = scored[0]
     second = scored[1][1] if len(scored) > 1 else 0.0
     margin = selected - second if len(scored) > 1 else 1.0
-    threshold = 0.45 / 0.85
-    soft_threshold = 0.5 / 0.85
-    margin_threshold = 0.15 / 0.85
-    if selected < threshold:
+    if selected < NO_ID_MATCH_THRESHOLD:
         return "reject", {}, selected, second, margin, True, "below production no-id acceptance threshold"
-    if selected < soft_threshold or margin < margin_threshold:
+    if selected < NO_ID_SOFT_THRESHOLD or margin < NO_ID_MARGIN_THRESHOLD:
         return "manual_review", memory, selected, second, margin, True, "ambiguous baseline candidate"
     return "match", memory, selected, second, margin, False, ""
 
@@ -186,7 +189,7 @@ def summarize(results: list[dict[str, str]]) -> dict[str, str]:
     accepted = [row for row in results if row["predicted_action"] == "match"]
     rejected = [row for row in results if row["predicted_action"] == "reject"]
     reviewed = [row for row in results if row["predicted_action"] == "manual_review"]
-    conflicts = [row for row in results if float(row["score_margin"]) < 0.15 / 0.85]
+    conflicts = [row for row in results if _is_candidate_conflict(row)]
     top1_correct = sum(row["is_top1_correct"] == "true" for row in evaluable)
     accepted_correct = sum(row["is_top1_correct"] == "true" for row in accepted)
     false_match = sum(row["predicted_action"] == "match" and row["is_top1_correct"] != "true" for row in results)
@@ -212,6 +215,15 @@ def summarize(results: list[dict[str, str]]) -> dict[str, str]:
     }
 
 
+def _is_candidate_conflict(row: dict[str, str]) -> bool:
+    """Count only accepted/reviewed multi-candidate ambiguity, never low-score rejection."""
+
+    if row["predicted_action"] == "reject" or int(row["candidate_count"]) < 2:
+        return False
+    threshold = WITH_ID_MARGIN_THRESHOLD if row["strategy"] == "with_id_upper_bound" else NO_ID_MARGIN_THRESHOLD
+    return float(row["score_margin"]) < threshold
+
+
 def _write_csv(path: Path, rows: list[dict[str, str]], fields: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -235,6 +247,7 @@ def write_benchmark_outputs(fixture: dict[str, Any], output_dir: Path) -> dict[s
     action_counts = Counter(case["expected_action"] for case in fixture["cases"])
     weighted = next(row for row in summary if row["strategy"] == "weighted_no_id")
     nearest = next(row for row in summary if row["strategy"] == "nearest_mileage")
+    spatial = next(row for row in summary if row["strategy"] == "spatial_only")
     comparison = "优于 nearest_mileage" if float(weighted["top1_accuracy"]) > float(nearest["top1_accuracy"]) else "未优于 nearest_mileage"
     lines = [
         "# Association Benchmark Report", "",
@@ -246,7 +259,7 @@ def write_benchmark_outputs(fixture: dict[str, Any], output_dir: Path) -> dict[s
         "## 场景", "",
         f"- 案例数：{len(fixture['cases'])}",
         f"- Ground Truth action：match {action_counts['match']}，reject {action_counts['reject']}，manual_review {action_counts['manual_review']}",
-        "- 覆盖：里程/方位漂移、相似候选、面积与空间冲突、新病害、字段缺失、风险变化、时间异常及未来候选过滤。", "",
+        "- 覆盖：里程/方位漂移、相似候选、面积与空间冲突、新病害、字段缺失、风险变化及未来候选过滤。", "",
         "## 统一指标", "",
         "| strategy | top1_accuracy | accepted_accuracy | rejection_rate | manual_review_rate | conflict_rate | false_match | false_reject | mean_margin |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -258,8 +271,11 @@ def write_benchmark_outputs(fixture: dict[str, Any], output_dir: Path) -> dict[s
     lines.extend([
         "", "## 真实结论", "",
         f"- weighted_no_id 相对 nearest_mileage：{comparison}（以本 fixture 的 top-1 accuracy 为准）。",
+        f"- weighted_no_id 相对 spatial_only：{'未优于' if float(weighted['top1_accuracy']) <= float(spatial['top1_accuracy']) else '优于'} spatial_only（{weighted['top1_accuracy']} vs {spatial['top1_accuracy']}）。",
         "- 自动接受、拒识和人工复核均由同一逐案例结果表统计；错误接受和错误拒识不会被隐藏。",
         "- 当前 benchmark 不能证明真实机器人连续巡检中的长期泛化能力，也不能替代带跨巡检 GT 的现场验证。", "",
+        "## 重复命中边界", "",
+        "C11/C12 是两个独立逐帧 query 对同一历史对象的重复命中案例；本 benchmark 不执行 one-to-one 分配，也不声称解决 query 间唯一匹配问题。", "",
         "## 自动接受案例", "",
         "逐案例结果中 `predicted_action=match` 的记录可见于 `association_benchmark_cases.csv`。", "",
         "## 拒绝案例", "",

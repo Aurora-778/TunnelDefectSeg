@@ -33,7 +33,7 @@
 - 常规记录: 0
 - 待补充巡检: 0
 
-## 增长趋势分布
+## 面积审计与可比性状态分布
 
 - 明显增长: 0
 - 轻微增长: 0
@@ -44,4 +44,4 @@
 
 ## 说明
 
-本阶段基于 disease_growth_analysis.csv 和 disease_engineering_report.csv，生成了病害增长结果可视化图表、里程段风险统计和重点复检清单。该结果可用于项目展示、工程汇报和后续 dashboard 或 Word/PDF 报告导出。
+本阶段基于 disease_growth_analysis.csv 和 disease_engineering_report.csv，生成了静态面积审计、可比性状态、里程段风险统计和重点复检清单。不可纵向比较记录不构成病害增长或方向性变化结论。

@@ -9,7 +9,7 @@
     "with_id_upper_bound"
   ],
   "source_fixture": "tests/fixtures/association_benchmark/benchmark_fixture.json",
-  "generated_at": "2026-07-10T15:23:08+00:00",
+  "generated_at": "2026-07-10T23:46:11+00:00",
   "outputs": [
     "association_benchmark_summary.csv",
     "association_benchmark_cases.csv",

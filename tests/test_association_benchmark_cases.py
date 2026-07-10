@@ -12,7 +12,16 @@ def test_fixture_has_match_reject_and_manual_review_cases():
     case_types = {case["case_type"] for case in fixture["cases"]}
 
     assert actions == {"match", "reject", "manual_review"}
-    assert {"similar_candidates", "future_candidate", "partial_fields", "competing_current_records"} <= case_types
+    assert {"similar_candidates", "future_candidate", "partial_fields", "independent_same_memory_queries"} <= case_types
+
+
+def test_same_memory_cases_are_explicitly_independent_not_one_to_one_assignment():
+    fixture = load_fixture(FIXTURE)
+    cases = [case for case in fixture["cases"] if case["case_id"] in {"C11", "C12"}]
+
+    assert len(cases) == 2
+    assert {case["case_type"] for case in cases} == {"independent_same_memory_queries"}
+    assert all("one-to-one" in case["case_description"] for case in cases)
 
 
 def test_future_candidate_is_filtered_before_all_strategies_score():

@@ -9,6 +9,17 @@ from typing import Any
 from orchestrator.agents.base import BaseAgent
 
 
+# Keep no-id threshold semantics in one place so evaluation baselines cannot
+# silently drift from the production Association policy.
+NO_ID_WEIGHT_SUM = 0.85
+WITH_ID_MATCH_THRESHOLD = 0.45
+NO_ID_MATCH_THRESHOLD = WITH_ID_MATCH_THRESHOLD / NO_ID_WEIGHT_SUM
+WITH_ID_SOFT_THRESHOLD = 0.65
+NO_ID_SOFT_THRESHOLD = 0.5 / NO_ID_WEIGHT_SUM
+WITH_ID_MARGIN_THRESHOLD = 0.15
+NO_ID_MARGIN_THRESHOLD = WITH_ID_MARGIN_THRESHOLD / NO_ID_WEIGHT_SUM
+
+
 class AssociationAgent(BaseAgent):
     """Create frame-to-memory association records with similarity scores."""
 
@@ -190,7 +201,7 @@ class AssociationAgent(BaseAgent):
             return {}, self._empty_scores(), []
         memory, scores = scored[0]
         # no-id 归一化后阈值同步上调，保持匹配行为与归一化前一致
-        threshold = 0.45 / 0.85 if not use_disease_id_score else 0.45
+        threshold = NO_ID_MATCH_THRESHOLD if not use_disease_id_score else WITH_ID_MATCH_THRESHOLD
         if scores["association_score"] < threshold:
             return {}, scores, scored
         return memory, scores, scored
@@ -212,7 +223,7 @@ class AssociationAgent(BaseAgent):
             score = 0.25 * spatial + 0.25 * area + 0.20 * temporal + 0.15 * risk + 0.15 * id_score
         else:
             # no-id 模式：四项特征权重和为 0.85，归一化到 1.0 使完美匹配可达满分
-            score = (0.25 * spatial + 0.25 * area + 0.20 * temporal + 0.15 * risk) / 0.85
+            score = (0.25 * spatial + 0.25 * area + 0.20 * temporal + 0.15 * risk) / NO_ID_WEIGHT_SUM
         return {
             "association_score": min(score, 1.0),
             "spatial_distance_score": spatial,
@@ -302,7 +313,7 @@ class AssociationAgent(BaseAgent):
             return "hard"
         # no-id 归一化后 soft 阈值同步调整，保持与 with-id 同尺度
         # with-id soft 需 raw4+id>=0.65，id=1 时 raw4>=0.5；no-id 归一化后 0.5/0.85
-        soft_threshold = 0.5 / 0.85 if not use_disease_id_score else 0.65
+        soft_threshold = NO_ID_SOFT_THRESHOLD if not use_disease_id_score else WITH_ID_SOFT_THRESHOLD
         if score >= soft_threshold:
             return "soft"
         return "uncertain"
@@ -352,7 +363,7 @@ class AssociationAgent(BaseAgent):
         if match_type == "uncertain":
             return True
         # no-id 归一化后候选差值被放大 1/0.85 倍，阈值同步放大保持等价
-        margin_threshold = 0.15 / 0.85 if not use_disease_id_score else 0.15
+        margin_threshold = NO_ID_MARGIN_THRESHOLD if not use_disease_id_score else WITH_ID_MARGIN_THRESHOLD
         return score_margin < margin_threshold
 
     def _score_margin(self, candidates: list[tuple[dict[str, str], dict[str, float]]]) -> float:
