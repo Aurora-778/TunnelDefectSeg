@@ -1,6 +1,6 @@
 # 机器人隧道巡检工程化病害报告
 
-本报告来自：`C:/Users/26822/Downloads/data/data/simulated/robot_kict_frame_records.csv`
+本报告来自：`data/simulated/robot_kict_frame_records.csv`
 
 ## 巡检 I001
 

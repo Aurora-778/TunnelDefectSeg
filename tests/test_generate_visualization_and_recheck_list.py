@@ -169,7 +169,7 @@ def test_generate_visualizations_and_recheck_list(tmp_path):
         "disease_type_distribution.png",
         "mileage_risk_distribution.png",
     }
-    assert "病害增长可视化与重点复检清单生成完成" in result.stdout
+    assert "病害面积审计可视化与重点复检清单生成完成" in result.stdout
     assert chart_names == {path.name for path in vis_dir.glob("*.png")}
     assert all((vis_dir / name).stat().st_size > 0 for name in chart_names)
     recheck_rows = read_csv(recheck_csv)

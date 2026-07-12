@@ -2,7 +2,7 @@
 
 ## 系统能力总结
 
-本系统面向机器人隧道连续巡检场景，形成从 KICT 裂缝 mask 几何特征、仿真巡检时间/里程/环号/方位元数据，到病害对象记忆、跨巡检关联、面积变化提示、风险排序、Web 展示和最终报告的端到端闭环。
+本系统面向机器人隧道巡检工程原型，形成从 KICT 裂缝 mask 几何特征、仿真巡检时间/里程/环号/方位元数据，到病害对象记忆、跨巡检关联、静态面积审计与可比性提示、风险排序、Web 展示和最终报告的端到端闭环。
 
 ## 病害分析结果
 
@@ -15,7 +15,7 @@
 - 关联记录数：20
 
 - 关联依据：Association Agent 在主 pipeline 中使用 no-id matching，综合空间距离、面积相似度、巡检时间连续性和风险相似度等非 ID 规则证据进行评分，并输出 candidate、margin、conflict 和 manual review 标记；`disease_id` 只作为标签和评估对照，不参与主流程匹配评分。该结果属于规则证据，需要人工复核闭环确认。
-- 输出文件：`C:/Users/26822/Downloads/data/data/simulated/disease_association_records.csv`
+- 输出文件：`data/simulated/disease_association_records.csv`
 
 ## Progressive Evaluation Summary
 
@@ -30,19 +30,19 @@ Progressive evaluation (no-id vs with-id) has been run. See `outputs/association
 
 - 高：10
 
-## 规则面积变化提示分布
+## 面积审计与纵向可比性状态分布
 
 - 不可比较：10
 
 ## 可视化输出
 
-- `C:/Users/26822/Downloads/data/outputs/visualizations/association_relationship_graph.png`
-- `C:/Users/26822/Downloads/data/outputs/visualizations/attention_level_distribution.png`
-- `C:/Users/26822/Downloads/data/outputs/visualizations/disease_type_distribution.png`
-- `C:/Users/26822/Downloads/data/outputs/visualizations/growth_trend_distribution.png`
-- `C:/Users/26822/Downloads/data/outputs/visualizations/mileage_risk_distribution.png`
-- `C:/Users/26822/Downloads/data/outputs/visualizations/risk_level_change_distribution.png`
-- `C:/Users/26822/Downloads/data/outputs/visualizations/top10_area_growth_rate.png`
+- `outputs/visualizations/association_relationship_graph.png`
+- `outputs/visualizations/attention_level_distribution.png`
+- `outputs/visualizations/disease_type_distribution.png`
+- `outputs/visualizations/growth_trend_distribution.png`
+- `outputs/visualizations/mileage_risk_distribution.png`
+- `outputs/visualizations/risk_level_change_distribution.png`
+- `outputs/visualizations/top10_area_growth_rate.png`
 
 ## 创新点
 
@@ -54,12 +54,12 @@ Progressive evaluation (no-id vs with-id) has been run. See `outputs/association
 
 ## 数据边界
 
-当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。KICT 提供图像和 mask 几何特征；时间、里程、环号、方位、`disease_id` 和跨巡检关系来自仿真元数据。系统可以验证病害对象建模、跨巡检关联、规则面积变化提示和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
+当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。KICT 提供图像和 mask 几何特征；时间、里程、环号、方位、`disease_id` 和跨巡检关系来自仿真元数据。系统可以验证病害对象建模、跨巡检关联、静态面积审计、可比性提示和报告展示的工程闭环，但不能直接证明真实跨期病害状态。
 
 ## 局限性
 
 - 当前关联评分仍主要依赖仿真元数据和 mask 几何特征，尚未接入真实机器人位姿、深度或视觉重识别。
-- 当前面积变化提示是基于面积和风险规则的工程判断，不等同于结构安全结论。
+- 当前面积审计与可比性提示基于规则证据，不等同于结构安全结论或真实长期变化判断。
 - KICT 数据主要提供静态裂缝 mask，真实跨时间病害演化仍需要长期巡检数据支撑。
 - Web Dashboard 是本地展示 Demo，用于说明数据链路和复检证据，不代表生产级巡检平台。
 

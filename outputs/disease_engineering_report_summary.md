@@ -2,13 +2,13 @@
 
 ## 输入文件
 
-- C:/Users/26822/Downloads/data/data/simulated/robot_kict_frame_records.csv
+- data/simulated/robot_kict_frame_records.csv
 
 ## 输出文件
 
-- C:/Users/26822/Downloads/data/data/simulated/disease_engineering_report.csv
-- C:/Users/26822/Downloads/data/outputs/disease_engineering_report.md
-- C:/Users/26822/Downloads/data/outputs/disease_engineering_report_summary.md
+- data/simulated/disease_engineering_report.csv
+- outputs/disease_engineering_report.md
+- outputs/disease_engineering_report_summary.md
 
 ## 统计信息
 
@@ -34,4 +34,4 @@
 
 ## 说明
 
-本阶段基于 robot_kict_frame_records.csv，将连续帧中的同一 disease_id 聚合为工程化病害对象，并生成了病害对象级 CSV 报告与 Markdown 报告。该结果可用于后续时空聚合验证、病害变化监测、风险趋势分析和工程化文本输出。
+本阶段基于 robot_kict_frame_records.csv，将连续帧中的同一 disease_id 聚合为工程化病害对象，并生成病害对象级 CSV 与 Markdown 报告。该结果可用于后续时空聚合验证、静态面积审计、可比性检查和工程化文本输出。

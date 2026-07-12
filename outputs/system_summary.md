@@ -6,14 +6,14 @@ Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and His
 
 ## 核心输出
 
-- `C:/Users/26822/Downloads/data/data/simulated/disease_memory_bank.csv`
-- `C:/Users/26822/Downloads/data/data/simulated/disease_association_records.csv`
-- `C:/Users/26822/Downloads/data/data/simulated/disease_growth_results.csv`
+- `data/simulated/disease_memory_bank.csv`
+- `data/simulated/disease_association_records.csv`
+- `data/simulated/disease_growth_results.csv`
 
 ## 数量统计
 
 - 工程化病害记录：30
-- 规则面积变化病害：10
+- 面积审计病害：10
 - 重点复检病害：10
 
 数据边界：当前输出基于 KICT 静态 mask 与仿真机器人巡检元数据。

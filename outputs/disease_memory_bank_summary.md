@@ -1,8 +1,8 @@
 # Disease Memory Bank Summary
 
-- 输入工程报告：`C:\Users\26822\Downloads\data\data\simulated\disease_engineering_report.csv`
-- 输入增长分析：`C:\Users\26822\Downloads\data\data\simulated\disease_growth_results.csv`
-- 输出记忆库：`C:\Users\26822\Downloads\data\data\simulated\disease_memory_bank.csv`
+- 输入工程报告：`data/simulated/disease_engineering_report.csv`
+- 输入面积审计：`data/simulated/disease_growth_results.csv`
+- 输出记忆库：`data/simulated/disease_memory_bank.csv`
 - disease总数：10
 - 可纵向比较病害数量：0
 - 高关注病害数量：10

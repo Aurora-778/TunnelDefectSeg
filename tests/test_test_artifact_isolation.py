@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ PROTECTED = [
     ROOT / "data/simulated",
     ROOT / "outputs/visualizations",
     ROOT / "outputs/association_benchmark",
+    ROOT / "outputs/progressive_evaluation",
     ROOT / "outputs/disease_engineering_report.md",
     ROOT / "outputs/disease_growth_analysis_report.md",
     ROOT / "outputs/disease_growth_analysis_summary.md",
@@ -21,17 +23,71 @@ PROTECTED = [
     ROOT / "outputs/visualization_summary.md",
     ROOT / "outputs/recheck_list_report.md",
     ROOT / "outputs/final_project_report.md",
+    ROOT / "outputs/system_summary.md",
+    ROOT / "outputs/key_insights.md",
 ]
 
 
-def _snapshot() -> dict[Path, str]:
-    files = []
-    for path in PROTECTED:
-        if path.is_dir():
-            files.extend(child for child in path.rglob("*") if child.is_file())
-        elif path.exists():
-            files.append(path)
-    return {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(files)}
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _snapshot(paths: list[Path] | None = None, base: Path = ROOT) -> dict[str, tuple[str, int, str]]:
+    """Capture names, structure, sizes and content without relying on mtimes."""
+
+    manifest: dict[str, tuple[str, int, str]] = {}
+    for protected in PROTECTED if paths is None else paths:
+        relative_root = protected.relative_to(base).as_posix()
+        if not protected.exists():
+            manifest[relative_root] = ("missing", 0, "")
+            continue
+        candidates = [protected]
+        if protected.is_dir():
+            candidates.extend(sorted(protected.rglob("*")))
+        for candidate in candidates:
+            relative = candidate.relative_to(base).as_posix()
+            if candidate.is_dir():
+                manifest[relative] = ("directory", 0, "")
+            else:
+                manifest[relative] = ("file", candidate.stat().st_size, _file_digest(candidate))
+    return manifest
+
+
+def _manifest_diff(
+    before: dict[str, tuple[str, int, str]],
+    after: dict[str, tuple[str, int, str]],
+) -> tuple[set[str], set[str], set[str]]:
+    added = set(after) - set(before)
+    removed = set(before) - set(after)
+    modified = {path for path in set(before) & set(after) if before[path] != after[path]}
+    return added, removed, modified
+
+
+def test_manifest_detects_added_removed_modified_and_directory_changes(tmp_path):
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    modified_file = protected / "modified.txt"
+    removed_file = protected / "removed.txt"
+    removed_dir = protected / "removed-empty-dir"
+    modified_file.write_text("before", encoding="utf-8")
+    removed_file.write_text("remove", encoding="utf-8")
+    removed_dir.mkdir()
+    before = _snapshot([protected], tmp_path)
+
+    modified_file.write_text("after", encoding="utf-8")
+    removed_file.unlink()
+    removed_dir.rmdir()
+    (protected / "added.txt").write_text("added", encoding="utf-8")
+    (protected / "added-empty-dir").mkdir()
+    added, removed, modified = _manifest_diff(before, _snapshot([protected], tmp_path))
+
+    assert added == {"protected/added.txt", "protected/added-empty-dir"}
+    assert removed == {"protected/removed.txt", "protected/removed-empty-dir"}
+    assert modified == {"protected/modified.txt"}
 
 
 def test_representative_cli_generation_keeps_formal_artifacts_unchanged(tmp_path):
@@ -48,7 +104,12 @@ def test_representative_cli_generation_keeps_formal_artifacts_unchanged(tmp_path
         [sys.executable, "scripts/run_progressive_inspection_evaluation.py", "--input-csv", "data/simulated/robot_kict_frame_records.csv", "--output-dir", str(progressive_dir / "rounds"), "--no-id-csv", str(progressive_dir / "no_id.csv"), "--with-id-csv", str(progressive_dir / "with_id.csv"), "--report-path", str(progressive_dir / "report.md")],
         [sys.executable, "scripts/run_association_benchmark.py", "--output-dir", str(benchmark_dir)],
     ]
+    env = os.environ.copy()
+    env["FAST_TEST_MODE"] = "1"
     for command in commands:
-        subprocess.run(command, cwd=ROOT, check=True, timeout=30, capture_output=True, text=True)
+        subprocess.run(command, cwd=ROOT, check=True, timeout=30, capture_output=True, text=True, env=env)
 
-    assert _snapshot() == before
+    added, removed, modified = _manifest_diff(before, _snapshot())
+    assert not added, f"formal artifacts added: {sorted(added)}"
+    assert not removed, f"formal artifacts removed: {sorted(removed)}"
+    assert not modified, f"formal artifacts modified: {sorted(modified)}"

@@ -5,6 +5,11 @@ import csv
 from collections import Counter, defaultdict
 from pathlib import Path
 
+try:
+    from scripts.report_paths import report_path as display_report_path
+except ModuleNotFoundError:  # Direct ``python scripts/...`` execution.
+    from report_paths import report_path as display_report_path
+
 
 DEFAULT_INPUT = Path("data/simulated/robot_kict_frame_records.csv")
 DEFAULT_OUTPUT_CSV = Path("data/simulated/disease_engineering_report.csv")
@@ -254,7 +259,7 @@ def write_markdown_report(records: list[dict[str, str]], input_csv: Path, report
     lines = [
         "# 机器人隧道巡检工程化病害报告",
         "",
-        f"本报告来自：`{input_csv.as_posix()}`",
+        f"本报告来自：`{display_report_path(input_csv)}`",
         "",
     ]
     for inspection_id, inspection_records in sorted(records_by_inspection.items()):
@@ -305,13 +310,13 @@ def write_summary_report(
 
 ## 输入文件
 
-- {input_csv.as_posix()}
+- {display_report_path(input_csv)}
 
 ## 输出文件
 
-- {output_csv.as_posix()}
-- {markdown_report.as_posix()}
-- {summary_report.as_posix()}
+- {display_report_path(output_csv)}
+- {display_report_path(markdown_report)}
+- {display_report_path(summary_report)}
 
 ## 统计信息
 
@@ -333,7 +338,7 @@ def write_summary_report(
 
 ## 说明
 
-本阶段基于 robot_kict_frame_records.csv，将连续帧中的同一 disease_id 聚合为工程化病害对象，并生成了病害对象级 CSV 报告与 Markdown 报告。该结果可用于后续时空聚合验证、病害变化监测、风险趋势分析和工程化文本输出。
+本阶段基于 robot_kict_frame_records.csv，将连续帧中的同一 disease_id 聚合为工程化病害对象，并生成病害对象级 CSV 与 Markdown 报告。该结果可用于后续时空聚合验证、静态面积审计、可比性检查和工程化文本输出。
 """
     summary_report.write_text(content, encoding="utf-8")
 

@@ -1,5 +1,9 @@
 from scripts.analyze_disease_growth import aggregate_rows, write_markdown_report
-from scripts.generate_visualization_and_recheck_list import write_summary_report as write_visualization_summary
+from scripts.generate_visualization_and_recheck_list import (
+    build_priority_recheck_list,
+    write_recheck_report,
+    write_summary_report as write_visualization_summary,
+)
 
 
 def _row(inspection_id: str, area: str) -> dict[str, str]:
@@ -21,8 +25,11 @@ def test_noncomparable_markdown_uses_static_audit_not_growth_rate(tmp_path):
 
     text = report.read_text(encoding="utf-8")
     assert "增长率" not in text
+    assert "趋势判断" not in text
     assert "不具备纵向比较条件" in text
-    assert "静态描述性审计" in text
+    assert "静态面积审计：100 px² -> 200 px²" in text
+    assert "描述性面积相对差：100.0%" in text
+    assert "纵向可比性：不可比较" in text
 
 
 def test_noncomparable_visualization_summary_uses_audit_wording(tmp_path):
@@ -44,3 +51,22 @@ def test_noncomparable_visualization_summary_uses_audit_wording(tmp_path):
     assert "病害增长结果" not in text
     assert "增长趋势分布" not in text
     assert "面积审计与可比性状态" in text
+    assert "明显增长: 0" not in text
+    assert "基本稳定: 0" not in text
+
+
+def test_noncomparable_recheck_uses_neutral_audit_wording(tmp_path):
+    records = aggregate_rows([_row("I001", "100"), _row("I002", "200")])
+    records[0]["last_risk_level"] = "高"
+    records[0]["attention_level"] = "重点关注"
+    rows = build_priority_recheck_list(records)
+    report = tmp_path / "recheck.md"
+    write_recheck_report(rows, report, tmp_path / "recheck.csv")
+
+    text = report.read_text(encoding="utf-8")
+    assert "静态面积审计：100 px² -> 200 px²" in text
+    assert "增长趋势" not in text
+    assert "增长率" not in text
+    assert "面积减小" not in text
+    assert "基本稳定" not in text
+    assert "真实复检数据后再判断方向性变化" in text

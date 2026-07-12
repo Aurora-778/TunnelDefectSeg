@@ -21,6 +21,7 @@ def test_same_memory_cases_are_explicitly_independent_not_one_to_one_assignment(
 
     assert len(cases) == 2
     assert {case["case_type"] for case in cases} == {"independent_same_memory_queries"}
+    assert all("独立逐帧 query" in case["case_description"] for case in cases)
     assert all("one-to-one" in case["case_description"] for case in cases)
 
 

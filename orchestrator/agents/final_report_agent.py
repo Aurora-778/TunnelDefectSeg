@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestrator.agents.base import BaseAgent
+from scripts.report_paths import report_path
 
 # 用于在 final report 中查找 progressive evaluation report
 PROJECT_ROOT_FOR_REPORT = Path(__file__).resolve().parents[2]
@@ -83,13 +84,13 @@ class FinalReportAgent(BaseAgent):
             if not association_rows
             else ""
         )
-        chart_lines = "\n".join(f"- `{path.as_posix()}`" for path in chart_paths)
+        chart_lines = "\n".join(f"- `{report_path(path)}`" for path in chart_paths)
         progressive_summary = self._progressive_evaluation_summary()
         return f"""# 隧道巡检病害监测系统完整报告
 
 ## 系统能力总结
 
-本系统面向机器人隧道连续巡检场景，形成从 KICT 裂缝 mask 几何特征、仿真巡检时间/里程/环号/方位元数据，到病害对象记忆、跨巡检关联、面积变化提示、风险排序、Web 展示和最终报告的端到端闭环。
+本系统面向机器人隧道巡检工程原型，形成从 KICT 裂缝 mask 几何特征、仿真巡检时间/里程/环号/方位元数据，到病害对象记忆、跨巡检关联、静态面积审计与可比性提示、风险排序、Web 展示和最终报告的端到端闭环。
 
 ## 病害分析结果
 
@@ -102,7 +103,7 @@ class FinalReportAgent(BaseAgent):
 - 关联记录数：{len(association_rows)}
 {association_note}
 - 关联依据：Association Agent 在主 pipeline 中使用 no-id matching，综合空间距离、面积相似度、巡检时间连续性和风险相似度等非 ID 规则证据进行评分，并输出 candidate、margin、conflict 和 manual review 标记；`disease_id` 只作为标签和评估对照，不参与主流程匹配评分。该结果属于规则证据，需要人工复核闭环确认。
-- 输出文件：`{association_records.as_posix()}`
+- 输出文件：`{report_path(association_records)}`
 
 {progressive_summary}
 
@@ -110,7 +111,7 @@ class FinalReportAgent(BaseAgent):
 
 {self._counter_lines(risk_counts)}
 
-## 规则面积变化提示分布
+## 面积审计与纵向可比性状态分布
 
 {self._counter_lines(trend_counts)}
 
@@ -128,12 +129,12 @@ class FinalReportAgent(BaseAgent):
 
 ## 数据边界
 
-当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。KICT 提供图像和 mask 几何特征；时间、里程、环号、方位、`disease_id` 和跨巡检关系来自仿真元数据。系统可以验证病害对象建模、跨巡检关联、规则面积变化提示和报告展示的工程闭环，但不能直接证明真实隧道病害长期演化规律。
+当前系统使用 KICT 静态裂缝 mask 与仿真机器人巡检元数据构建端到端流程。KICT 提供图像和 mask 几何特征；时间、里程、环号、方位、`disease_id` 和跨巡检关系来自仿真元数据。系统可以验证病害对象建模、跨巡检关联、静态面积审计、可比性提示和报告展示的工程闭环，但不能直接证明真实跨期病害状态。
 
 ## 局限性
 
 - 当前关联评分仍主要依赖仿真元数据和 mask 几何特征，尚未接入真实机器人位姿、深度或视觉重识别。
-- 当前面积变化提示是基于面积和风险规则的工程判断，不等同于结构安全结论。
+- 当前面积审计与可比性提示基于规则证据，不等同于结构安全结论或真实长期变化判断。
 - KICT 数据主要提供静态裂缝 mask，真实跨时间病害演化仍需要长期巡检数据支撑。
 - Web Dashboard 是本地展示 Demo，用于说明数据链路和复检证据，不代表生产级巡检平台。
 
@@ -183,14 +184,14 @@ Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and His
 
 ## 核心输出
 
-- `{memory_bank.as_posix()}`
-- `{association_records.as_posix()}`
-- `{growth_results.as_posix()}`
+- `{report_path(memory_bank)}`
+- `{report_path(association_records)}`
+- `{report_path(growth_results)}`
 
 ## 数量统计
 
 - 工程化病害记录：{len(engineering_rows)}
-- 规则面积变化病害：{len(growth_rows)}
+- 面积审计病害：{len(growth_rows)}
 - 重点复检病害：{len(recheck_rows)}
 
 数据边界：当前输出基于 KICT 静态 mask 与仿真机器人巡检元数据。
@@ -201,7 +202,11 @@ Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and His
 """
 
     def _key_insights_text(self, growth_rows: list[dict[str, str]], recheck_rows: list[dict[str, str]]) -> str:
-        comparable_rows = [row for row in growth_rows if row.get("comparability_status") == "verified_comparable"]
+        comparable_rows = [
+            row
+            for row in growth_rows
+            if row.get("comparability_status") in {"verified_comparable", "longitudinally_comparable"}
+        ]
         top_growth = sorted(comparable_rows, key=lambda row: self._to_float(row.get("area_growth_rate")), reverse=True)[:5]
         top_lines = "\n".join(
             f"- {row['disease_id']}：{row['growth_trend']}，增长率 {round(self._to_float(row.get('area_growth_rate')) * 100, 1)}%，风险 {row['last_risk_level']}"
@@ -212,7 +217,7 @@ Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and His
         ) or "- 当前没有重点复检记录。"
         return f"""# 关键洞察
 
-## 规则面积变化最明显的病害
+## 可纵向比较记录摘要
 
 {top_lines}
 
@@ -222,7 +227,7 @@ Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and His
 
 ## 一句话结论
 
-当前系统已经能把 KICT 静态 mask 与仿真机器人巡检元数据整理成病害对象、规则面积变化提示、风险等级和复检清单，适合用于课程展示、项目答辩和后续论文/专利方向论证。
+当前系统已经能把 KICT 静态 mask 与仿真机器人巡检元数据整理成病害对象、静态面积审计、纵向可比性状态、风险等级和复检清单，适合用于课程展示、项目答辩和后续论文/专利方向论证。
 """
 
     def _validate_outputs(

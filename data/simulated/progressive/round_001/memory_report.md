@@ -1,8 +1,8 @@
 # Memory Agent Report
 
-- 输入工程报告：`C:\Users\26822\Downloads\data\data\simulated\progressive\round_001\history_engineering_report.csv`
-- 输入增长分析：`C:\Users\26822\Downloads\data\data\simulated\progressive\round_001\history_growth_analysis.csv`
-- 输出记忆库：`C:\Users\26822\Downloads\data\data\simulated\progressive\round_001\memory.csv`
+- 输入工程报告：`data/simulated/progressive/round_001/history_engineering_report.csv`
+- 输入面积审计：`data/simulated/progressive/round_001/history_growth_analysis.csv`
+- 输出记忆库：`data/simulated/progressive/round_001/memory.csv`
 - disease总数：10
 - 可纵向比较病害数量：0
 - 高关注病害数量：0

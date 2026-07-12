@@ -104,7 +104,7 @@ def test_analyze_disease_growth_outputs_trends_and_attention(tmp_path):
     rows = {row["disease_id"]: row for row in read_csv(output_csv)}
     d001 = rows["D001"]
     d002 = rows["D002"]
-    assert "跨巡检病害增长分析完成" in result.stdout
+    assert "病害面积审计与可比性分析完成" in result.stdout
     assert d001["inspection_count"] == "3"
     assert d001["first_inspection"] == "I001"
     assert d001["last_inspection"] == "I003"

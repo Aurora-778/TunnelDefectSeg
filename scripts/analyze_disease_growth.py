@@ -6,6 +6,11 @@ import math
 from collections import Counter, defaultdict
 from pathlib import Path
 
+try:
+    from scripts.report_paths import report_path as display_report_path
+except ModuleNotFoundError:  # Direct ``python scripts/...`` execution.
+    from report_paths import report_path as display_report_path
+
 
 DEFAULT_INPUT = Path("data/simulated/disease_engineering_report.csv")
 DEFAULT_OUTPUT_CSV = Path("data/simulated/disease_growth_analysis.csv")
@@ -312,6 +317,12 @@ def percent_text(rate: str) -> str:
     return f"{round(float(rate) * 100, 1)}%"
 
 
+def is_longitudinally_comparable(record: dict[str, str]) -> bool:
+    """Accept the current verified value and the public contract alias."""
+
+    return record.get("comparability_status") in {"verified_comparable", "longitudinally_comparable"}
+
+
 def write_markdown_report(
     records: list[dict[str, str]],
     input_rows: list[dict[str, str]],
@@ -324,7 +335,7 @@ def write_markdown_report(
     lines = [
         "# 机器人隧道巡检病害面积审计与可比性报告",
         "",
-        f"数据来源：`{input_csv.as_posix()}`",
+        f"数据来源：`{display_report_path(input_csv)}`",
         "",
         "## 总体概况",
         "",
@@ -345,21 +356,33 @@ def write_markdown_report(
         lines.extend([f"## {level}病害", ""])
         for record in records_by_attention.get(level, []):
             type_name = disease_type_zh(record["disease_type"])
+            comparable = is_longitudinally_comparable(record)
             detail_lines = [
                 f"### {record['disease_id']} - {type_name}",
                 "",
                 f"- 首次巡检：{record['first_inspection']}",
                 f"- 末次巡检：{record['last_inspection']}",
-                f"- 面积变化：{record['first_area_px']} px² -> {record['last_area_px']} px²",
             ]
-            if record["comparability_status"] == "verified_comparable":
-                detail_lines.append(f"- 增长率：{percent_text(record['area_growth_rate'])}")
+            if comparable:
+                detail_lines.extend(
+                    [
+                        f"- 面积变化：{record['first_area_px']} px² -> {record['last_area_px']} px²",
+                        f"- 面积相对差：{percent_text(record['area_growth_rate'])}",
+                        f"- 规则状态：{record['growth_trend']}",
+                    ]
+                )
             else:
-                detail_lines.append("- 可比性说明：当前记录不具备纵向比较条件；面积差仅作静态描述性审计。")
+                detail_lines.extend(
+                    [
+                        f"- 静态面积审计：{record['first_area_px']} px² -> {record['last_area_px']} px²",
+                        f"- 描述性面积相对差：{percent_text(record['area_growth_rate'])}",
+                        "- 纵向可比性：不可比较",
+                        "- 说明：当前记录不具备纵向比较条件；该数值仅用于静态样本的描述性审计，不构成方向性变化或长期变化判断。",
+                    ]
+                )
             detail_lines.extend(
                 [
                     f"- 风险变化：{record['first_risk_level']} -> {record['last_risk_level']}",
-                    f"- 趋势判断：{record['growth_trend']}",
                     f"- 关注等级：{record['attention_level']}",
                     f"- 证据等级：{record['claim_level']}",
                     f"- 可比性状态：{record['comparability_status']}",
@@ -396,13 +419,13 @@ def write_summary_report(
 
 ## 输入文件
 
-- {input_csv.as_posix()}
+- {display_report_path(input_csv)}
 
 ## 输出文件
 
-- {output_csv.as_posix()}
-- {markdown_report.as_posix()}
-- {summary_report.as_posix()}
+- {display_report_path(output_csv)}
+- {display_report_path(markdown_report)}
+- {display_report_path(summary_report)}
 
 ## 统计信息
 
@@ -439,7 +462,7 @@ def main() -> None:
 
     # 后续可基于 disease_growth_analysis.csv 做趋势预测、增长曲线可视化、
     # 按里程段统计风险、生成重点复检清单、接入 dashboard、导出 Word/PDF 报告。
-    print("跨巡检病害增长分析完成")
+    print("病害面积审计与可比性分析完成")
     print(f"input rows: {len(input_rows)}")
     print(f"disease count: {len(records)}")
     print(f"output csv: {args.output_csv.as_posix()}")

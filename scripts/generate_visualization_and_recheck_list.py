@@ -14,8 +14,10 @@ from matplotlib import pyplot as plt
 
 try:  # Direct ``python scripts/...`` execution has scripts/ on sys.path.
     from scripts.plotting_fonts import configure_chinese_font
+    from scripts.report_paths import report_path as display_report_path
 except ModuleNotFoundError:  # pragma: no cover - exercised by CLI subprocesses.
     from plotting_fonts import configure_chinese_font
+    from report_paths import report_path as display_report_path
 
 
 DEFAULT_GROWTH_CSV = Path("data/simulated/disease_growth_analysis.csv")
@@ -255,6 +257,10 @@ def display_text(value: str) -> str:
     return value if _CHINESE_FONT_AVAILABLE else _FALLBACK_TEXT.get(value, "Item")
 
 
+def is_longitudinally_comparable(row: dict[str, str]) -> bool:
+    return row.get("comparability_status") in {"verified_comparable", "longitudinally_comparable"}
+
+
 def ordered_counts(values: list[str], order: list[str]) -> tuple[list[str], list[int]]:
     counts = Counter(value or "未知" for value in values)
     labels = [label for label in order if counts.get(label, 0) > 0]
@@ -292,7 +298,7 @@ def generate_standard_visualizations(growth_rows: list[dict[str, str]], output_d
         )
     )
 
-    comparable_rows = [row for row in growth_rows if row.get("comparability_status") == "verified_comparable"]
+    comparable_rows = [row for row in growth_rows if is_longitudinally_comparable(row)]
     top_growth = sorted(comparable_rows, key=lambda row: parse_float(row["area_growth_rate"], "area_growth_rate"), reverse=True)[:10]
     if not top_growth:
         paths.append(
@@ -398,7 +404,7 @@ def recheck_reason(row: dict[str, str]) -> str:
     reasons: list[str] = []
     if row["attention_level"] == "重点关注":
         reasons.append("该病害被判定为重点关注对象")
-    if row.get("comparability_status") == "verified_comparable" and parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5:
+    if is_longitudinally_comparable(row) and parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5:
         reasons.append("面积增长率超过 50%，存在明显扩展趋势")
     if row["last_risk_level"] == "高":
         reasons.append("末次巡检风险等级为高")
@@ -409,7 +415,9 @@ def recheck_reason(row: dict[str, str]) -> str:
     return "；".join(reasons) + "。"
 
 
-def recheck_suggestion(attention_level: str) -> str:
+def recheck_suggestion(attention_level: str, comparable: bool = True) -> str:
+    if not comparable:
+        return "建议记录静态面积证据，并在取得真实复检数据后再判断方向性变化。"
     suggestions = {
         "重点关注": "建议优先安排人工复核，并在下一次巡检中重点跟踪。",
         "持续观察": "建议保持周期性复检，关注面积和风险等级变化。",
@@ -427,7 +435,7 @@ def build_priority_recheck_list(growth_rows: list[dict[str, str]]) -> list[dict[
         or row["growth_trend"] == "明显增长"
         or row["last_risk_level"] == "高"
         or (
-            row.get("comparability_status") == "verified_comparable"
+            is_longitudinally_comparable(row)
             and parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5
         )
     ]
@@ -452,7 +460,7 @@ def build_priority_recheck_list(growth_rows: list[dict[str, str]]) -> list[dict[
         item = {key: row.get(key, "") for key in RECHECK_COLUMNS}
         item["priority_rank"] = str(index)
         item["recheck_reason"] = recheck_reason(row)
-        item["recheck_suggestion"] = recheck_suggestion(row["attention_level"])
+        item["recheck_suggestion"] = recheck_suggestion(row["attention_level"], is_longitudinally_comparable(row))
         rows.append(item)
     return rows
 
@@ -486,15 +494,15 @@ def write_visualization_report(
 ) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     attention_counts = count_by_order([row["attention_level"] for row in growth_rows], ATTENTION_ORDER)
-    comparable_count = sum(1 for row in growth_rows if row.get("comparability_status") == "verified_comparable")
+    comparable_count = sum(1 for row in growth_rows if is_longitudinally_comparable(row))
     high_risk_count = sum(1 for row in growth_rows if row["last_risk_level"] == "高")
-    chart_lines = "\n".join(f"- {CHART_TITLES.get(path.name, path.stem)}：`{path.as_posix()}`" for path in chart_paths)
+    chart_lines = "\n".join(f"- {CHART_TITLES.get(path.name, path.stem)}：`{display_report_path(path)}`" for path in chart_paths)
     note_lines = "\n".join(f"- {note}" for note in [font_note, engineering_note] if note) or "- 无"
     content = f"""# 病害面积审计可视化报告
 
 数据来源：
-- `{growth_path.as_posix()}`
-- `{engineering_path.as_posix()}`
+- `{display_report_path(growth_path)}`
+- `{display_report_path(engineering_path)}`
 
 ## 1. 图表清单
 
@@ -530,7 +538,7 @@ def write_recheck_report(recheck_rows: list[dict[str, str]], report_path: Path, 
     lines = [
         "# 重点复检病害清单",
         "",
-        f"数据来源：`{recheck_csv.as_posix()}`",
+        f"数据来源：`{display_report_path(recheck_csv)}`",
         "",
         "## 总体情况",
         "",
@@ -538,7 +546,7 @@ def write_recheck_report(recheck_rows: list[dict[str, str]], report_path: Path, 
         f"- 重点关注：{sum(1 for row in recheck_rows if row.get('attention_level') == '重点关注')}",
         f"- 持续观察：{sum(1 for row in recheck_rows if row.get('attention_level') == '持续观察')}",
         f"- 高风险病害：{sum(1 for row in recheck_rows if row.get('last_risk_level') == '高')}",
-        f"- 可纵向比较病害：{sum(1 for row in recheck_rows if row.get('comparability_status') == 'verified_comparable')}",
+        f"- 可纵向比较病害：{sum(1 for row in recheck_rows if is_longitudinally_comparable(row))}",
         "",
         "## 复检清单",
         "",
@@ -548,7 +556,7 @@ def write_recheck_report(recheck_rows: list[dict[str, str]], report_path: Path, 
     else:
         for row in sorted(recheck_rows, key=lambda item: parse_int(item["priority_rank"], "priority_rank")):
             type_name = disease_type_label(row["disease_type"])
-            comparable = row.get("comparability_status") == "verified_comparable"
+            comparable = is_longitudinally_comparable(row)
             evidence_lines = (
                 [
                     f"- 增长趋势：{row['growth_trend']}",
@@ -597,23 +605,22 @@ def write_summary_report(
     attention_lines = "\n".join(
         f"- {name}: {count}" for name, count in count_by_order([row["attention_level"] for row in growth_rows], ATTENTION_ORDER).items()
     )
-    trend_lines = "\n".join(
-        f"- {name}: {count}" for name, count in count_by_order([row["growth_trend"] for row in growth_rows], GROWTH_TREND_ORDER).items()
-    )
-    chart_lines = "\n".join(f"- {path.as_posix()}" for path in chart_paths)
+    observed_status_counts = Counter(row["growth_trend"] or "未知" for row in growth_rows)
+    trend_lines = "\n".join(f"- {name}: {count}" for name, count in sorted(observed_status_counts.items()))
+    chart_lines = "\n".join(f"- {display_report_path(path)}" for path in chart_paths)
     content = f"""# 可视化与重点复检清单摘要
 
 ## 输入文件
 
-- {growth_path.as_posix()}
-- {engineering_path.as_posix()}
+- {display_report_path(growth_path)}
+- {display_report_path(engineering_path)}
 
 ## 输出文件
 
-- {recheck_csv.as_posix()}
-- {vis_report.as_posix()}
-- {recheck_report.as_posix()}
-- {summary_report.as_posix()}
+- {display_report_path(recheck_csv)}
+- {display_report_path(vis_report)}
+- {display_report_path(recheck_report)}
+- {display_report_path(summary_report)}
 
 ## 图表文件
 
@@ -634,7 +641,7 @@ def write_summary_report(
 
 ## 说明
 
-本阶段基于 disease_growth_analysis.csv 和 disease_engineering_report.csv，生成了静态面积审计、可比性状态、里程段风险统计和重点复检清单。不可纵向比较记录不构成病害增长或方向性变化结论。
+本阶段基于 disease_growth_analysis.csv 和 disease_engineering_report.csv，生成了静态面积审计、可比性状态、里程段风险统计和重点复检清单。不可纵向比较记录不构成方向性或长期变化结论。
 """
     summary_report.write_text(content, encoding="utf-8")
 
@@ -688,7 +695,7 @@ def main() -> None:
     )
     validate_generated_outputs(chart_paths, args.recheck_csv, [args.visualization_report, args.recheck_report, args.summary_report])
 
-    print("病害增长可视化与重点复检清单生成完成")
+    print("病害面积审计可视化与重点复检清单生成完成")
     print(f"growth analysis rows: {len(growth_rows)}")
     print(f"engineering report rows: {0 if engineering_rows is None else len(engineering_rows)}")
     print(f"visualizations generated: {len(chart_paths)}")

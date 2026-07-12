@@ -2,24 +2,24 @@
 
 ## 输入文件
 
-- C:/Users/26822/Downloads/data/data/simulated/disease_growth_results.csv
-- C:/Users/26822/Downloads/data/data/simulated/disease_engineering_report.csv
+- data/simulated/disease_growth_results.csv
+- data/simulated/disease_engineering_report.csv
 
 ## 输出文件
 
-- C:/Users/26822/Downloads/data/data/simulated/priority_recheck_list.csv
-- C:/Users/26822/Downloads/data/outputs/visualization_report.md
-- C:/Users/26822/Downloads/data/outputs/recheck_list_report.md
-- C:/Users/26822/Downloads/data/outputs/visualization_summary.md
+- data/simulated/priority_recheck_list.csv
+- outputs/visualization_report.md
+- outputs/recheck_list_report.md
+- outputs/visualization_summary.md
 
 ## 图表文件
 
-- C:/Users/26822/Downloads/data/outputs/visualizations/attention_level_distribution.png
-- C:/Users/26822/Downloads/data/outputs/visualizations/growth_trend_distribution.png
-- C:/Users/26822/Downloads/data/outputs/visualizations/risk_level_change_distribution.png
-- C:/Users/26822/Downloads/data/outputs/visualizations/top10_area_growth_rate.png
-- C:/Users/26822/Downloads/data/outputs/visualizations/disease_type_distribution.png
-- C:/Users/26822/Downloads/data/outputs/visualizations/mileage_risk_distribution.png
+- outputs/visualizations/attention_level_distribution.png
+- outputs/visualizations/growth_trend_distribution.png
+- outputs/visualizations/risk_level_change_distribution.png
+- outputs/visualizations/top10_area_growth_rate.png
+- outputs/visualizations/disease_type_distribution.png
+- outputs/visualizations/mileage_risk_distribution.png
 
 ## 统计信息
 
@@ -35,13 +35,8 @@
 
 ## 面积审计与可比性状态分布
 
-- 明显增长: 0
-- 轻微增长: 0
-- 基本稳定: 0
-- 面积减小: 0
 - 不可比较: 10
-- 数据不足: 0
 
 ## 说明
 
-本阶段基于 disease_growth_analysis.csv 和 disease_engineering_report.csv，生成了静态面积审计、可比性状态、里程段风险统计和重点复检清单。不可纵向比较记录不构成病害增长或方向性变化结论。
+本阶段基于 disease_growth_analysis.csv 和 disease_engineering_report.csv，生成了静态面积审计、可比性状态、里程段风险统计和重点复检清单。不可纵向比较记录不构成方向性或长期变化结论。

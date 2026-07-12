@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestrator.agents.base import BaseAgent
+from scripts.report_paths import report_path as display_report_path
 
 
 class MemoryAgent(BaseAgent):
@@ -209,10 +210,10 @@ class MemoryAgent(BaseAgent):
             report_path,
             "Incremental Memory Update Report",
             [
-                f"- previous memory: `{previous_path}`",
-                f"- frame records: `{frame_path}`",
-                f"- association records: `{association_path}`",
-                f"- output memory: `{output_path}`",
+                f"- previous memory: `{display_report_path(previous_path)}`",
+                f"- frame records: `{display_report_path(frame_path)}`",
+                f"- association records: `{display_report_path(association_path)}`",
+                f"- output memory: `{display_report_path(output_path)}`",
                 f"- memory rows: {len(rows)}",
                 f"- skipped associations without frame: {len(skipped_associations)}",
                 "",
@@ -527,9 +528,9 @@ class MemoryAgent(BaseAgent):
         high_attention_count = sum(1 for row in rows if row.get("attention_level") in {"重点关注", "high"})
         high_risk_count = sum(1 for row in rows if str(row.get("last_risk_level", "")).lower() in ("高", "high"))
         lines = [
-            f"- 输入工程报告：`{source_report_path}`",
-            f"- 输入增长分析：`{source_growth_path}`",
-            f"- 输出记忆库：`{output_path}`",
+            f"- 输入工程报告：`{display_report_path(source_report_path)}`",
+            f"- 输入面积审计：`{display_report_path(source_growth_path)}`",
+            f"- 输出记忆库：`{display_report_path(output_path)}`",
             f"- disease总数：{len(rows)}",
             f"- 可纵向比较病害数量：{comparable_count}",
             f"- 高关注病害数量：{high_attention_count}",
