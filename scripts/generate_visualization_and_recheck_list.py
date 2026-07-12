@@ -101,6 +101,7 @@ RECHECK_COLUMNS = [
 ATTENTION_ORDER = ["重点关注", "持续观察", "常规记录", "待补充巡检"]
 GROWTH_TREND_ORDER = ["明显增长", "轻微增长", "基本稳定", "面积减小", "不可比较", "数据不足"]
 ATTENTION_RANK = {name: index for index, name in enumerate(ATTENTION_ORDER)}
+RISK_RANK = {"高": 0, "中": 1, "低": 2}
 DISEASE_TYPE_ZH = {
     "crack": "裂缝",
     "water_leakage": "渗水",
@@ -261,6 +262,16 @@ def is_longitudinally_comparable(row: dict[str, str]) -> bool:
     return row.get("comparability_status") in {"verified_comparable", "longitudinally_comparable"}
 
 
+def display_growth_status(row: dict[str, str]) -> str:
+    """Hide stale directional labels when the observation is not comparable."""
+
+    if is_longitudinally_comparable(row):
+        return row.get("growth_trend", "")
+    if row.get("comparability_status") == "insufficient_history":
+        return "数据不足"
+    return "不可比较"
+
+
 def ordered_counts(values: list[str], order: list[str]) -> tuple[list[str], list[int]]:
     counts = Counter(value or "未知" for value in values)
     labels = [label for label in order if counts.get(label, 0) > 0]
@@ -282,7 +293,7 @@ def generate_standard_visualizations(growth_rows: list[dict[str, str]], output_d
     labels, values = ordered_counts([row["attention_level"] for row in growth_rows], ATTENTION_ORDER)
     paths.append(save_bar_chart(labels, values, "关注等级分布", "关注等级", "病害数量", output_dir / CHART_FILES["attention"]))
 
-    labels, values = ordered_counts([row["growth_trend"] for row in growth_rows], GROWTH_TREND_ORDER)
+    labels, values = ordered_counts([display_growth_status(row) for row in growth_rows], GROWTH_TREND_ORDER)
     paths.append(save_bar_chart(labels, values, "跨巡检可比性状态分布", "状态", "病害数量", output_dir / CHART_FILES["trend"]))
 
     risk_counts = Counter(parse_int(row["risk_level_change"], "risk_level_change") for row in growth_rows)
@@ -432,27 +443,38 @@ def build_priority_recheck_list(growth_rows: list[dict[str, str]]) -> list[dict[
         row
         for row in growth_rows
         if row["attention_level"] == "重点关注"
-        or row["growth_trend"] == "明显增长"
         or row["last_risk_level"] == "高"
         or (
             is_longitudinally_comparable(row)
-            and parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5
+            and (
+                row["growth_trend"] == "明显增长"
+                or parse_float(row["area_growth_rate"], "area_growth_rate") >= 0.5
+            )
         )
     ]
     if not selected:
         selected = [
             row
             for row in growth_rows
-            if row["attention_level"] == "持续观察" or row["growth_trend"] == "轻微增长" or row["last_risk_level"] == "中"
+            if row["attention_level"] == "持续观察"
+            or row["last_risk_level"] == "中"
+            or (is_longitudinally_comparable(row) and row["growth_trend"] == "轻微增长")
         ]
+
+    def priority_key(row: dict[str, str]) -> tuple[int, float, int, int, float, str]:
+        comparable = is_longitudinally_comparable(row)
+        return (
+            ATTENTION_RANK.get(row["attention_level"], len(ATTENTION_ORDER)),
+            -parse_float(row["area_growth_rate"], "area_growth_rate") if comparable else 0.0,
+            -parse_int(row["risk_level_change"], "risk_level_change") if comparable else 0,
+            RISK_RANK.get(row["last_risk_level"], len(RISK_RANK)),
+            -parse_float(row["last_area_px"], "last_area_px"),
+            row["disease_id"],
+        )
+
     selected = sorted(
         selected,
-        key=lambda row: (
-            ATTENTION_RANK.get(row["attention_level"], len(ATTENTION_ORDER)),
-            -parse_float(row["area_growth_rate"], "area_growth_rate"),
-            -parse_int(row["risk_level_change"], "risk_level_change"),
-            -parse_float(row["last_area_px"], "last_area_px"),
-        ),
+        key=priority_key,
     )
 
     rows: list[dict[str, str]] = []
@@ -605,7 +627,7 @@ def write_summary_report(
     attention_lines = "\n".join(
         f"- {name}: {count}" for name, count in count_by_order([row["attention_level"] for row in growth_rows], ATTENTION_ORDER).items()
     )
-    observed_status_counts = Counter(row["growth_trend"] or "未知" for row in growth_rows)
+    observed_status_counts = Counter(display_growth_status(row) or "未知" for row in growth_rows)
     trend_lines = "\n".join(f"- {name}: {count}" for name, count in sorted(observed_status_counts.items()))
     chart_lines = "\n".join(f"- {display_report_path(path)}" for path in chart_paths)
     content = f"""# 可视化与重点复检清单摘要

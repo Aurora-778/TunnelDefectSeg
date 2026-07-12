@@ -35,13 +35,18 @@ class MemoryAgent(BaseAgent):
         growth_rows = self.read_csv(growth_path)
         growth_by_id = {row.get("disease_id", ""): row for row in growth_rows}
         grouped_rows = self._group_by_disease(report_rows)
+        missing_growth_ids = sorted(disease_id for disease_id in grouped_rows if disease_id not in growth_by_id)
+        if missing_growth_ids:
+            raise ValueError(
+                "growth_analysis missing disease_id records: " + ", ".join(missing_growth_ids)
+            )
 
         rows: list[dict[str, Any]] = []
         for disease_id in sorted(grouped_rows):
             disease_rows = sorted(grouped_rows[disease_id], key=self._inspection_sort_key)
             first = disease_rows[0]
             last = disease_rows[-1]
-            growth = growth_by_id.get(disease_id, {})
+            growth = growth_by_id[disease_id]
             first_area = self._to_float(first.get("max_area_px"))
             last_area = self._to_float(last.get("max_area_px"))
             area_growth_px = last_area - first_area
@@ -50,9 +55,13 @@ class MemoryAgent(BaseAgent):
             first_risk = first.get("risk_level", "")
             last_risk = last.get("risk_level", "")
             risk_change = self._risk_score(last_risk) - self._risk_score(first_risk)
-            growth_trend = growth.get("growth_trend") or self._growth_trend(area_growth_rate)
-            attention_level = growth.get("attention_level") or self._attention_level(area_growth_rate, last_risk)
             comparability_status = growth.get("comparability_status", "")
+            if comparability_status == "verified_comparable":
+                growth_trend = growth.get("growth_trend") or self._growth_trend(area_growth_rate)
+                attention_level = growth.get("attention_level") or self._attention_level(area_growth_rate, last_risk)
+            else:
+                growth_trend = "不可比较"
+                attention_level = growth.get("attention_level") or self._attention_level(0.0, last_risk)
             total_seen_frames = sum(int(self._to_float(row.get("frame_count"))) for row in disease_rows)
             source_inspection_ids = sorted({row.get("inspection_id", "") for row in disease_rows if row.get("inspection_id", "")})
             first_inspection = first.get("inspection_id", "")

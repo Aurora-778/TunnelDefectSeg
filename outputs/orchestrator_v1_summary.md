@@ -9,9 +9,9 @@
 
 ## Outputs
 
-- `C:\Users\26822\Downloads\data\data\simulated\disease_memory_bank.csv`
-- `C:\Users\26822\Downloads\data\data\simulated\association_records.csv`
-- `C:\Users\26822\Downloads\data\outputs\orchestrator_web_manifest.md`
+- `data/simulated/disease_memory_bank.csv`
+- `data/simulated/association_records.csv`
+- `outputs/orchestrator_web_manifest.md`
 
 ## Boundary
 

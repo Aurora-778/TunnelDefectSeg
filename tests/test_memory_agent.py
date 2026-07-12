@@ -67,8 +67,14 @@ def test_memory_agent_builds_cross_inspection_memory(tmp_path):
     )
     write_csv(
         data_dir / "disease_growth_analysis.csv",
-        [{"disease_id": "D001", "main_clock_direction": "3点"}],
-        ["disease_id", "main_clock_direction"],
+        [{
+            "disease_id": "D001",
+            "main_clock_direction": "3点",
+            "growth_trend": "明显增长",
+            "attention_level": "重点关注",
+            "comparability_status": "verified_comparable",
+        }],
+        ["disease_id", "main_clock_direction", "growth_trend", "attention_level", "comparability_status"],
     )
 
     context = {
@@ -112,6 +118,69 @@ def test_memory_agent_builds_cross_inspection_memory(tmp_path):
     assert Path(result["memory_agent_report_path"]).exists()
     assert Path(result["memory_agent_log_path"]).exists()
     assert result["memory_bank_rows"] == 1
+
+
+def _batch_memory_context(tmp_path: Path, growth_rows: list[dict[str, str]]) -> dict:
+    data_dir = tmp_path / "data" / "simulated"
+    report_fields = [
+        "inspection_id", "disease_id", "disease_type", "frame_count", "max_area_px", "risk_level",
+        "main_clock_direction", "start_mileage_text", "end_mileage_text", "representative_image_path",
+        "representative_mask_path",
+    ]
+    write_csv(
+        data_dir / "disease_engineering_report.csv",
+        [
+            {"inspection_id": "I001", "disease_id": "D001", "disease_type": "crack", "frame_count": "1", "max_area_px": "100", "risk_level": "低", "main_clock_direction": "3点", "start_mileage_text": "K12+000", "end_mileage_text": "K12+000", "representative_image_path": "images/old.png", "representative_mask_path": "masks/old.png"},
+            {"inspection_id": "I002", "disease_id": "D001", "disease_type": "crack", "frame_count": "1", "max_area_px": "200", "risk_level": "低", "main_clock_direction": "3点", "start_mileage_text": "K12+000", "end_mileage_text": "K12+000", "representative_image_path": "images/new.png", "representative_mask_path": "masks/new.png"},
+        ],
+        report_fields,
+    )
+    growth_fields = ["disease_id", "main_clock_direction", "growth_trend", "attention_level", "comparability_status"]
+    write_csv(data_dir / "disease_growth_analysis.csv", growth_rows, growth_fields)
+    return {
+        "inputs": {"memory": {
+            "engineering_report": "data/simulated/disease_engineering_report.csv",
+            "growth_analysis": "data/simulated/disease_growth_analysis.csv",
+            "output_path": "data/simulated/disease_memory_bank.csv",
+            "report_path": "outputs/memory_agent_report.md",
+            "summary_path": "outputs/disease_memory_bank_summary.md",
+            "log_path": "logs/memory_agent.log",
+        }},
+        "outputs": {},
+        "shared": {"project_root": str(tmp_path)},
+    }
+
+
+def test_memory_agent_rejects_missing_growth_record(tmp_path):
+    context = _batch_memory_context(tmp_path, [])
+
+    try:
+        MemoryAgent().run(context)
+    except ValueError as exc:
+        assert "growth_analysis missing disease_id records: D001" in str(exc)
+    else:
+        raise AssertionError("Expected missing growth record to fail")
+
+
+def test_memory_agent_forces_noncomparable_growth_to_neutral(tmp_path):
+    context = _batch_memory_context(
+        tmp_path,
+        [{
+            "disease_id": "D001",
+            "main_clock_direction": "3点",
+            "growth_trend": "明显增长",
+            "attention_level": "持续观察",
+            "comparability_status": "not_longitudinally_comparable",
+        }],
+    )
+
+    result = MemoryAgent().run(context)
+    row = read_csv(Path(result["disease_memory_bank_path"]))[0]
+
+    assert row["growth_trend"] == "不可比较"
+    assert row["comparability_status"] == "not_longitudinally_comparable"
+    assert "面积变化率" not in row["memory_description"]
+    assert "仅保留面积审计" in row["memory_description"]
 
 
 def test_memory_agent_incremental_update_appends_current_inspection(tmp_path):

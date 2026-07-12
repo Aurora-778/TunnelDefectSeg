@@ -1,6 +1,7 @@
 from scripts.analyze_disease_growth import aggregate_rows, write_markdown_report
 from scripts.generate_visualization_and_recheck_list import (
     build_priority_recheck_list,
+    display_growth_status,
     write_recheck_report,
     write_summary_report as write_visualization_summary,
 )
@@ -70,3 +71,29 @@ def test_noncomparable_recheck_uses_neutral_audit_wording(tmp_path):
     assert "面积减小" not in text
     assert "基本稳定" not in text
     assert "真实复检数据后再判断方向性变化" in text
+
+
+def test_noncomparable_stale_direction_does_not_select_recheck():
+    records = aggregate_rows([_row("I001", "100"), _row("I002", "200")])
+    records[0]["attention_level"] = "常规记录"
+    records[0]["last_risk_level"] = "低"
+    records[0]["growth_trend"] = "明显增长"
+
+    assert build_priority_recheck_list(records) == []
+    assert display_growth_status(records[0]) == "不可比较"
+
+
+def test_display_growth_status_preserves_insufficient_history():
+    row = {"comparability_status": "insufficient_history", "growth_trend": "明显增长"}
+
+    assert display_growth_status(row) == "数据不足"
+
+
+def test_noncomparable_recheck_order_ignores_area_growth_rate():
+    records = aggregate_rows([_row("I001", "100"), _row("I002", "200")])
+    larger = dict(records[0], disease_id="D001", attention_level="持续观察", last_risk_level="中", last_area_px="300", area_growth_rate="-0.9")
+    smaller = dict(records[0], disease_id="D002", attention_level="持续观察", last_risk_level="中", last_area_px="100", area_growth_rate="0.9")
+
+    rows = build_priority_recheck_list([smaller, larger])
+
+    assert [row["disease_id"] for row in rows] == ["D001", "D002"]

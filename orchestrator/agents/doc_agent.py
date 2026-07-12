@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from orchestrator.agents.base import BaseAgent
+from scripts.report_paths import report_path
 
 
 class DocAgent(BaseAgent):
@@ -19,6 +20,7 @@ class DocAgent(BaseAgent):
         memory_output = context.get("outputs", {}).get("memory", {})
         association_output = context.get("outputs", {}).get("association", {})
         web_output = context.get("outputs", {}).get("web", {})
+        project_root = self.project_root(context)
 
         lines = [
             "## Pipeline",
@@ -30,9 +32,9 @@ class DocAgent(BaseAgent):
             "",
             "## Outputs",
             "",
-            f"- `{memory_output.get('disease_memory_bank_path', '')}`",
-            f"- `{association_output.get('association_records_path', '')}`",
-            f"- `{web_output.get('web_manifest_path', '')}`",
+            f"- `{report_path(memory_output.get('disease_memory_bank_path', ''), project_root)}`",
+            f"- `{report_path(association_output.get('association_records_path', ''), project_root)}`",
+            f"- `{report_path(web_output.get('web_manifest_path', ''), project_root)}`",
             "",
             "## Boundary",
             "",

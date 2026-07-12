@@ -77,7 +77,7 @@ class FinalReportAgent(BaseAgent):
         association_records: Path,
     ) -> str:
         risk_counts = Counter(row.get("last_risk_level") or row.get("risk_level", "") for row in growth_rows)
-        trend_counts = Counter(row.get("growth_trend", "") for row in growth_rows)
+        trend_counts = Counter(self._display_growth_status(row) for row in growth_rows)
         association_rows = self._read_csv(association_records)
         association_note = (
             "- 当前仅有 baseline，尚无可关联 query inspection。"
@@ -255,6 +255,13 @@ Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and His
 
     def _counter_lines(self, counter: Counter) -> str:
         return "\n".join(f"- {key or '未知'}：{value}" for key, value in sorted(counter.items())) or "- 暂无数据"
+
+    def _display_growth_status(self, row: dict[str, str]) -> str:
+        if row.get("comparability_status") in {"verified_comparable", "longitudinally_comparable"}:
+            return row.get("growth_trend", "")
+        if row.get("comparability_status") == "insufficient_history":
+            return "数据不足"
+        return "不可比较"
 
     def _to_float(self, value: object) -> float:
         try:

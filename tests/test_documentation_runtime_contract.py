@@ -2,10 +2,12 @@ import csv
 import re
 from pathlib import Path
 
+from orchestrator.agents.doc_agent import DocAgent
+from orchestrator.agents.web_agent import WebAgent
 from scripts.report_paths import report_path
 
 
-ABSOLUTE_USER_PATH = re.compile(r"(?:[A-Za-z]:[\\/](?:Users|users)[\\/]|/(?:home|Users)/[^/\s`]+/)")
+ABSOLUTE_USER_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|/(?:home|Users|tmp|opt)(?:[\\/]|$))")
 FORMAL_TEXT_ARTIFACTS = [
     Path("outputs/disease_engineering_report.md"),
     Path("outputs/disease_engineering_report_summary.md"),
@@ -22,6 +24,9 @@ FORMAL_TEXT_ARTIFACTS = [
     Path("outputs/association_evaluation_report.md"),
     Path("outputs/association_benchmark/association_benchmark_report.md"),
     Path("outputs/association_benchmark/benchmark_manifest.json"),
+    Path("outputs/orchestrator_v1_summary.md"),
+    Path("outputs/orchestrator_web_manifest.md"),
+    Path("docs/orchestrator_v1_summary.md"),
 ]
 for artifact_root in (Path("data/simulated/main_progressive"), Path("data/simulated/progressive")):
     FORMAL_TEXT_ARTIFACTS.extend(
@@ -53,6 +58,38 @@ def test_report_path_uses_relative_posix_or_external_marker(tmp_path):
 
     assert report_path(project_root / "outputs" / "report.md") == "outputs/report.md"
     assert report_path(tmp_path / "external.csv") == "external_input:external.csv"
+
+
+def test_report_path_recognizes_foreign_platform_absolute_paths(tmp_path):
+    assert report_path(r"C:\Users\alice\input.csv", tmp_path) == "external_input:input.csv"
+    assert report_path(r"D:\datasets\input.csv", tmp_path) == "external_input:input.csv"
+    assert report_path("/home/alice/input.csv", tmp_path) == "external_input:input.csv"
+    assert report_path("/opt/data/input.csv", tmp_path) == "external_input:input.csv"
+
+
+def test_doc_and_web_agents_write_project_relative_paths(tmp_path):
+    context = {
+        "inputs": {
+            "web": {"manifest_path": "outputs/orchestrator_web_manifest.md"},
+            "doc": {"summary_path": "outputs/orchestrator_v1_summary.md", "docs_path": "docs/orchestrator_v1_summary.md"},
+        },
+        "outputs": {
+            "memory": {"disease_memory_bank_path": str(tmp_path / "data/simulated/disease_memory_bank.csv"), "memory_bank_rows": 1},
+            "association": {"association_records_path": str(tmp_path / "data/simulated/association_records.csv"), "association_rows": 1},
+        },
+        "shared": {"project_root": str(tmp_path)},
+    }
+    context["outputs"]["web"] = WebAgent().run(context)
+    DocAgent().run(context)
+
+    for path in (
+        tmp_path / "outputs/orchestrator_web_manifest.md",
+        tmp_path / "outputs/orchestrator_v1_summary.md",
+        tmp_path / "docs/orchestrator_v1_summary.md",
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert str(tmp_path) not in text
+        assert not ABSOLUTE_USER_PATH.search(text)
 
 
 def test_formal_text_artifacts_do_not_expose_user_absolute_paths():

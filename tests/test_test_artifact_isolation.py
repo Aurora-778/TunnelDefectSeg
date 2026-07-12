@@ -16,8 +16,11 @@ PROTECTED = [
     ROOT / "outputs/association_benchmark",
     ROOT / "outputs/progressive_evaluation",
     ROOT / "outputs/disease_engineering_report.md",
+    ROOT / "outputs/disease_engineering_report_summary.md",
     ROOT / "outputs/disease_growth_analysis_report.md",
     ROOT / "outputs/disease_growth_analysis_summary.md",
+    ROOT / "outputs/disease_memory_bank_summary.md",
+    ROOT / "outputs/memory_agent_report.md",
     ROOT / "outputs/association_evaluation_report.md",
     ROOT / "outputs/visualization_report.md",
     ROOT / "outputs/visualization_summary.md",
@@ -25,6 +28,11 @@ PROTECTED = [
     ROOT / "outputs/final_project_report.md",
     ROOT / "outputs/system_summary.md",
     ROOT / "outputs/key_insights.md",
+    ROOT / "outputs/orchestrator_v1_summary.md",
+    ROOT / "outputs/orchestrator_web_manifest.md",
+    ROOT / "outputs/project_review_report.md",
+    ROOT / "outputs/robot_kict_merge_report.md",
+    ROOT / "docs/orchestrator_v1_summary.md",
 ]
 
 

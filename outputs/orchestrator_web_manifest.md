@@ -2,8 +2,8 @@
 
 ## Web Dashboard 可接入文件
 
-- Disease Memory Bank：`C:\Users\26822\Downloads\data\data\simulated\disease_memory_bank.csv`
-- Association Records：`C:\Users\26822\Downloads\data\data\simulated\association_records.csv`
+- Disease Memory Bank：`data/simulated/disease_memory_bank.csv`
+- Association Records：`data/simulated/association_records.csv`
 - Memory rows：10
 - Association rows：30
 

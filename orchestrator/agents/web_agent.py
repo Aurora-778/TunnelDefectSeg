@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from orchestrator.agents.base import BaseAgent
+from scripts.report_paths import report_path
 
 
 class WebAgent(BaseAgent):
@@ -19,12 +20,13 @@ class WebAgent(BaseAgent):
         association_output = context.get("outputs", {}).get("association", {})
         memory_path = memory_output.get("disease_memory_bank_path") or inputs.get("memory_bank", "")
         association_path = association_output.get("association_records_path") or inputs.get("association_records", "")
+        project_root = self.project_root(context)
 
         lines = [
             "## Web Dashboard 可接入文件",
             "",
-            f"- Disease Memory Bank：`{memory_path}`",
-            f"- Association Records：`{association_path}`",
+            f"- Disease Memory Bank：`{report_path(memory_path, project_root)}`",
+            f"- Association Records：`{report_path(association_path, project_root)}`",
             f"- Memory rows：{memory_output.get('memory_bank_rows', 0)}",
             f"- Association rows：{association_output.get('association_rows', 0)}",
             "",

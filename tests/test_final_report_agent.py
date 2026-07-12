@@ -28,7 +28,7 @@ def test_final_report_agent_writes_reports_and_validates_outputs(tmp_path):
     write_csv(engineering_report, [{"disease_id": "D001"}])
     write_csv(
         growth_results,
-        [{"disease_id": "D001", "growth_trend": "明显增长", "last_risk_level": "高", "area_growth_rate": "1.0"}],
+        [{"disease_id": "D001", "growth_trend": "明显增长", "last_risk_level": "高", "area_growth_rate": "1.0", "comparability_status": "verified_comparable"}],
     )
     write_csv(memory_bank, [{"memory_id": "MEM-D001", "disease_id": "D001"}])
     write_csv(association_records, [{"association_status": "matched", "label_disease_id": "D001"}])
@@ -60,3 +60,24 @@ def test_final_report_agent_writes_reports_and_validates_outputs(tmp_path):
     assert (outputs / "final_project_report.md").exists()
     assert (outputs / "system_summary.md").exists()
     assert (outputs / "key_insights.md").exists()
+
+
+def test_final_report_masks_stale_direction_for_noncomparable_row(tmp_path):
+    association_records = tmp_path / "association.csv"
+    association_records.write_text("association_status\n", encoding="utf-8")
+    text = FinalReportAgent()._final_report_text(
+        engineering_rows=[{"disease_id": "D001"}],
+        growth_rows=[{
+            "disease_id": "D001",
+            "growth_trend": "明显增长",
+            "last_risk_level": "高",
+            "area_growth_rate": "1.0",
+            "comparability_status": "not_longitudinally_comparable",
+        }],
+        recheck_rows=[],
+        chart_paths=[],
+        association_records=association_records,
+    )
+
+    assert "不可比较：1" in text
+    assert "明显增长：1" not in text
