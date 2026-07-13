@@ -2,77 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+from conftest import PROTECTED_ARTIFACTS as PROTECTED
+from conftest import artifact_manifest_diff as _manifest_diff
+from conftest import artifact_snapshot as _snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
-PROTECTED = [
-    ROOT / "data/simulated",
-    ROOT / "outputs/visualizations",
-    ROOT / "outputs/association_benchmark",
-    ROOT / "outputs/progressive_evaluation",
-    ROOT / "outputs/disease_engineering_report.md",
-    ROOT / "outputs/disease_engineering_report_summary.md",
-    ROOT / "outputs/disease_growth_analysis_report.md",
-    ROOT / "outputs/disease_growth_analysis_summary.md",
-    ROOT / "outputs/disease_memory_bank_summary.md",
-    ROOT / "outputs/memory_agent_report.md",
-    ROOT / "outputs/association_evaluation_report.md",
-    ROOT / "outputs/visualization_report.md",
-    ROOT / "outputs/visualization_summary.md",
-    ROOT / "outputs/recheck_list_report.md",
-    ROOT / "outputs/final_project_report.md",
-    ROOT / "outputs/system_summary.md",
-    ROOT / "outputs/key_insights.md",
-    ROOT / "outputs/orchestrator_v1_summary.md",
-    ROOT / "outputs/orchestrator_web_manifest.md",
-    ROOT / "outputs/project_review_report.md",
-    ROOT / "outputs/robot_kict_merge_report.md",
-    ROOT / "docs/orchestrator_v1_summary.md",
-]
-
-
-def _file_digest(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _snapshot(paths: list[Path] | None = None, base: Path = ROOT) -> dict[str, tuple[str, int, str]]:
-    """Capture names, structure, sizes and content without relying on mtimes."""
-
-    manifest: dict[str, tuple[str, int, str]] = {}
-    for protected in PROTECTED if paths is None else paths:
-        relative_root = protected.relative_to(base).as_posix()
-        if not protected.exists():
-            manifest[relative_root] = ("missing", 0, "")
-            continue
-        candidates = [protected]
-        if protected.is_dir():
-            candidates.extend(sorted(protected.rglob("*")))
-        for candidate in candidates:
-            relative = candidate.relative_to(base).as_posix()
-            if candidate.is_dir():
-                manifest[relative] = ("directory", 0, "")
-            else:
-                manifest[relative] = ("file", candidate.stat().st_size, _file_digest(candidate))
-    return manifest
-
-
-def _manifest_diff(
-    before: dict[str, tuple[str, int, str]],
-    after: dict[str, tuple[str, int, str]],
-) -> tuple[set[str], set[str], set[str]]:
-    added = set(after) - set(before)
-    removed = set(before) - set(after)
-    modified = {path for path in set(before) & set(after) if before[path] != after[path]}
-    return added, removed, modified
 
 
 def test_manifest_detects_added_removed_modified_and_directory_changes(tmp_path):

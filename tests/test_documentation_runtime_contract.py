@@ -1,5 +1,6 @@
 import csv
 import re
+import subprocess
 from pathlib import Path
 
 from orchestrator.agents.doc_agent import DocAgent
@@ -7,30 +8,28 @@ from orchestrator.agents.web_agent import WebAgent
 from scripts.report_paths import report_path
 
 
-ABSOLUTE_USER_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|/(?:home|Users|tmp|opt)(?:[\\/]|$))")
-FORMAL_TEXT_ARTIFACTS = [
-    Path("outputs/disease_engineering_report.md"),
-    Path("outputs/disease_engineering_report_summary.md"),
-    Path("outputs/disease_growth_analysis_report.md"),
-    Path("outputs/disease_growth_analysis_summary.md"),
-    Path("outputs/disease_memory_bank_summary.md"),
-    Path("outputs/memory_agent_report.md"),
-    Path("outputs/visualization_report.md"),
-    Path("outputs/visualization_summary.md"),
-    Path("outputs/recheck_list_report.md"),
-    Path("outputs/final_project_report.md"),
-    Path("outputs/system_summary.md"),
-    Path("outputs/key_insights.md"),
-    Path("outputs/association_evaluation_report.md"),
-    Path("outputs/association_benchmark/association_benchmark_report.md"),
-    Path("outputs/association_benchmark/benchmark_manifest.json"),
-    Path("outputs/orchestrator_v1_summary.md"),
-    Path("outputs/orchestrator_web_manifest.md"),
-    Path("docs/orchestrator_v1_summary.md"),
+ABSOLUTE_USER_PATH = re.compile(r"(?:(?<![A-Za-z])[A-Za-z]:[\\/]|/(?:home|Users|tmp|opt)(?:[\\/]|$))")
+FORMAL_TEXT_ROOTS = [
+    "data/simulated",
+    "outputs",
+    "docs/orchestrator_v1_summary.md",
+    "docs/presentations/tunnel-defect-project-speaker-output",
 ]
-for artifact_root in (Path("data/simulated/main_progressive"), Path("data/simulated/progressive")):
-    FORMAL_TEXT_ARTIFACTS.extend(
-        path for path in artifact_root.rglob("*") if path.is_file() and path.suffix.lower() in {".md", ".json", ".csv"}
+
+
+def tracked_formal_text_artifacts() -> list[Path]:
+    """Return tracked formal text artifacts, excluding local logs and WIP outputs."""
+
+    result = subprocess.run(
+        ["git", "ls-files", "--", *FORMAL_TEXT_ROOTS],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return sorted(
+        Path(line)
+        for line in result.stdout.splitlines()
+        if line and Path(line).suffix.lower() in {".md", ".json", ".csv"}
     )
 
 
@@ -67,6 +66,10 @@ def test_report_path_recognizes_foreign_platform_absolute_paths(tmp_path):
     assert report_path("/opt/data/input.csv", tmp_path) == "external_input:input.csv"
 
 
+def test_absolute_path_pattern_does_not_treat_http_url_as_drive_path():
+    assert not ABSOLUTE_USER_PATH.search("Open http://127.0.0.1:8000/ in a browser")
+
+
 def test_doc_and_web_agents_write_project_relative_paths(tmp_path):
     context = {
         "inputs": {
@@ -93,6 +96,6 @@ def test_doc_and_web_agents_write_project_relative_paths(tmp_path):
 
 
 def test_formal_text_artifacts_do_not_expose_user_absolute_paths():
-    for path in FORMAL_TEXT_ARTIFACTS:
+    for path in tracked_formal_text_artifacts():
         text = path.read_text(encoding="utf-8")
         assert not ABSOLUTE_USER_PATH.search(text), f"absolute user path found in {path.as_posix()}"

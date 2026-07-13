@@ -1,6 +1,6 @@
 # 隧道病害项目 PPT 视觉核对说明
 
-Deck reviewed: `C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-project/index.html`
+Deck reviewed: `docs/presentations/tunnel-defect-project/index.html`
 
 ## Review Scope
 

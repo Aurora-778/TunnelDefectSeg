@@ -1,6 +1,6 @@
 {
   "title": "Speaker Notes Display Version",
-  "deck_path": "C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-project/index.html",
+  "deck_path": "docs/presentations/tunnel-defect-project/index.html",
   "language": "Chinese with canonical technical terms preserved in English",
   "comprehension_brief": {
     "Thesis": "The project is not only a segmentation model; it is a tunnel defect inspection system that detects defects, explains confidence, flags review risk, and expresses engineering location.",

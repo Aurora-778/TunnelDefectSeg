@@ -2,6 +2,7 @@ from scripts.analyze_disease_growth import aggregate_rows, write_markdown_report
 from scripts.generate_visualization_and_recheck_list import (
     build_priority_recheck_list,
     display_growth_status,
+    generate_standard_visualizations,
     write_recheck_report,
     write_summary_report as write_visualization_summary,
 )
@@ -97,3 +98,47 @@ def test_noncomparable_recheck_order_ignores_area_growth_rate():
     rows = build_priority_recheck_list([smaller, larger])
 
     assert [row["disease_id"] for row in rows] == ["D001", "D002"]
+
+
+def test_noncomparable_recheck_normalizes_stale_directional_fields(tmp_path):
+    records = aggregate_rows([_row("I001", "100"), _row("I002", "200")])
+    records[0].update(
+        {
+            "attention_level": "重点关注",
+            "last_risk_level": "高",
+            "risk_level_change": "2",
+            "growth_trend": "明显增长",
+            "growth_description": "旧产物声称病害明显增长且风险上升。",
+        }
+    )
+
+    rows = build_priority_recheck_list(records)
+    report = tmp_path / "recheck.md"
+    write_recheck_report(rows, report, tmp_path / "recheck.csv")
+    text = report.read_text(encoding="utf-8")
+
+    assert rows[0]["growth_trend"] == "不可比较"
+    assert "风险等级较首次巡检出现上升" not in rows[0]["recheck_reason"]
+    assert "明显增长" not in rows[0]["growth_description"]
+    assert "风险上升" not in rows[0]["growth_description"]
+    assert "旧产物声称" not in text
+
+
+def test_noncomparable_risk_change_is_not_plotted(monkeypatch, tmp_path):
+    records = aggregate_rows([_row("I001", "100"), _row("I002", "200")])
+    records[0]["risk_level_change"] = "2"
+    captured: dict[str, tuple[list[str], list[int | float]]] = {}
+
+    def capture_chart(labels, values, title, xlabel, ylabel, output):
+        captured[title] = (labels, values)
+        return output
+
+    monkeypatch.setattr(
+        "scripts.generate_visualization_and_recheck_list.save_bar_chart",
+        capture_chart,
+    )
+    generate_standard_visualizations(records, tmp_path)
+
+    labels, values = captured["风险等级变化分布"]
+    assert labels == ["暂无可比数据"]
+    assert values == [0]

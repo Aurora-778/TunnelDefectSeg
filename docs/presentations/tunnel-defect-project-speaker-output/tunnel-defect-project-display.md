@@ -1,6 +1,6 @@
 # 隧道病害语义分割与可信增强展示讲稿
 
-Deck path: `C:/Users/26822/Downloads/data/docs/presentations/tunnel-defect-project/index.html`
+Deck path: `docs/presentations/tunnel-defect-project/index.html`
 
 输出语言：中文。专业名词保留英文，例如 `SegFormer`、`mask`、`GT`、`mIoU`、`uncertainty`、`IoU`。
 
@@ -167,7 +167,7 @@ Transition: 最后一页总结目前完成情况和下一步工作。
 最后一句话总结这个项目：它不是只告诉用户“这里可能有病害”，而是进一步告诉用户“为什么这么判断、位置大概在哪里，以及哪里需要再看一眼”。
 ## Demo Operation Script
 
-1. 双击 `C:/Users/26822/Downloads/data/run_web_app.bat` 启动 Web 应用。
+1. 在仓库根目录双击 `run_web_app.bat` 启动 Web 应用。
 2. 打开 `http://127.0.0.1:8000/`。
 3. 先选数据集内样本，展示原图、GT 标注、single mask、selected mask、overlay、skeleton。
 4. 讲清楚：有 GT 的样本可以算 mIoU，因为 GT 就是人工标注 mask。

@@ -272,6 +272,21 @@ def display_growth_status(row: dict[str, str]) -> str:
     return "不可比较"
 
 
+def neutral_audit_description(row: dict[str, str]) -> str:
+    """Describe non-comparable evidence without reusing stale direction claims."""
+
+    if row.get("comparability_status") == "insufficient_history":
+        return (
+            f"病害{row.get('disease_id', '')}当前仅有一次巡检记录，"
+            "保留静态面积证据，待补充真实复检数据后再判断方向性变化。"
+        )
+    return (
+        f"病害{row.get('disease_id', '')}当前不可纵向比较。"
+        f"静态面积审计为{row.get('first_area_px', '')} px² -> {row.get('last_area_px', '')} px²，"
+        "该数值仅作描述性审计，不构成增长、减小或稳定结论。"
+    )
+
+
 def ordered_counts(values: list[str], order: list[str]) -> tuple[list[str], list[int]]:
     counts = Counter(value or "未知" for value in values)
     labels = [label for label in order if counts.get(label, 0) > 0]
@@ -296,12 +311,15 @@ def generate_standard_visualizations(growth_rows: list[dict[str, str]], output_d
     labels, values = ordered_counts([display_growth_status(row) for row in growth_rows], GROWTH_TREND_ORDER)
     paths.append(save_bar_chart(labels, values, "跨巡检可比性状态分布", "状态", "病害数量", output_dir / CHART_FILES["trend"]))
 
-    risk_counts = Counter(parse_int(row["risk_level_change"], "risk_level_change") for row in growth_rows)
+    comparable_rows = [row for row in growth_rows if is_longitudinally_comparable(row)]
+    risk_counts = Counter(parse_int(row["risk_level_change"], "risk_level_change") for row in comparable_rows)
     risk_keys = sorted(risk_counts)
+    risk_labels = [risk_change_label(value) for value in risk_keys] if risk_keys else ["暂无可比数据"]
+    risk_values = [risk_counts[value] for value in risk_keys] if risk_keys else [0]
     paths.append(
         save_bar_chart(
-            [risk_change_label(value) for value in risk_keys],
-            [risk_counts[value] for value in risk_keys],
+            risk_labels,
+            risk_values,
             "风险等级变化分布",
             "风险等级变化值",
             "病害数量",
@@ -309,7 +327,6 @@ def generate_standard_visualizations(growth_rows: list[dict[str, str]], output_d
         )
     )
 
-    comparable_rows = [row for row in growth_rows if is_longitudinally_comparable(row)]
     top_growth = sorted(comparable_rows, key=lambda row: parse_float(row["area_growth_rate"], "area_growth_rate"), reverse=True)[:10]
     if not top_growth:
         paths.append(
@@ -419,7 +436,7 @@ def recheck_reason(row: dict[str, str]) -> str:
         reasons.append("面积增长率超过 50%，存在明显扩展趋势")
     if row["last_risk_level"] == "高":
         reasons.append("末次巡检风险等级为高")
-    if parse_int(row["risk_level_change"], "risk_level_change") >= 1:
+    if is_longitudinally_comparable(row) and parse_int(row["risk_level_change"], "risk_level_change") >= 1:
         reasons.append("风险等级较首次巡检出现上升")
     if not reasons:
         reasons.append("该病害满足持续观察条件")
@@ -480,6 +497,9 @@ def build_priority_recheck_list(growth_rows: list[dict[str, str]]) -> list[dict[
     rows: list[dict[str, str]] = []
     for index, row in enumerate(selected, start=1):
         item = {key: row.get(key, "") for key in RECHECK_COLUMNS}
+        if not is_longitudinally_comparable(row):
+            item["growth_trend"] = display_growth_status(row)
+            item["growth_description"] = neutral_audit_description(row)
         item["priority_rank"] = str(index)
         item["recheck_reason"] = recheck_reason(row)
         item["recheck_suggestion"] = recheck_suggestion(row["attention_level"], is_longitudinally_comparable(row))
