@@ -1,7 +1,7 @@
 ---
 title: TunnelDefect Patch 1.2：可信度展示投影收口计划
 type: fix
-status: active
+status: completed
 date: 2026-07-15
 origin: docs/brainstorms/2026-07-15-credibility-projection-closure-requirements.md
 ---
