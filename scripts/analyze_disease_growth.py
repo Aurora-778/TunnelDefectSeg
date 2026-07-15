@@ -318,9 +318,9 @@ def percent_text(rate: str) -> str:
 
 
 def is_longitudinally_comparable(record: dict[str, str]) -> bool:
-    """Accept the current verified value and the public contract alias."""
+    """Allow directional claims only for explicitly verified observations."""
 
-    return record.get("comparability_status") in {"verified_comparable", "longitudinally_comparable"}
+    return record.get("comparability_status") == "verified_comparable"
 
 
 def write_markdown_report(
@@ -380,9 +380,14 @@ def write_markdown_report(
                         "- 说明：当前记录不具备纵向比较条件；该数值仅用于静态样本的描述性审计，不构成方向性变化或长期变化判断。",
                     ]
                 )
+            risk_line = (
+                f"- 风险变化：{record['first_risk_level']} -> {record['last_risk_level']}"
+                if comparable
+                else f"- 当前风险等级：{record['last_risk_level']}"
+            )
             detail_lines.extend(
                 [
-                    f"- 风险变化：{record['first_risk_level']} -> {record['last_risk_level']}",
+                    risk_line,
                     f"- 关注等级：{record['attention_level']}",
                     f"- 证据等级：{record['claim_level']}",
                     f"- 可比性状态：{record['comparability_status']}",
@@ -410,10 +415,14 @@ def write_summary_report(
     inspection_ids = {row["inspection_id"] for row in input_rows}
     trend_counts = Counter(record["growth_trend"] for record in records)
     attention_counts = Counter(record["attention_level"] for record in records)
-    risk_change_counts = Counter(record["risk_level_change"] for record in records)
+    comparable_records = [record for record in records if is_longitudinally_comparable(record)]
+    risk_change_counts = Counter(record["risk_level_change"] for record in comparable_records)
     trend_lines = "\n".join(f"- {name}: {count}" for name, count in sorted(trend_counts.items()))
     attention_lines = "\n".join(f"- {name}: {count}" for name, count in sorted(attention_counts.items()))
-    risk_change_lines = "\n".join(f"- {name}: {count}" for name, count in sorted(risk_change_counts.items()))
+    risk_change_lines = (
+        "\n".join(f"- {name}: {count}" for name, count in sorted(risk_change_counts.items()))
+        or "- 暂无可比数据"
+    )
 
     content = f"""# 病害面积审计与可比性摘要
 
@@ -441,7 +450,7 @@ def write_summary_report(
 
 {attention_lines}
 
-## 风险等级变化统计
+## 已验证可比记录风险等级变化统计
 
 {risk_change_lines}
 

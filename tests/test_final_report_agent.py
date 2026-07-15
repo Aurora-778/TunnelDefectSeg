@@ -81,3 +81,55 @@ def test_final_report_masks_stale_direction_for_noncomparable_row(tmp_path):
 
     assert "不可比较：1" in text
     assert "明显增长：1" not in text
+
+
+def test_final_report_rejects_legacy_comparability_alias(tmp_path):
+    association_records = tmp_path / "association.csv"
+    association_records.write_text("association_status\n", encoding="utf-8")
+    growth_rows = [{
+        "disease_id": "D001",
+        "growth_trend": "明显增长",
+        "last_risk_level": "高",
+        "area_growth_rate": "1.0",
+        "comparability_status": "longitudinally_comparable",
+    }]
+    agent = FinalReportAgent()
+
+    report = agent._final_report_text(
+        engineering_rows=[{"disease_id": "D001"}],
+        growth_rows=growth_rows,
+        recheck_rows=[],
+        chart_paths=[],
+        association_records=association_records,
+    )
+    insights = agent._key_insights_text(growth_rows, [])
+
+    assert "不可比较：1" in report
+    assert "明显增长：1" not in report
+    assert "增长率 100.0%" not in insights
+    assert "当前没有可纵向比较的规则面积变化记录" in insights
+
+
+def test_final_report_preserves_verified_comparable_direction(tmp_path):
+    association_records = tmp_path / "association.csv"
+    association_records.write_text("association_status\n", encoding="utf-8")
+    growth_rows = [{
+        "disease_id": "D001",
+        "growth_trend": "明显增长",
+        "last_risk_level": "高",
+        "area_growth_rate": "1.0",
+        "comparability_status": "verified_comparable",
+    }]
+    agent = FinalReportAgent()
+
+    report = agent._final_report_text(
+        engineering_rows=[{"disease_id": "D001"}],
+        growth_rows=growth_rows,
+        recheck_rows=[],
+        chart_paths=[],
+        association_records=association_records,
+    )
+    insights = agent._key_insights_text(growth_rows, [])
+
+    assert "明显增长：1" in report
+    assert "增长率 100.0%" in insights

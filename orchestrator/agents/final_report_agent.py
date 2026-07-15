@@ -205,7 +205,7 @@ Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and His
         comparable_rows = [
             row
             for row in growth_rows
-            if row.get("comparability_status") in {"verified_comparable", "longitudinally_comparable"}
+            if row.get("comparability_status") == "verified_comparable"
         ]
         top_growth = sorted(comparable_rows, key=lambda row: self._to_float(row.get("area_growth_rate")), reverse=True)[:5]
         top_lines = "\n".join(
@@ -257,7 +257,7 @@ Engineering Report -> Rule-based Growth Evidence -> Final Memory Summary and His
         return "\n".join(f"- {key or '未知'}：{value}" for key, value in sorted(counter.items())) or "- 暂无数据"
 
     def _display_growth_status(self, row: dict[str, str]) -> str:
-        if row.get("comparability_status") in {"verified_comparable", "longitudinally_comparable"}:
+        if row.get("comparability_status") == "verified_comparable":
             return row.get("growth_trend", "")
         if row.get("comparability_status") == "insufficient_history":
             return "数据不足"

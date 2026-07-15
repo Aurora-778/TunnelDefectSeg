@@ -2661,15 +2661,24 @@
       return `<div class="distribution-card"><b>${escapeHtml(title)}</b><p>${text}</p></div>`;
     }
 
+    function directionalMetricsAvailable(row = {}) {
+      return row.directional_metrics_available === true || row.directional_metrics_available === "true";
+    }
+
+    function staticAreaAuditText(row = {}) {
+      return `${row.first_area_px || "-"} -> ${row.last_area_px || "-"} px²`;
+    }
+
     function renderDefectDetail(row = {}) {
+      const directional = directionalMetricsAvailable(row);
       const cells = [
         ["Disease", row.disease_id || "-"],
         ["Type", row.disease_type || "-"],
         ["Mileage", row.last_mileage_range || "-"],
         ["Clock", row.main_clock_direction || "-"],
-        ["Trend", row.growth_trend || "-"],
+        [directional ? "Trend" : "可比性", row.growth_trend || "-"],
         ["Risk", row.last_risk_level || "-"],
-        ["Growth", row.area_growth_rate !== undefined ? `${fmt(row.area_growth_rate, 2)}%` : "-"],
+        [directional ? "Growth" : "静态面积审计", directional ? pct(row.area_growth_rate) : staticAreaAuditText(row)],
         ["Evidence", row.evidence_status || "pending"],
       ];
       const evidenceFigure = row.evidence_overlay_url
@@ -2683,7 +2692,7 @@
           ${cells.map(([label, value]) => `<div class="detail-cell"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`).join("")}
         </div>
         ${evidenceFigure}
-        <div class="detail-note">${escapeHtml(row.growth_description || row.recheck_reason || "暂无增长描述。")}</div>
+        <div class="detail-note">${escapeHtml(row.growth_description || row.recheck_reason || "暂无面积审计说明。")}</div>
         <div class="detail-note" style="margin-top:8px;">${escapeHtml(row.recheck_suggestion || "建议人工复核后再形成养护结论。")}</div>
       `;
     }
@@ -2745,7 +2754,7 @@
       }
 
       document.querySelector("#robotDistributionGrid").innerHTML = [
-        renderDistribution("Growth trend", payload.growth_distribution),
+        renderDistribution("可比性与变化状态", payload.growth_distribution),
         renderDistribution("Attention", payload.attention_distribution),
         renderDistribution("Disease type", payload.disease_type_distribution),
         renderDistribution("Risk level", payload.risk_level_distribution),
@@ -2774,7 +2783,6 @@
           ["工程记录", payload.engineering_record_count ?? "-"],
           ["重点复检", payload.priority_recheck_count ?? "-"],
           ["高风险", payload.high_risk_count ?? "-"],
-          ["明显增长", payload.obvious_growth_count ?? "-"],
           ["图表", payload.visualization_count ?? "-"],
         ];
         document.querySelector("#robotDashboardSource").textContent = payload.source || "fallback";
@@ -2814,15 +2822,21 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         const rows = payload.items || [];
-        grid.innerHTML = rows.length ? rows.slice(0, 12).map((row) => `
-          <article class="data-card">
-            <b>${escapeHtml(row.disease_id || "-")} / ${escapeHtml(row.disease_type || "-")}</b>
-            <span class="tag ${row.attention_level === "重点关注" ? "hot" : ""}">${escapeHtml(row.attention_level || "-")}</span>
-            <span class="tag">${escapeHtml(row.growth_trend || "-")}</span>
-            <p>面积：${escapeHtml(row.first_area_px || "-")} -> ${escapeHtml(row.last_area_px || "-")} px²；增长率：${escapeHtml(row.area_growth_rate || "0")}%；风险：${escapeHtml(row.first_risk_level || "-")} -> ${escapeHtml(row.last_risk_level || "-")}。</p>
-            <p style="margin-top:8px;">${escapeHtml(row.growth_description || "暂无增长描述。")}</p>
-          </article>
-        `).join("") : `<div class="robot-empty">暂无增长分析记录。</div>`;
+        grid.innerHTML = rows.length ? rows.slice(0, 12).map((row) => {
+          const directional = directionalMetricsAvailable(row);
+          const evidence = directional
+            ? `面积：${escapeHtml(row.first_area_px || "-")} -> ${escapeHtml(row.last_area_px || "-")} px²；变化率：${escapeHtml(pct(row.area_growth_rate))}；风险：${escapeHtml(row.first_risk_level || "-")} -> ${escapeHtml(row.last_risk_level || "-")}。`
+            : `静态面积审计：${escapeHtml(staticAreaAuditText(row))}；当前风险：${escapeHtml(row.last_risk_level || "-")}。`;
+          return `
+            <article class="data-card">
+              <b>${escapeHtml(row.disease_id || "-")} / ${escapeHtml(row.disease_type || "-")}</b>
+              <span class="tag ${row.attention_level === "重点关注" ? "hot" : ""}">${escapeHtml(row.attention_level || "-")}</span>
+              <span class="tag">${escapeHtml(row.growth_trend || "-")}</span>
+              <p>${evidence}</p>
+              <p style="margin-top:8px;">${escapeHtml(row.growth_description || "暂无面积审计说明。")}</p>
+            </article>
+          `;
+        }).join("") : `<div class="robot-empty">暂无面积审计记录。</div>`;
       } catch (error) {
         grid.innerHTML = `<div class="robot-empty">增长分析不可用：${escapeHtml(error.message)}</div>`;
       }
@@ -2835,16 +2849,22 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         const rows = payload.items || [];
-        grid.innerHTML = rows.length ? rows.map((row) => `
-          <article class="data-card">
-            <b>Priority ${escapeHtml(row.priority_rank || "-")}：${escapeHtml(row.disease_id || "-")} ${escapeHtml(row.disease_type || "-")}</b>
-            <span class="tag hot">${escapeHtml(row.attention_level || "-")}</span>
-            <span class="tag">${escapeHtml(row.growth_trend || "-")}</span>
-            <p>位置：${escapeHtml(row.last_mileage_range || "-")}，${escapeHtml(row.main_clock_direction || "-")}；风险：${escapeHtml(row.first_risk_level || "-")} -> ${escapeHtml(row.last_risk_level || "-")}。</p>
-            <p style="margin-top:8px;">复检原因：${escapeHtml(row.recheck_reason || "-")}</p>
-            <p style="margin-top:8px;">复检建议：${escapeHtml(row.recheck_suggestion || "-")}</p>
-          </article>
-        `).join("") : `<div class="robot-empty">当前未筛选出需要重点复检的病害对象。</div>`;
+        grid.innerHTML = rows.length ? rows.map((row) => {
+          const directional = directionalMetricsAvailable(row);
+          const riskText = directional
+            ? `${escapeHtml(row.first_risk_level || "-")} -> ${escapeHtml(row.last_risk_level || "-")}`
+            : `当前 ${escapeHtml(row.last_risk_level || "-")}`;
+          return `
+            <article class="data-card">
+              <b>Priority ${escapeHtml(row.priority_rank || "-")}：${escapeHtml(row.disease_id || "-")} ${escapeHtml(row.disease_type || "-")}</b>
+              <span class="tag hot">${escapeHtml(row.attention_level || "-")}</span>
+              <span class="tag">${escapeHtml(row.growth_trend || "-")}</span>
+              <p>位置：${escapeHtml(row.last_mileage_range || "-")}，${escapeHtml(row.main_clock_direction || "-")}；风险：${riskText}。</p>
+              <p style="margin-top:8px;">复检原因：${escapeHtml(row.recheck_reason || "-")}</p>
+              <p style="margin-top:8px;">复检建议：${escapeHtml(row.recheck_suggestion || "-")}</p>
+            </article>
+          `;
+        }).join("") : `<div class="robot-empty">当前未筛选出需要重点复检的病害对象。</div>`;
       } catch (error) {
         grid.innerHTML = `<div class="robot-empty">复检清单不可用：${escapeHtml(error.message)}</div>`;
       }

@@ -259,7 +259,7 @@ def display_text(value: str) -> str:
 
 
 def is_longitudinally_comparable(row: dict[str, str]) -> bool:
-    return row.get("comparability_status") in {"verified_comparable", "longitudinally_comparable"}
+    return row.get("comparability_status") == "verified_comparable"
 
 
 def display_growth_status(row: dict[str, str]) -> str:
@@ -498,7 +498,9 @@ def build_priority_recheck_list(growth_rows: list[dict[str, str]]) -> list[dict[
     for index, row in enumerate(selected, start=1):
         item = {key: row.get(key, "") for key in RECHECK_COLUMNS}
         if not is_longitudinally_comparable(row):
-            item["growth_trend"] = display_growth_status(row)
+            # Priority artifacts use one strict non-directional value for every
+            # row that has not passed the verified longitudinal gate.
+            item["growth_trend"] = "不可比较"
             item["growth_description"] = neutral_audit_description(row)
         item["priority_rank"] = str(index)
         item["recheck_reason"] = recheck_reason(row)
@@ -566,7 +568,7 @@ def write_visualization_report(
 
 ## 4. 简要结论
 
-根据静态面积审计、风险等级变化、可比性状态和关注等级，本阶段生成了可视化图表和复检清单，为后续重点复检和报告展示提供依据。
+根据静态面积审计、当前风险等级、可比性状态和关注等级，本阶段生成了可视化图表和复检清单，为后续重点复检和报告展示提供依据。
 """
     report_path.write_text(content, encoding="utf-8")
 
@@ -611,13 +613,18 @@ def write_recheck_report(recheck_rows: list[dict[str, str]], report_path: Path, 
                     f"- 静态面积审计：{row['first_area_px']} px² -> {row['last_area_px']} px²",
                 ]
             )
+            risk_lines = (
+                [f"- 风险变化：{row['first_risk_level']} -> {row['last_risk_level']}"]
+                if comparable
+                else [f"- 当前风险等级：{row['last_risk_level']}"]
+            )
             lines.extend(
                 [
                     f"### {int(row['priority_rank'])}. {row['disease_id']} - {type_name}",
                     "",
                     f"- 关注等级：{row['attention_level']}",
                     *evidence_lines,
-                    f"- 风险变化：{row['first_risk_level']} -> {row['last_risk_level']}",
+                    *risk_lines,
                     f"- 位置：{row['last_mileage_range']}，{row['main_clock_direction']}方向",
                     f"- 复检原因：{row['recheck_reason']}",
                     f"- 复检建议：{row['recheck_suggestion']}",

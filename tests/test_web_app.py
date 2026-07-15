@@ -1,8 +1,12 @@
 import json
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 import web_app
@@ -258,17 +262,17 @@ def test_load_robot_dashboard_reads_generated_artifacts(tmp_path, monkeypatch):
     }), encoding="utf-8")
     priority_csv = tmp_path / "priority_recheck_list.csv"
     priority_csv.write_text(
-        "priority_rank,disease_id,disease_type,attention_level,growth_trend,last_risk_level,recheck_reason\n"
-        "2,D002,crack,重点关注,持续增长,高,增长较快\n"
-        "1,D001,spalling,重点关注,基本稳定,高,风险较高\n",
+        "priority_rank,disease_id,disease_type,attention_level,growth_trend,last_risk_level,recheck_reason,comparability_status\n"
+        "2,D002,crack,重点关注,持续增长,高,增长较快,verified_comparable\n"
+        "1,D001,spalling,重点关注,基本稳定,高,风险较高,verified_comparable\n",
         encoding="utf-8",
     )
     growth_csv = tmp_path / "disease_growth_analysis.csv"
     growth_csv.write_text(
-        "disease_id,disease_type,inspection_count,growth_trend,attention_level,last_risk_level,last_inspection\n"
-        "D001,spalling,3,基本稳定,重点关注,高,I003\n"
-        "D002,crack,3,持续增长,重点关注,高,I003\n"
-        "D003,crack,2,基本稳定,一般关注,中,I002\n",
+        "disease_id,disease_type,inspection_count,growth_trend,attention_level,last_risk_level,last_inspection,comparability_status\n"
+        "D001,spalling,3,基本稳定,重点关注,高,I003,verified_comparable\n"
+        "D002,crack,3,持续增长,重点关注,高,I003,verified_comparable\n"
+        "D003,crack,2,基本稳定,一般关注,中,I002,verified_comparable\n",
         encoding="utf-8",
     )
     mileage_chart = tmp_path / "mileage_risk_distribution.png"
@@ -291,6 +295,20 @@ def test_load_robot_dashboard_reads_generated_artifacts(tmp_path, monkeypatch):
 
     payload = web_app._load_robot_dashboard()
 
+    assert set(payload) == {
+        "ok",
+        "source",
+        "summary",
+        "route_report",
+        "priority_rechecks",
+        "growth_distribution",
+        "attention_distribution",
+        "disease_type_distribution",
+        "risk_level_distribution",
+        "visualization_links",
+        "limitations",
+        "errors",
+    }
     assert payload["ok"] is True
     assert payload["source"] == "generated-artifacts"
     assert payload["summary"]["frame_count"] == 8
@@ -367,9 +385,9 @@ def test_project_summary_reads_generated_tables(tmp_path, monkeypatch):
     )
     growth_csv = tmp_path / "disease_growth_analysis.csv"
     growth_csv.write_text(
-        "disease_id,inspection_count,growth_trend,last_risk_level\n"
-        "D001,3,明显增长,高\n"
-        "D002,2,基本稳定,中\n",
+        "disease_id,inspection_count,growth_trend,last_risk_level,comparability_status\n"
+        "D001,3,明显增长,高,verified_comparable\n"
+        "D002,2,基本稳定,中,not_longitudinally_comparable\n",
         encoding="utf-8",
     )
     recheck_csv = tmp_path / "priority_recheck_list.csv"
@@ -393,6 +411,178 @@ def test_project_summary_reads_generated_tables(tmp_path, monkeypatch):
     assert payload["high_risk_count"] == 1
     assert payload["obvious_growth_count"] == 1
     assert payload["visualization_count"] == 1
+
+
+def test_project_summary_does_not_count_noncomparable_stale_growth(tmp_path, monkeypatch):
+    engineering_csv = tmp_path / "engineering.csv"
+    engineering_csv.write_text("inspection_id,disease_id\nI001,D001\n", encoding="utf-8")
+    growth_csv = tmp_path / "growth.csv"
+    growth_csv.write_text(
+        "disease_id,inspection_count,growth_trend,last_risk_level,comparability_status\n"
+        "D001,2,明显增长,高,not_longitudinally_comparable\n",
+        encoding="utf-8",
+    )
+    recheck_csv = tmp_path / "recheck.csv"
+    recheck_csv.write_text("priority_rank,disease_id\n1,D001\n", encoding="utf-8")
+    monkeypatch.setattr(web_app, "ENGINEERING_REPORT_FILE", engineering_csv)
+    monkeypatch.setattr(web_app, "DISEASE_GROWTH_FILE", growth_csv)
+    monkeypatch.setattr(web_app, "PRIORITY_RECHECK_FILE", recheck_csv)
+    monkeypatch.setattr(web_app, "VISUALIZATION_FILES", {})
+
+    payload = web_app._load_project_summary()
+
+    assert set(payload) == {
+        "ok",
+        "source",
+        "inspection_count",
+        "disease_count",
+        "engineering_record_count",
+        "priority_recheck_count",
+        "high_risk_count",
+        "obvious_growth_count",
+        "visualization_count",
+        "missing",
+        "errors",
+    }
+    assert payload["obvious_growth_count"] == 0
+
+
+def test_project_summary_page_does_not_render_directional_growth_kpi():
+    html = (web_app.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+
+    assert '["明显增长", payload.obvious_growth_count' not in html
+
+
+def test_web_growth_projection_neutralizes_noncomparable_directional_fields():
+    source = {
+        "disease_id": "D001",
+        "comparability_status": "not_longitudinally_comparable",
+        "growth_trend": "明显增长",
+        "growth_description": "旧产物声称风险上升并明显增长。",
+        "first_area_px": "100",
+        "last_area_px": "200",
+        "area_growth_rate": "1.0",
+        "area_growth_px": "100",
+        "risk_level_change": "2",
+        "first_risk_level": "低",
+        "last_risk_level": "高",
+    }
+
+    projected = web_app._project_credibility_row(source)
+
+    assert projected["growth_trend"] == "不可比较"
+    assert projected["directional_metrics_available"] is False
+    assert projected["area_growth_rate"] == ""
+    assert projected["area_growth_px"] == ""
+    assert projected["risk_level_change"] == ""
+    assert projected["first_risk_level"] == ""
+    assert projected["last_risk_level"] == "高"
+    assert projected["descriptive_area_relative_difference"] == "1.0"
+    assert projected["descriptive_area_difference_px"] == "100"
+    assert "明显增长" not in projected["growth_description"]
+    assert source["growth_trend"] == "明显增长"
+
+
+def test_web_growth_projection_preserves_verified_directional_fields():
+    source = {
+        "comparability_status": "verified_comparable",
+        "growth_trend": "轻微增长",
+        "area_growth_rate": "0.2",
+        "area_growth_px": "20",
+        "first_risk_level": "低",
+        "last_risk_level": "中",
+        "risk_level_change": "1",
+    }
+
+    projected = web_app._project_credibility_row(source)
+
+    assert projected["directional_metrics_available"] is True
+    assert projected["growth_trend"] == "轻微增长"
+    assert projected["area_growth_rate"] == "0.2"
+    assert projected["area_growth_px"] == "20"
+    assert projected["first_risk_level"] == "低"
+    assert projected["risk_level_change"] == "1"
+
+
+def test_web_recheck_projection_forces_all_nonverified_rows_to_unavailable():
+    projected = web_app._project_credibility_row(
+        {
+            "comparability_status": "insufficient_history",
+            "growth_trend": "基本稳定",
+            "first_area_px": "100",
+            "last_area_px": "100",
+            "last_risk_level": "高",
+        },
+        priority_output=True,
+    )
+
+    assert projected["growth_trend"] == "不可比较"
+    assert projected["directional_metrics_available"] is False
+
+
+def test_robot_dashboard_projects_stale_noncomparable_rows(tmp_path, monkeypatch):
+    growth_csv = tmp_path / "growth.csv"
+    growth_csv.write_text(
+        "disease_id,inspection_count,growth_trend,attention_level,last_risk_level,comparability_status\n"
+        "D001,2,明显增长,重点关注,高,not_longitudinally_comparable\n",
+        encoding="utf-8",
+    )
+    recheck_csv = tmp_path / "recheck.csv"
+    recheck_csv.write_text(
+        "priority_rank,disease_id,growth_trend,growth_description,recheck_reason,recheck_suggestion,last_risk_level,comparability_status\n"
+        "1,D001,明显增长,旧描述声称增长,风险上升,继续观察增长,高,not_longitudinally_comparable\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "ROBOT_ROUTE_REPORT_FILE", tmp_path / "missing-route.json")
+    monkeypatch.setattr(web_app, "DISEASE_GROWTH_FILE", growth_csv)
+    monkeypatch.setattr(web_app, "PRIORITY_RECHECK_FILE", recheck_csv)
+    monkeypatch.setattr(web_app, "ROBOT_KICT_FRAME_RECORDS_FILE", tmp_path / "missing-kict.csv")
+    monkeypatch.setattr(web_app, "VISUALIZATION_FILES", {})
+
+    payload = web_app._load_robot_dashboard()
+
+    assert payload["growth_distribution"] == {"不可比较": 1}
+    projected = payload["priority_rechecks"][0]
+    assert projected["growth_trend"] == "不可比较"
+    assert "增长" not in projected["growth_description"]
+    assert "上升" not in projected["recheck_reason"]
+    assert "增长" not in projected["recheck_suggestion"]
+
+
+def test_growth_and_recheck_api_routes_apply_credibility_projection(tmp_path, monkeypatch):
+    growth_csv = tmp_path / "growth.csv"
+    growth_csv.write_text(
+        "disease_id,growth_trend,growth_description,first_area_px,last_area_px,area_growth_rate,first_risk_level,last_risk_level,risk_level_change,comparability_status\n"
+        "D001,明显增长,旧增长描述,100,200,1.0,低,高,2,not_longitudinally_comparable\n",
+        encoding="utf-8",
+    )
+    recheck_csv = tmp_path / "recheck.csv"
+    recheck_csv.write_text(
+        "priority_rank,disease_id,growth_trend,growth_description,recheck_reason,recheck_suggestion,first_area_px,last_area_px,area_growth_rate,first_risk_level,last_risk_level,risk_level_change,comparability_status\n"
+        "1,D001,明显增长,旧增长描述,风险上升,继续观察增长,100,200,1.0,低,高,2,not_longitudinally_comparable\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "DISEASE_GROWTH_FILE", growth_csv)
+    monkeypatch.setattr(web_app, "PRIORITY_RECHECK_FILE", recheck_csv)
+    handler = object.__new__(web_app.DetectionHandler)
+    sent = {}
+    handler._send_json = lambda payload, status=None: sent.update(payload=payload, status=status)
+
+    handler.path = "/api/growth-analysis"
+    web_app.DetectionHandler.do_GET(handler)
+    assert set(sent["payload"]) == {"ok", "source", "items", "missing", "errors"}
+    growth = sent["payload"]["items"][0]
+    assert growth["growth_trend"] == "不可比较"
+    assert growth["area_growth_rate"] == ""
+    assert growth["first_risk_level"] == ""
+
+    handler.path = "/api/recheck-list"
+    web_app.DetectionHandler.do_GET(handler)
+    assert set(sent["payload"]) == {"ok", "source", "items", "missing", "errors"}
+    recheck = sent["payload"]["items"][0]
+    assert recheck["growth_trend"] == "不可比较"
+    assert "上升" not in recheck["recheck_reason"]
+    assert "增长" not in recheck["recheck_suggestion"]
 
 
 def test_project_summary_falls_back_when_files_missing(tmp_path, monkeypatch):
@@ -431,6 +621,12 @@ def test_visualization_assets_use_static_outputs_url(tmp_path, monkeypatch):
         "title": "关注等级分布",
         "url": "/static-outputs/visualizations/attention_level_distribution.png",
     }]
+
+
+def test_visualization_titles_use_credibility_boundary_wording():
+    assert web_app.VISUALIZATION_TITLES["growth_trend"] == "可比性与变化状态分布"
+    assert web_app.VISUALIZATION_TITLES["risk_change"] == "已验证可比记录风险等级变化"
+    assert web_app.VISUALIZATION_TITLES["top_growth"] == "可比跨巡检面积审计 Top 10"
 
 
 def test_visualization_static_route_rejects_path_traversal():
@@ -491,6 +687,48 @@ def test_web_demo_has_robot_dashboard_and_preserves_single_image_review():
     assert "mask" in html
     assert "GT" in html
     assert "uncertainty" in html
+    assert "function directionalMetricsAvailable" in html
+    assert "静态面积审计" in html
+    assert html.count("pct(row.area_growth_rate)") >= 2
+    assert "(Number(value) * 100).toFixed(2)" in html
+
+
+def test_web_credibility_helpers_render_verified_and_nonverified_values():
+    if shutil.which("node") is None:
+        pytest.skip("Node.js is unavailable for the frontend helper smoke test")
+
+    html = Path("web_demo/index.html").read_text(encoding="utf-8")
+
+    def extract_function(name: str) -> str:
+        match = re.search(
+            rf"^    function {name}\([^\n]*\) \{{.*?^    \}}",
+            html,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match, f"missing JavaScript helper: {name}"
+        return match.group(0).strip()
+
+    script = "\n".join(
+        [
+            extract_function("pct"),
+            extract_function("directionalMetricsAvailable"),
+            extract_function("staticAreaAuditText"),
+            "console.log(JSON.stringify({",
+            "  verified: directionalMetricsAvailable({directional_metrics_available: true}),",
+            "  nonverified: directionalMetricsAvailable({directional_metrics_available: false}),",
+            "  rate: pct(0.2),",
+            "  audit: staticAreaAuditText({first_area_px: '100', last_area_px: '200'})",
+            "}));",
+        ]
+    )
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, encoding="utf-8")
+
+    assert json.loads(result.stdout) == {
+        "verified": True,
+        "nonverified": False,
+        "rate": "20.00%",
+        "audit": "100 -> 200 px²",
+    }
 
 
 def test_web_demo_hides_inactive_detect_grids_and_expands_dashboard_evidence():
