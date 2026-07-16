@@ -755,6 +755,37 @@ def test_successful_publish_cleanup_failure_is_reported_and_blocks_readiness(
         preparation.require_inference_ready(manifest_path)
 
 
+def test_publish_and_cleanup_failure_preserves_primary_error(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    output = tmp_path / "derived"
+    real_replace = preparation._atomic_replace
+    real_rmtree = preparation.shutil.rmtree
+
+    def fail_frame_publish(source: Path, target: Path) -> None:
+        if (
+            source.parent.name.startswith(".prepare-real-inspection-staging-")
+            and target.name == "frame_records.csv"
+        ):
+            raise OSError("simulated frame publish failure")
+        real_replace(source, target)
+
+    def fail_backup_cleanup(path: Path, *args, **kwargs):
+        if Path(path).name.startswith(".prepare-real-inspection-backup-"):
+            raise OSError("simulated backup cleanup failure")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(preparation, "_atomic_replace", fail_frame_publish)
+    monkeypatch.setattr(preparation.shutil, "rmtree", fail_backup_cleanup)
+    with pytest.raises(RuntimeError) as captured:
+        preparation.prepare_real_inspection_pilot(dataset, output)
+
+    message = str(captured.value)
+    assert "preparation cleanup failed" in message
+    assert "primary publish error: OSError: simulated frame publish failure" in message
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated frame publish failure"
+
+
 def test_csv_restore_failure_hides_manifest_and_preserves_manual_recovery_backup(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     output = tmp_path / "derived"
@@ -1165,6 +1196,41 @@ def test_path_readiness_gate_rejects_artifact_change_during_snapshot_validation(
         preparation.require_inference_ready(output / "preparation_manifest.json")
 
 
+def test_path_readiness_gate_rechecks_manifest_after_snapshot_validation(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    manifest_path = output / "preparation_manifest.json"
+    original_validate = preparation.validate_prepared_artifacts
+
+    def validate_then_mutate_manifest(*args, **kwargs):
+        original_validate(*args, **kwargs)
+        manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
+
+    monkeypatch.setattr(preparation, "validate_prepared_artifacts", validate_then_mutate_manifest)
+    with pytest.raises(ValueError, match="changed during readiness validation: preparation_manifest.json"):
+        preparation.require_inference_ready(manifest_path)
+
+
+def test_path_readiness_gate_rechecks_first_artifact_after_later_checks(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    original_assert = preparation._assert_snapshot_unchanged
+    observation_mutated = False
+
+    def check_then_mutate_observation(path: Path, expected_size: int, expected_hash: str) -> None:
+        nonlocal observation_mutated
+        original_assert(path, expected_size, expected_hash)
+        if path.name == "observation_records.csv" and not observation_mutated:
+            path.write_bytes(path.read_bytes() + b"\n")
+            observation_mutated = True
+
+    monkeypatch.setattr(preparation, "_assert_snapshot_unchanged", check_then_mutate_observation)
+    with pytest.raises(ValueError, match="changed during readiness validation: observation_records.csv"):
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+
 def test_self_consistency_scope_accepts_coordinated_valid_edits_without_external_trust(tmp_path):
     dataset = make_dataset(tmp_path)
     prepare(tmp_path, dataset)
@@ -1191,6 +1257,21 @@ def test_path_readiness_gate_rejects_existing_recovery_directory(tmp_path):
     prepare(tmp_path, dataset)
     output = tmp_path / "derived"
     (output / ".prepare-real-inspection-backup-test").mkdir()
+    with pytest.raises(ValueError, match="unfinished recovery data"):
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+
+def test_path_readiness_gate_rejects_recovery_created_during_validation(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    original_validate = preparation.validate_prepared_artifacts
+
+    def validate_then_add_recovery(*args, **kwargs):
+        original_validate(*args, **kwargs)
+        (output / ".prepare-real-inspection-backup-race").mkdir()
+
+    monkeypatch.setattr(preparation, "validate_prepared_artifacts", validate_then_add_recovery)
     with pytest.raises(ValueError, match="unfinished recovery data"):
         preparation.require_inference_ready(output / "preparation_manifest.json")
 
@@ -1222,6 +1303,25 @@ def test_path_readiness_streams_csv_snapshots_without_read_bytes(tmp_path, monke
 
     monkeypatch.setattr(Path, "read_bytes", reject_csv_read_bytes)
     assert preparation.require_inference_ready(output / "preparation_manifest.json")["inference_ready"] is True
+
+
+def test_path_readiness_reports_temporary_snapshot_creation_failure(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+
+    def fail_snapshot_open(self: Path, mode: str = "r", *args, **kwargs):
+        if mode == "wb" and self.parent.name.startswith("real-inspection-readiness-"):
+            raise OSError("simulated temporary storage failure")
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_snapshot_open)
+    with pytest.raises(
+        ValueError,
+        match="temporary readiness snapshot cannot be created for observation_records.csv",
+    ):
+        preparation.require_inference_ready(output / "preparation_manifest.json")
 
 
 def test_mapping_readiness_gate_checks_logical_state_without_claiming_file_integrity(tmp_path):

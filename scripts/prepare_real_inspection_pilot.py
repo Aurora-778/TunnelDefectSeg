@@ -1005,13 +1005,41 @@ def _validate_manifest_output(
     digest = hashlib.sha256()
     actual_size = 0
     try:
-        with output_path.open("rb") as source, snapshot_path.open("wb") as snapshot:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                snapshot.write(chunk)
-                digest.update(chunk)
-                actual_size += len(chunk)
+        source_handle = output_path.open("rb")
     except OSError as exc:
         raise ValueError(f"prepared artifact is not readable: {expected_filename}") from exc
+    with source_handle as source:
+        try:
+            snapshot_handle = snapshot_path.open("wb")
+        except OSError as exc:
+            raise ValueError(
+                f"temporary readiness snapshot cannot be created for {expected_filename}"
+            ) from exc
+        try:
+            with snapshot_handle as snapshot:
+                while True:
+                    try:
+                        chunk = source.read(1024 * 1024)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"prepared artifact is not readable: {expected_filename}"
+                        ) from exc
+                    if not chunk:
+                        break
+                    try:
+                        snapshot.write(chunk)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"temporary readiness snapshot write failed for {expected_filename}"
+                        ) from exc
+                    digest.update(chunk)
+                    actual_size += len(chunk)
+        except ValueError:
+            raise
+        except OSError as exc:
+            raise ValueError(
+                f"temporary readiness snapshot finalization failed for {expected_filename}"
+            ) from exc
     if actual_size != size_bytes:
         raise ValueError(
             f"prepared artifact size mismatch for {expected_filename}: expected {size_bytes}, got {actual_size}"
@@ -1044,24 +1072,45 @@ def _recovery_entries(output_dir: Path) -> list[str]:
     )
 
 
+def _assert_no_recovery_data(output_dir: Path) -> None:
+    recovery_entries = _recovery_entries(output_dir)
+    if recovery_entries:
+        raise ValueError(
+            "prepared output has unfinished recovery data and is not inference-ready: "
+            + ", ".join(recovery_entries)
+        )
+
+
+def _assert_artifact_set_unchanged(
+    artifacts: list[tuple[Path, int, str]],
+) -> None:
+    """Best-effort final guard over the complete committed artifact set."""
+
+    # The reverse pass catches a file changed immediately after its first
+    # check while another file is being checked. This remains a no-lock,
+    # point-in-time guard rather than an atomic filesystem snapshot.
+    for path, expected_size, expected_hash in [*artifacts, *reversed(artifacts)]:
+        _assert_snapshot_unchanged(path, expected_size, expected_hash)
+
+
 def require_inference_ready(manifest: Mapping[str, Any] | Path) -> Mapping[str, Any]:
     """Check logical readiness and artifact self-consistency, not origin authenticity."""
 
     manifest_path: Path | None = None
+    manifest_size = 0
+    manifest_hash = ""
     if isinstance(manifest, Path):
         manifest_path = manifest
-        recovery_entries = _recovery_entries(manifest_path.parent)
-        if recovery_entries:
-            raise ValueError(
-                "prepared output has unfinished recovery data and is not inference-ready: "
-                + ", ".join(recovery_entries)
-            )
+        _assert_no_recovery_data(manifest_path.parent)
         if manifest_path.is_symlink() or not manifest_path.is_file():
             raise ValueError(f"prepared manifest is missing or not a regular file: {manifest_path}")
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_bytes = manifest_path.read_bytes()
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError(f"prepared manifest is not readable JSON: {manifest_path}") from exc
+        manifest_size = len(manifest_bytes)
+        manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
     if not isinstance(manifest, Mapping):
         raise ValueError("prepared manifest must be an object")
     if manifest.get("data_contract_version") != DATA_CONTRACT_VERSION:
@@ -1113,8 +1162,14 @@ def require_inference_ready(manifest: Mapping[str, Any] | Path) -> Mapping[str, 
                 expected_observation_count=observation_count,
                 expected_frame_count=frame_count,
             )
-        _assert_snapshot_unchanged(observation_path, observation_size, observation_hash)
-        _assert_snapshot_unchanged(frame_path, frame_size, frame_hash)
+        _assert_artifact_set_unchanged(
+            [
+                (manifest_path, manifest_size, manifest_hash),
+                (observation_path, observation_size, observation_hash),
+                (frame_path, frame_size, frame_hash),
+            ]
+        )
+        _assert_no_recovery_data(manifest_path.parent)
     if manifest.get("inference_ready") is not True or readiness_reasons:
         reasons = readiness_reasons or ["unspecified"]
         raise ValueError("prepared sequence is not inference-ready: " + ", ".join(map(str, reasons)))
@@ -1214,6 +1269,7 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
     published: list[str] = []
     cleanup_backup = False
     preserve_staging = False
+    primary_error: Exception | None = None
     original_manifest_present = targets["preparation_manifest.json"].exists()
     try:
         _validate_known_target_types(targets)
@@ -1315,6 +1371,7 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
                 + "; ".join(rollback_errors)
             ) from publish_error
         cleanup_backup = True
+        primary_error = publish_error
         raise
     finally:
         cleanup_errors: list[str] = []
@@ -1333,10 +1390,17 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
             if staging_dir.exists():
                 cleanup_errors.append(f"staging directory still exists: {staging_dir}")
         if cleanup_errors:
-            raise RuntimeError(
+            message = (
                 "preparation cleanup failed; output remains blocked by the recovery gate: "
                 + "; ".join(cleanup_errors)
             )
+            if primary_error is not None:
+                message += (
+                    "; primary publish error: "
+                    f"{type(primary_error).__name__}: {primary_error}"
+                )
+                raise RuntimeError(message) from primary_error
+            raise RuntimeError(message)
     return targets
 
 
