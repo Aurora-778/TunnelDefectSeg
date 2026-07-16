@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -313,6 +314,36 @@ def test_answer_column_token_variants_are_rejected(tmp_path, forbidden_column):
         prepare(tmp_path, dataset)
 
 
+@pytest.mark.parametrize(
+    "unexpected_column",
+    ["camera_id", "gold_match_id", "eval_result", "same_defect_label", "dataset_partition"],
+)
+def test_v1_metadata_contract_rejects_every_unknown_column(tmp_path, unexpected_column):
+    dataset = make_dataset(tmp_path)
+    rows = metadata_rows()
+    fieldnames = preparation.REQUIRED_METADATA_COLUMNS + [unexpected_column]
+    with (dataset / "metadata.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({**row, unexpected_column: "unexpected"})
+    with pytest.raises(ValueError):
+        prepare(tmp_path, dataset)
+
+
+def test_v1_neutral_unknown_column_has_allowlist_error(tmp_path):
+    dataset = make_dataset(tmp_path)
+    rows = metadata_rows()
+    fieldnames = preparation.REQUIRED_METADATA_COLUMNS + ["camera_id"]
+    with (dataset / "metadata.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({**row, "camera_id": "camera_01"})
+    with pytest.raises(ValueError, match="unexpected columns for real_inspection_pilot_v1: camera_id"):
+        prepare(tmp_path, dataset)
+
+
 @pytest.mark.parametrize("row_shape", ["short", "long"])
 def test_malformed_csv_row_width_is_rejected(tmp_path, row_shape):
     dataset = make_dataset(tmp_path)
@@ -486,6 +517,27 @@ def test_dataset_components_cannot_resolve_outside_dataset_root(tmp_path, link_n
         prepare(tmp_path, dataset)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
+@pytest.mark.parametrize("link_name", ["images", "masks"])
+def test_windows_junction_cannot_resolve_outside_dataset_root_without_symlink_privilege(
+    tmp_path, link_name
+):
+    dataset = make_dataset(tmp_path)
+    source = dataset / link_name
+    external = tmp_path / f"external-junction-{link_name}"
+    source.rename(external)
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(source), str(external)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.fail(f"failed to create non-privileged Windows junction: {result.stderr or result.stdout}")
+    with pytest.raises(ValueError, match="resolves outside dataset_root"):
+        prepare(tmp_path, dataset)
+
+
 @pytest.mark.parametrize("changed_source", ["metadata", "image", "mask", "deleted_image"])
 def test_source_changes_during_preparation_are_rejected(tmp_path, monkeypatch, changed_source):
     dataset = make_dataset(tmp_path)
@@ -609,6 +661,20 @@ def test_symbolic_link_target_is_rejected_without_touching_link_destination(tmp_
     assert external.read_text(encoding="utf-8") == "keep"
 
 
+def test_output_target_symlink_rejection_branch_does_not_require_os_privilege(tmp_path, monkeypatch):
+    target = tmp_path / "observation_records.csv"
+    target.write_text("user data", encoding="utf-8")
+    real_is_symlink = Path.is_symlink
+
+    def report_target_as_symlink(self: Path) -> bool:
+        return self == target or real_is_symlink(self)
+
+    monkeypatch.setattr(Path, "is_symlink", report_target_as_symlink)
+    with pytest.raises(ValueError, match="output target must not be a symbolic link"):
+        preparation._validate_known_target_types({"observation_records.csv": target})
+    assert target.read_text(encoding="utf-8") == "user data"
+
+
 @pytest.mark.parametrize("with_existing", [False, True])
 def test_publish_failure_never_leaves_mixed_artifacts(tmp_path, monkeypatch, with_existing):
     dataset = make_dataset(tmp_path)
@@ -641,7 +707,7 @@ def test_publish_failure_never_leaves_mixed_artifacts(tmp_path, monkeypatch, wit
     assert not list(output.glob(".prepare-real-inspection-*"))
 
 
-def test_rollback_failure_preserves_manual_recovery_backup(tmp_path, monkeypatch):
+def test_csv_restore_failure_hides_manifest_and_preserves_manual_recovery_backup(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     output = tmp_path / "derived"
     prepare(tmp_path, dataset)
@@ -666,6 +732,7 @@ def test_rollback_failure_preserves_manual_recovery_backup(tmp_path, monkeypatch
     staging_dirs = list(output.glob(".prepare-real-inspection-staging-*"))
     assert len(backup_dirs) == 1
     assert len(staging_dirs) == 1
+    assert not (output / "preparation_manifest.json").exists()
     assert (backup_dirs[0] / "preparation_manifest.json").read_bytes() == original["preparation_manifest.json"]
     assert (backup_dirs[0] / "RECOVERY_REQUIRED.txt").is_file()
     assert (staging_dirs[0] / ".recovery_required").is_file()
@@ -877,6 +944,78 @@ def test_inference_readiness_gate_rejects_malformed_or_not_ready_manifest(tmp_pa
     manifest = {**result["manifest"], **updates}
     with pytest.raises(ValueError, match=message):
         preparation.require_inference_ready(manifest)
+
+
+def test_path_readiness_gate_rejects_missing_frame_records(tmp_path):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    manifest_path = tmp_path / "derived" / "preparation_manifest.json"
+    (tmp_path / "derived" / "frame_records.csv").unlink()
+    with pytest.raises(ValueError, match="missing or not a regular file: frame_records.csv"):
+        preparation.require_inference_ready(manifest_path)
+
+
+def test_path_readiness_gate_rejects_tampered_csv(tmp_path):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    frame_path = output / "frame_records.csv"
+    frame_path.write_bytes(frame_path.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="size mismatch for frame_records.csv"):
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+
+def test_path_readiness_gate_rejects_wrong_manifest_hash(tmp_path):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    manifest_path = output / "preparation_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["outputs"]["observation_records"]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="SHA-256 mismatch for observation_records.csv"):
+        preparation.require_inference_ready(manifest_path)
+
+
+def test_path_readiness_gate_checks_schema_after_fingerprint_is_updated(tmp_path):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    frame_path = output / "frame_records.csv"
+    frames = read_csv(frame_path)
+    malformed_fields = [field for field in preparation.FRAME_FIELDNAMES if field != "disease_id"]
+    preparation._write_csv(frame_path, frames, malformed_fields)
+    manifest_path = output / "preparation_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["outputs"]["frame_records"] = preparation._file_fingerprint(
+        frame_path, "frame_records.csv"
+    )
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="frame_records schema validation failed"):
+        preparation.require_inference_ready(manifest_path)
+
+
+def test_path_readiness_gate_checks_row_count_after_fingerprint_is_updated(tmp_path):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    frame_path = output / "frame_records.csv"
+    preparation._write_csv(frame_path, read_csv(frame_path)[:1], preparation.FRAME_FIELDNAMES)
+    manifest_path = output / "preparation_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["outputs"]["frame_records"] = preparation._file_fingerprint(
+        frame_path, "frame_records.csv"
+    )
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="frame_records row count changed during staging"):
+        preparation.require_inference_ready(manifest_path)
+
+
+def test_mapping_readiness_gate_checks_logical_state_without_claiming_file_integrity(tmp_path):
+    dataset = make_dataset(tmp_path)
+    result = prepare(tmp_path, dataset)
+    shutil.rmtree(tmp_path / "derived")
+    assert preparation.require_inference_ready(result["manifest"])["inference_ready"] is True
 
 
 def test_ready_output_runs_existing_history_only_coordinator(tmp_path):

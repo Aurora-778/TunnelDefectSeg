@@ -308,6 +308,12 @@ def load_metadata(metadata_path: Path) -> tuple[list[tuple[int, dict[str, str]]]
             raise ValueError(
                 "metadata.csv contains forbidden answer/evaluation columns: " + ", ".join(forbidden)
             )
+        unexpected = sorted(set(fieldnames) - set(REQUIRED_METADATA_COLUMNS))
+        if unexpected:
+            raise ValueError(
+                "metadata.csv contains unexpected columns for real_inspection_pilot_v1: "
+                + ", ".join(unexpected)
+            )
         rows = [(line_number, dict(row)) for line_number, row in enumerate(reader, start=2)]
     except UnicodeDecodeError as exc:
         raise ValueError(f"metadata.csv must be UTF-8 encoded: {metadata_path}") from exc
@@ -968,9 +974,56 @@ def build_preparation_manifest(
     }
 
 
+def _validate_manifest_output(
+    manifest_path: Path,
+    outputs: Mapping[str, Any],
+    row_counts: Mapping[str, Any],
+    output_name: str,
+) -> tuple[Path, int]:
+    fingerprint = outputs.get(output_name)
+    if not isinstance(fingerprint, Mapping):
+        raise ValueError(f"prepared manifest outputs.{output_name} must be an object")
+    expected_filename = f"{output_name}.csv"
+    if fingerprint.get("path") != expected_filename:
+        raise ValueError(f"prepared manifest outputs.{output_name}.path must be {expected_filename}")
+    size_bytes = fingerprint.get("size_bytes")
+    if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes < 0:
+        raise ValueError(f"prepared manifest outputs.{output_name}.size_bytes must be a non-negative integer")
+    expected_hash = fingerprint.get("sha256")
+    if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash):
+        raise ValueError(f"prepared manifest outputs.{output_name}.sha256 must be a SHA-256 hex digest")
+    expected_rows = row_counts.get(output_name)
+    if isinstance(expected_rows, bool) or not isinstance(expected_rows, int) or expected_rows < 0:
+        raise ValueError(f"prepared manifest row_counts.{output_name} must be a non-negative integer")
+
+    output_path = manifest_path.parent / expected_filename
+    if output_path.is_symlink() or not output_path.is_file():
+        raise ValueError(f"prepared artifact is missing or not a regular file: {expected_filename}")
+    actual_size = output_path.stat().st_size
+    if actual_size != size_bytes:
+        raise ValueError(
+            f"prepared artifact size mismatch for {expected_filename}: expected {size_bytes}, got {actual_size}"
+        )
+    actual_hash = _sha256(output_path)
+    if actual_hash.lower() != expected_hash.lower():
+        raise ValueError(f"prepared artifact SHA-256 mismatch for {expected_filename}")
+    return output_path, expected_rows
+
+
 def require_inference_ready(manifest: Mapping[str, Any] | Path) -> Mapping[str, Any]:
+    """Require logical readiness and, for a manifest Path, verify its published CSV siblings."""
+
+    manifest_path: Path | None = None
     if isinstance(manifest, Path):
-        manifest = json.loads(manifest.read_text(encoding="utf-8"))
+        manifest_path = manifest
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError(f"prepared manifest is missing or not a regular file: {manifest_path}")
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"prepared manifest is not readable JSON: {manifest_path}") from exc
+    if not isinstance(manifest, Mapping):
+        raise ValueError("prepared manifest must be an object")
     if manifest.get("data_contract_version") != DATA_CONTRACT_VERSION:
         raise ValueError("prepared manifest has an unsupported data_contract_version")
     if manifest.get("artifact_set_complete") is not True:
@@ -978,6 +1031,27 @@ def require_inference_ready(manifest: Mapping[str, Any] | Path) -> Mapping[str, 
     readiness_reasons = manifest.get("readiness_reasons")
     if not isinstance(readiness_reasons, list):
         raise ValueError("prepared manifest readiness_reasons must be a list")
+    # Mapping input checks logical readiness only. A Path additionally proves that
+    # the committed sibling CSV files still match the manifest fingerprints.
+    if manifest_path is not None:
+        outputs = manifest.get("outputs")
+        row_counts = manifest.get("row_counts")
+        if not isinstance(outputs, Mapping):
+            raise ValueError("prepared manifest outputs must be an object")
+        if not isinstance(row_counts, Mapping):
+            raise ValueError("prepared manifest row_counts must be an object")
+        observation_path, observation_count = _validate_manifest_output(
+            manifest_path, outputs, row_counts, "observation_records"
+        )
+        frame_path, frame_count = _validate_manifest_output(
+            manifest_path, outputs, row_counts, "frame_records"
+        )
+        validate_prepared_artifacts(
+            observation_path,
+            frame_path,
+            expected_observation_count=observation_count,
+            expected_frame_count=frame_count,
+        )
     if manifest.get("inference_ready") is not True or readiness_reasons:
         reasons = readiness_reasons or ["unspecified"]
         raise ValueError("prepared sequence is not inference-ready: " + ", ".join(map(str, reasons)))
@@ -1081,6 +1155,7 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
     published: list[str] = []
     cleanup_backup = False
     preserve_staging = False
+    original_manifest_present = targets["preparation_manifest.json"].exists()
     try:
         _validate_known_target_types(targets)
         _validate_known_target_types(stage_paths)
@@ -1101,19 +1176,61 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
         cleanup_backup = True
     except Exception as publish_error:
         rollback_errors: list[str] = []
+        # If the old marker was moved away, no marker may remain visible until
+        # both old CSV files have been restored successfully.
+        if "preparation_manifest.json" in backups or not original_manifest_present:
+            manifest_target = targets["preparation_manifest.json"]
+            try:
+                if manifest_target.exists() or manifest_target.is_symlink():
+                    manifest_target.unlink()
+            except Exception as exc:  # pragma: no cover - platform-specific filesystem failure
+                rollback_errors.append(f"hide preparation_manifest.json: {exc}")
         for name in reversed(published):
+            if name == "preparation_manifest.json":
+                continue
             target = targets[name]
             try:
                 if target.exists() or target.is_symlink():
                     target.unlink()
             except Exception as exc:  # pragma: no cover - platform-specific filesystem failure
                 rollback_errors.append(f"remove new {name}: {exc}")
-        for name, backup in backups.items():
-            if backup.exists():
+        csv_restore_errors: list[str] = []
+        for name in ("observation_records.csv", "frame_records.csv"):
+            backup = backups.get(name)
+            if backup is None:
+                continue
+            if not backup.exists():
+                message = f"restore {name}: backup is missing"
+                csv_restore_errors.append(message)
+                rollback_errors.append(message)
+                continue
+            try:
+                _atomic_replace(backup, targets[name])
+            except Exception as exc:
+                message = f"restore {name}: {exc}"
+                csv_restore_errors.append(message)
+                rollback_errors.append(message)
+        manifest_backup = backups.get("preparation_manifest.json")
+        if manifest_backup is not None and manifest_backup.exists():
+            missing_csv_backups = [
+                name
+                for name in ("observation_records.csv", "frame_records.csv")
+                if name not in backups
+            ]
+            if missing_csv_backups:
+                rollback_errors.append(
+                    "restore preparation_manifest.json: deferred because the prior artifact set "
+                    "did not contain both CSV files: " + ", ".join(missing_csv_backups)
+                )
+            elif csv_restore_errors:
+                rollback_errors.append(
+                    "restore preparation_manifest.json: deferred because CSV rollback was incomplete"
+                )
+            else:
                 try:
-                    _atomic_replace(backup, targets[name])
+                    _atomic_replace(manifest_backup, targets["preparation_manifest.json"])
                 except Exception as exc:
-                    rollback_errors.append(f"restore {name}: {exc}")
+                    rollback_errors.append(f"restore preparation_manifest.json: {exc}")
         if rollback_errors:
             preserve_staging = True
             recovery_note = (

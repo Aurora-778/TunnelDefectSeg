@@ -15,7 +15,7 @@ dataset-root/
 └─ metadata.csv
 ```
 
-`metadata.csv` 每行表示一条局部病害观测，必需字段如下：
+`metadata.csv` 每行表示一条局部病害观测。V1 表头采用严格 allowlist，只允许以下字段，不接受额外的中性字段或答案字段：
 
 ```text
 sequence_id
@@ -40,7 +40,7 @@ disease_type
 - `clock_direction` 使用 `1点` 至 `12点`。
 - 图像和 mask 尺寸必须一致；mask 非零像素视为病害区域。
 - 同一 sequence 内各巡检时间区间必须严格不重叠。
-- 输入 metadata 不得包含 `global_disease_id`、GT、split、review/audit 等答案或评估字段；这些信息只能在未来独立的 post-inference evaluator 中使用。
+- 输入 metadata 不得包含任何未列入 V1 allowlist 的字段。`global_disease_id`、`gold_match_id`、GT、split/partition、review/audit、eval result 等答案或评估信息只能在未来独立的 post-inference evaluator 中使用。
 - `metadata.csv`、`images/`、`masks/` 解析后必须仍位于 dataset root，不能通过符号链接或 junction 指向外部来源。
 - CSV 短行、额外匿名单元格和缺失值会直接报错；`disease_type` 等自由文本不得携带本机绝对路径。
 
@@ -138,14 +138,14 @@ manifest 不记录自身哈希，并作为三件套最后发布的完整性标�
 - sequence 只有一次巡检；
 - 任一巡检过滤空 mask 后没有有效观测。
 
-消费者应先调用脚本中的 `require_inference_ready()`。not-ready 产物不得送入 history-only coordinator。
+消费者应先调用脚本中的 `require_inference_ready()`。传入 manifest 文件 `Path` 时，gate 会同时校验同目录两个 CSV 的普通文件类型、大小、SHA-256、schema 和行数；缺失或篡改均会报错。直接传入内存 `Mapping` 时只校验逻辑 readiness，不代表已经完成文件完整性验证。not-ready 产物不得送入 history-only coordinator。
 
 ## 7. 写入安全
 
 - 原始 dataset 只读。
 - output directory 不得位于 dataset root、项目 `data/simulated/` 或正式 `outputs/` 内。
 - 默认拒绝覆盖已有产物；`--overwrite` 只处理本脚本的三个固定文件。
-- staging 全部通过后才发布；旧 manifest 先移出，新 manifest 最后发布，失败时恢复旧三件套。
+- staging 全部通过后才发布；旧 manifest 先移出，新 manifest 最后发布。失败回滚时先恢复两个旧 CSV，只有两者均恢复成功后才最后恢复旧 manifest；任一 CSV 恢复失败时，提交位置不保留 manifest，backup/staging 会保留供人工恢复。
 - 已有目标必须是普通文件，目录、符号链接和其他特殊文件会被拒绝。
 - 如果发布失败且自动回滚也失败，脚本不会删除剩余备份；错误信息会给出 `.prepare-real-inspection-backup-*` 和 staging 恢复路径，供人工恢复。
 - output directory 中仍有上述 backup/staging 恢复目录时，后续运行会停止，必须先完成人工检查，避免覆盖尚未恢复的数据。
