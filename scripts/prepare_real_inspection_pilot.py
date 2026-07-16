@@ -35,6 +35,7 @@ from orchestrator.schema import REQUIRED_SCHEMAS, validate_csv_schema
 
 
 DATA_CONTRACT_VERSION = "real_inspection_pilot_v1"
+INTEGRITY_SCOPE = "self_consistency_only"
 OBSERVATION_SOURCE = "real_inspection_mask_input"
 COMPARABILITY_STATUS = "not_longitudinally_comparable"
 SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -946,6 +947,7 @@ def build_preparation_manifest(
     ]
     return {
         "data_contract_version": DATA_CONTRACT_VERSION,
+        "integrity_scope": INTEGRITY_SCOPE,
         "generated_at": _format_utc(datetime.now(timezone.utc)),
         "path_base": "dataset_root",
         "sequence_id": observation_rows[0]["sequence_id"],
@@ -979,7 +981,7 @@ def _validate_manifest_output(
     outputs: Mapping[str, Any],
     row_counts: Mapping[str, Any],
     output_name: str,
-) -> tuple[Path, int]:
+) -> tuple[Path, int, bytes]:
     fingerprint = outputs.get(output_name)
     if not isinstance(fingerprint, Mapping):
         raise ValueError(f"prepared manifest outputs.{output_name} must be an object")
@@ -999,23 +1001,55 @@ def _validate_manifest_output(
     output_path = manifest_path.parent / expected_filename
     if output_path.is_symlink() or not output_path.is_file():
         raise ValueError(f"prepared artifact is missing or not a regular file: {expected_filename}")
-    actual_size = output_path.stat().st_size
+    try:
+        snapshot = output_path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"prepared artifact is not readable: {expected_filename}") from exc
+    actual_size = len(snapshot)
     if actual_size != size_bytes:
         raise ValueError(
             f"prepared artifact size mismatch for {expected_filename}: expected {size_bytes}, got {actual_size}"
         )
-    actual_hash = _sha256(output_path)
+    actual_hash = hashlib.sha256(snapshot).hexdigest()
     if actual_hash.lower() != expected_hash.lower():
         raise ValueError(f"prepared artifact SHA-256 mismatch for {expected_filename}")
-    return output_path, expected_rows
+    return output_path, expected_rows, snapshot
+
+
+def _assert_snapshot_unchanged(path: Path, snapshot: bytes) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"prepared artifact changed during readiness validation: {path.name}")
+    try:
+        current_size = path.stat().st_size
+        current_hash = _sha256(path)
+    except OSError as exc:
+        raise ValueError(f"prepared artifact changed during readiness validation: {path.name}") from exc
+    if current_size != len(snapshot) or current_hash != hashlib.sha256(snapshot).hexdigest():
+        raise ValueError(f"prepared artifact changed during readiness validation: {path.name}")
+
+
+def _recovery_entries(output_dir: Path) -> list[str]:
+    if not output_dir.is_dir():
+        return []
+    return sorted(
+        path.name
+        for pattern in (".prepare-real-inspection-backup-*", ".prepare-real-inspection-staging-*")
+        for path in output_dir.glob(pattern)
+    )
 
 
 def require_inference_ready(manifest: Mapping[str, Any] | Path) -> Mapping[str, Any]:
-    """Require logical readiness and, for a manifest Path, verify its published CSV siblings."""
+    """Check logical readiness and artifact self-consistency, not origin authenticity."""
 
     manifest_path: Path | None = None
     if isinstance(manifest, Path):
         manifest_path = manifest
+        recovery_entries = _recovery_entries(manifest_path.parent)
+        if recovery_entries:
+            raise ValueError(
+                "prepared output has unfinished recovery data and is not inference-ready: "
+                + ", ".join(recovery_entries)
+            )
         if manifest_path.is_symlink() or not manifest_path.is_file():
             raise ValueError(f"prepared manifest is missing or not a regular file: {manifest_path}")
         try:
@@ -1026,6 +1060,8 @@ def require_inference_ready(manifest: Mapping[str, Any] | Path) -> Mapping[str, 
         raise ValueError("prepared manifest must be an object")
     if manifest.get("data_contract_version") != DATA_CONTRACT_VERSION:
         raise ValueError("prepared manifest has an unsupported data_contract_version")
+    if manifest.get("integrity_scope") != INTEGRITY_SCOPE:
+        raise ValueError("prepared manifest integrity_scope must be self_consistency_only")
     if manifest.get("artifact_set_complete") is not True:
         raise ValueError("prepared manifest is not a complete artifact set")
     readiness_reasons = manifest.get("readiness_reasons")
@@ -1040,18 +1076,28 @@ def require_inference_ready(manifest: Mapping[str, Any] | Path) -> Mapping[str, 
             raise ValueError("prepared manifest outputs must be an object")
         if not isinstance(row_counts, Mapping):
             raise ValueError("prepared manifest row_counts must be an object")
-        observation_path, observation_count = _validate_manifest_output(
+        observation_path, observation_count, observation_snapshot = _validate_manifest_output(
             manifest_path, outputs, row_counts, "observation_records"
         )
-        frame_path, frame_count = _validate_manifest_output(
+        frame_path, frame_count, frame_snapshot = _validate_manifest_output(
             manifest_path, outputs, row_counts, "frame_records"
         )
-        validate_prepared_artifacts(
-            observation_path,
-            frame_path,
-            expected_observation_count=observation_count,
-            expected_frame_count=frame_count,
-        )
+        # Validate immutable copies so one check cannot hash one version and
+        # parse a different version of the same CSV.
+        with tempfile.TemporaryDirectory(prefix="real-inspection-readiness-") as temp_dir:
+            snapshot_dir = Path(temp_dir)
+            snapshot_observation = snapshot_dir / "observation_records.csv"
+            snapshot_frame = snapshot_dir / "frame_records.csv"
+            snapshot_observation.write_bytes(observation_snapshot)
+            snapshot_frame.write_bytes(frame_snapshot)
+            validate_prepared_artifacts(
+                snapshot_observation,
+                snapshot_frame,
+                expected_observation_count=observation_count,
+                expected_frame_count=frame_count,
+            )
+        _assert_snapshot_unchanged(observation_path, observation_snapshot)
+        _assert_snapshot_unchanged(frame_path, frame_snapshot)
     if manifest.get("inference_ready") is not True or readiness_reasons:
         reasons = readiness_reasons or ["unspecified"]
         raise ValueError("prepared sequence is not inference-ready: " + ", ".join(map(str, reasons)))
@@ -1118,11 +1164,7 @@ def validate_output_preflight(
         if target.resolve(strict=False) in input_paths:
             raise ValueError(f"output artifact overlaps an input path: {target}")
     if output_dir.is_dir():
-        recovery_entries = sorted(
-            path.name
-            for pattern in (".prepare-real-inspection-backup-*", ".prepare-real-inspection-staging-*")
-            for path in output_dir.glob(pattern)
-        )
+        recovery_entries = _recovery_entries(output_dir)
         if recovery_entries:
             raise RuntimeError(
                 "output_dir contains unfinished preparation recovery data; inspect it before rerunning: "
@@ -1180,11 +1222,18 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
         # both old CSV files have been restored successfully.
         if "preparation_manifest.json" in backups or not original_manifest_present:
             manifest_target = targets["preparation_manifest.json"]
-            try:
-                if manifest_target.exists() or manifest_target.is_symlink():
-                    manifest_target.unlink()
-            except Exception as exc:  # pragma: no cover - platform-specific filesystem failure
-                rollback_errors.append(f"hide preparation_manifest.json: {exc}")
+            if manifest_target.exists() or manifest_target.is_symlink():
+                quarantine_target = backup_dir / "UNCOMMITTED_preparation_manifest.json"
+                try:
+                    _atomic_replace(manifest_target, quarantine_target)
+                except Exception as quarantine_error:
+                    try:
+                        manifest_target.unlink()
+                    except Exception as unlink_error:  # pragma: no cover - double filesystem failure
+                        rollback_errors.append(
+                            "hide preparation_manifest.json: "
+                            f"quarantine failed ({quarantine_error}); unlink failed ({unlink_error})"
+                        )
         for name in reversed(published):
             if name == "preparation_manifest.json":
                 continue

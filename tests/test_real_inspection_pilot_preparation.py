@@ -149,6 +149,7 @@ def test_prepares_answer_free_schema_compatible_artifacts(tmp_path):
     assert all(row["comparability_status"] == "not_longitudinally_comparable" for row in frames)
     assert validate_csv_schema(output / "frame_records.csv", "robot_kict_frame_records") == []
     assert manifest["path_base"] == "dataset_root"
+    assert manifest["integrity_scope"] == "self_consistency_only"
     assert manifest["inference_ready"] is True
     assert manifest["row_counts"] == {"observation_records": 2, "frame_records": 2}
     assert manifest["outputs"]["observation_records"]["sha256"] == sha256(output / "observation_records.csv")
@@ -517,6 +518,23 @@ def test_dataset_components_cannot_resolve_outside_dataset_root(tmp_path, link_n
         prepare(tmp_path, dataset)
 
 
+def test_resolved_dataset_escape_is_rejected_without_link_privileges(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    escaped_images = tmp_path / "resolved-outside-images"
+    escaped_images.mkdir()
+    images_path = dataset / "images"
+    real_resolve = Path.resolve
+
+    def resolve_images_outside(self: Path, *args, **kwargs) -> Path:
+        if self == images_path:
+            return escaped_images
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve_images_outside)
+    with pytest.raises(ValueError, match="images resolves outside dataset_root"):
+        preparation.validate_dataset_layout(dataset)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
 @pytest.mark.parametrize("link_name", ["images", "masks"])
 def test_windows_junction_cannot_resolve_outside_dataset_root_without_symlink_privilege(
@@ -738,6 +756,94 @@ def test_csv_restore_failure_hides_manifest_and_preserves_manual_recovery_backup
     assert (staging_dirs[0] / ".recovery_required").is_file()
 
 
+def test_uncommitted_manifest_is_quarantined_before_failed_csv_restore(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    output = tmp_path / "derived"
+    prepare(tmp_path, dataset)
+    write_mask(dataset / "masks" / "mask_late.png", [(0, 0), (1, 0), (2, 0)])
+    real_replace = preparation._atomic_replace
+
+    def fail_after_manifest_publish_and_during_observation_restore(source: Path, target: Path) -> None:
+        if source.parent.name.startswith(".prepare-real-inspection-staging-") and target.name == "preparation_manifest.json":
+            real_replace(source, target)
+            raise OSError("ambiguous manifest publish failure")
+        if source.parent.name.startswith(".prepare-real-inspection-backup-") and source.name == "observation_records.csv":
+            raise OSError("observation restore failure")
+        real_replace(source, target)
+
+    monkeypatch.setattr(
+        preparation,
+        "_atomic_replace",
+        fail_after_manifest_publish_and_during_observation_restore,
+    )
+    with pytest.raises(RuntimeError, match="manual recovery backup preserved"):
+        preparation.prepare_real_inspection_pilot(dataset, output, overwrite=True)
+
+    backup_dir = next(output.glob(".prepare-real-inspection-backup-*"))
+    assert not (output / "preparation_manifest.json").exists()
+    assert (backup_dir / "UNCOMMITTED_preparation_manifest.json").is_file()
+
+
+def test_manifest_fallback_unlink_survives_quarantine_and_csv_restore_failures(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    output = tmp_path / "derived"
+    prepare(tmp_path, dataset)
+    write_mask(dataset / "masks" / "mask_late.png", [(0, 0), (1, 0), (2, 0)])
+    real_replace = preparation._atomic_replace
+
+    def fail_quarantine_and_observation_restore(source: Path, target: Path) -> None:
+        if source.parent.name.startswith(".prepare-real-inspection-staging-") and target.name == "preparation_manifest.json":
+            real_replace(source, target)
+            raise OSError("ambiguous manifest publish failure")
+        if target.name == "UNCOMMITTED_preparation_manifest.json":
+            raise OSError("quarantine failure")
+        if source.parent.name.startswith(".prepare-real-inspection-backup-") and source.name == "observation_records.csv":
+            raise OSError("observation restore failure")
+        real_replace(source, target)
+
+    monkeypatch.setattr(preparation, "_atomic_replace", fail_quarantine_and_observation_restore)
+    with pytest.raises(RuntimeError, match="manual recovery backup preserved"):
+        preparation.prepare_real_inspection_pilot(dataset, output, overwrite=True)
+
+    assert not (output / "preparation_manifest.json").exists()
+    assert len(list(output.glob(".prepare-real-inspection-backup-*"))) == 1
+    assert len(list(output.glob(".prepare-real-inspection-staging-*"))) == 1
+
+
+def test_recovery_sentinel_rejects_manifest_when_both_hide_methods_fail(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    output = tmp_path / "derived"
+    prepare(tmp_path, dataset)
+    write_mask(dataset / "masks" / "mask_late.png", [(0, 0), (1, 0), (2, 0)])
+    real_replace = preparation._atomic_replace
+    real_unlink = Path.unlink
+
+    def fail_hide_and_observation_restore(source: Path, target: Path) -> None:
+        if source.parent.name.startswith(".prepare-real-inspection-staging-") and target.name == "preparation_manifest.json":
+            real_replace(source, target)
+            raise OSError("ambiguous manifest publish failure")
+        if target.name == "UNCOMMITTED_preparation_manifest.json":
+            raise OSError("quarantine failure")
+        if source.parent.name.startswith(".prepare-real-inspection-backup-") and source.name == "observation_records.csv":
+            raise OSError("observation restore failure")
+        real_replace(source, target)
+
+    def fail_manifest_unlink(self: Path, *args, **kwargs):
+        if self == output / "preparation_manifest.json":
+            raise OSError("manifest unlink failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(preparation, "_atomic_replace", fail_hide_and_observation_restore)
+    monkeypatch.setattr(Path, "unlink", fail_manifest_unlink)
+    with pytest.raises(RuntimeError, match="manual recovery backup preserved"):
+        preparation.prepare_real_inspection_pilot(dataset, output, overwrite=True)
+
+    manifest_path = output / "preparation_manifest.json"
+    assert manifest_path.is_file()
+    with pytest.raises(ValueError, match="unfinished recovery data"):
+        preparation.require_inference_ready(manifest_path)
+
+
 def test_marker_write_failure_does_not_delete_recovery_staging(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     output = tmp_path / "derived"
@@ -932,6 +1038,7 @@ def test_single_inspection_is_not_ready_but_still_auditable(tmp_path):
     ("updates", "message"),
     [
         ({"data_contract_version": "wrong"}, "unsupported data_contract_version"),
+        ({"integrity_scope": "tamper_proof"}, "integrity_scope must be self_consistency_only"),
         ({"artifact_set_complete": False}, "not a complete artifact set"),
         ({"inference_ready": False}, "not inference-ready"),
         ({"readiness_reasons": ["missing evidence"]}, "missing evidence"),
@@ -1009,6 +1116,52 @@ def test_path_readiness_gate_checks_row_count_after_fingerprint_is_updated(tmp_p
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     with pytest.raises(ValueError, match="frame_records row count changed during staging"):
         preparation.require_inference_ready(manifest_path)
+
+
+def test_path_readiness_gate_rejects_artifact_change_during_snapshot_validation(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    original_validate = preparation.validate_prepared_artifacts
+
+    def validate_snapshot_then_mutate(*args, **kwargs):
+        original_validate(*args, **kwargs)
+        frame_path = output / "frame_records.csv"
+        frame_path.write_bytes(frame_path.read_bytes() + b"\n")
+
+    monkeypatch.setattr(preparation, "validate_prepared_artifacts", validate_snapshot_then_mutate)
+    with pytest.raises(ValueError, match="changed during readiness validation: frame_records.csv"):
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+
+def test_self_consistency_scope_accepts_coordinated_valid_edits_without_external_trust(tmp_path):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    observations = read_csv(output / "observation_records.csv")
+    frames = read_csv(output / "frame_records.csv")
+    observations[0]["disease_type"] = "spalling"
+    frames[0]["disease_type"] = "spalling"
+    preparation._write_csv(output / "observation_records.csv", observations, preparation.OBSERVATION_FIELDNAMES)
+    preparation._write_csv(output / "frame_records.csv", frames, preparation.FRAME_FIELDNAMES)
+    manifest_path = output / "preparation_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for output_name in ("observation_records", "frame_records"):
+        manifest["outputs"][output_name] = preparation._file_fingerprint(
+            output / f"{output_name}.csv", f"{output_name}.csv"
+        )
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    assert preparation.require_inference_ready(manifest_path)["integrity_scope"] == "self_consistency_only"
+
+
+def test_path_readiness_gate_rejects_existing_recovery_directory(tmp_path):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    (output / ".prepare-real-inspection-backup-test").mkdir()
+    with pytest.raises(ValueError, match="unfinished recovery data"):
+        preparation.require_inference_ready(output / "preparation_manifest.json")
 
 
 def test_mapping_readiness_gate_checks_logical_state_without_claiming_file_integrity(tmp_path):

@@ -119,6 +119,7 @@ data_contract_version=real_inspection_pilot_v1
 - 每轮原始、有效和空 mask 数量；
 - `inference_ready` 与原因；
 - 两个 CSV 的 SHA-256；
+- `integrity_scope=self_consistency_only`，明确该 manifest 不是外部可信签名；
 - `path_base=dataset_root`。
 
 manifest 不记录自身哈希，并作为三件套最后发布的完整性标志。
@@ -138,14 +139,16 @@ manifest 不记录自身哈希，并作为三件套最后发布的完整性标�
 - sequence 只有一次巡检；
 - 任一巡检过滤空 mask 后没有有效观测。
 
-消费者应先调用脚本中的 `require_inference_ready()`。传入 manifest 文件 `Path` 时，gate 会同时校验同目录两个 CSV 的普通文件类型、大小、SHA-256、schema 和行数；缺失或篡改均会报错。直接传入内存 `Mapping` 时只校验逻辑 readiness，不代表已经完成文件完整性验证。not-ready 产物不得送入 history-only coordinator。
+消费者应先调用脚本中的 `require_inference_ready()`。传入 manifest 文件 `Path` 时，gate 会基于同一份 CSV 字节快照校验普通文件类型、大小、SHA-256、schema 和行数，并在结束前复核源文件未发生变化；缺失、意外损坏或校验期间变化会报错。若输出目录存在 backup/staging recovery 数据，gate 会直接拒绝。直接传入内存 `Mapping` 时只校验逻辑 readiness，不代表已经完成文件完整性验证。not-ready 产物不得送入 history-only coordinator。
+
+该 gate 的完整性范围是 **self-consistency only**：manifest 与 CSV 可共同编辑，因此同步修改合法 CSV 内容并刷新 manifest 指纹仍可保持自洽。当前版本不把该机制描述为防恶意篡改认证；需要来源真实性时，应由调用方另行提供受信任的外部摘要或重新核验原始 dataset。
 
 ## 7. 写入安全
 
 - 原始 dataset 只读。
 - output directory 不得位于 dataset root、项目 `data/simulated/` 或正式 `outputs/` 内。
 - 默认拒绝覆盖已有产物；`--overwrite` 只处理本脚本的三个固定文件。
-- staging 全部通过后才发布；旧 manifest 先移出，新 manifest 最后发布。失败回滚时先恢复两个旧 CSV，只有两者均恢复成功后才最后恢复旧 manifest；任一 CSV 恢复失败时，提交位置不保留 manifest，backup/staging 会保留供人工恢复。
+- staging 全部通过后才发布；旧 manifest 先移出，新 manifest 最后发布。失败时先把已落盘的新 manifest 原子移动到 recovery backup，再恢复两个旧 CSV，只有两者均恢复成功后才最后恢复旧 manifest；任一 CSV 恢复失败时，提交位置不保留可用 manifest，backup/staging 会保留并阻断 readiness，供人工恢复。
 - 已有目标必须是普通文件，目录、符号链接和其他特殊文件会被拒绝。
 - 如果发布失败且自动回滚也失败，脚本不会删除剩余备份；错误信息会给出 `.prepare-real-inspection-backup-*` 和 staging 恢复路径，供人工恢复。
 - output directory 中仍有上述 backup/staging 恢复目录时，后续运行会停止，必须先完成人工检查，避免覆盖尚未恢复的数据。
