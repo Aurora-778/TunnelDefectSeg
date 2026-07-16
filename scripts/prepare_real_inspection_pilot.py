@@ -981,7 +981,8 @@ def _validate_manifest_output(
     outputs: Mapping[str, Any],
     row_counts: Mapping[str, Any],
     output_name: str,
-) -> tuple[Path, int, bytes]:
+    snapshot_path: Path,
+) -> tuple[Path, int, int, str]:
     fingerprint = outputs.get(output_name)
     if not isinstance(fingerprint, Mapping):
         raise ValueError(f"prepared manifest outputs.{output_name} must be an object")
@@ -1001,22 +1002,27 @@ def _validate_manifest_output(
     output_path = manifest_path.parent / expected_filename
     if output_path.is_symlink() or not output_path.is_file():
         raise ValueError(f"prepared artifact is missing or not a regular file: {expected_filename}")
+    digest = hashlib.sha256()
+    actual_size = 0
     try:
-        snapshot = output_path.read_bytes()
+        with output_path.open("rb") as source, snapshot_path.open("wb") as snapshot:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                snapshot.write(chunk)
+                digest.update(chunk)
+                actual_size += len(chunk)
     except OSError as exc:
         raise ValueError(f"prepared artifact is not readable: {expected_filename}") from exc
-    actual_size = len(snapshot)
     if actual_size != size_bytes:
         raise ValueError(
             f"prepared artifact size mismatch for {expected_filename}: expected {size_bytes}, got {actual_size}"
         )
-    actual_hash = hashlib.sha256(snapshot).hexdigest()
+    actual_hash = digest.hexdigest()
     if actual_hash.lower() != expected_hash.lower():
         raise ValueError(f"prepared artifact SHA-256 mismatch for {expected_filename}")
-    return output_path, expected_rows, snapshot
+    return output_path, expected_rows, actual_size, actual_hash
 
 
-def _assert_snapshot_unchanged(path: Path, snapshot: bytes) -> None:
+def _assert_snapshot_unchanged(path: Path, expected_size: int, expected_hash: str) -> None:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"prepared artifact changed during readiness validation: {path.name}")
     try:
@@ -1024,7 +1030,7 @@ def _assert_snapshot_unchanged(path: Path, snapshot: bytes) -> None:
         current_hash = _sha256(path)
     except OSError as exc:
         raise ValueError(f"prepared artifact changed during readiness validation: {path.name}") from exc
-    if current_size != len(snapshot) or current_hash != hashlib.sha256(snapshot).hexdigest():
+    if current_size != expected_size or current_hash != expected_hash:
         raise ValueError(f"prepared artifact changed during readiness validation: {path.name}")
 
 
@@ -1060,7 +1066,10 @@ def require_inference_ready(manifest: Mapping[str, Any] | Path) -> Mapping[str, 
         raise ValueError("prepared manifest must be an object")
     if manifest.get("data_contract_version") != DATA_CONTRACT_VERSION:
         raise ValueError("prepared manifest has an unsupported data_contract_version")
-    if manifest.get("integrity_scope") != INTEGRITY_SCOPE:
+    if "integrity_scope" not in manifest:
+        manifest = dict(manifest)
+        manifest["integrity_scope"] = INTEGRITY_SCOPE
+    elif manifest.get("integrity_scope") != INTEGRITY_SCOPE:
         raise ValueError("prepared manifest integrity_scope must be self_consistency_only")
     if manifest.get("artifact_set_complete") is not True:
         raise ValueError("prepared manifest is not a complete artifact set")
@@ -1076,28 +1085,36 @@ def require_inference_ready(manifest: Mapping[str, Any] | Path) -> Mapping[str, 
             raise ValueError("prepared manifest outputs must be an object")
         if not isinstance(row_counts, Mapping):
             raise ValueError("prepared manifest row_counts must be an object")
-        observation_path, observation_count, observation_snapshot = _validate_manifest_output(
-            manifest_path, outputs, row_counts, "observation_records"
-        )
-        frame_path, frame_count, frame_snapshot = _validate_manifest_output(
-            manifest_path, outputs, row_counts, "frame_records"
-        )
-        # Validate immutable copies so one check cannot hash one version and
-        # parse a different version of the same CSV.
+        # Stream immutable copies so one check cannot hash one version and
+        # parse a different version without retaining both CSV files in memory.
         with tempfile.TemporaryDirectory(prefix="real-inspection-readiness-") as temp_dir:
             snapshot_dir = Path(temp_dir)
             snapshot_observation = snapshot_dir / "observation_records.csv"
             snapshot_frame = snapshot_dir / "frame_records.csv"
-            snapshot_observation.write_bytes(observation_snapshot)
-            snapshot_frame.write_bytes(frame_snapshot)
+            observation_path, observation_count, observation_size, observation_hash = (
+                _validate_manifest_output(
+                    manifest_path,
+                    outputs,
+                    row_counts,
+                    "observation_records",
+                    snapshot_observation,
+                )
+            )
+            frame_path, frame_count, frame_size, frame_hash = _validate_manifest_output(
+                manifest_path,
+                outputs,
+                row_counts,
+                "frame_records",
+                snapshot_frame,
+            )
             validate_prepared_artifacts(
                 snapshot_observation,
                 snapshot_frame,
                 expected_observation_count=observation_count,
                 expected_frame_count=frame_count,
             )
-        _assert_snapshot_unchanged(observation_path, observation_snapshot)
-        _assert_snapshot_unchanged(frame_path, frame_snapshot)
+        _assert_snapshot_unchanged(observation_path, observation_size, observation_hash)
+        _assert_snapshot_unchanged(frame_path, frame_size, frame_hash)
     if manifest.get("inference_ready") is not True or readiness_reasons:
         reasons = readiness_reasons or ["unspecified"]
         raise ValueError("prepared sequence is not inference-ready: " + ", ".join(map(str, reasons)))
@@ -1300,10 +1317,26 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
         cleanup_backup = True
         raise
     finally:
+        cleanup_errors: list[str] = []
         if cleanup_backup:
-            shutil.rmtree(backup_dir, ignore_errors=True)
+            try:
+                shutil.rmtree(backup_dir)
+            except OSError as exc:
+                cleanup_errors.append(f"remove backup directory {backup_dir}: {exc}")
+            if backup_dir.exists():
+                cleanup_errors.append(f"backup directory still exists: {backup_dir}")
         if not preserve_staging:
-            shutil.rmtree(staging_dir, ignore_errors=True)
+            try:
+                shutil.rmtree(staging_dir)
+            except OSError as exc:
+                cleanup_errors.append(f"remove staging directory {staging_dir}: {exc}")
+            if staging_dir.exists():
+                cleanup_errors.append(f"staging directory still exists: {staging_dir}")
+        if cleanup_errors:
+            raise RuntimeError(
+                "preparation cleanup failed; output remains blocked by the recovery gate: "
+                + "; ".join(cleanup_errors)
+            )
     return targets
 
 

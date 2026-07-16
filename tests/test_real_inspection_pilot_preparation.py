@@ -725,6 +725,36 @@ def test_publish_failure_never_leaves_mixed_artifacts(tmp_path, monkeypatch, wit
     assert not list(output.glob(".prepare-real-inspection-*"))
 
 
+@pytest.mark.parametrize(
+    "directory_prefix",
+    [".prepare-real-inspection-backup-", ".prepare-real-inspection-staging-"],
+)
+@pytest.mark.parametrize("cleanup_failure", ["raises", "silent"])
+def test_successful_publish_cleanup_failure_is_reported_and_blocks_readiness(
+    tmp_path, monkeypatch, directory_prefix, cleanup_failure
+):
+    dataset = make_dataset(tmp_path)
+    output = tmp_path / "derived"
+    real_rmtree = preparation.shutil.rmtree
+
+    def leave_selected_directory(path: Path, *args, **kwargs):
+        if Path(path).name.startswith(directory_prefix):
+            if cleanup_failure == "raises":
+                raise OSError("simulated cleanup failure")
+            return None
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(preparation.shutil, "rmtree", leave_selected_directory)
+    with pytest.raises(RuntimeError, match="preparation cleanup failed"):
+        preparation.prepare_real_inspection_pilot(dataset, output)
+
+    manifest_path = output / "preparation_manifest.json"
+    assert manifest_path.is_file()
+    assert len(list(output.glob(f"{directory_prefix}*"))) == 1
+    with pytest.raises(ValueError, match="unfinished recovery data"):
+        preparation.require_inference_ready(manifest_path)
+
+
 def test_csv_restore_failure_hides_manifest_and_preserves_manual_recovery_backup(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     output = tmp_path / "derived"
@@ -1039,6 +1069,7 @@ def test_single_inspection_is_not_ready_but_still_auditable(tmp_path):
     [
         ({"data_contract_version": "wrong"}, "unsupported data_contract_version"),
         ({"integrity_scope": "tamper_proof"}, "integrity_scope must be self_consistency_only"),
+        ({"integrity_scope": ""}, "integrity_scope must be self_consistency_only"),
         ({"artifact_set_complete": False}, "not a complete artifact set"),
         ({"inference_ready": False}, "not inference-ready"),
         ({"readiness_reasons": ["missing evidence"]}, "missing evidence"),
@@ -1162,6 +1193,35 @@ def test_path_readiness_gate_rejects_existing_recovery_directory(tmp_path):
     (output / ".prepare-real-inspection-backup-test").mkdir()
     with pytest.raises(ValueError, match="unfinished recovery data"):
         preparation.require_inference_ready(output / "preparation_manifest.json")
+
+
+def test_legacy_v1_manifest_without_integrity_scope_is_normalized(tmp_path):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    manifest_path = output / "preparation_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["integrity_scope"]
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    normalized = preparation.require_inference_ready(manifest_path)
+    assert normalized["data_contract_version"] == preparation.DATA_CONTRACT_VERSION
+    assert normalized["integrity_scope"] == "self_consistency_only"
+
+
+def test_path_readiness_streams_csv_snapshots_without_read_bytes(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_read_bytes = Path.read_bytes
+
+    def reject_csv_read_bytes(self: Path) -> bytes:
+        if self.parent == output and self.suffix == ".csv":
+            raise AssertionError("read_bytes must not load prepared CSV files")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_csv_read_bytes)
+    assert preparation.require_inference_ready(output / "preparation_manifest.json")["inference_ready"] is True
 
 
 def test_mapping_readiness_gate_checks_logical_state_without_claiming_file_integrity(tmp_path):

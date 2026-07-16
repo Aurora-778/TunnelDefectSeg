@@ -139,9 +139,11 @@ manifest 不记录自身哈希，并作为三件套最后发布的完整性标�
 - sequence 只有一次巡检；
 - 任一巡检过滤空 mask 后没有有效观测。
 
-消费者应先调用脚本中的 `require_inference_ready()`。传入 manifest 文件 `Path` 时，gate 会基于同一份 CSV 字节快照校验普通文件类型、大小、SHA-256、schema 和行数，并在结束前复核源文件未发生变化；缺失、意外损坏或校验期间变化会报错。若输出目录存在 backup/staging recovery 数据，gate 会直接拒绝。直接传入内存 `Mapping` 时只校验逻辑 readiness，不代表已经完成文件完整性验证。not-ready 产物不得送入 history-only coordinator。
+消费者应先调用脚本中的 `require_inference_ready()`。传入 manifest 文件 `Path` 时，gate 会把 CSV 分块复制到临时快照，在同一快照上校验普通文件类型、大小、SHA-256、schema 和行数，并在结束前复核源文件未发生变化；缺失、意外损坏或校验期间变化会报错。临时快照位于系统临时目录，不写入项目 `data/` 或 `outputs/`。若输出目录存在 backup/staging recovery 数据，gate 会直接拒绝。直接传入内存 `Mapping` 时只校验逻辑 readiness，不代表已经完成文件完整性验证。not-ready 产物不得送入 history-only coordinator。
 
-该 gate 的完整性范围是 **self-consistency only**：manifest 与 CSV 可共同编辑，因此同步修改合法 CSV 内容并刷新 manifest 指纹仍可保持自洽。当前版本不把该机制描述为防恶意篡改认证；需要来源真实性时，应由调用方另行提供受信任的外部摘要或重新核验原始 dataset。
+该 gate 是检查时刻的 **point-in-time self-consistency check**：manifest 与 CSV 可共同编辑，因此同步修改合法 CSV 内容并刷新 manifest 指纹仍可保持自洽；gate 返回后发生的文件变化也不在本次检查保证范围内。当前版本不把该机制描述为防恶意篡改认证；需要来源真实性或持续读取一致性时，应由调用方另行提供受信任的外部摘要、重新核验原始 dataset，或消费已固定的受信任快照。
+
+早期 `real_inspection_pilot_v1` manifest 可能没有 `integrity_scope`。为保持同版本兼容，gate 会把“字段完全缺失”归一化为 `self_consistency_only`；空值或其他值仍视为非法。新生成 manifest 始终显式写入该字段。
 
 ## 7. 写入安全
 
@@ -151,6 +153,7 @@ manifest 不记录自身哈希，并作为三件套最后发布的完整性标�
 - staging 全部通过后才发布；旧 manifest 先移出，新 manifest 最后发布。失败时先把已落盘的新 manifest 原子移动到 recovery backup，再恢复两个旧 CSV，只有两者均恢复成功后才最后恢复旧 manifest；任一 CSV 恢复失败时，提交位置不保留可用 manifest，backup/staging 会保留并阻断 readiness，供人工恢复。
 - 已有目标必须是普通文件，目录、符号链接和其他特殊文件会被拒绝。
 - 如果发布失败且自动回滚也失败，脚本不会删除剩余备份；错误信息会给出 `.prepare-real-inspection-backup-*` 和 staging 恢复路径，供人工恢复。
+- 即使三件套已完成发布，只要 backup/staging 清理失败，脚本也会明确报错而不会返回成功；残留目录继续阻断 readiness，避免生产者与消费者对状态产生矛盾判断。
 - output directory 中仍有上述 backup/staging 恢复目录时，后续运行会停止，必须先完成人工检查，避免覆盖尚未恢复的数据。
 - manifest 中的 source hashes 来自实际用于几何计算的输入字节；发布前发现 metadata、图像或 mask 已变化时直接终止。
 - CSV 和 manifest 只保存 dataset-root-relative POSIX 路径，不保存用户名或本机绝对路径。
