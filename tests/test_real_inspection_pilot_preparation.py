@@ -822,6 +822,36 @@ def test_publish_backup_creation_failure_preserves_original_error(tmp_path, monk
     assert not list(output.glob(".prepare-real-inspection-backup-*"))
 
 
+def test_publish_backup_creation_partial_success_preserves_recovery(tmp_path, monkeypatch):
+    staging = tmp_path / "staging"
+    output = tmp_path / "derived"
+    staging.mkdir()
+    output.mkdir()
+    for name in preparation.ARTIFACT_NAMES:
+        (staging / name).write_text("staged", encoding="utf-8")
+    real_mkdir = Path.mkdir
+
+    def create_then_fail(self: Path, *args, **kwargs):
+        if self.parent == output and self.name.startswith(".prepare-real-inspection-backup-"):
+            real_mkdir(self, *args, **kwargs)
+            raise OSError("simulated post-create backup failure")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", create_then_fail)
+    with pytest.raises(RuntimeError) as captured:
+        preparation.publish_artifacts(staging, output, overwrite=True)
+
+    message = str(captured.value)
+    assert "rollback was incomplete" in message
+    assert "partially created and preserved for inspection" in message
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated post-create backup failure"
+    backup_dirs = list(output.glob(".prepare-real-inspection-backup-*"))
+    assert len(backup_dirs) == 1
+    assert (backup_dirs[0] / "RECOVERY_REQUIRED.txt").is_file()
+    assert (staging / ".recovery_required").is_file()
+
+
 def test_csv_restore_failure_hides_manifest_and_preserves_manual_recovery_backup(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     output = tmp_path / "derived"
@@ -1383,8 +1413,14 @@ def test_path_readiness_distinguishes_source_read_failure(tmp_path, monkeypatch)
         return handle
 
     monkeypatch.setattr(Path, "open", fail_source_read)
-    with pytest.raises(ValueError, match="prepared artifact is not readable: observation_records.csv"):
+    with pytest.raises(
+        ValueError,
+        match="prepared artifact is not readable: observation_records.csv",
+    ) as captured:
         preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated source read failure"
 
 
 def test_path_readiness_distinguishes_snapshot_write_failure(tmp_path, monkeypatch):
@@ -1413,8 +1449,11 @@ def test_path_readiness_distinguishes_snapshot_write_failure(tmp_path, monkeypat
     with pytest.raises(
         ValueError,
         match="temporary readiness snapshot write failed for observation_records.csv",
-    ):
+    ) as captured:
         preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated snapshot write failure"
 
 
 def test_path_readiness_distinguishes_snapshot_finalization_failure(tmp_path, monkeypatch):
@@ -1444,8 +1483,79 @@ def test_path_readiness_distinguishes_snapshot_finalization_failure(tmp_path, mo
     with pytest.raises(
         ValueError,
         match="temporary readiness snapshot finalization failed for observation_records.csv",
-    ):
+    ) as captured:
         preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated snapshot finalization failure"
+
+
+def test_path_readiness_distinguishes_source_finalization_failure(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+
+    class FailingSourceFinalizer:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def read(self, *args, **kwargs):
+            return self.handle.read(*args, **kwargs)
+
+        def close(self):
+            self.handle.close()
+            raise OSError("simulated source finalization failure")
+
+    def fail_source_finalization(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if self == output / "observation_records.csv" and mode == "rb":
+            return FailingSourceFinalizer(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_source_finalization)
+    with pytest.raises(
+        ValueError,
+        match="prepared artifact finalization failed for observation_records.csv",
+    ) as captured:
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated source finalization failure"
+
+
+def test_snapshot_write_failure_remains_primary_when_close_also_fails(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+
+    class FailingWriterAndFinalizer:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def write(self, _chunk):
+            raise OSError("simulated snapshot write failure")
+
+        def close(self):
+            self.handle.close()
+            raise OSError("simulated snapshot finalization failure")
+
+    def fail_snapshot_write_and_close(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if mode == "wb" and self.parent.name.startswith("real-inspection-readiness-"):
+            return FailingWriterAndFinalizer(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_snapshot_write_and_close)
+    with pytest.raises(
+        ValueError,
+        match="temporary readiness snapshot write failed for observation_records.csv",
+    ) as captured:
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated snapshot write failure"
 
 
 def test_mapping_readiness_gate_checks_logical_state_without_claiming_file_integrity(tmp_path):

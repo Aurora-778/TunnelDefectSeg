@@ -1316,6 +1316,14 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
         cleanup_backup = True
     except Exception as publish_error:
         rollback_errors: list[str] = []
+        # Some filesystems can create the directory and then report an error.
+        # Preserve that partial directory as recovery evidence instead of
+        # silently treating the failed mkdir as if it created nothing.
+        if not backup_dir_created and backup_dir.exists():
+            rollback_errors.append(
+                "backup directory was partially created and preserved for inspection: "
+                f"{backup_dir}"
+            )
         # If the old marker was moved away, no marker may remain visible until
         # both old CSV files have been restored successfully.
         if "preparation_manifest.json" in backups or not original_manifest_present:
