@@ -786,6 +786,42 @@ def test_publish_and_cleanup_failure_preserves_primary_error(tmp_path, monkeypat
     assert str(captured.value.__cause__) == "simulated frame publish failure"
 
 
+def test_publish_target_validation_failure_does_not_invent_cleanup_error(tmp_path):
+    staging = tmp_path / "staging"
+    output = tmp_path / "derived"
+    staging.mkdir()
+    output.mkdir()
+    for name in preparation.ARTIFACT_NAMES:
+        (staging / name).write_text("staged", encoding="utf-8")
+    (output / "preparation_manifest.json").mkdir()
+
+    with pytest.raises(ValueError, match="output target must be a regular file"):
+        preparation.publish_artifacts(staging, output, overwrite=True)
+
+    assert not list(output.glob(".prepare-real-inspection-backup-*"))
+
+
+def test_publish_backup_creation_failure_preserves_original_error(tmp_path, monkeypatch):
+    staging = tmp_path / "staging"
+    output = tmp_path / "derived"
+    staging.mkdir()
+    output.mkdir()
+    for name in preparation.ARTIFACT_NAMES:
+        (staging / name).write_text("staged", encoding="utf-8")
+    real_mkdir = Path.mkdir
+
+    def fail_backup_mkdir(self: Path, *args, **kwargs):
+        if self.parent == output and self.name.startswith(".prepare-real-inspection-backup-"):
+            raise OSError("simulated backup directory creation failure")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_backup_mkdir)
+    with pytest.raises(OSError, match="simulated backup directory creation failure"):
+        preparation.publish_artifacts(staging, output, overwrite=True)
+
+    assert not list(output.glob(".prepare-real-inspection-backup-*"))
+
+
 def test_csv_restore_failure_hides_manifest_and_preserves_manual_recovery_backup(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     output = tmp_path / "derived"
@@ -1261,7 +1297,7 @@ def test_path_readiness_gate_rejects_existing_recovery_directory(tmp_path):
         preparation.require_inference_ready(output / "preparation_manifest.json")
 
 
-def test_path_readiness_gate_rejects_recovery_created_during_validation(tmp_path, monkeypatch):
+def test_path_readiness_gate_rejects_recovery_visible_before_final_guard(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     prepare(tmp_path, dataset)
     output = tmp_path / "derived"
@@ -1320,6 +1356,94 @@ def test_path_readiness_reports_temporary_snapshot_creation_failure(tmp_path, mo
     with pytest.raises(
         ValueError,
         match="temporary readiness snapshot cannot be created for observation_records.csv",
+    ):
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+
+def test_path_readiness_distinguishes_source_read_failure(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+
+    class FailingReader:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def read(self, *args, **kwargs):
+            raise OSError("simulated source read failure")
+
+        def close(self):
+            self.handle.close()
+
+    def fail_source_read(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if self == output / "observation_records.csv" and mode == "rb":
+            return FailingReader(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_source_read)
+    with pytest.raises(ValueError, match="prepared artifact is not readable: observation_records.csv"):
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+
+def test_path_readiness_distinguishes_snapshot_write_failure(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+
+    class FailingWriter:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def write(self, _chunk):
+            raise OSError("simulated snapshot write failure")
+
+        def close(self):
+            self.handle.close()
+
+    def fail_snapshot_write(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if mode == "wb" and self.parent.name.startswith("real-inspection-readiness-"):
+            return FailingWriter(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_snapshot_write)
+    with pytest.raises(
+        ValueError,
+        match="temporary readiness snapshot write failed for observation_records.csv",
+    ):
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+
+def test_path_readiness_distinguishes_snapshot_finalization_failure(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+
+    class FailingFinalizer:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def write(self, chunk):
+            return self.handle.write(chunk)
+
+        def close(self):
+            self.handle.close()
+            raise OSError("simulated snapshot finalization failure")
+
+    def fail_snapshot_finalization(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if mode == "wb" and self.parent.name.startswith("real-inspection-readiness-"):
+            return FailingFinalizer(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_snapshot_finalization)
+    with pytest.raises(
+        ValueError,
+        match="temporary readiness snapshot finalization failed for observation_records.csv",
     ):
         preparation.require_inference_ready(output / "preparation_manifest.json")
 

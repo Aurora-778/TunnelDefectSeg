@@ -1008,38 +1008,61 @@ def _validate_manifest_output(
         source_handle = output_path.open("rb")
     except OSError as exc:
         raise ValueError(f"prepared artifact is not readable: {expected_filename}") from exc
-    with source_handle as source:
+
+    snapshot_handle = None
+    operation_error: ValueError | None = None
+    operation_cause: OSError | None = None
+    try:
         try:
             snapshot_handle = snapshot_path.open("wb")
         except OSError as exc:
-            raise ValueError(
+            operation_error = ValueError(
                 f"temporary readiness snapshot cannot be created for {expected_filename}"
-            ) from exc
+            )
+            operation_cause = exc
+
+        while operation_error is None:
+            try:
+                chunk = source_handle.read(1024 * 1024)
+            except OSError as exc:
+                operation_error = ValueError(
+                    f"prepared artifact is not readable: {expected_filename}"
+                )
+                operation_cause = exc
+                break
+            if not chunk:
+                break
+            try:
+                snapshot_handle.write(chunk)
+            except OSError as exc:
+                operation_error = ValueError(
+                    f"temporary readiness snapshot write failed for {expected_filename}"
+                )
+                operation_cause = exc
+                break
+            digest.update(chunk)
+            actual_size += len(chunk)
+    finally:
+        if snapshot_handle is not None:
+            try:
+                snapshot_handle.close()
+            except OSError as exc:
+                if operation_error is None:
+                    operation_error = ValueError(
+                        f"temporary readiness snapshot finalization failed for {expected_filename}"
+                    )
+                    operation_cause = exc
         try:
-            with snapshot_handle as snapshot:
-                while True:
-                    try:
-                        chunk = source.read(1024 * 1024)
-                    except OSError as exc:
-                        raise ValueError(
-                            f"prepared artifact is not readable: {expected_filename}"
-                        ) from exc
-                    if not chunk:
-                        break
-                    try:
-                        snapshot.write(chunk)
-                    except OSError as exc:
-                        raise ValueError(
-                            f"temporary readiness snapshot write failed for {expected_filename}"
-                        ) from exc
-                    digest.update(chunk)
-                    actual_size += len(chunk)
-        except ValueError:
-            raise
+            source_handle.close()
         except OSError as exc:
-            raise ValueError(
-                f"temporary readiness snapshot finalization failed for {expected_filename}"
-            ) from exc
+            if operation_error is None:
+                operation_error = ValueError(
+                    f"prepared artifact finalization failed for {expected_filename}"
+                )
+                operation_cause = exc
+
+    if operation_error is not None:
+        raise operation_error from operation_cause
     if actual_size != size_bytes:
         raise ValueError(
             f"prepared artifact size mismatch for {expected_filename}: expected {size_bytes}, got {actual_size}"
@@ -1268,6 +1291,7 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
     backups: dict[str, Path] = {}
     published: list[str] = []
     cleanup_backup = False
+    backup_dir_created = False
     preserve_staging = False
     primary_error: Exception | None = None
     original_manifest_present = targets["preparation_manifest.json"].exists()
@@ -1275,6 +1299,7 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
         _validate_known_target_types(targets)
         _validate_known_target_types(stage_paths)
         backup_dir.mkdir(parents=False, exist_ok=False)
+        backup_dir_created = True
         # Remove the old commit marker before any CSV can change.
         backup_order = ["preparation_manifest.json", "observation_records.csv", "frame_records.csv"]
         for name in backup_order:
@@ -1375,7 +1400,7 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
         raise
     finally:
         cleanup_errors: list[str] = []
-        if cleanup_backup:
+        if cleanup_backup and backup_dir_created:
             try:
                 shutil.rmtree(backup_dir)
             except OSError as exc:

@@ -139,9 +139,11 @@ manifest 不记录自身哈希，并作为三件套最后发布的完整性标�
 - sequence 只有一次巡检；
 - 任一巡检过滤空 mask 后没有有效观测。
 
-消费者应先调用脚本中的 `require_inference_ready()`。传入 manifest 文件 `Path` 时，gate 会把 CSV 分块复制到临时快照，在同一快照上校验普通文件类型、大小、SHA-256、schema 和行数；返回前会对 manifest 与两个 CSV 做正向、反向指纹复核，并再次检查 backup/staging recovery 标志。缺失、意外损坏、复核期间变化或新出现的 recovery 数据会报错。临时快照位于系统临时目录，不写入项目 `data/` 或 `outputs/`。直接传入内存 `Mapping` 时只校验逻辑 readiness，不代表已经完成文件完整性验证。not-ready 产物不得送入 history-only coordinator。
+消费者应先调用脚本中的 `require_inference_ready()`。传入 manifest 文件 `Path` 时，gate 会把 CSV 分块复制到临时快照，在同一快照上校验普通文件类型、大小、SHA-256、schema 和行数；返回前会对 manifest 与两个 CSV 做正向、反向指纹复核，并再次检查 backup/staging recovery 标志。缺失、意外损坏、复核期间变化或在末次枚举时已经可见的 recovery 数据会报错。临时快照位于系统临时目录，不写入项目 `data/` 或 `outputs/`。直接传入内存 `Mapping` 时只校验逻辑 readiness，不代表已经完成文件完整性验证。not-ready 产物不得送入 history-only coordinator。
 
-该 gate 是检查时刻的 **point-in-time self-consistency check**：正反两轮复核用于缩小常见替换窗口，但不提供文件锁或并发原子快照。manifest 与 CSV 可共同编辑，因此同步修改合法 CSV 内容并刷新 manifest 指纹仍可保持自洽；最终复核结束后或 gate 返回后发生的文件变化不在本次检查保证范围内。当前版本不把该机制描述为防恶意篡改认证；需要来源真实性或持续读取一致性时，应由调用方另行提供受信任的外部摘要、重新核验原始 dataset，或消费已固定的受信任快照。
+该 gate 是尽力执行的 **point-in-time self-consistency check**：正反两轮复核用于缩小常见替换窗口，但不提供文件锁或并发原子快照，也不能保证发现最后一次文件或目录枚举结束后发生的变化。manifest 与 CSV 可共同编辑，因此同步修改合法 CSV 内容并刷新 manifest 指纹仍可保持自洽；最终复核结束后或 gate 返回后发生的文件变化不在本次检查保证范围内。当前版本不把该机制描述为防恶意篡改认证；需要来源真实性或持续读取一致性时，应由调用方另行提供受信任的外部摘要、重新核验原始 dataset，或消费已固定的受信任快照。
+
+V1 面向单 sequence 的 pilot 数据准备。一次 Path readiness 检查会在生成临时快照时读取并哈希 CSV，并在正向、反向复核中再次完整读取，因此磁盘 I/O 与 CSV 大小线性增长且约包含三次完整读取。该开销用于保留当前无锁自洽检查强度；大规模批量数据应先评估耗时，或由后续版本改为消费调用方固定的受信任快照，而不是把 V1 gate 描述为大数据并发校验服务。
 
 早期 `real_inspection_pilot_v1` manifest 可能没有 `integrity_scope`。为保持同版本兼容，gate 会把“字段完全缺失”归一化为 `self_consistency_only`；空值或其他值仍视为非法。新生成 manifest 始终显式写入该字段。
 
