@@ -1108,7 +1108,15 @@ def _close_stream_with_retry(handle: Any, label: str) -> tuple[OSError | None, l
             if first_error is None:
                 first_error = exc.with_traceback(None)
             diagnostics.append(f"{label} close attempt {attempt} failed: {exc}")
-            if bool(getattr(handle, "closed", False)):
+            try:
+                is_closed = bool(getattr(handle, "closed", False))
+            except Exception as state_error:
+                diagnostics.append(
+                    f"{label} closed state inspection failed after attempt {attempt}: "
+                    f"{state_error}"
+                )
+                is_closed = False
+            if is_closed:
                 break
     return first_error, diagnostics
 

@@ -1743,6 +1743,129 @@ def test_persistent_close_failure_does_not_mask_readiness_error(
     assert f"simulated persistent {stream_kind} close failure 2" in str(captured.value)
 
 
+@pytest.mark.parametrize("state_error_type", [OSError, ValueError])
+def test_closed_state_error_does_not_replace_first_close_error(
+    tmp_path,
+    monkeypatch,
+    state_error_type,
+):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+    close_calls = {"count": 0}
+
+    class FaultyClosedState:
+        def __init__(self, handle):
+            self.handle = handle
+
+        @property
+        def closed(self):
+            raise state_error_type("simulated closed state inspection failure")
+
+        def write(self, chunk):
+            return self.handle.write(chunk)
+
+        def close(self):
+            close_calls["count"] += 1
+            if close_calls["count"] == 1:
+                raise OSError("simulated primary snapshot close failure")
+            self.handle.close()
+
+    def fail_closed_state(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if mode == "wb" and self.parent.name.startswith("real-inspection-readiness-"):
+            return FaultyClosedState(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_closed_state)
+    with pytest.raises(
+        ValueError,
+        match="temporary readiness snapshot finalization failed",
+    ) as captured:
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated primary snapshot close failure"
+    assert close_calls["count"] == 2
+    assert "closed state inspection failed" in str(captured.value)
+    assert "simulated closed state inspection failure" in str(captured.value)
+
+
+@pytest.mark.parametrize("operation_kind", ["snapshot_write", "source_read"])
+def test_primary_io_error_survives_persistent_close_failures(
+    tmp_path,
+    monkeypatch,
+    operation_kind,
+):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+    close_calls = {"count": 0}
+
+    class FailingOperationAndClose:
+        def __init__(self, handle):
+            self.handle = handle
+
+        @property
+        def closed(self):
+            return self.handle.closed
+
+        def read(self, *args, **kwargs):
+            if operation_kind == "source_read":
+                raise OSError("simulated primary source read failure")
+            return self.handle.read(*args, **kwargs)
+
+        def write(self, chunk):
+            if operation_kind == "snapshot_write":
+                raise OSError("simulated primary snapshot write failure")
+            return self.handle.write(chunk)
+
+        def close(self):
+            close_calls["count"] += 1
+            raise OSError(
+                f"simulated persistent {operation_kind} close failure "
+                f"{close_calls['count']}"
+            )
+
+    def fail_operation_and_close(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        is_snapshot = mode == "wb" and self.parent.name.startswith(
+            "real-inspection-readiness-"
+        )
+        is_source = self == output / "observation_records.csv" and mode == "rb"
+        if (operation_kind == "snapshot_write" and is_snapshot) or (
+            operation_kind == "source_read" and is_source
+        ):
+            # No external wrapper reference is retained. Persistent close
+            # failures must not turn TemporaryDirectory cleanup into the top
+            # level error on Windows.
+            return FailingOperationAndClose(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_operation_and_close)
+    expected_message = (
+        "temporary readiness snapshot write failed"
+        if operation_kind == "snapshot_write"
+        else "prepared artifact is not readable"
+    )
+    expected_cause = (
+        "simulated primary snapshot write failure"
+        if operation_kind == "snapshot_write"
+        else "simulated primary source read failure"
+    )
+    with pytest.raises(ValueError, match=expected_message) as captured:
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == expected_cause
+    assert close_calls["count"] == 2
+    assert "cleanup diagnostics" in str(captured.value)
+    assert f"simulated persistent {operation_kind} close failure 1" in str(captured.value)
+    assert f"simulated persistent {operation_kind} close failure 2" in str(captured.value)
+
+
 def test_snapshot_write_failure_remains_primary_when_close_also_fails(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     prepare(tmp_path, dataset)
