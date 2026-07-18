@@ -852,6 +852,56 @@ def test_publish_backup_creation_partial_success_preserves_recovery(tmp_path, mo
     assert (staging / ".recovery_required").is_file()
 
 
+@pytest.mark.parametrize(
+    ("failed_marker", "surviving_marker"),
+    [
+        ("RECOVERY_REQUIRED.txt", ".recovery_required"),
+        (".recovery_required", "RECOVERY_REQUIRED.txt"),
+    ],
+)
+def test_recovery_markers_are_attempted_independently(
+    tmp_path,
+    monkeypatch,
+    failed_marker,
+    surviving_marker,
+):
+    staging = tmp_path / "staging"
+    output = tmp_path / "derived"
+    staging.mkdir()
+    output.mkdir()
+    for name in preparation.ARTIFACT_NAMES:
+        (staging / name).write_text("staged", encoding="utf-8")
+    real_mkdir = Path.mkdir
+    real_write_text = Path.write_text
+
+    def create_then_fail(self: Path, *args, **kwargs):
+        if self.parent == output and self.name.startswith(".prepare-real-inspection-backup-"):
+            real_mkdir(self, *args, **kwargs)
+            raise OSError("simulated post-create backup failure")
+        return real_mkdir(self, *args, **kwargs)
+
+    def fail_one_marker(self: Path, *args, **kwargs):
+        if self.name == failed_marker:
+            raise OSError(f"simulated {failed_marker} write failure")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", create_then_fail)
+    monkeypatch.setattr(Path, "write_text", fail_one_marker)
+    with pytest.raises(RuntimeError) as captured:
+        preparation.publish_artifacts(staging, output, overwrite=True)
+
+    backup_dir = next(output.glob(".prepare-real-inspection-backup-*"))
+    marker_paths = {
+        "RECOVERY_REQUIRED.txt": backup_dir / "RECOVERY_REQUIRED.txt",
+        ".recovery_required": staging / ".recovery_required",
+    }
+    assert not marker_paths[failed_marker].exists()
+    assert marker_paths[surviving_marker].is_file()
+    assert f"simulated {failed_marker} write failure" in str(captured.value)
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated post-create backup failure"
+
+
 def test_csv_restore_failure_hides_manifest_and_preserves_manual_recovery_backup(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     output = tmp_path / "derived"
@@ -1524,6 +1574,90 @@ def test_path_readiness_distinguishes_source_finalization_failure(tmp_path, monk
     assert str(captured.value.__cause__) == "simulated source finalization failure"
 
 
+def test_snapshot_close_failure_before_release_is_retried(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+    wrapped_handles = []
+
+    class FailsBeforeClosingOnce:
+        def __init__(self, handle):
+            self.handle = handle
+            self.close_calls = 0
+
+        def write(self, chunk):
+            return self.handle.write(chunk)
+
+        def close(self):
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise OSError("simulated pre-release snapshot close failure")
+            self.handle.close()
+
+    def fail_snapshot_close_once(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if mode == "wb" and self.parent.name.startswith("real-inspection-readiness-"):
+            wrapped = FailsBeforeClosingOnce(handle)
+            wrapped_handles.append(wrapped)
+            return wrapped
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_snapshot_close_once)
+    with pytest.raises(
+        ValueError,
+        match="temporary readiness snapshot finalization failed for observation_records.csv",
+    ) as captured:
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated pre-release snapshot close failure"
+    assert wrapped_handles[0].close_calls == 2
+    assert wrapped_handles[0].handle.closed is True
+
+
+def test_source_close_failure_before_release_is_retried(tmp_path, monkeypatch):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+    wrapped_handles = []
+
+    class FailsBeforeClosingOnce:
+        def __init__(self, handle):
+            self.handle = handle
+            self.close_calls = 0
+
+        def read(self, *args, **kwargs):
+            return self.handle.read(*args, **kwargs)
+
+        def close(self):
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise OSError("simulated pre-release source close failure")
+            self.handle.close()
+
+    def fail_source_close_once(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        if self == output / "observation_records.csv" and mode == "rb":
+            wrapped = FailsBeforeClosingOnce(handle)
+            wrapped_handles.append(wrapped)
+            return wrapped
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_source_close_once)
+    with pytest.raises(
+        ValueError,
+        match="prepared artifact finalization failed for observation_records.csv",
+    ) as captured:
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == "simulated pre-release source close failure"
+    assert wrapped_handles[0].close_calls == 2
+    assert wrapped_handles[0].handle.closed is True
+
+
 def test_snapshot_write_failure_remains_primary_when_close_also_fails(tmp_path, monkeypatch):
     dataset = make_dataset(tmp_path)
     prepare(tmp_path, dataset)
@@ -1533,13 +1667,16 @@ def test_snapshot_write_failure_remains_primary_when_close_also_fails(tmp_path, 
     class FailingWriterAndFinalizer:
         def __init__(self, handle):
             self.handle = handle
+            self.close_calls = 0
 
         def write(self, _chunk):
             raise OSError("simulated snapshot write failure")
 
         def close(self):
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise OSError("simulated snapshot finalization failure")
             self.handle.close()
-            raise OSError("simulated snapshot finalization failure")
 
     def fail_snapshot_write_and_close(self: Path, mode: str = "r", *args, **kwargs):
         handle = real_open(self, mode, *args, **kwargs)
@@ -1556,6 +1693,8 @@ def test_snapshot_write_failure_remains_primary_when_close_also_fails(tmp_path, 
 
     assert isinstance(captured.value.__cause__, OSError)
     assert str(captured.value.__cause__) == "simulated snapshot write failure"
+    assert "cleanup diagnostics" in str(captured.value)
+    assert "simulated snapshot finalization failure" in str(captured.value)
 
 
 def test_mapping_readiness_gate_checks_logical_state_without_claiming_file_integrity(tmp_path):

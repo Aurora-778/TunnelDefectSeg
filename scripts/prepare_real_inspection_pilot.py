@@ -1012,6 +1012,7 @@ def _validate_manifest_output(
     snapshot_handle = None
     operation_error: ValueError | None = None
     operation_cause: OSError | None = None
+    finalization_diagnostics: list[str] = []
     try:
         try:
             snapshot_handle = snapshot_path.open("wb")
@@ -1044,22 +1045,43 @@ def _validate_manifest_output(
             actual_size += len(chunk)
     finally:
         if snapshot_handle is not None:
-            try:
-                snapshot_handle.close()
-            except OSError as exc:
+            close_error, close_diagnostics = _close_stream_with_retry(
+                snapshot_handle,
+                "temporary readiness snapshot",
+            )
+            if close_error is not None:
                 if operation_error is None:
                     operation_error = ValueError(
                         f"temporary readiness snapshot finalization failed for {expected_filename}"
                     )
-                    operation_cause = exc
-        try:
-            source_handle.close()
-        except OSError as exc:
+                    operation_cause = close_error
+                    finalization_diagnostics.extend(close_diagnostics[1:])
+                else:
+                    finalization_diagnostics.extend(close_diagnostics)
+        close_error, close_diagnostics = _close_stream_with_retry(
+            source_handle,
+            "prepared artifact source",
+        )
+        if close_error is not None:
             if operation_error is None:
                 operation_error = ValueError(
                     f"prepared artifact finalization failed for {expected_filename}"
                 )
-                operation_cause = exc
+                operation_cause = close_error
+                finalization_diagnostics.extend(close_diagnostics[1:])
+            else:
+                finalization_diagnostics.extend(close_diagnostics)
+        if finalization_diagnostics and operation_error is not None:
+            operation_error.args = (
+                f"{operation_error}; cleanup diagnostics: "
+                + "; ".join(finalization_diagnostics),
+            )
+            if operation_cause is not None:
+                # Do not retain wrapper frames that may still own an open
+                # Windows file handle while TemporaryDirectory is cleaning up.
+                operation_cause = operation_cause.with_traceback(None)
+        snapshot_handle = None
+        source_handle = None
 
     if operation_error is not None:
         raise operation_error from operation_cause
@@ -1071,6 +1093,22 @@ def _validate_manifest_output(
     if actual_hash.lower() != expected_hash.lower():
         raise ValueError(f"prepared artifact SHA-256 mismatch for {expected_filename}")
     return output_path, expected_rows, actual_size, actual_hash
+
+
+def _close_stream_with_retry(handle: Any, label: str) -> tuple[OSError | None, list[str]]:
+    """Close once more after an I/O failure and retain concise diagnostics."""
+
+    first_error: OSError | None = None
+    diagnostics: list[str] = []
+    for attempt in (1, 2):
+        try:
+            handle.close()
+            break
+        except OSError as exc:
+            if first_error is None:
+                first_error = exc.with_traceback(None)
+            diagnostics.append(f"{label} close attempt {attempt} failed: {exc}")
+    return first_error, diagnostics
 
 
 def _assert_snapshot_unchanged(path: Path, expected_size: int, expected_hash: str) -> None:
@@ -1393,15 +1431,20 @@ def publish_artifacts(staging_dir: Path, output_dir: Path, overwrite: bool) -> d
                 f"original error: {publish_error}\n"
                 + "\n".join(rollback_errors)
             )
-            try:
-                (backup_dir / "RECOVERY_REQUIRED.txt").write_text(recovery_note, encoding="utf-8")
-                (staging_dir / ".recovery_required").write_text(recovery_note, encoding="utf-8")
-            except OSError:
-                pass
+            marker_errors: list[str] = []
+            for marker_path in (
+                backup_dir / "RECOVERY_REQUIRED.txt",
+                staging_dir / ".recovery_required",
+            ):
+                try:
+                    marker_path.write_text(recovery_note, encoding="utf-8")
+                except OSError as exc:
+                    marker_errors.append(f"write recovery marker {marker_path}: {exc}")
+            diagnostics = [*rollback_errors, *marker_errors]
             raise RuntimeError(
                 "preparation publish failed and rollback was incomplete; "
                 f"manual recovery backup preserved at {backup_dir}; staging preserved at {staging_dir}; "
-                + "; ".join(rollback_errors)
+                + "; ".join(diagnostics)
             ) from publish_error
         cleanup_backup = True
         primary_error = publish_error

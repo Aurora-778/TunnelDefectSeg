@@ -155,6 +155,7 @@ V1 只面向单 sequence 的 pilot 数据准备。一次 Path readiness 检查�
 - staging 全部通过后才发布；旧 manifest 先移出，新 manifest 最后发布。失败时先把已落盘的新 manifest 原子移动到 recovery backup，再恢复两个旧 CSV，只有两者均恢复成功后才最后恢复旧 manifest；任一 CSV 恢复失败时，提交位置不保留可用 manifest，backup/staging 会保留并阻断 readiness，供人工恢复。
 - 已有目标必须是普通文件，目录、符号链接和其他特殊文件会被拒绝。
 - 如果发布失败且自动回滚也失败，脚本不会删除剩余备份；错误信息会给出 `.prepare-real-inspection-backup-*` 和 staging 恢复路径，供人工恢复。
+- backup 与 staging 的 recovery 标记会独立尝试写入；单侧标记写入失败不会阻止另一侧尝试，失败原因会附加到错误诊断中，目录名称本身仍会阻断 readiness。
 - 即使三件套已完成发布，只要 backup/staging 清理失败，脚本也会明确报错而不会返回成功；残留目录继续阻断 readiness，避免生产者与消费者对状态产生矛盾判断。若发布和清理同时失败，顶层错误会同时保留原始发布原因与清理原因。
 - output directory 中仍有上述 backup/staging 恢复目录时，后续运行会停止，必须先完成人工检查，避免覆盖尚未恢复的数据。
 - manifest 中的 source hashes 来自实际用于几何计算的输入字节；发布前发现 metadata、图像或 mask 已变化时直接终止。
