@@ -1511,22 +1511,31 @@ def test_path_readiness_distinguishes_snapshot_finalization_failure(tmp_path, mo
     prepare(tmp_path, dataset)
     output = tmp_path / "derived"
     real_open = Path.open
+    wrapped_handles = []
 
     class FailingFinalizer:
         def __init__(self, handle):
             self.handle = handle
+            self.close_calls = 0
+
+        @property
+        def closed(self):
+            return self.handle.closed
 
         def write(self, chunk):
             return self.handle.write(chunk)
 
         def close(self):
+            self.close_calls += 1
             self.handle.close()
             raise OSError("simulated snapshot finalization failure")
 
     def fail_snapshot_finalization(self: Path, mode: str = "r", *args, **kwargs):
         handle = real_open(self, mode, *args, **kwargs)
         if mode == "wb" and self.parent.name.startswith("real-inspection-readiness-"):
-            return FailingFinalizer(handle)
+            wrapped = FailingFinalizer(handle)
+            wrapped_handles.append(wrapped)
+            return wrapped
         return handle
 
     monkeypatch.setattr(Path, "open", fail_snapshot_finalization)
@@ -1538,6 +1547,8 @@ def test_path_readiness_distinguishes_snapshot_finalization_failure(tmp_path, mo
 
     assert isinstance(captured.value.__cause__, OSError)
     assert str(captured.value.__cause__) == "simulated snapshot finalization failure"
+    assert wrapped_handles[0].closed is True
+    assert wrapped_handles[0].close_calls == 1
 
 
 def test_path_readiness_distinguishes_source_finalization_failure(tmp_path, monkeypatch):
@@ -1589,6 +1600,10 @@ def test_snapshot_close_failure_before_release_is_retried(tmp_path, monkeypatch)
         def write(self, chunk):
             return self.handle.write(chunk)
 
+        @property
+        def closed(self):
+            return self.handle.closed
+
         def close(self):
             self.close_calls += 1
             if self.close_calls == 1:
@@ -1631,6 +1646,10 @@ def test_source_close_failure_before_release_is_retried(tmp_path, monkeypatch):
         def read(self, *args, **kwargs):
             return self.handle.read(*args, **kwargs)
 
+        @property
+        def closed(self):
+            return self.handle.closed
+
         def close(self):
             self.close_calls += 1
             if self.close_calls == 1:
@@ -1656,6 +1675,72 @@ def test_source_close_failure_before_release_is_retried(tmp_path, monkeypatch):
     assert str(captured.value.__cause__) == "simulated pre-release source close failure"
     assert wrapped_handles[0].close_calls == 2
     assert wrapped_handles[0].handle.closed is True
+
+
+@pytest.mark.parametrize("stream_kind", ["snapshot", "source"])
+def test_persistent_close_failure_does_not_mask_readiness_error(
+    tmp_path,
+    monkeypatch,
+    stream_kind,
+):
+    dataset = make_dataset(tmp_path)
+    prepare(tmp_path, dataset)
+    output = tmp_path / "derived"
+    real_open = Path.open
+    close_calls = {"count": 0}
+
+    class PersistentCloseFailure:
+        def __init__(self, handle):
+            self.handle = handle
+
+        @property
+        def closed(self):
+            return self.handle.closed
+
+        def read(self, *args, **kwargs):
+            return self.handle.read(*args, **kwargs)
+
+        def write(self, chunk):
+            return self.handle.write(chunk)
+
+        def close(self):
+            close_calls["count"] += 1
+            raise OSError(
+                f"simulated persistent {stream_kind} close failure "
+                f"{close_calls['count']}"
+            )
+
+    def fail_persistent_close(self: Path, mode: str = "r", *args, **kwargs):
+        handle = real_open(self, mode, *args, **kwargs)
+        is_snapshot = mode == "wb" and self.parent.name.startswith(
+            "real-inspection-readiness-"
+        )
+        is_source = self == output / "observation_records.csv" and mode == "rb"
+        if (stream_kind == "snapshot" and is_snapshot) or (
+            stream_kind == "source" and is_source
+        ):
+            # Do not retain this wrapper outside production code. The test
+            # therefore exercises TemporaryDirectory cleanup after both close
+            # attempts fail before releasing the underlying handle.
+            return PersistentCloseFailure(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", fail_persistent_close)
+    expected_message = (
+        "temporary readiness snapshot finalization failed"
+        if stream_kind == "snapshot"
+        else "prepared artifact finalization failed"
+    )
+    with pytest.raises(ValueError, match=expected_message) as captured:
+        preparation.require_inference_ready(output / "preparation_manifest.json")
+
+    assert isinstance(captured.value.__cause__, OSError)
+    assert str(captured.value.__cause__) == (
+        f"simulated persistent {stream_kind} close failure 1"
+    )
+    assert close_calls["count"] == 2
+    assert "cleanup diagnostics" in str(captured.value)
+    assert f"simulated persistent {stream_kind} close failure 2" in str(captured.value)
 
 
 def test_snapshot_write_failure_remains_primary_when_close_also_fails(tmp_path, monkeypatch):
