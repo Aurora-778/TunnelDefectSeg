@@ -770,34 +770,50 @@ Phase A 只能自动生成前五种。
 
 ## 4.3 状态映射
 
-根据真实 Association 字段：
+根据真实 Association 字段，按以下顺序执行唯一决策。命中前一分支后立即结束，禁止继续套用后续规则：
 
 ```text
-association_status=matched
+当前记录属于 Manifest 明确标记的 baseline 分支
+AND 主 Association Artifact 存在、Schema/Hash 合法
+AND 该 current observation 没有 Association 行
+→ association_not_applicable
+
+ELSE Association 文件缺失
+或 Schema 非法
+或 Manifest 无对应 query round
+或 baseline 分支意外出现 Association 行/自匹配
+或 query composite key 重复/孤立
+或来源 Hash 不匹配
+或 matched 记录的 memory_before 不存在
+或 matched 记录的 memory_id 为空/不唯一
+→ association_invalid
+
+ELSE association_status=matched
+AND needs_manual_review=true
+AND memory_id 非空
+AND association_mode=no_id
+AND use_disease_id_score=false
+→ association_pending_review
+
+ELSE association_status=matched
 AND needs_manual_review=false
 AND memory_id 非空
 AND association_mode=no_id
 AND use_disease_id_score=false
 → association_supported
 
-association_status=unmatched
+ELSE association_status=unmatched
+AND association_mode=no_id
+AND use_disease_id_score=false
 → association_rejected
+→ memory_id 为空合法
+→ needs_manual_review=true 只保留为复核建议，不把 identity_evidence_state 改成 pending
 
-needs_manual_review=true
-→ association_pending_review
-
-Association 文件缺失
-或 Schema 非法
-或 Manifest 无对应 round
-或 memory_before 不存在
-或 memory_id 在 snapshot 中不唯一
-或来源 Hash 不匹配
+ELSE
 → association_invalid
-
-当前记录属于 Manifest 明确标记的 baseline/current-only 分支
-AND 该分支按合同不产生 Association query
-→ association_not_applicable
 ```
+
+因此，合法 baseline 的“无 Association 行”不会先落入 `association_invalid`，但整个 Association Artifact 缺失、Schema/Hash 非法或 baseline 出现自匹配仍必须 invalid；`association_pending_review` 只用于已经选中历史 Memory、但证据边界要求人工复核的 matched 记录。任何输入组合只能产生一个 `identity_evidence_state`。
 
 ## 4.4 语义边界
 
@@ -1166,18 +1182,19 @@ difference_valid = false
 
 ## 7.2 数据定位流程
 
-Comparison Evidence 必须以当前 Run 的 Engineering/Frame records 为主表，Association 只能作为可选左连接输入。禁止以 Association CSV 为主表，否则 header-only baseline 会被静默遗漏。
+Comparison Evidence 必须以当前 Run 的 Engineering/Frame records 组成 current-side 主关系，Association 只能作为可选左连接输入。Frame/Observation 是“一行一个 current observation”的主粒度；Engineering 是通过 `source_observation_ids` 连接的必需当前值聚合，禁止直接按两个表做笛卡尔展开。禁止以 Association CSV 为主表，否则 header-only baseline 会被静默遗漏。
 
 固定流程：
 
 ```text
-1. 读取并验证当前 Engineering/Frame records，按中性 current observation 复合键建立唯一主表；
-2. 读取 association_manifest.json，识别 baseline rounds 与 query rounds；
-3. 按 `(inspection_id, frame_id, image_id, current_observation_id)` 左连接 Association query；
-4. 对 baseline/current-only、matched、invalid 三条分支分别处理；
-5. 仅 matched 分支读取对应 round.memory_before，并根据 memory_id 定位唯一 Memory 行；
-6. 生成当前静态 Evidence 或历史比较 Evidence；
-7. 保存所有来源 Hash 和分支类型。
+1. 读取并验证 Frame/Observation records，按中性 current observation 主键建立唯一 observation-grain 主表；
+2. 通过 Engineering.source_observation_ids 将每个 observation 唯一连接到一个当前 Engineering 聚合行，形成 current-side 主关系；
+3. 读取 association_manifest.json，识别 baseline rounds 与 query rounds；
+4. 按规范化主键 `(inspection_id, current_observation_id)` 左连接 Association query，并将 `frame_id`、`image_id` 作为一致性校验字段；
+5. 对 baseline/current-only、matched、invalid 三条分支分别处理；
+6. 仅 matched 分支读取对应 round.memory_before，并根据 memory_id 定位唯一 Memory 行；
+7. 生成当前静态 Evidence 或历史比较 Evidence；
+8. 保存所有来源 Hash 和分支类型。
 ```
 
 三条分支固定为：
@@ -1185,16 +1202,19 @@ Comparison Evidence 必须以当前 Run 的 Engineering/Frame records 为主表�
 ### Baseline / Current-only
 
 ```text
-Manifest 明确标记为 baseline round，且该 round 合同规定不产生 query Association
+Manifest 明确标记为 baseline round，主 Association Artifact 存在且 Schema/Hash 合法，并且该 current observation 没有 Association 行
 → Association 行缺失是合法状态
 → identity_evidence_state = association_not_applicable
 → previous_entity_type = not_applicable
 → 只生成当前观测 Static Audit
 
 Association 行存在且 association_status=unmatched
+AND association_mode=no_id
+AND use_disease_id_score=false
 → identity_evidence_state = association_rejected
 → previous_entity_type = not_applicable
 → memory_id 为空是合法状态
+→ needs_manual_review=true 只表示建议复核，不覆盖 rejected 身份状态
 → 只生成当前观测 Static Audit
 ```
 
@@ -1204,7 +1224,9 @@ Association 行存在且 association_status=unmatched
 association_status=matched
 → Association 行、round、memory_before 和唯一 memory_id 全部必须存在且 Hash 一致
 → previous_entity_type = memory_snapshot
-→ 按 Claim Policy 判断是否允许 Difference/Directional Claim
+→ needs_manual_review=true 时 identity_evidence_state=association_pending_review
+→ needs_manual_review=false 时 identity_evidence_state=association_supported
+→ 再按 Claim Policy 判断是否允许 Difference/Directional Claim
 ```
 
 ### Invalid
@@ -1230,7 +1252,36 @@ difference_valid = false
 
 Claim Gate FAIL CLOSED 或逐记录阻断。
 
-不得把 baseline/current-only 的 Association 行缺失或 unmatched 的空 `memory_id` 归入 Invalid；也不得把非 baseline query 的意外 Association 断链降级为 Current-only。
+不得把合法 baseline 的 Association 行缺失或 unmatched 的空 `memory_id` 归入 Invalid；unmatched 本身必须有合法 Association 行。也不得把非 baseline query 的意外 Association 断链降级为 Current-only。
+
+## 7.2.1 Current Observation ID 合同
+
+`current_observation_id` 是巡检内中性观测键，不是跨巡检病害身份，也不是 GT 标签。Phase 0 必须把它加入 Frame/Observation、Association 和 Engineering 来源引用合同：
+
+```text
+Prepared real inspection
+→ local_observation_id 必须存在且在单 inspection 内唯一
+→ current_observation_id = <association_inspection_id>::<local_observation_id>
+
+Legacy KICT simulated
+→ 在 Run-local 输入投影阶段生成并持久化 local_observation_id
+→ source_record_fingerprint = SHA-256(canonical JSON of normalized non-answer frame fields)
+→ fingerprint 输入至少包含 inspection_id/frame_id/image_id/timestamp、图像与 mask 的仓库相对路径、几何字段和 disease_type
+→ fingerprint 明确排除 disease_id、label_disease_id、GT、split、review 和 audit 字段
+→ local_observation_id = legacy::<完整 source_record_fingerprint>
+→ current_observation_id = <inspection_id>::<local_observation_id>
+→ 相同 fingerprint 的重复源行视为不可区分的重复观测并 Fail Closed，不使用行号消歧
+
+Association query output
+→ 原样回写 query Frame 的 current_observation_id
+→ 该字段不进入 score、ranking、match_type、confidence 或 conflict 判断
+
+Engineering aggregate
+→ 必须记录稳定排序、去重后的 source_observation_ids
+→ 每个 current_observation_id 必须唯一映射到一个当前 Engineering 聚合行
+```
+
+Frame/Observation 主表以 `(inspection_id, current_observation_id)` 唯一；`frame_id`、`image_id` 必须与 Association 回写值一致。重复、缺失、孤立或一对多 Engineering 映射全部 Fail Closed。Legacy 源 CSV 重排不得改变 fingerprint/current_observation_id。现有 schema 尚未携带该中性键，因此 Phase 0 必须先完成 schema/version 合同，A1 不得临时借用 `disease_id`/`label_disease_id`。
 
 ## 7.3 Schema
 
@@ -1373,7 +1424,7 @@ inspection_level_max_mask_area_px:
   measurement_unit              ← pixel²
 ```
 
-当前记录必须先通过 Association query 的中性复合键 `(inspection_id, frame_id, image_id, current_observation_id)` 在源 Frame/Observation records 中唯一定位，再通过 `current_observation_id`、来源记录指纹或 Engineering 中显式的 `source_observation_ids` 映射到唯一 Engineering 聚合行。Phase 0 若发现现有 Engineering schema 无法完成该映射，必须增加中性的来源引用字段并升级 schema；不得退回使用评估标签定位。
+当前记录必须先通过 Association query 的规范化主键 `(inspection_id, current_observation_id)` 在源 Frame/Observation records 中唯一定位，同时复核 `frame_id`、`image_id` 一致，再通过 Engineering 中显式的 `source_observation_ids` 映射到唯一 Engineering 聚合行。Phase 0 必须增加上述中性来源引用并升级 Frame、Association、Engineering schema；不得退回使用评估标签定位。
 
 `label_disease_id` 只能在 Association 完成后用于 benchmark/evaluation 对照。Comparison Evidence、ClaimDecision、报告渲染和跨巡检身份判断均不得把它作为 required join key，也不得因其缺失而改变生产 Claim 结果。
 
@@ -1383,6 +1434,7 @@ inspection_level_max_mask_area_px:
 
 ```text
 previous_entity_type == not_applicable
+OR current_comparability_status == insufficient_history
 OR previous_comparability_status == insufficient_history
 → comparison_comparability_status = insufficient_history
 → difference_valid = false
@@ -1878,19 +1930,28 @@ Staging final_summary.md 生成并通过验证
 
 ```text
 1. 确认 Run-local comparison_evidence 与 claim_decision 已经原子落盘并通过 Hash/Schema 校验；
-2. 创建 runs/<run_id>/publication_backup/ 和 transaction_state.json；
-3. 为每个目标记录 destination_path、staging_path、existed_before、backup_path、new_sha256 和 parent_directory；只对 existed_before=true 的文件创建备份；
-4. 将除 `final_summary.md` 外的每个待发布 Staging Artifact 原子替换到正式路径；`current_publication_manifest.json` 不属于 Staging Artifact；
-5. 每次替换后校验 SHA-256；
-6. 将 staging/final_summary.md 原子提升为 runs/<run_id>/final_summary.md，并校验 Hash；
-7. 生成 current_publication_manifest.json.tmp，记录正式文件、Run-local 证据和 final_summary 的 Hash；
-8. fsync 临时 Manifest；
-9. os.replace(tmp, current_publication_manifest.json)，这是唯一可见提交点；
-10. 对本事务发生 replace/delete/restore 的每个唯一目标父目录分别 fsync，包括但不限于 outputs、outputs/visualizations、data/simulated、runs/<run_id> 和 Manifest 所在目录；
-11. StateStore.transition_status(RUNNING → COMPLETED)；
-12. 释放 Active Run Lock；
-13. 清理 backup。
+2. 创建 runs/<run_id>/publication_backup/；
+3. 为每个目标记录 destination_path、staging_path、existed_before、backup_path、old_sha256、new_sha256 和 parent_directory；`final_summary.md` 也属于 transaction target；只对 existed_before=true 的文件创建备份；
+4. 对旧 Manifest、全部 backup 文件和完整 transaction_state.json 分别完成 flush+fsync；同步 publication_backup/ 目录以持久化备份文件条目，再同步 runs/<run_id>/ 以持久化 publication_backup 目录条目；随后重新读取并复核 backup/transaction Hash。该步骤完全成功前禁止替换任何正式目标；
+5. 对每个待发布 Staging 文件完成 flush+fsync 并复核 new_sha256；`current_publication_manifest.json` 不属于 Staging Artifact；
+6. 将除 `final_summary.md` 外的每个待发布 Staging Artifact 原子替换到正式路径，并复核 SHA-256；
+7. 对步骤 6 影响的每个唯一正式目标父目录分别执行 durability sync；随后将 transaction_state phase 原子更新为 files_replaced 并持久化；任一步骤失败立即回滚；
+8. 将 staging/final_summary.md 原子提升为 runs/<run_id>/final_summary.md，并复核 SHA-256，再同步 runs/<run_id>/ 父目录；
+9. 将 transaction_state phase 原子更新为 final_summary_ready，flush+fsync 文件并同步其父目录；
+10. 生成 current_publication_manifest.json.tmp，记录 transaction_id、正式文件、Run-local 证据和 final_summary 的 Hash；
+11. flush+fsync 临时 Manifest，计算 new_manifest_sha256；将 transaction_state phase 原子更新为 manifest_commit_intent，记录该 Hash 并完成文件/目录持久化；
+12. os.replace(tmp, current_publication_manifest.json)，这是唯一可见提交点；
+13. 单独同步 Manifest 所在父目录；失败时按“Manifest 已提交、COMPLETED 前”路径隔离并回滚；
+14. 将 transaction_state phase 原子更新为 manifest_committed 并持久化；
+15. StateStore.transition_status(RUNNING → COMPLETED)；
+16. 将 transaction_state phase 原子更新为 state_completed 并持久化；
+17. 在仍持有 Active Run Lock 时清理 backup；清理成功后同步 runs/<run_id>/ 父目录；
+18. 释放 Active Run Lock。
 ```
+
+若步骤 17 清理失败，必须在 backup 内持久化 `PUBLICATION_CLEANUP_PENDING.json`，记录 transaction_id、Manifest Hash 和 cleanup error，随后才释放 Active Run Lock。该状态不撤销已经验证且状态为 COMPLETED 的发布；后续恢复只能在重新验证 COMPLETED state 与当前 Manifest 完全一致后重试清理，禁止把 cleanup-only 残留解释成待回滚事务。
+
+Publication 不允许把“平台不支持目录 `fsync`”静默当作成功。Phase 0/A2 必须实现并验证一个最小 `sync_parent_directory(path)` 平台适配点：POSIX 使用目录句柄 `fsync`；Windows 使用经专项测试确认具有 write-through/目录持久化语义的标准库或系统调用。能力探测失败时，sandbox 可以验证 Fail Closed 路径，但 A3 不得启用正式 Publication，也不得声称 crash-durable。该适配点只负责目录持久化，不扩展为第二套文件系统或事务框架。
 
 Manifest 是可见提交点。Phase A 新增的 workflow/CLI consumers 必须：
 
@@ -1908,6 +1969,7 @@ Phase A 不修改现有 Web。现有 Web 在 Phase E 接入 Manifest 前仍是 l
 ```json
 {
   "schema_version": "publication_manifest_v1",
+  "transaction_id": "txn-uuid",
   "run_id": "run_012",
   "plan_fingerprint": "sha256...",
   "published_at": "...",
@@ -2050,10 +2112,14 @@ expected_source_artifact_paths == manifest_source_artifact_paths
 
 ```text
 Manifest 尚未提交
-→ 按 transaction_state 逆序回滚每个目标
+→ 先将本事务新生成的 staging/final_summary.md 或 runs/<run_id>/final_summary.md 移动到 staging/invalidated_final_summary.<transaction_id>.md，并同步其源/目标父目录
+→ invalidated 目标已存在或隔离失败时写 recovery marker 并 FAIL CLOSED，不覆盖历史审计文件
+→ 再按 transaction_state 逆序回滚每个正式目标
 → existed_before=true：从 backup 恢复并复核旧 Hash
-→ existed_before=false：删除本次新建的正式文件并 fsync 其父目录
-→ 最后恢复旧 Manifest；首次发布没有旧 Manifest 时确认提交位置不存在 Manifest
+→ existed_before=false：删除本次新建的正式文件
+→ final_summary target 已先隔离新文件；随后按 existed_before 恢复旧 summary，或在首次创建时确认 canonical final_summary 不存在
+→ 对全部 restore/delete 影响的每个唯一目标父目录执行 durability sync
+→ 最后恢复旧 Manifest并同步 Manifest 父目录；首次发布没有旧 Manifest 时确认提交位置不存在 Manifest
 
 恢复成功
 → 保留旧 Manifest
@@ -2072,8 +2138,10 @@ Publication Transaction 必须在 `transaction_state.json` 记录以下阶段：
 backup_ready
 files_replaced
 final_summary_ready
+manifest_commit_intent
 manifest_committed
 state_completed
+cleanup_pending
 ```
 
 `transaction_state.json` 至少包含：
@@ -2085,6 +2153,8 @@ state_completed
   "phase": "backup_ready",
   "old_manifest_existed": true,
   "old_manifest_backup_path": "runs/run_012/publication_backup/current_publication_manifest.json",
+  "old_manifest_sha256": "...",
+  "new_manifest_sha256": null,
   "targets": [
     {
       "destination_path": "outputs/final_project_report.md",
@@ -2099,21 +2169,34 @@ state_completed
 }
 ```
 
-`existed_before=false` 时 `backup_path` 和 `old_sha256` 必须为 null。回滚完成后，正式文件路径集合与旧 Manifest 必须完全一致；首次发布回滚后，正式位置不得残留本事务新增文件或 current Manifest。
+`existed_before=false` 时 `backup_path` 和 `old_sha256` 必须为 null。`old_manifest_existed=false` 时 `old_manifest_backup_path` 和 `old_manifest_sha256` 必须为 null。进入 `manifest_commit_intent` 前，`new_manifest_sha256` 必须由已经 fsync 的临时 Manifest 计算并持久化。回滚完成后，正式文件路径集合与旧 Manifest 必须完全一致；首次发布回滚后，正式位置不得残留本事务新增文件或 current Manifest。
 
 Controller 启动或恢复时若发现未清理的 publication backup：
 
 ```text
-manifest_committed 之前崩溃
+先同时读取 transaction_state、current_publication_manifest.json 和 new_manifest_sha256
+
+当前 Manifest 不存在，或仍等于 old_manifest Hash
+→ 视为 Manifest 未提交
 → 先隔离任何临时 Manifest
-→ 按 backup 恢复旧正式文件与旧 Manifest
+→ 先按 transaction_id 隔离本事务已生成/提升的 final_summary，再按 backup 恢复旧正式文件与旧 Manifest
 → 恢复完整后标记当前 Run FAILED
 
-manifest_committed 之后、COMPLETED 之前崩溃
+当前 Manifest 的 transaction_id/new_manifest_sha256 与本事务完全一致
+→ 无论 transaction_state 仍为 manifest_commit_intent 还是已为 manifest_committed，都视为 Manifest 已提交
 → 验证新 Manifest、全部正式文件、Run-local 证据和 final_summary Hash
 → state 仍为预期 RUNNING 且 plan_fingerprint/run_id 一致时，幂等补做 COMPLETED
 → 任一校验失败或 state 冲突时，先隔离新 Manifest，再将 runs/<run_id>/final_summary.md 原子移动到 staging/invalidated_final_summary.<transaction_id>.md 并写 invalidation reason，然后按 transaction_state 逆序恢复旧发布
 → final_summary 隔离、旧发布恢复或旧 Manifest 恢复任一步骤不完整时，写 recovery marker 并 FAIL CLOSED
+
+当前 Manifest 存在但 transaction_id/Hash 既不匹配旧 Manifest，也不匹配本事务
+→ PUBLICATION_CONFLICT
+→ 不覆盖未知 Manifest，写 recovery marker 并 FAIL CLOSED
+
+StateStore 已为 COMPLETED，当前 Manifest transaction_id/Hash 与本事务一致，且只剩 publication_backup/PUBLICATION_CLEANUP_PENDING.json
+→ 这是 cleanup-only recovery
+→ 重新验证全部正式文件和 final_summary Hash 后只重试删除 backup
+→ 禁止恢复旧文件、隔离 final_summary 或降级 Run 状态
 ```
 
 `invalidated_final_summary.<transaction_id>.md` 必须使用本事务不可变 ID。目标已存在表示事务审计状态冲突，必须 Fail Closed；禁止覆盖、复用固定文件名或静默追加。
@@ -2327,7 +2410,7 @@ run_NNN
 runs/.active_run.lock
 ```
 
-原子创建：
+排他创建：
 
 ```python
 os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -2352,6 +2435,8 @@ os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
 }
 ```
 
+首次锁必须使用上面的 `O_CREAT | O_EXCL` 返回句柄直接写入完整 JSON，随后 flush+fsync 该句柄并同步 `runs/` 目录；不得用可覆盖现有锁的 `os.replace()` 获取锁。只有排他创建和持久化全部成功后，进程才可进入 allocation。首次写入失败时，仅持有本次 `lock_token` 的创建者可以删除未完成锁并同步目录；无法证明所有权、清理失败或发现 malformed lock 时必须 Fail Closed。
+
 在持锁情况下：
 
 ```text
@@ -2361,6 +2446,8 @@ os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
    allocation_token=<uuid>
    reserved_run_id=run_NNN
 → 此时尚未创建 Run 目录
+→ 使用同目录临时文件写入更新内容，flush+fsync 后 os.replace 到既有锁路径，并同步 runs/ 目录；重新读取确认 allocation_token/reserved_run_id/lock_token 一致
+→ 持久化确认完成前禁止创建 runs/<reserved_run_id>/
 → RunManager.create_run(
     run_id=reserved_run_id,
     dag_config=...,
@@ -2372,9 +2459,11 @@ os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     },
 )
 → metadata.json 首次原子写入成功后，Run 才算 created
+→ metadata.json 及 Run 目录完成 durability sync 后，才允许更新锁为 running
 → 原子更新锁：
    phase=running
    run_id=reserved_run_id
+→ running 锁更新同样完成 flush+fsync、原子替换和 runs/ 父目录同步
 → DAGExecutor(..., run_id=reserved_run_id)
 ```
 
@@ -2636,18 +2725,18 @@ transition_id
 
 ## 15.7 Recovery 前置条件
 
-Controller 对已有 Run 执行 resume、retry、publication recovery 或状态查询后继续写入前，必须：
+锁所有权固定为：公开 `StateStore.recover(run_id)` 自行获取并释放一次 state lock；持锁 mutation 只能调用私有 `_recover_unfinished_operations_locked()`，不得调用公开 `recover()`。Controller 对已有 Run 执行 resume、retry、publication recovery 或状态查询后继续写入前，必须：
 
 ```text
-获取 runs/<run_id>/.state.lock
-→ StateStore.recover(run_id)
+StateStore.recover(run_id)  # 公开 API 内部获取一次 runs/<run_id>/.state.lock
 → 确认不存在 unresolved pending / journal conflict
-→ 才允许 load 后继续 checkpoint_context 或 transition_status
+→ 才允许读取恢复后的 state
+→ 后续 checkpoint_context 或 transition_status 再次持锁，并在同一锁内重复执行内部 recovery + CAS
 ```
 
-为防止调用者遗漏，`checkpoint_context()` 和 `transition_status()` 在持有 state lock 后也必须先调用内部 `_recover_unfinished_operations_locked()`。存在无法恢复的 pending、中间损坏、checksum 冲突或 payload 冲突时，mutation API 必须直接返回 `STATE_CONFLICT`/FAIL CLOSED，不得在其后追加新的 pending。
+公开 recovery 与后续 mutation 之间不声称无锁原子性；安全性来自 mutation 在自己的锁内重新恢复和校验 expected version。`checkpoint_context()` 和 `transition_status()` 在持有 state lock 后必须先调用内部 `_recover_unfinished_operations_locked()`。存在无法恢复的 pending、中间损坏、checksum 冲突或 payload 冲突时，mutation API 必须直接返回 `STATE_CONFLICT`/FAIL CLOSED，不得在其后追加新的 pending。
 
-公开 `recover()` 与 mutation API 的内部恢复必须复用同一实现；禁止形成两套恢复算法或嵌套重复获取同一文件锁。新 Run 的 `initialize_run()` 必须确认 Journal 不存在或为空。
+公开 `recover()` 与 mutation API 必须复用同一 `_recover_unfinished_operations_locked()` 实现；公开 API 负责加锁，私有函数要求调用方已持锁。禁止形成两套恢复算法、从私有函数再次加锁或在持锁 mutation 中调用公开 `recover()`。新 Run 的 `initialize_run()` 必须确认 Journal 不存在或为空。
 
 ---
 
@@ -3043,8 +3132,12 @@ Manifest 提交前的任何失败：
 
 ```text
 不进入 COMPLETED
-不生成成功式 final_summary
+步骤 5 之前失败 → 不生成成功式 final_summary
+staging/final_summary.md 已生成但尚未提升 → 移动为 staging/invalidated_final_summary.<transaction_id>.md
+runs/<run_id>/final_summary.md 已提升但 Manifest 尚未提交 → 移回 staging/invalidated_final_summary.<transaction_id>.md
+invalidated 目标已存在或隔离失败 → 写 recovery marker 并 FAIL CLOSED，禁止覆盖历史审计文件
 不更新 current_publication_manifest
+按 transaction_state 恢复旧目标并删除 existed_before=false 的新目标
 生成 failure_summary
 状态进入 FAILED
 ```
@@ -3205,16 +3298,24 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 45. `checkpoint_context()` 与 `transition_status()` 均写入同一 State Journal，pending checkpoint 可幂等恢复。
 46. 不可比较的 ClaimDecision 缺少受控静态审计限定语时不得发布。
 47. Comparison Evidence 不依赖 `label_disease_id` 定位当前生产记录；删除评估标签后 Claim 结果保持一致。
-48. header-only baseline 仍按当前 Engineering/Frame 主表生成 Static Audit 和 ClaimDecision。
+48. header-only baseline 在主 Association Artifact 存在且合法时，仍按当前 Engineering/Frame 主表生成 Static Audit 和 ClaimDecision；整个文件缺失或 baseline 自匹配必须 Invalid。
 49. 非 baseline query 缺 Association 行进入 Invalid，不得伪装成 Current-only。
-50. `insufficient_history` 不会被可比性合成规则覆盖为 `not_longitudinally_comparable`。
-51. `previous_entity_type=not_applicable` 的 CSV/JSON nullable 字段严格使用 canonical 表示。
-52. A1 合入后默认 legacy CLI 不注册、不调度 A1 新节点；只有 sandbox profile 可直接测试组件。
-53. Manifest source artifact 集合明确包含 final_summary，并与实际路径集合相等。
-54. 首次发布失败会删除 `existed_before=false` 的全部新正式文件。
-55. replace/delete/restore 后对每个受影响目标父目录执行支持范围内的 fsync。
-56. `reserved_run_id=null` 的过期 allocating lock 可按合同恢复，异常目录 Fail Closed。
-57. Controller resume 和每个 StateStore mutation 均先恢复或拒绝 unresolved pending。
+50. no-id unmatched 且 `needs_manual_review=true` 仍唯一映射为 `association_rejected`；matched review 才映射为 pending；with-id/非法模式行必须 Invalid。
+51. Prepared 与 Legacy 输入都生成不依赖 `disease_id`/`label_disease_id` 的唯一 `current_observation_id`；Legacy CSV 重排不改变该键，Association 原样回写。
+52. current 或 previous 任一侧为 `insufficient_history` 时，都不会被合成规则覆盖为 `not_longitudinally_comparable`。
+53. `previous_entity_type=not_applicable` 的 CSV/JSON nullable 字段严格使用 canonical 表示。
+54. A1 合入后默认 legacy CLI 不注册、不调度 A1 新节点；只有 sandbox profile 可直接测试组件。
+55. Manifest source artifact 集合明确包含 final_summary，并与实际路径集合相等。
+56. 首次发布失败会删除 `existed_before=false` 的全部新正式文件。
+57. 正式目标及父目录的 durability sync 早于 Manifest 提交，Manifest 替换后再单独同步其父目录。
+58. Manifest 前已生成或提升的 final_summary 会进入 transaction-scoped invalidated 路径，冲突时 Fail Closed。
+59. `reserved_run_id=null` 的过期 allocating lock 可按合同恢复，异常目录 Fail Closed。
+60. Controller resume 和每个 StateStore mutation 均先恢复或拒绝 unresolved pending。
+61. 公开 `recover()` 只获取一次锁，持锁 mutation 只调用内部 locked recovery，不发生嵌套加锁。
+62. crash 发生在 Manifest replace 后、transaction_state 更新前时，通过 transaction_id/new_manifest_sha256 正确识别为已提交。
+63. backup、transaction_state 与 reserved_run_id 锁更新均在影响正式文件/创建 Run 目录前完成文件和目录持久化。
+64. Active Lock 的首次获取仍使用 `O_EXCL`，两个并发进程不能通过临时文件 replace 同时获得锁。
+65. COMPLETED Run 的 backup 清理失败只进入 cleanup_pending；恢复只重试清理，不回滚有效发布。
 
 ---
 
@@ -3393,7 +3494,7 @@ Manifest 驱动的当前发布结果
 5. Registration、Scale、Uncertainty 是否都有 Provenance？
 6. observation_source 与 comparability_status 是否进入 Evidence 和 Claim Policy？
 7. 缺失/非法 observation 或 comparability 是否 Fail Closed，明确不可比较记录是否只能进行 Static Audit？
-8. baseline/current-only 是否由 Engineering/Frame 主表产生 Evidence，且不要求 Association 行或 Memory ID？
+8. baseline 是否在 Association Artifact 合法但无 query 行时产生 Evidence；unmatched 是否要求合法 Association 行但允许空 Memory ID？
 9. `insufficient_history` 是否优先于不可比较合成分支？
 10. Phase A 的 Physical/Multi-timepoint/Prediction 是否固定 blocked？
 11. Visualization 是否实际读取 ClaimDecision？

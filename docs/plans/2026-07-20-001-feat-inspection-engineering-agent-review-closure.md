@@ -41,18 +41,21 @@
 |问题|Review 入场状态|当前状态|计划修订|实现条件|
 |---|---|---|---|---|
 |非法可比性被降级为 Static Audit|待修订|条件关闭|required/enum 校验前置；缺失、空值、未知枚举一律 Fail Closed；只有合法的明确非 verified 状态可 Static Audit|Phase 0 固定枚举与非法 fixture；A1 实现 Gate|
-|Baseline/Unmatched Evidence 分支断链|待修订|条件关闭|以当前 Engineering/Frame 为主表左连接 Association；baseline、unmatched、matched、invalid 分支不再混用|Phase 0 固定 branch/schema；A1 覆盖 header-only baseline 与 orphan query|
-|无历史 comparability/null 合同冲突|待修订|条件关闭|`insufficient_history` 优先；`not_applicable` 的 previous 字段固定 CSV/JSON canonical null、空列表和零值|Phase 0 固定 normalization；A1 补反例|
+|Baseline/Unmatched Evidence 分支断链|待修订|条件关闭|以当前 Engineering/Frame 为主表左连接 Association；只有 Artifact 合法且 baseline 无行才 not-applicable；unmatched 仍须 no-id；文件缺失、自匹配、with-id 混入和其他结构错误 invalid|Phase 0 固定 branch/schema；A1 覆盖 header-only、文件缺失、自匹配、unmatched+review、with-id unmatched、matched+review 与 orphan query|
+|中性 Current Observation 连接键缺失|待修订|条件关闭|Prepared 使用 `local_observation_id`；Legacy 使用排除答案字段的规范化源记录 Hash，CSV 重排不变；Frame/Association/Engineering 三侧携带或引用|Phase 0 升级三侧 schema；A1 补唯一性、重排稳定、回写、重复 fingerprint 和删 label 不变测试|
+|无历史 comparability/null 合同冲突|待修订|条件关闭|current/previous 任一侧 `insufficient_history` 均优先；`not_applicable` 的 previous 字段固定 CSV/JSON canonical null、空列表和零值|Phase 0 固定 normalization；A1 补 current/previous 两侧反例|
 |A1 仍可能写正式产物|待修订|条件关闭|A1 新节点默认不注册、不调度；只在 tmp sandbox profile 直接测试组件；A3 才接入唯一 DAG/Registry|A1 补默认 CLI 未激活和 Artifact Isolation 测试|
 |Publication Manifest 不完整|待修订|条件关闭|Manifest 穷举全部发布和来源文件；expected source 集合显式包含 final_summary；可视化/Association round 逐文件 Hash|A2 补新增、遗漏、重复和集合差异反例|
 |Publication 新文件无法回滚|待修订|条件关闭|transaction target 记录 existed_before；回滚恢复旧文件并删除首次发布新增文件|A2 覆盖首次发布和混合新旧目标故障|
-|跨目录发布 durability 不完整|待修订|条件关闭|对 outputs、visualizations、data/simulated、runs 和 Manifest 等每个受影响父目录分别 fsync|A2 补 parent fsync 调用与失败反例|
-|提交后回滚遗留 final_summary|待修订|条件关闭|任何最终非 COMPLETED 的 Run 都使用 transaction-scoped 文件隔离 final_summary；已存在时 Fail Closed|A2 覆盖 Manifest 已提交后 state 冲突、重试和隔离失败|
-|Run 目录无 token 崩溃窗口|待修订|条件关闭|初始锁包含 `reserved_run_id:null`；目录创建前原子持久化预留 ID；null 和非 null 分支分别恢复|A3 覆盖锁初写后、预留后和 metadata 首写前崩溃|
+|跨目录发布 durability 不完整|待修订|条件关闭|backup/transaction 先持久化；正式文件及各目标父目录先同步；随后提交 Manifest 并单独同步其父目录；平台不支持时禁止静默成功|A2 补调用顺序、平台能力、backup durability 和失败回滚反例|
+|Manifest replace 与 transaction phase 存在窗口|待修订|条件关闭|提交前持久化 manifest_commit_intent/new Hash；恢复以实际 Manifest transaction_id/Hash 判定是否已提交，不只信任 phase|A2 覆盖 replace 后、phase 更新前硬崩溃及未知 Manifest 冲突|
+|COMPLETED 后 backup 清理残留可能被误回滚|待修订|条件关闭|清理在释放锁前执行；失败持久化 cleanup_pending；有效 COMPLETED 发布恢复时只重试清理|A2 覆盖清理失败、重启恢复和禁止回滚反例|
+|提交前后失败遗留 final_summary|待修订|条件关闭|Manifest 前后只要 Run 最终非 COMPLETED，都使用 transaction-scoped 文件隔离 final_summary；已存在时 Fail Closed|A2 覆盖 Staging、已提升、Manifest 已提交及隔离失败窗口|
+|Run 目录无 token 崩溃窗口|待修订|条件关闭|初始锁通过 O_EXCL 获取并持久化；目录创建前持久化 reserved_run_id；null 和非 null 分支分别恢复|A3 覆盖并发锁、锁初写失败、预留更新后和 metadata 首写前崩溃|
 |Context Checkpoint 不在 WAL|待修订|条件关闭|checkpoint 与 status transition 使用同一 State Journal、统一 CAS/pending/committed/aborted 恢复|A3 固定 journal schema 并补幂等/冲突反例|
-|State recover 没有强制调用点|待修订|条件关闭|Controller resume 和全部 mutation 在新写前恢复或拒绝 unresolved pending，并复用同一内部算法|A3 补 pending 后 resume/mutation 反例|
+|State recover 没有强制调用点或锁所有权|待修订|条件关闭|公开 recover 自行持锁一次；mutation 持锁后调用同一内部 recovery；Controller 和全部 mutation 在新写前恢复或拒绝 pending|A3 补 pending 后 resume/mutation、无嵌套锁与 recover/mutation 间竞态反例|
 |不可比较限定语未强制|待修订|条件关闭|ClaimDecision 必须携带受控“仅静态审计、不构成方向性变化结论”模板；缺失不得发布|Phase 0 固定模板 ID；A1 补 renderer/validator 测试|
-|生产 Evidence 依赖评估标签|待修订|条件关闭|以 query composite key/current_observation_id/来源指纹连接 Engineering；`label_disease_id` 只保留评估用途|Phase 0 固定中性 join schema；A1 补删除 label 后结果不变测试|
+|生产 Evidence 依赖评估标签|待修订|条件关闭|以 `(inspection_id,current_observation_id)` 连接并复核 frame/image；三侧显式携带中性键，`label_disease_id` 只保留评估用途|Phase 0 固定中性 join schema；A1 补删除 label 后结果不变测试|
 |A1/A2/A3 独立验收路径含糊|待修订|条件关闭|A1 只做禁用态组件与 sandbox；A2 只在 sandbox 验证发布；A3 才接管双入口和正式发布|每段单独提交、review；上一段 P0/P1 清零后继续|
 
 ## 3. 基线与范围
