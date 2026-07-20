@@ -72,6 +72,22 @@
 |Publication transaction 权威路径与生命周期未固定|待修订|条件关闭|同目录完整临时文件经 fsync/目录同步/复核后原子提升到唯一 `runs/<run_id>/publication_transaction.json`；首次可见即为完整 backup_ready，同一 Run 只允许一个事务，backup 删除后保留 cleanup_complete 审计状态|A2 补临时提升前崩溃、损坏权威文件、第二事务拒绝、backup 清理与 phase 未追上反例|
 |Cleanup 诊断持久化失败仍可能伪报成功|待修订|条件关闭|transaction cleanup_pending 与 Run-level marker 独立尝试；任一失败均不走正常解锁/成功路径|A2 补单侧、双侧 marker 写入失败和部分 backup 删除反例|
 
+## 2.3 第四轮严格 Review 的条件关闭项
+
+以下项目在本轮进入时均为“待修订”；当前只完成计划合同修订，最多标记为“条件关闭”，代码与故障注入测试仍待 A1/A3 实现。
+
+|问题|Review 入场状态|当前状态|计划修订|实现条件|
+|---|---|---|---|---|
+|Evidence invalid 未成为 Claim 全局门槛|待修订|条件关闭|`evidence_valid == true` 成为所有 capability 的前置条件，非法 Evidence 不得降级为 Static Audit|A1 补每个 capability 的 invalid-evidence 反例|
+|Phase A 可被输入伪造 Human/GT verified|待修订|条件关闭|Human/GT 状态仅为后续保留枚举；Phase A 输入或 Agent 生成该状态均 Fail Closed|Phase 0 固定 profile/schema；A1 补手工篡改反例|
+|Checkpoint operation_id 在任务阶段间冲突|待修订|条件关闭|event_id 固定为 task/attempt/checkpoint_kind；业务阶段和重试具有明确唯一性，aborted ID 不得重新 pending|A3 补 started→succeeded、failed→retry 和 aborted 重放反例|
+|Canonical State 初始化合同缺失|待修订|条件关闭|固定 inspection_state_v1 schema；state 必须早于 running lock 原子创建、目录同步并重读复核|A3 补 metadata/state 各崩溃窗口与重复初始化反例|
+|Running Active Lock 无安全恢复|待修订|条件关闭|锁 phase 固定 allocating/running/recovering；仅同机死 PID 可在带 provenance 的 O_EXCL recovery lock 下先提升为 recovering，恢复者再次崩溃仍按 token/Hash 续接；遗留 recovery lock 保守阻断|A3 补双恢复者、recovering 二次崩溃、遗留 recovery lock、活 PID、跨主机、token/Hash 冲突测试|
+|Active Lock 释放缺所有权保护|待修订|条件关闭|释放前复核 lock_token，原子移动到 token-scoped tombstone 并同步目录；新获取者持久化后复检；遗留 tombstone 仅可经终态/transaction 验证的 cleanup-only recovery 删除|A3 补锁被替换、获取/释放交错、遗留 tombstone、移动失败和目录同步失败反例|
+|高层 COMPLETED 顺序遗漏 cleanup 合同|待修订|条件关闭|最终顺序与第 11 节统一：state_completed 后 cleanup，诊断持久化完成后才允许所有权释放|A2/A3 联合故障注入验收|
+|Canonical State 迁移图不完整|待修订|条件关闭|固定 CREATED/PLANNED/RUNNING/WAITING/BLOCKED 的唯一允许边，FAILED/COMPLETED 为终态；恢复仍走 WAL/CAS|A3 补所有允许边、非法边和终态迁出反例|
+|StateStore.load 可能绕过 recovery|待修订|条件关闭|load 保持只读；发现 pending/损坏/committed-state 冲突时返回 recovery required/conflict，不得返回可执行状态|A3 补只读无副作用和三类拒绝反例|
+
 ## 3. 基线与范围
 
 |检查项|状态|证据|实现状态|

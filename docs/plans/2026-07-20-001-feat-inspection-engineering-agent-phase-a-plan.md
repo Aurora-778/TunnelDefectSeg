@@ -768,6 +768,8 @@ ground_truth_verified
 
 Phase A 只能自动生成前五种。
 
+`human_verified` 与 `ground_truth_verified` 仅是后续阶段保留枚举。Phase A 没有可信人工签名或 GT authority 输入，因此 Phase A validator 不得接受输入直接声明这两种状态，也不得由 Agent 推导它们；发现这两种状态必须以 `UNTRUSTED_IDENTITY_VERIFICATION` Fail Closed。未来启用时必须升级 Evidence schema，增加 verifier/ground-truth artifact、SHA-256 和授权来源合同，不能只放开枚举。
+
 ## 4.3 状态映射
 
 根据真实 Association 字段，按以下顺序执行唯一决策。命中前一分支后立即结束，禁止继续套用后续规则：
@@ -945,7 +947,7 @@ association_supported
 allowed_with_limits
 ```
 
-只有 `human_verified` 或 `ground_truth_verified` 才可为无条件 `allowed`。
+能力模型中只有经未来可信 verifier/GT artifact 证明的 `human_verified` 或 `ground_truth_verified` 才可能为无条件 `allowed`；Phase A 尚无该 authority，因而无条件 `allowed` 分支固定不可达，输入自称这两种状态必须 Fail Closed。
 
 ## 5.3 `directional_change_claim`
 
@@ -1020,6 +1022,8 @@ blocked
 
 # 6. Claim Policy 机器规则
 
+Claim Gate 的全局首要条件固定为 `evidence_valid == true`。该条件必须在 capability 分支之前执行；`false`、缺失或非布尔值时，所有 Claim capability 均为 blocked，禁止继续尝试 Static Audit 或以某个局部字段合法为由降级放行。
+
 建议配置：
 
 ```yaml
@@ -1035,6 +1039,7 @@ claim_policy:
   static_descriptive_audit:
     allowed:
       when:
+        - evidence_valid == true
         - evidence_schema_valid == true
         - current_record_valid == true
         - current_observation_source_declared == true
@@ -1043,6 +1048,8 @@ claim_policy:
 
   descriptive_difference_claim:
     allowed:
+      phase_a_enabled: false
+      activation_requirement: trusted_identity_verification_schema_upgrade
       when:
         - identity_evidence_state in [human_verified, ground_truth_verified]
         - current_comparability_status == verified_comparable
@@ -1070,6 +1077,8 @@ claim_policy:
 
   directional_change_claim:
     allowed:
+      phase_a_enabled: false
+      activation_requirement: trusted_identity_verification_schema_upgrade
       when:
         - descriptive_difference_claim == allowed
         - identity_evidence_state in [human_verified, ground_truth_verified]
@@ -1101,6 +1110,8 @@ claim_policy:
       reason: PHASE_A_NO_VALIDATED_PREDICTION_MODEL
 ```
 
+上面 `human_verified` / `ground_truth_verified` 对应的无条件 `allowed` 分支在 Phase A 是不可达的保留策略；Phase A 实际运行只允许自动身份状态进入 `allowed_with_limits` 或 blocked/not-applicable。不得通过手工编辑 Evidence/ClaimDecision 激活保留分支。
+
 硬规则：
 
 ```text
@@ -1111,6 +1122,10 @@ association_pending_review
 → Phase A 仅 static_descriptive_audit 可允许
 
 association_invalid
+→ Claim Gate FAIL CLOSED
+
+evidence_valid 缺失、非布尔值或不等于 true
+→ 所有 Claim capability blocked
 → Claim Gate FAIL CLOSED
 
 association_not_applicable
@@ -1459,6 +1474,8 @@ Claim Gate FAIL CLOSED
 ```
 
 `identity_evidence_state` 只由第 4.3 节的 Association 结构与结果映射决定。Observation/comparability 校验失败不得把原本合法的 `association_supported`、`association_rejected`、`association_pending_review` 或 `association_not_applicable` 改写为 `association_invalid`；它只使 Evidence 失效并阻断 Claim。Association 自身结构非法时才使用 `association_invalid`。
+
+`evidence_valid` 与 `identity_evidence_state` 都是当前 Run 的 Evidence Builder 派生字段，禁止从 TaskRequest、输入 CSV 或旧 ClaimDecision 直接信任。`evidence_valid=true` 当且仅当：current record/schema 合法；中性 observation join 唯一；Association 分支合法且 identity state 非 `association_invalid`；全部 required source/comparability 字段通过枚举与分支合同；必需来源 Hash、时间和 metric 校验均通过。任一条件失败都必须置 false 并写稳定 `invalid_reason`。`association_rejected` 与合法 `association_not_applicable` 本身仍可形成 valid Static Audit Evidence。
 
 只有 schema 合法、且值明确属于后三种非 verified 状态时，才允许降级到 `static_descriptive_audit`。`mixed_sources` 和 `legacy_unverified_source` 是合法来源声明，但不会自动提升可比性。
 
@@ -2504,11 +2521,14 @@ os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
   "pid": 12345,
   "hostname": "host-a",
   "lock_token": "uuid",
+  "recovery_of_lock_token": null,
   "created_at": "..."
 }
 ```
 
-首次锁必须使用上面的 `O_CREAT | O_EXCL` 返回句柄直接写入完整 JSON，随后 flush+fsync 该句柄并同步 `runs/` 目录；不得用可覆盖现有锁的 `os.replace()` 获取锁。只有排他创建和持久化全部成功后，进程才可进入 allocation。首次写入失败时，仅持有本次 `lock_token` 的创建者可以删除未完成锁并同步目录；无法证明所有权、清理失败或发现 malformed lock 时必须 Fail Closed。
+Active Lock 的 `phase` 闭集为 `allocating | running | recovering`；缺失或未知值均 Fail Closed。初次获取时 `recovery_of_lock_token` 必须为 null；恢复接管时必须等于被替换锁的 lock_token。`recovering` 只表示一个已验证归属的 stale running/recovering Run 正在执行 State/Publication recovery，不表示可以启动新的业务 Run。
+
+首次锁必须使用上面的 `O_CREAT | O_EXCL` 返回句柄直接写入完整 JSON，随后 flush+fsync 该句柄并同步 `runs/` 目录；不得用可覆盖现有锁的 `os.replace()` 获取锁。只有排他创建和持久化全部成功后，进程才可进入 allocation。首次写入失败时，仅持有本次 `lock_token` 的创建者可以删除未完成锁并同步目录；无法证明所有权、清理失败或发现 malformed lock 时必须 Fail Closed。新获取者在 O_EXCL 成功并持久化后，还必须重新检查 `.active_run.recovery.lock` 和任意 `.active_run.release.*` tombstone；若检查到并发恢复/释放痕迹，必须按自己的 lock_token 安全撤销本次获取、同步目录并返回 `ACTIVE_RUN_CONFLICT`，不得进入 allocation。
 
 在持锁情况下：
 
@@ -2532,7 +2552,8 @@ os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     },
 )
 → metadata.json 首次原子写入成功后，Run 才算 created
-→ metadata.json 及 Run 目录完成 durability sync 后，才允许更新锁为 running
+→ 使用 StateStore.initialize_run() 原子创建完整 state.json，初始 status=CREATED、state_version=0、last_operation_* 均为 null；Journal 必须不存在或为空
+→ metadata.json、state.json 及 Run 目录均完成 flush+fsync、父目录 durability sync 和重读复核后，才允许更新锁为 running
 → 原子更新锁：
    phase=running
    run_id=reserved_run_id
@@ -2585,13 +2606,30 @@ reserved_run_id 目录存在但 metadata.json 不存在
 → 目录为空时仅可在审计记录后删除该目录和锁
 → 目录非空或清理失败时写 .allocation_recovery_required 并 FAIL CLOSED
 
-metadata.json 存在且 allocation_token/run_id 与锁一致，状态为 created
+metadata.json 存在且 allocation_token/run_id 与锁一致，但 state.json 缺失或初始化未通过复核
+→ 将该 Run 标记 allocation_recovery_required 并 FAIL CLOSED；不得猜测或补造初始 State
+
+metadata.json 与 state.json 均存在，allocation_token/run_id 一致，state 为合法 CREATED/version=0 且 Journal 不存在或为空
 → 将该 Run 标记 FAILED / allocation_aborted
 → 删除锁
 
 metadata token/run_id 不一致、目录名称不一致或状态不一致
 → FAIL CLOSED
 ```
+
+### 14.4.1 Running Lock 崩溃恢复与释放
+
+`phase=running` 或 `phase=recovering` 的 Active Lock 不能永久悬挂，也不能通过直接删除后猜测 Run 归属。仅当锁声明的 hostname 为当前主机且 PID 已不存在时，允许进入恢复；PID 仍存在、跨主机或进程状态无法可靠判断时一律 Fail Closed，不实施自动接管。
+
+同机死进程恢复使用一个最小恢复互斥文件 `runs/.active_run.recovery.lock`，同样以 `O_CREAT | O_EXCL` 获取。该文件必须完整记录 `schema_version=active_run_recovery_lock_v1`、recovery_token、pid、hostname、target_lock_token、target_lock_sha256、run_id 和 created_at，并完成文件及 `runs/` 目录持久化。恢复者必须在持有该互斥文件期间重读 Active Lock，并确认原 `lock_token`、文件 Hash、run_id、allocation_token 和 phase 未变化；随后验证 Run metadata、Canonical State、State Journal 与 Publication transaction。只有归属和基础 schema 验证通过，才可将 Active Lock 原子更新为带新 `lock_token`、`recovery_of_lock_token`、同一 run_id 且 `phase=recovering` 的内容，完成文件及 `runs/` 目录持久化后释放 recovery lock。随后执行 State/Publication recovery；仍需继续业务执行时再把 Active Lock 原子更新为 `phase=running` 并持久化，已进入 FAILED/COMPLETED 的 Run 则按终态合同直接完成清理和释放。其他进程无法获取 recovery lock 时不得参与接管；普通新 Run 分配也不得绕过已有 Active Lock。
+
+若 `.active_run.recovery.lock` 已存在，Phase A 不自动删除或接管它：持有进程仍存活、跨主机、文件损坏或同机 PID 已死亡均先返回 `LOCK_ERROR/PUBLICATION_RECOVERY_REQUIRED`，保留 Active Lock 和 recovery lock 供人工核对。该保守边界避免为“恢复锁的恢复”再建立第三层锁；不得因 recovery lock 看似过期就静默删除。
+
+接管后的处理固定为：RUNNING/WAITING_FOR_REVIEW/BLOCKED 先执行 StateStore recovery，再由显式 resume/retry 决策继续；FAILED 仅在无 pending Journal/Publication recovery 时释放；COMPLETED 先完成第 11.6 节 cleanup-only recovery，再释放。恢复者在 `phase=recovering` 持久化后再次崩溃时，下一恢复者必须按同一规则验证新的 target lock token/Hash 并继续，不得把 recovering 当作可删除的过期 allocation lock。任何 Hash、token、Journal、Manifest 或 transaction 冲突均保留 Active Lock 并 Fail Closed，禁止启动另一个 Run。
+
+正常释放 Active Lock 前必须重读并确认 `lock_token` 与当前持有者一致；不一致时禁止删除。释放采用原子移动到 `.active_run.release.<lock_token>` tombstone、同步 `runs/` 目录后再删除 tombstone并再次同步，避免把未知所有者的新锁误删。新获取者必须执行上一节规定的 acquire 后复检，因此“获取者先检查、释放者后移动”的竞态也会被阻断。释放、tombstone 清理或任一目录同步失败均返回 `LOCK_ERROR` 并保留可见 tombstone，不得报告正常完成。
+
+启动时发现 release tombstone 必须阻断新 Run。只允许显式 cleanup-only recovery 在确认 `.active_run.lock` 不存在、tombstone 内容 schema/lock_token/run_id 合法、对应 Run 已处于允许释放的终态或已持久化 cleanup_pending 双重诊断后删除；删除后强制同步 `runs/`。验证失败时保留 tombstone 并 Fail Closed，禁止按文件年龄自动清理。
 
 ## 14.5 文件系统边界
 
@@ -2625,6 +2663,29 @@ orchestrator/state/run_state.json
 仅为兼容镜像，不参与 Resume、Web 决策或状态判断。
 
 `metadata.json.status` 只是 state 投影。
+
+Phase A Canonical State 的最小 schema 固定为：
+
+```json
+{
+  "schema_version": "inspection_state_v1",
+  "run_id": "run_012",
+  "allocation_token": "uuid",
+  "plan_fingerprint": "sha256...",
+  "status": "CREATED",
+  "state_version": 0,
+  "task_status": {},
+  "completed_tasks": [],
+  "failed_tasks": [],
+  "context_snapshot": {},
+  "last_operation_kind": null,
+  "last_operation_id": null,
+  "last_operation_payload_sha256": null,
+  "updated_at": "UTC timestamp"
+}
+```
+
+`initialize_run()` 只能在持有对应 Run 的 state lock、目标 `state.json` 不存在且 Journal 不存在或为空时执行。它通过同目录临时文件写完整 v1 schema，flush+fsync 后原子提升，强制同步 Run 目录并重读复核；任何已有 state、非空 Journal、token/run_id/plan fingerprint 冲突均 Fail Closed。初始化不写 pending/committed，因为其发生在 Run 尚未开放给 DAGExecutor 的 allocation transaction 内；Active Lock 只有在初始化和目录持久化完成后才能进入 running。
 
 ## 15.2 StateStore API
 
@@ -2674,6 +2735,8 @@ class StateStore:
         ...
 ```
 
+`load()` 是无副作用读取，不得隐式执行恢复。它必须校验 state schema，并检查 Journal 是否存在未解决 pending、中间损坏或 committed/state 不一致；发现任一情况时返回 `STATE_RECOVERY_REQUIRED`/`STATE_CONFLICT`，不得把可能过期的 `state.json` 当作可继续执行状态。需要继续执行的调用方必须先显式 `recover()`，随后 mutation 仍在自己的 state lock 内重复恢复和 CAS。
+
 ## 15.3 两类写入
 
 ### Context Checkpoint
@@ -2697,16 +2760,27 @@ context_snapshot
 checkpoint_context()
 ```
 
+传入的 `event_id` 实际承担 WAL `operation_id`，必须是“单次 checkpoint 事件”的稳定唯一 ID，而不是可复用的 task_id。格式固定为 `<task_id>:<attempt_number>:<checkpoint_kind>`，其中 `checkpoint_kind` 只能是 `started | succeeded | failed | retry_scheduled`；同一 task/attempt 的不同阶段使用不同 ID。调用方重试同一次持久化必须复用同一 event_id 和完全相同 payload，业务重试则递增 attempt_number。这样 started/succeeded/failure 不会因共享 task_id 而产生伪 payload conflict。
+
 ### 顶层状态迁移
 
 用于：
 
 ```text
 CREATED → PLANNED
+CREATED → FAILED              # 仅 allocation recovery
 PLANNED → RUNNING
+PLANNED → BLOCKED
+PLANNED → FAILED
 RUNNING → FAILED
 RUNNING → COMPLETED
 RUNNING → WAITING_FOR_REVIEW
+RUNNING → BLOCKED
+WAITING_FOR_REVIEW → RUNNING  # 显式人工决定后 resume
+WAITING_FOR_REVIEW → BLOCKED
+WAITING_FOR_REVIEW → FAILED
+BLOCKED → PLANNED             # 外部阻断解除后重新规划/复核
+BLOCKED → FAILED
 ```
 
 调用：
@@ -2716,6 +2790,8 @@ transition_status()
 ```
 
 每个任务 checkpoint 不得冒充顶层状态迁移。
+
+上述列表是 Phase A 唯一允许的状态边；`FAILED` 与 `COMPLETED` 均为终态，不允许迁出。`WAITING_FOR_REVIEW` 和 `BLOCKED` 的恢复必须携带新的 `transition_id`、操作者/原因 metadata，并经过同一 WAL/CAS；不得直接改写 state 或 metadata 投影。`CREATED → FAILED` 仅用于第 14.4 节已经验证归属的 allocation abort，不作为普通业务失败捷径。
 
 ## 15.4 DAGExecutor 适配
 
@@ -2836,7 +2912,7 @@ aborted
 ```text
 schema_version
 operation_kind        # context_checkpoint | status_transition
-operation_id          # checkpoint 使用 event_id；transition 使用 transition_id
+operation_id          # checkpoint 使用唯一 checkpoint event_id；transition 使用 transition_id
 phase                 # pending | committed | aborted
 expected_state_version
 resulting_state_version
@@ -2904,7 +2980,8 @@ pending + state 的 version/last_operation_id/payload_sha256 均表明操作已�
 
 pending + state 仍为 expected version/status
 → 追加 aborted
-→ 允许使用新 operation_id 重试；使用相同 ID 时 payload 必须完全一致
+→ aborted 是该 operation_id 的终结记录，完成 flush+fsync 和 Journal 父目录同步后才允许返回
+→ 业务重试必须使用新的 operation_id；原调用方若以相同 ID/相同 payload 重放，只返回该 operation 已 aborted，不得追加第二个 pending；相同 ID/不同 payload 为 STATE_CONFLICT
 
 pending + state 为其他版本或状态
 → STATE_CONFLICT
@@ -3043,6 +3120,19 @@ runs/*/artifacts/comparison_evidence_manifest.json
 runs/*/artifacts/claim_decision.json
 runs/*/staging/
 runs/*/publication_backup/
+runs/*/publication_transaction.json
+runs/*/PUBLICATION_CLEANUP_PENDING.json
+runs/*/state.json
+runs/*/state_journal.jsonl
+runs/*/metadata.json
+runs/*/final_summary.md
+runs/*/failure_summary.md
+runs/*/staging/invalidated_final_summary.*.md
+runs/*/.state.lock
+runs/*/.allocation_recovery_required
+runs/.active_run.lock
+runs/.active_run.recovery.lock
+runs/.active_run.release.*
 ```
 
 所有 Workflow 测试：
@@ -3205,7 +3295,8 @@ python scripts/run_inspection_workflow.py --task-file ...
 7. Publication Transaction 完成全部正式文件替换；
 8. 最后提交 current_publication_manifest.json；
 9. StateStore.transition_status(RUNNING → COMPLETED)；
-10. 释放 Active Run Lock。
+10. 持久化 publication transaction 的 state_completed，并完成 backup cleanup；cleanup 失败时按第 11.4 节持久化双重诊断并返回非零；
+11. 仅在 cleanup_complete，或两个 cleanup_pending 诊断均已持久化并复核时，按 lock_token 所有权合同释放 Active Run Lock。
 ```
 
 Manifest 提交前的任何失败：
@@ -3333,7 +3424,7 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 
 1. `association_supported` 不等于身份确认。
 2. 规则关联下 Difference/Directional 最高为 `allowed_with_limits`。
-3. 只有 Human/GT verified 才允许无条件“同一病害”文案。
+3. Phase A 拒绝输入或 Agent 自称 Human/GT verified；无条件“同一病害”分支保持不可达。
 4. 存在历史对象时 `previous_entity_type=memory_snapshot`；无历史对象的 Static Audit 使用 `not_applicable` 且不伪造 Memory。
 5. Schema 不存在 `previous_observation_id`。
 6. Association Manifest 可定位唯一 `memory_before_query.csv`。
@@ -3409,6 +3500,15 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 76. cleanup pending/recovery required 时 CLI 返回 10 而非 0，同时 Canonical StateStore 仍保持 COMPLETED。
 77. `publication_transaction.json` 首次可见时必须是经 fsync、目录同步和重读复核的完整 `backup_ready` 记录；临时事务不得被恢复器当作已开始修改正式目标。
 78. 同一 Run 不得启动第二个 Publication transaction；损坏或不完整的权威事务文件必须 Fail Closed。
+79. `evidence_valid != true` 时所有 Claim capability 均 blocked；Phase A 输入不得自行声明 human/GT verified。
+80. 同一 task attempt 的 started/succeeded/failed/retry checkpoint 使用不同 operation_id；aborted operation_id 不得追加第二个 pending。
+81. 初始 state.json 必须在 Active Lock 进入 running 前以完整 v1 schema 原子创建并完成目录持久化。
+82. 同机死亡 running lock 只能在 recovery O_EXCL 互斥、token/Hash/Run 状态复核后接管；跨主机、活 PID 或冲突状态 Fail Closed。
+83. Active Lock 释放必须验证 lock_token，并通过 token-scoped tombstone 持久化删除；不得直接删除未知所有者锁。
+84. 新 Active Lock 获取在持久化后必须复检 recovery/release 标记；与并发释放或恢复冲突时按自身 token 撤销并返回冲突。
+85. Canonical 状态只能沿唯一允许边迁移；WAITING/BLOCKED 可显式恢复，FAILED/COMPLETED 不得迁出。
+86. `StateStore.load()` 发现 unresolved pending、Journal 损坏或 committed/state 不一致时必须拒绝返回可执行状态，且不得隐式修改文件。
+87. Active Lock phase 只允许 allocating/running/recovering；恢复者在 recovering 阶段崩溃后仍可按 token/Hash 合同再次恢复，不得误删或启动新 Run。
 
 ---
 
@@ -3523,7 +3623,14 @@ Snapshot 可自动重录
 跳过 A1/A2/A3 分段验收
 A1 专项执行修改正式 data/simulated、outputs 或 progressive 产物
 A1 新节点在默认 legacy CLI 中提前启用
+Evidence invalid 仍能生成 Static Audit 或其他 Claim
+Phase A 接受输入自称 human_verified/ground_truth_verified
 COMPLETED 早于 Publication Commit 或 final_summary
+同一 checkpoint event_id 被 started/succeeded/retry 复用
+初始 state.json 尚未持久化就把 Active Lock 更新为 running
+死亡 running lock 没有安全恢复分支，或释放锁时不校验 lock_token
+WAITING_FOR_REVIEW/BLOCKED 没有合法恢复边，或 FAILED/COMPLETED 可以迁出
+StateStore.load 在 unresolved Journal 下仍返回可继续执行状态
 Semantic Snapshot 显示核心算法漂移
 Artifact Validator、重点测试或快速回归失败
 ```
