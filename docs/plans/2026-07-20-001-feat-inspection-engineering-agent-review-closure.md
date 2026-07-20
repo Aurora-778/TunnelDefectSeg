@@ -128,9 +128,21 @@
 |Claim Policy value_ref 指向不存在枚举|待修订|条件关闭|在 `claim_policy_v5` 根内直接定义 observation source/comparability 两个闭集；所有 value_ref 只能解析同一策略中的三个权威路径|Phase 0 schema validator 补不存在、类型错误、循环引用和自然语言镜像漂移反例|
 |WAL reducer 的 updated_at 无确定时间来源|待修订|条件关闭|checkpoint.created_at/transition_timestamp 在 pending 前生成并持久化为 mutation_timestamp；reducer 用其写 updated_at，replay 禁止重新读时钟|A3 补 checkpoint/transition 硬崩溃、时钟变化和 State Hash 完全一致测试|
 |Status transition operation ID 未规范化|待修订|条件关闭|固定 auto/decision 两种包含 run/version/from/to 的 canonical ID；同一语义 aborted 后不得换 token/suffix 绕过|Phase 0 固定 ID schema；A3 补非法字符、碰撞、幂等、aborted 和不同合法边反例|
-|State Coordinator 所有者和生命周期不唯一|待修订|条件关闭|InspectionWorkflowController 独占 queue/reducer/cursor，通过唯一 sink 注入 DAGExecutor，并持有到 Publication、终态和解锁结束|A3 补 Executor 返回后 transition、Resume 重建、旧 sink 失效和禁止第二 cursor 测试|
-|RUNNING→COMPLETED 仅依赖 Controller 顺序|待修订|条件关闭|StateStore 在 pending 前重读 task plan、required task、Manifest、transaction、final summary 与 recovery marker，并验证受控 completion_evidence|A3 补 pending/running/retry/failed task、删减 required IDs、Hash/transaction 冲突和恢复追赶反例|
-|Completed recovery replay 未定义合法后继|待修订|条件关闭|outcome 冻结恢复事实；重放只读验证 Journal 单调链、合法状态边、Publication 和 lock successor/release，不将历史完成当作当前 readiness|A3 补精确状态、后续 COMPLETED/解锁/Publication、再次受审计 recovery 和版本倒退反例|
+|State Coordinator 所有者和生命周期不唯一|待修订|条件关闭|InspectionWorkflowController 独占 queue/reducer/cursor/token，通过唯一 sink 注入 DAGExecutor；StateStore mutation 复核 expected lock token 并持有到 Publication、终态和解锁结束|A3 补 Executor 返回后 transition、Resume 换 token、旧 sink fencing 和禁止第二 cursor 测试|
+|RUNNING→COMPLETED 仅依赖 Controller 顺序|待修订|条件关闭|StateStore 从 committed task plan 派生 required task，并在 pending 前重读 Manifest、manifest_committed transaction、final summary 与 recovery marker|A3 补 required/optional、pending/running/retry/failed task、删减 IDs、Hash/transaction 冲突和 phase 追赶反例|
+|Completed recovery replay 未定义合法后继|待修订|条件关闭|outcome 冻结 Journal tail index/checksum；重放只读验证前向 checksum 链、合法状态边、Publication 时序和 lock successor/release，不将历史完成当作当前 readiness|A3 补链删除/插入/重排、FAILED 后 Publication、后续 COMPLETED/解锁及再次恢复反例|
+
+## 2.7 第八轮严格 Review 的条件关闭项
+
+以下问题在 `docs: close engineering agent state contract gaps` Review 中进入时均为“待修订”。本次仍只修订计划合同，修订后最多标记为“条件关闭”；Phase 0 machine schema、A2/A3 实现和故障注入均未开始：
+
+|问题|Review 入场状态|当前状态|计划修订|实现条件|
+|---|---|---|---|---|
+|Manifest replace 后的 phase 追赶死路|待修订|条件关闭|实际 Manifest 匹配时先幂等持久化并复核 manifest_committed，再调用 COMPLETED guard；追赶前后再次崩溃均按当前 phase 继续且不回滚有效发布|A2/A3 补 replace 后、phase 前，phase 后、COMPLETED 前，以及每步重复崩溃反例|
+|State mutation 缺少 Active Lock fencing|待修订|条件关闭|checkpoint、transition 和 mutating recovery 携带 expected_lock_token；StateStore 在 state lock 内复核 run/allocation/token/phase，旧 sink 不能仅凭正确 version 写入|A3 补 takeover 前后竞态、旧 token、新 token、phase 错误和固定锁序测试|
+|Recovery 所需 Journal checksum chain 未定义|待修订|条件关闭|WAL 增加连续 record_index 和 previous_record_checksum；outcome 保存 tail tuple，重放验证完整前向链|A3 补 genesis、合法追加、删除、插入、重排、crash-torn tail 和越过审计 tail 截断反例|
+|required/optional task 不能机器判定|待修订|条件关闭|committed task plan 每项固定布尔 required，plan fingerprint 覆盖该字段；StateStore 自行派生 required IDs，Phase A core 全部 required|Phase 0 固定 task plan schema；A3 补 required skipped、optional skipped、调用方删减和字符串布尔反例|
+|Completed audit 对后续 Publication 约束过宽|待修订|条件关闭|只读重放仅接受 RUNNING 中合法 manifest_committed，或被后续 committed COMPLETED evidence 引用的 Publication；FAILED 后、晚于 COMPLETED或第二 transaction 均冲突|A3 补 Publication 合法时序与每个非法状态组合，证明复核无写副作用|
 
 ## 3. 基线与范围
 
@@ -160,8 +172,8 @@
 |---|---|---|---|
 |唯一 DAG/Executor|条件关闭|只扩展现有 DAG、DAGExecutor、Registry 和 RunManager|A1/A3 待实施|
 |A1 Claim/Evidence|条件关闭|新节点默认不激活；sandbox 中逐节点重定向到 Run-local work/artifacts/staging，不得修改正式目录|A1 待实施|
-|A2 Publication|条件关闭|Manifest-last、完整文件集合、固定 publication transaction 路径、COMPLETED/phase 追赶、cleanup 诊断、existed_before 回滚、逐父目录 fsync 和 transaction-scoped final_summary 隔离已定义|A2 待实施|
-|A3 State/Lock/WAL|条件关闭|双入口、Canonical attempts、checkpoint/transition ID、确定 mutation timestamp、Controller-owned 单 queue/cursor、COMPLETED 不变量、统一 WAL 和可单调复核的 intent/outcome recovery 审计已定义|A3 待实施|
+|A2 Publication|条件关闭|Manifest-last、完整文件集合、固定 publication transaction 路径、Manifest replace 后的 phase 追赶、cleanup 诊断、existed_before 回滚、逐父目录 fsync 和 transaction-scoped final_summary 隔离已定义|A2 待实施|
+|A3 State/Lock/WAL|条件关闭|Canonical attempts、required task plan、deterministic mutation time、Active Lock fencing、Controller-owned 单 queue/cursor、前向 checksum WAL、COMPLETED 不变量和只读 recovery audit 已定义|A3 待实施|
 |Memory/Growth 报告分离|条件关闭|结构化数据保留，正式报告必须经过 Claim Gate|A1 待实施|
 |Visualization/FinalReport|条件关闭|必须读取当前 Run 的 ClaimDecision 和 Comparison Evidence|A1 待实施|
 |Web 边界|条件关闭|Phase A 不修改 Web，也不声称 Web 是 Manifest 权威 reader|Phase E 待实施|
