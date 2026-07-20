@@ -138,11 +138,22 @@
 
 |问题|Review 入场状态|当前状态|计划修订|实现条件|
 |---|---|---|---|---|
-|Manifest replace 后的 phase 追赶死路|待修订|条件关闭|实际 Manifest 匹配时先幂等持久化并复核 manifest_committed，再调用 COMPLETED guard；追赶前后再次崩溃均按当前 phase 继续且不回滚有效发布|A2/A3 补 replace 后、phase 前，phase 后、COMPLETED 前，以及每步重复崩溃反例|
-|State mutation 缺少 Active Lock fencing|待修订|条件关闭|checkpoint、transition 和 mutating recovery 携带 expected_lock_token；StateStore 在 state lock 内复核 run/allocation/token/phase，旧 sink 不能仅凭正确 version 写入|A3 补 takeover 前后竞态、旧 token、新 token、phase 错误和固定锁序测试|
-|Recovery 所需 Journal checksum chain 未定义|待修订|条件关闭|WAL 增加连续 record_index 和 previous_record_checksum；outcome 保存 tail tuple，重放验证完整前向链|A3 补 genesis、合法追加、删除、插入、重排、crash-torn tail 和越过审计 tail 截断反例|
+|Manifest replace 后的 phase 追赶死路|待修订|条件关闭|仅 RUNNING+intent 可追赶 manifest_committed；COMPLETED+intent 是与持久化顺序及 transaction SHA 冲突的非法状态，保留证据并 Fail Closed|A2/A3 补 RUNNING intent、RUNNING committed、COMPLETED committed、COMPLETED intent 和每步重复崩溃反例|
+|State mutation 缺少 Active Lock fencing|待修订|条件关闭|checkpoint、transition 和 mutating recovery 携带 expected_lock_token；operation owner 不变，接管 terminal 行单独记录 append actor 和 recovery intent/Active Lock 引用|A3 补 takeover 前后竞态、旧 owner/新 actor、错误 reference、旧 sink、phase 错误和固定锁序测试|
+|Recovery 所需 Journal checksum chain 未定义|待修订|条件关闭|WAL 增加 canonical SHA-256 前向链和独立持久化 tail anchor；outcome 保存 tail tuple，重放验证 anchor 与完整前向链|A3 补 genesis、单步 append-before-anchor、pending/aborted/committed 尾行删除、插入、重排、crash-torn tail 和审计 tail 反例|
 |required/optional task 不能机器判定|待修订|条件关闭|committed task plan 每项固定布尔 required，plan fingerprint 覆盖该字段；StateStore 自行派生 required IDs，Phase A core 全部 required|Phase 0 固定 task plan schema；A3 补 required skipped、optional skipped、调用方删减和字符串布尔反例|
 |Completed audit 对后续 Publication 约束过宽|待修订|条件关闭|只读重放仅接受 RUNNING 中合法 manifest_committed，或被后续 committed COMPLETED evidence 引用的 Publication；FAILED 后、晚于 COMPLETED或第二 transaction 均冲突|A3 补 Publication 合法时序与每个非法状态组合，证明复核无写副作用|
+
+## 2.8 第九轮严格 Review 的条件关闭项
+
+以下问题在 `docs: close engineering agent recovery contract gaps` Review 中重新进入“待修订”。本次仍只修订计划合同，修订后最多标记为“条件关闭”；tail anchor、canonical serializer、Publication recovery 和接管 WAL 的代码及故障注入均未实现：
+
+|问题|Review 入场状态|当前状态|计划修订|实现条件|
+|---|---|---|---|---|
+|前向 checksum chain 无法发现合法前缀截断|待修订|条件关闭|新增 genesis 起即存在的 Run-local tail anchor；每个 append 只有在 anchor 原子推进、目录同步和重读后才确认，Journal 短于 anchor 必须拒绝|A3 补删除已 anchor 的 pending/aborted/committed 尾行、append-before-anchor 单步窗口和协调回滚边界测试|
+|COMPLETED + manifest_commit_intent 与 completion transaction Hash 矛盾|待修订|条件关闭|只允许 RUNNING+intent 追赶；COMPLETED 只接受 manifest_committed 且 completion_evidence transaction SHA 精确匹配，COMPLETED+intent 保留证据并 Fail Closed|A2/A3 补四种 State/phase 组合与 phase 追赶前后重复崩溃测试|
+|接管补写旧 pending 的 owner token 语义不唯一|待修订|条件关闭|operation_owner_lock_token 跨 phase 不变；append_actor_lock_token 表示当前写入者，接管 terminal 行必须引用已持久化 recovery intent 和 Active Lock Hash|A3 补普通写入、合法接管、旧 sink、错误 owner/actor/reference 和接管链断裂反例|
+|record_checksum canonical bytes 未定义|待修订|条件关闭|固定字段闭集、SHA-256、UTF-8 无 BOM、字典序 key、紧凑 separators、禁止非有限数字及 canonical 类型/时间规则|Phase 0 固定 serializer/schema；A3 补跨平台相同 Hash、未知字段、float/NaN、字段重排和 checksum mismatch 测试|
 
 ## 3. 基线与范围
 
@@ -173,7 +184,7 @@
 |唯一 DAG/Executor|条件关闭|只扩展现有 DAG、DAGExecutor、Registry 和 RunManager|A1/A3 待实施|
 |A1 Claim/Evidence|条件关闭|新节点默认不激活；sandbox 中逐节点重定向到 Run-local work/artifacts/staging，不得修改正式目录|A1 待实施|
 |A2 Publication|条件关闭|Manifest-last、完整文件集合、固定 publication transaction 路径、Manifest replace 后的 phase 追赶、cleanup 诊断、existed_before 回滚、逐父目录 fsync 和 transaction-scoped final_summary 隔离已定义|A2 待实施|
-|A3 State/Lock/WAL|条件关闭|Canonical attempts、required task plan、deterministic mutation time、Active Lock fencing、Controller-owned 单 queue/cursor、前向 checksum WAL、COMPLETED 不变量和只读 recovery audit 已定义|A3 待实施|
+|A3 State/Lock/WAL|条件关闭|Canonical attempts、required task plan、deterministic mutation time、Active Lock fencing、owner/append actor 分离、Controller-owned 单 queue/cursor、canonical checksum WAL + tail anchor、COMPLETED 不变量和只读 recovery audit 已定义|A3 待实施|
 |Memory/Growth 报告分离|条件关闭|结构化数据保留，正式报告必须经过 Claim Gate|A1 待实施|
 |Visualization/FinalReport|条件关闭|必须读取当前 Run 的 ClaimDecision 和 Comparison Evidence|A1 待实施|
 |Web 边界|条件关闭|Phase A 不修改 Web，也不声称 Web 是 Manifest 权威 reader|Phase E 待实施|
