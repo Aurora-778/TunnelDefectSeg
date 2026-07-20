@@ -1032,6 +1032,19 @@ Phase A 使用唯一 profile `phase_a`。Evaluator 不接受由输入或 Agent �
 claim_policy:
   schema_version: claim_policy_v5
 
+  observation_source_enum:
+    - kict_static_mask_cyclic_demo
+    - real_inspection_mask_input
+    - verified_fixture
+    - mixed_sources
+    - legacy_unverified_source
+
+  comparability_status_enum:
+    - verified_comparable
+    - not_longitudinally_comparable
+    - insufficient_history
+    - simulated_metadata_comparable
+
   evaluator:
     profile: phase_a
     evaluation_order:
@@ -1144,7 +1157,7 @@ claim_policy:
 
 Phase A policy 不定义 `phase_a_enabled`，也不包含 `human_verified` / `ground_truth_verified` 的 `allowed` 分支。Evaluator 只读取 policy 中固定的 `evaluator.profile=phase_a`；运行参数、Evidence、Task 或 Agent 输出均不得覆盖它。全局前置条件一旦失败，后续 capability 和模板求值均不得执行；capability 分支不能覆盖 profile/global 的 blocked 决策，多个分支同时命中或没有唯一结果时也必须 Fail Closed。
 
-`when_all` 不是通用表达式 DSL。每个条件只能包含 `field`、`operator`，以及二选一的 `value`（typed literal）或 `value_ref`（只引用 policy 内已声明的固定枚举路径）；两者同时存在或同时缺失均为 schema error。`in_enum` 必须使用 `value_ref`，`strict_equals` / `greater_than_or_equal` 必须使用 `value`，禁止交叉使用。operator 只能取 `allowed_operators` 闭集，field 只能来自 Phase 0 固定的 Evidence/previous capability result schema；禁止执行字符串表达式、动态属性访问、脚本或任意函数。Capability 必须按 `capability_order` 逐项求值，只有后序 capability 可以读取前序 `capability_results`；循环引用、前向引用、未知字段、未知 value_ref、未知 operator、类型不匹配、重复 capability key 或无法得到唯一决策均按 `default_decision` blocked。
+`when_all` 不是通用表达式 DSL。每个条件只能包含 `field`、`operator`，以及二选一的 `value`（typed literal）或 `value_ref`（只引用当前 `claim_policy_v5` 根内已声明的固定枚举路径）；两者同时存在或同时缺失均为 schema error。`in_enum` 必须使用 `value_ref`，`strict_equals` / `greater_than_or_equal` 必须使用 `value`，禁止交叉使用。`profiles.phase_a.accepted_identity_evidence_states`、`observation_source_enum` 和 `comparability_status_enum` 是本版本仅有的合法 `value_ref`；第 7.3.1 节的自然语言枚举只是同一机器配置的可读镜像，不是第二个权威来源。operator 只能取 `allowed_operators` 闭集，field 只能来自 Phase 0 固定的 Evidence/previous capability result schema；禁止执行字符串表达式、动态属性访问、脚本或任意函数。Capability 必须按 `capability_order` 逐项求值，只有后序 capability 可以读取前序 `capability_results`；循环引用、前向引用、未知字段、未知 value_ref、未知 operator、类型不匹配、重复 capability key 或无法得到唯一决策均按 `default_decision` blocked。
 
 求值优先级与反例矩阵：
 
@@ -2315,7 +2328,7 @@ Controller 启动或恢复时必须先读取权威 `publication_transaction.json
 当前 Manifest 的 transaction_id/new_manifest_sha256 与本事务完全一致
 → 无论 publication transaction 仍为 manifest_commit_intent 还是已为 manifest_committed，都视为 Manifest 已提交
 → 验证新 Manifest、全部正式文件、Run-local 证据和 final_summary Hash
-→ state 仍为预期 RUNNING 且 plan_fingerprint/run_id 一致时，幂等补做 COMPLETED
+→ state 仍为预期 RUNNING 且 plan_fingerprint/run_id 一致时，必须重新执行第 15.3 节 RUNNING→COMPLETED 全部 StateStore 不变量后才可幂等补做 COMPLETED
 → 补做 COMPLETED 成功后立即持久化 transaction phase=state_completed，再进入 cleanup-only
 → StateStore 已为 COMPLETED，当前 Manifest 与本事务匹配，transaction phase 仍为 manifest_commit_intent/manifest_committed 且没有 cleanup marker 时，这是“COMPLETED 已持久化、事务 phase 尚未追上”的明确崩溃窗口
 → 该窗口必须重新验证 state/Manifest/全部 Hash，幂等补写 state_completed，然后只执行 cleanup-only；禁止回滚、隔离 final_summary 或降级 Run
@@ -2697,7 +2710,16 @@ runs/<run_id>/lock_recovery_audit/<basename>.outcome.<attempt_number>.json
 
 启动、Resume 和新人工恢复命令发现 intent 存在但没有任何 `standard_recovery_completed` outcome 时必须 Fail Closed，并通过 intent 中的 token/Hash 与现有最大 attempt number 续接同一审计；下一次尝试只能写 `max(attempt_number)+1`，不得生成新的 basename 绕过未完成审计。若 outcome 写入或同步失败，intent 本身继续作为 recovery sentinel，Active Lock 保持不变或保留当前可验证状态，命令返回 `LOCK_ERROR/PUBLICATION_RECOVERY_REQUIRED`，不得报告正常成功。删除遗留 recovery lock 不等于恢复成功；只有标准 recovery 再次验证并完成、且 completed outcome 已持久化后，命令才可报告该 recovery 操作完成。
 
-若已存在 `standard_recovery_completed` outcome，后续同 token 命令只能执行只读幂等复核：intent、全部 outcome、当前 State、Publication、Active Lock/recovery lock 状态必须共同证明该清理已经完成，之后返回既有审计结果，不得再次删除、改写锁或追加“成功” outcome。completed outcome 与当前锁/State/Publication 任一矛盾、attempt 序号不连续、出现多个互相冲突的 completed outcome，均按审计冲突 Fail Closed。A3 必须覆盖正确解除、重复调用无副作用、错误 token/Hash、活 PID、跨主机、损坏 State/Publication、Windows 文件名、intent/outcome 冲突、删除失败、目录同步失败、outcome 写失败、递增续接和恢复者再次崩溃反例。
+`standard_recovery_completed` outcome 必须冻结恢复完成时的 `run_id`、`allocation_token`、`plan_fingerprint`、recovery/target token 与 Hash、recovered `state_version/status/state_sha256`、State Journal tail checksum、Publication transaction/Manifest 的存在状态与 Hash，以及 successor Active Lock token/phase/Hash（完成时不存在则为 canonical null）。这些是历史恢复事实，不要求 Run 此后停留在同一业务状态。
+
+若已存在 `standard_recovery_completed` outcome，后续同 token 命令只能执行只读幂等复核，不得再次删除、改写锁、恢复 State/Publication 或追加“成功” outcome。合法结果只有：
+
+1. **精确状态**：当前证据仍与 completed outcome 完全一致；
+2. **单调后继**：run_id/allocation_token/plan_fingerprint 不变，current state_version 不小于 recovered version，State Journal checksum 链能从 outcome 记录的 tail 连续验证到当前 tail，status 只能沿第 15.3 节允许边到达；原 target recovery lock 不得以相同 token/Hash 重新出现；
+3. outcome 时 Publication 不存在，后续可以出现与同一 run_id/plan_fingerprint 一致且通过第 11 节验证的唯一 transaction/Manifest；outcome 时 Publication 已存在，则 transaction_id/Manifest Hash 不得被另一个发布替换；
+4. successor Active Lock 可以保持同 token 并由 recovering 单调进入 running，也可以通过后续有完整 recovery audit 的 recovery-of-token 链更换；Active Lock 仅可在 State 已为 FAILED/COMPLETED 且相应 Publication/cleanup/release 合同完成后合法消失。
+
+上述复核成功只返回 `AUDIT_ALREADY_COMPLETED` 和既有 outcome，不宣称当前 Run ready/success；当前 readiness 仍由最新 State、Publication 和 lock guard 独立决定。state version 倒退、Journal 链断裂、immutable identity 改变、原 recovery lock 复活、未知 Active Lock token、非法状态边、同 Run 第二个 Publication transaction、attempt 序号不连续或多个互相冲突的 completed outcome，均按审计冲突 Fail Closed。A3 必须覆盖精确重放、Run 后续 COMPLETED 并释放锁、后续合法 Publication、后续再次受审计 recovery、重复调用无副作用，以及每个矛盾反例。
 
 接管后的处理固定为：RUNNING/WAITING_FOR_REVIEW/BLOCKED 先执行 StateStore recovery，再由显式 resume/retry 决策继续；FAILED 仅在无 pending Journal/Publication recovery 时释放；COMPLETED 先完成第 11.6 节 cleanup-only recovery，再释放。恢复者在 `phase=recovering` 持久化后再次崩溃时，下一恢复者必须按同一规则验证新的 target lock token/Hash 并继续，不得把 recovering 当作可删除的过期 allocation lock。任何 Hash、token、Journal、Manifest 或 transaction 冲突均保留 Active Lock 并 Fail Closed，禁止启动另一个 Run。
 
@@ -2804,8 +2826,10 @@ class StateStore:
         expected_status,
         expected_state_version,
         transition_id,
+        transition_timestamp,
         next_status,
         metadata=None,
+        completion_evidence=None,
     ) -> StateMutationResult:
         ...
 
@@ -2838,10 +2862,12 @@ StateMutationResult = {
 版本所有权固定为单一 Run-local State Coordinator：
 
 1. 新 Run 从 `initialize_run()` 的返回值取得 `expected_state_version=0`；Resume 必须先 `recover()`，再从其返回的 canonical state 恢复版本和 `task_attempts`。
-2. DAG task/Agent 不得直接调用 StateStore。全部七类 checkpoint 请求与 Controller transition 都先进入现有 `DAGExecutor`/Controller 内部的同一有序 mutation queue；只有该内部 Coordinator 串行调用 `checkpoint_context()` / `transition_status()`。Coordinator 只是现有执行器中的私有队列、pure reducer 和 version cursor，不新增公开类、服务、线程、Executor、Registry 或 RunManager。
-3. 每次成功 mutation 后，Coordinator 只使用返回的 `resulting_state_version` 更新下一次 CAS 版本；不得从 context、metadata、进程全局变量或文件修改时间推断。
-4. CAS 冲突时禁止盲重试。Coordinator 先执行显式 recovery/load，检查相同 operation 是否已 committed/aborted，再决定返回幂等结果、使用下一业务 attempt，或以 `STATE_CONFLICT` 停止。
-5. Controller 状态迁移与 Executor checkpoint 共用同一 Coordinator/version cursor；Resume 和并发完成不得各自持有隐式版本副本。
+2. `InspectionWorkflowController` 是该 Coordinator 的唯一所有者。它在 Run metadata/state 初始化完成后、首次 `CREATED -> PLANNED` 前创建一个 Run-local queue/reducer/version cursor，并持有到 Publication、终态 transition、cleanup 诊断和 Active Run Lock 释放全部结束；DAG 执行返回不得销毁或复制该 cursor。
+3. Controller 将唯一的 `submit_checkpoint_event(event) -> StateMutationResult` 受控 callback/event sink 注入现有 `DAGExecutor`。Executor 只把七类规范化事件提交给该 sink；task/Agent/worker 不得直接调用 StateStore，也不得自行持有 expected version。Controller 自身的全部 `transition_status()` 请求进入同一 queue，禁止为 Publication 或 Resume 创建第二个 mutation queue。
+4. Queue consumer 只能有一个。它在每条 mutation 前使用当前 cursor 调用 StateStore，成功后只用返回的 `resulting_state_version` 推进 cursor；不得从 context、metadata、进程全局变量或文件修改时间推断。Resume 必须先 recover，再以恢复后的 StateSnapshot 重建一个新 Coordinator，并把同一个 sink 注入新 Executor；旧进程的 sink/token 立即失效。
+5. CAS 冲突时禁止盲重试。Coordinator 先停止接收新 task event，执行显式 recovery/load，检查相同 operation 是否已 committed/aborted，再决定返回幂等结果、使用下一业务 attempt，或以 `STATE_CONFLICT` 停止。Coordinator/queue 自身异常时也必须 Fail Closed，禁止回退为 Controller 和 Executor 各自直接写 StateStore。
+
+这里的 Coordinator 只允许是 `InspectionWorkflowController` 内部的私有 queue、pure reducer、sink callback 和 version cursor；不新增公开 StateCoordinator 类、后台服务、线程、Executor、Registry、RunManager 或第二套调度框架。A3 必须通过对象身份/测试 spy 证明 DAG checkpoint、Publication transition 和终态 transition 经过同一 sink 与同一单调 version cursor。
 
 `checkpoint_event` 是受控增量，不是 worker 提交的完整 state 快照。固定最小 schema：
 
@@ -2863,7 +2889,7 @@ checkpoint_event = {
 
 Worker 只能返回 task result 或受控错误摘要，不能传入 `task_status`、`task_attempts`、`completed_tasks`、`failed_tasks` 或完整 `context_snapshot`。Coordinator 必须在 state lock 内读取最新 canonical state，由固定 reducer 应用一条 checkpoint event，再生成下一完整 state；任何 event 中的 expected task status、attempt 或 delta namespace 与最新 state 冲突均 `STATE_CONFLICT`。除 `run_initialized` 只能写固定 `task_plan` namespace 外，`controlled_context_delta` 只允许写当前 task 的 `outputs.<task_id>` 和预先声明的 task-local namespace，禁止覆盖其他 task、顶层 status、attempt、completed/failed 集合或 shared identity fields。
 
-七类 event 的 canonical 字段合同固定如下；表中 `null` 是 JSON null，`{}` 是空 object，不能用空字符串替代。`created_at` 必须是 UTC `YYYY-MM-DDTHH:MM:SS.ffffffZ`，只用于审计，不参与 operation ID、排序或 CAS：
+七类 event 的 canonical 字段合同固定如下；表中 `null` 是 JSON null，`{}` 是空 object，不能用空字符串替代。`created_at` 必须由 Coordinator 在首次调用 `checkpoint_context()` 前生成一次，格式为 UTC `YYYY-MM-DDTHH:MM:SS.ffffffZ`，并进入 canonical checkpoint payload/WAL pending；它不参与 operation ID 或事件排序，但 pure reducer 必须令 resulting canonical state 的 `updated_at` 严格等于该值。pending 已存在后的 recovery/replay 必须复用 pending 中的原值，禁止重新读取系统时间：
 
 |checkpoint_kind|task_id / attempt_number|expected -> next task status|retry_disposition / next_attempt_number|controlled_context_delta|error_summary|
 |---|---|---|---|---|---|
@@ -2977,7 +3003,49 @@ transition_status()
 
 每个任务 checkpoint 不得冒充顶层状态迁移。
 
-上述列表是 Phase A 唯一允许的状态边；`FAILED` 与 `COMPLETED` 均为终态，不允许迁出。`WAITING_FOR_REVIEW` 和 `BLOCKED` 的恢复必须携带新的 `transition_id`、操作者/原因 metadata，并经过同一 WAL/CAS；不得直接改写 state 或 metadata 投影。`CREATED → FAILED` 仅用于第 14.4 节已经验证归属的 allocation abort，不作为普通业务失败捷径。
+上述列表是 Phase A 唯一允许的状态边；`FAILED` 与 `COMPLETED` 均为终态，不允许迁出。`WAITING_FOR_REVIEW` 和 `BLOCKED` 的恢复必须携带权威 decision token、操作者/原因 metadata，并经过同一 WAL/CAS；不得直接改写 state 或 metadata 投影。`CREATED → FAILED` 仅用于第 14.4 节已经验证归属的 allocation abort，不作为普通业务失败捷径。
+
+`transition_id` 与 checkpoint operation ID 共用同一 identifier contract 和 per-run Journal 唯一性作用域。`run_id` 继续使用第 15.3 节字符闭集；status 必须来自上表固定大写枚举。格式只有两种：
+
+```text
+自动迁移：run:<run_id>:transition:v<expected_state_version>:<expected_status>:<next_status>:auto
+人工决定：run:<run_id>:transition:v<expected_state_version>:<expected_status>:<next_status>:decision:<decision_token>
+```
+
+`decision_token` 必须是人工决定 artifact 在调用 StateStore 前已持久化的 canonical UUID，不能由重试临时重签。唯一性为 `(run_id, expected_state_version, expected_status, next_status, transition_kind/decision_token)`；未知 suffix、自由文本 ID、路径字符、缺少 expected version 或与 payload 不一致均在 WAL pending 前拒绝。自动迁移 ID 可由输入唯一重建；人工迁移必须复核 decision artifact 的 token/Hash/操作者/原因。
+
+任一 status transition operation ID 一旦出现 `aborted`，该 ID 永久终结；同一 `(expected_state_version, expected_status, next_status)` 也不得通过更换 `decision_token`、suffix 或随机 ID 再次提交。自动继续必须 Fail Closed。人工处置只能在审计后选择语义不同的允许边（例如转入 FAILED），并使用该不同边自己的 canonical ID；不得伪装成原迁移成功。
+
+`transition_timestamp` 由唯一 Coordinator 在首次 `transition_status()` 调用前生成一次，格式与 checkpoint `created_at` 相同，并进入 status transition canonical payload 和 WAL pending。Reducer 必须令 resulting canonical state 的 `updated_at` 等于该值。pending/committed 重放只能使用 Journal 中已持久化的 `transition_timestamp`，禁止 recovery 时重新读取系统时间。初始化的 `updated_at` 则由 `initialize_run()` 在原子写入前生成一次并随完整初始 State 持久化，不参与 WAL 重放。
+
+### RUNNING -> COMPLETED 的 StateStore 不变量
+
+`RUNNING -> COMPLETED` 除普通 CAS 参数外，必须传入以下受控 `completion_evidence`；其他状态边的该参数必须为 canonical null：
+
+```text
+schema_version=completion_evidence_v1
+run_id
+plan_fingerprint
+required_task_ids              # 稳定排序，与 run_initialized task plan 一致
+publication_manifest_path      # 固定 outputs/current_publication_manifest.json
+publication_manifest_sha256
+publication_transaction_path   # 固定 runs/<run_id>/publication_transaction.json
+publication_transaction_sha256
+transaction_id
+final_summary_path             # 固定 runs/<run_id>/final_summary.md
+final_summary_sha256
+```
+
+StateStore 必须在持有 state lock、追加 transition pending 之前自行重读并验证，不得只信任 Controller 提供的布尔结论：
+
+1. Canonical `task_status` 的 key 集合与 committed `run_initialized` task plan 完全一致；不得存在 `pending | running | retry_pending | retry_scheduled | failed`，所有 required core task 必须为 `success`，optional task 只能为 `success | skipped`；
+2. `completed_tasks` 必须恰好等于 status=success 的稳定排序 task 集合，`failed_tasks=[]`，`task_attempts` 与各 committed checkpoint 一致；
+3. `required_task_ids` 与 plan fingerprint/committed plan 完全一致，禁止由调用方删减失败任务；
+4. current Manifest 必须存在、schema/Hash/run_id/transaction_id 与 evidence 一致，并且其穷举文件均通过 Hash 验证；
+5. 权威 publication transaction 必须存在、Hash/transaction_id/new Manifest Hash 一致，phase 必须恰为 `manifest_committed`；final_summary 路径与 Hash 必须同时被 transaction 和 Manifest 穷举；
+6. 不得存在 Publication recovery、cleanup pending、未知临时 Manifest 或 transaction conflict marker。
+
+任一不变量失败都必须在写 WAL pending 前以 `STATE_CONFLICT/PUBLICATION_RECOVERY_REQUIRED` Fail Closed，Canonical State 保持 RUNNING。恢复 `manifest_committed -> COMPLETED` 窗口时也必须重新执行同一组检查；不得因 current Manifest 已存在就跳过 task/transaction/final summary 验证。
 
 ## 15.4 DAGExecutor 适配
 
@@ -3054,6 +3122,8 @@ expected_state_version
 ```text
 expected_status
 transition_id
+transition_timestamp
+completion_evidence            # 仅 RUNNING -> COMPLETED required
 ```
 
 同一旧版本下仅一个不同写入成功。
@@ -3104,13 +3174,14 @@ expected_state_version
 resulting_state_version
 expected_status
 resulting_status
-timestamp
+mutation_timestamp     # checkpoint_event.created_at 或 transition_timestamp；决定 state.updated_at
+timestamp              # 当前 Journal 行实际追加时间，仅用于审计
 payload_sha256
 resulting_state_sha256
 record_checksum
 ```
 
-`status_transition` 的 `resulting_status` 是 `next_status`；`context_checkpoint` 的 `resulting_status` 必须等于 `expected_status`，只能更新 task/context 字段和 `state_version`，不得伪造顶层状态迁移。
+`status_transition` 的 `resulting_status` 是 `next_status`；`context_checkpoint` 的 `resulting_status` 必须等于 `expected_status`，只能更新 task/context 字段和 `state_version`，不得伪造顶层状态迁移。一个 operation 的 pending/committed/aborted 行必须复制完全相同的 `mutation_timestamp`；各行自己的 `timestamp` 可不同，但不得进入 resulting State reducer。Checkpoint 的 mutation timestamp 严格等于 payload `created_at`，status transition 严格等于 payload `transition_timestamp`。
 
 Canonical `state.json` 必须额外保存：
 
@@ -3130,6 +3201,7 @@ last_operation_payload_sha256
 → 相同 operation_kind + operation_id 已 committed：验证 payload_sha256，并复核 canonical state 的 resulting version/last_operation_*/payload Hash/resulting_state_sha256 后才返回原结果；不一致时 STATE_CONFLICT
 → 相同 ID 但 payload 不同：STATE_CONFLICT
 → 验证 expected status/version
+→ 在首次 pending 前确定并验证 mutation_timestamp；用该值计算唯一 resulting State（包括 updated_at）和 resulting_state_sha256
 → 追加 pending，flush+fsync，并同步 Journal 父目录（首次创建 Journal 时尤为必须）
 → 原子替换 state.json；同时写 resulting version 和 last_operation_* 三字段，并使 canonical state Hash 等于 pending.resulting_state_sha256
 → 必须立即对 state.json 父目录执行 durability sync，然后重读 state.json 并复核 resulting version/last_operation_*/payload Hash
@@ -3169,7 +3241,8 @@ pending + state 仍为 expected version/status
 → 追加 aborted
 → aborted 是该 operation_id 的终结记录，完成 flush+fsync 和 Journal 父目录同步后才允许返回
 → 原调用方若以相同 ID/相同 payload 重放，只返回该 operation 已 aborted，不得追加第二个 pending；相同 ID/不同 payload为 STATE_CONFLICT
-→ status transition 可在重新读取 canonical state 后使用语义明确的新 transition_id；task checkpoint 的 ID 由 run/task/attempt/kind 唯一决定，aborted 后当前 Run 必须 Fail Closed，不得跳号伪造新 checkpoint
+→ status transition 的同一 expected version/status/next status 语义也已终结，不得更换 transition_id/decision_token 绕过；只有经审计选择另一条合法状态边时才可使用该不同边自己的 canonical ID
+→ task checkpoint 的 ID 由 run/task/attempt/kind 唯一决定，aborted 后当前 Run 必须 Fail Closed，不得跳号伪造新 checkpoint
 → 正常 task 业务重试只来自 committed retryable failure + committed retry_scheduled，不得把 WAL aborted 当作业务失败
 
 pending + state 为其他版本或状态
@@ -3183,7 +3256,7 @@ committed 已存在
 → 不增加 state_version
 ```
 
-`checkpoint_context()` 的 pending payload 只保存 canonical `checkpoint_event`、`expected_state_version` 与 reducer 计算出的 `resulting_state_sha256`，不保存 worker 提供的完整 state。恢复后必须重放同一 pure reducer，并验证 resulting version、`last_operation_*`、受影响 task 的 status/attempt、completed/failed 集合、受控 context delta 和完整 canonical state Hash 均与 pending 预期一致；只比较 `state_version` 不足以证明 checkpoint 已应用。
+`checkpoint_context()` 的 pending payload 只保存 canonical `checkpoint_event`、`expected_state_version`、`mutation_timestamp` 与 reducer 计算出的 `resulting_state_sha256`，不保存 worker 提供的完整 state。`transition_status()` 的 pending payload同样必须保存 canonical transition 参数、`transition_timestamp/mutation_timestamp`、受控 metadata、可选 completion_evidence 和 resulting State Hash。恢复后必须使用 pending 中的 mutation timestamp 重放同一 pure reducer，不得调用 clock；并验证 resulting version、`updated_at`、`last_operation_*`、受影响 task 的 status/attempt、completed/failed 集合、受控 context delta 和完整 canonical state Hash 均与 pending 预期一致。只比较 `state_version` 或在重放时生成新时间均不足以证明 operation 已应用。
 
 ---
 
@@ -3730,6 +3803,12 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 105. Claim typed rule 必须用 `value` 与 `value_ref` 二选一表达字面值或枚举引用；未知引用和混用必须 blocked。
 106. 七类 checkpoint 的 canonical null、状态、attempt、retry 和 delta 组合必须逐类校验；未知组合不得进入 WAL。
 107. 已有 completed recovery audit 的重复命令只能只读复核并返回既有结果；不得重复删除、改锁或追加成功记录。
+108. `claim_policy_v5` 的每个 `value_ref` 必须在同一机器策略根内解析；自然语言枚举不能充当隐藏权威来源。
+109. Checkpoint/transition reducer 必须使用 pending 中持久化的 mutation timestamp 写 `state.updated_at`；replay 不读取系统时间且 resulting State Hash 完全相同。
+110. Status transition 使用 canonical per-run operation ID；同一语义 aborted 后不得换 decision token/suffix 绕过。
+111. Controller 从初始化后到 Active Lock 释放始终持有唯一 mutation queue/version cursor；Executor、Publication 和 Resume 不创建第二个 cursor。
+112. `RUNNING -> COMPLETED` 在 StateStore 内验证完整 task plan、required task success、Manifest/transaction/final summary Hash 和无 recovery marker；失败时不写 pending。
+113. Completed recovery audit 重放接受经 Journal/lock/publication 合同证明的合法单调后继，但只返回历史审计结果，不把它当作当前 readiness。
 
 ---
 
@@ -3849,19 +3928,25 @@ Phase A 接受输入自称 human_verified/ground_truth_verified
 association_invalid 即使伪造 evidence_valid=true 仍可进入 Static Audit
 Claim machine policy 缺少 global_preconditions、求值顺序，或仍含未定义 phase_a_enabled
 Claim capability 依赖可执行自由文本表达式或开放 operator 集合
+任一 claim_policy value_ref 无法在同一机器策略根内解析
 COMPLETED 早于 Publication Commit 或 final_summary
+RUNNING→COMPLETED 未由 StateStore 复核 required task、Manifest、transaction 和 final_summary Hash
 同一 checkpoint operation_id 被 started/succeeded/retry 复用
 run/skipped/cache checkpoint 没有固定 operation ID，或 Resume 将 attempt 重置为零
+status transition ID 可自由生成、含歧义字符，或 aborted 后可换 ID 绕过
 run_initialized 未提交、task map 为空或 plan fingerprint 变化时仍进入 RUNNING
 run/task ID 可包含分隔符导致 operation ID 无法唯一解析
 StateStore initialize 接受任意 initial_status、伪造 operation_id，或 mutation 不返回 resulting_state_version
 并发 checkpoint/Controller transition 依赖隐式共享版本而不是单一 Coordinator
+Controller、Executor、Publication 或 Resume 各自创建 mutation queue/version cursor
 Worker 可提交完整旧 state/context 快照，或 retryable failure 被加入 failed_tasks
 failed committed、retry_scheduled 未提交的崩溃窗口没有唯一恢复动作
+WAL replay 重新读取系统时间，或 state.updated_at 不来自 pending mutation_timestamp
 初始 state.json 尚未持久化就把 Active Lock 更新为 running
 死亡 running lock 没有安全恢复分支，或释放锁时不校验 lock_token
 遗留 recovery lock 可按年龄删除，或解除前没有 token/Hash/State/Publication 复核与审计记录
 recovery 审计文件名在 Windows 非法，或只有 intent 没有可续接的最终 outcome
+completed recovery audit 重放会再次修改锁，或不接受经 Journal 证明的合法单调后继
 WAITING_FOR_REVIEW/BLOCKED 没有合法恢复边，或 FAILED/COMPLETED 可以迁出
 StateStore.load 在 unresolved Journal 下仍返回可继续执行状态
 成功或失败测试遗留未知 transaction/Manifest/State/Lock 临时文件

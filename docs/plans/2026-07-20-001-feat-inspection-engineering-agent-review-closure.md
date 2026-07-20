@@ -108,16 +108,29 @@
 |问题|Review 入场状态|当前状态|计划修订|实现条件|
 |---|---|---|---|---|
 |association_invalid 仍可能穿过机器 policy|待修订|条件关闭|从 accepted state 移除并在 profile 阶段以 `INVALID_ASSOCIATION_EVIDENCE` 拒绝；即使伪造 evidence_valid=true 也不进入 capability|Phase 0 固定矛盾组合 schema；A1 补直接篡改 artifact 反例|
-|Claim 条件仍是未定义自由文本表达式|待修订|条件关闭|条件统一为 `{field,operator,value}` typed rule，operator/field 使用闭集并固定 capability order；未知、循环/前向引用、歧义或无唯一分支均 blocked|Phase 0 固定字段/枚举/operator/order schema；A1 不实现通用 DSL|
+|Claim 条件仍是未定义自由文本表达式|待修订|条件关闭|条件统一为 `field/operator + value 或 value_ref` typed rule，operator/field/reference 使用闭集并固定 capability order；未知、循环/前向引用、歧义或无唯一分支均 blocked|Phase 0 固定字段/枚举/operator/order schema；A1 不实现通用 DSL|
 |initialize_run 返回合同与 null operation 冲突|待修订|条件关闭|initialize 固定返回无 operation_id 的 StateSnapshot；只有 checkpoint/transition 返回 StateMutationResult|A3 补返回 schema、null/伪造 operation ID 反例|
 |并发完整快照覆盖与 Retry 终态混用|待修订|条件关闭|七类事件全部进入现有 Executor 内部串行队列；StateStore 接受受控 delta；retryable/terminal failure 使用不同归约并定义中间崩溃恢复；RUNNING 前要求 run_initialized committed|A3 补双任务交错、旧快照、空 task map、failed/retry 崩溃和 terminal 状态反例|
 |Operation ID 解析与作用域不唯一|待修订|条件关闭|run/task ID 使用禁止分隔符的闭集正则，task operation 显式携带 run_id，唯一性固定为 per-run Journal|Phase 0 固定 identifier schema；A3 补非法 ID 和聚合日志碰撞反例|
-|State Coordinator 可能膨胀为第二套框架|待修订|条件关闭|明确只允许现有 DAGExecutor/Controller 内部私有 queue/reducer/version cursor，不新增公开组件或调度器|A3 在现有调用链内实现并做架构 diff 审查|
+|State Coordinator 可能膨胀为第二套框架|待修订|条件关闭|Controller 独占一个 Run-local queue/reducer/version cursor，并向现有 DAGExecutor 注入唯一 sink；持有到 Publication/终态/解锁完成，不新增公开组件或调度器|A3 在现有调用链内实现并做对象身份、单 cursor 和架构 diff 审查|
 |WAL recovery 仍按完整 worker 快照验证|待修订|条件关闭|pending 只保存 checkpoint event 和 resulting state Hash；恢复重放 pure reducer 并核对完整 canonical state，不信任 worker snapshot|A3 补 delta 重放、state Hash 不符和跨 task 覆盖反例|
 |Recovery 审计缺少跨平台名称和最终结果|待修订|条件关闭|固定 Windows-safe UTC basename、不可覆盖 intent、递增 outcome 与未完成审计 sentinel；completed outcome 前不得成功|A3 补 Windows 路径、删除/同步/outcome 写失败、递增续接和再次崩溃反例|
 |Typed rule 的 literal 与 enum reference 仍可能混淆|待修订|条件关闭|固定 `value`/`value_ref` 二选一；未知引用、同时存在或同时缺失均 blocked|Phase 0 固定 machine schema；A1 补 malformed rule 反例|
 |七类 checkpoint 的空值和 delta 合同不唯一|待修订|条件关闭|逐 kind 固定 task/attempt/status/retry/delta/error 字段组合和 UTC 时间格式，未知组合在 WAL 前拒绝|Phase 0 固定 event schema；A3 补逐类合法/非法矩阵|
-|Completed recovery audit 重放可能产生二次副作用|待修订|条件关闭|completed 后仅允许只读复核并返回既有结果；锁/State/Publication 矛盾或冲突 completed 记录 Fail Closed|A3 补重复命令无副作用和审计矛盾反例|
+|Completed recovery audit 重放可能产生二次副作用|待修订|条件关闭|completed 后仅允许只读复核；接受由 Journal/lock/publication 证明的合法单调后继，仅返回历史审计结果，矛盾证据 Fail Closed|A3 补精确重放、后续 COMPLETED/解锁/Publication、再次恢复及矛盾反例|
+
+## 2.6 第七轮严格 Review 的条件关闭项
+
+以下问题在 `docs: close remaining engineering agent plan gaps` Review 中进入时均标记为“待修订”。本次只补齐计划合同，修订后最多恢复为“条件关闭”；Phase 0 machine schema、A1/A2/A3 实现和故障注入仍未开始：
+
+|问题|Review 入场状态|当前状态|计划修订|实现条件|
+|---|---|---|---|---|
+|Claim Policy value_ref 指向不存在枚举|待修订|条件关闭|在 `claim_policy_v5` 根内直接定义 observation source/comparability 两个闭集；所有 value_ref 只能解析同一策略中的三个权威路径|Phase 0 schema validator 补不存在、类型错误、循环引用和自然语言镜像漂移反例|
+|WAL reducer 的 updated_at 无确定时间来源|待修订|条件关闭|checkpoint.created_at/transition_timestamp 在 pending 前生成并持久化为 mutation_timestamp；reducer 用其写 updated_at，replay 禁止重新读时钟|A3 补 checkpoint/transition 硬崩溃、时钟变化和 State Hash 完全一致测试|
+|Status transition operation ID 未规范化|待修订|条件关闭|固定 auto/decision 两种包含 run/version/from/to 的 canonical ID；同一语义 aborted 后不得换 token/suffix 绕过|Phase 0 固定 ID schema；A3 补非法字符、碰撞、幂等、aborted 和不同合法边反例|
+|State Coordinator 所有者和生命周期不唯一|待修订|条件关闭|InspectionWorkflowController 独占 queue/reducer/cursor，通过唯一 sink 注入 DAGExecutor，并持有到 Publication、终态和解锁结束|A3 补 Executor 返回后 transition、Resume 重建、旧 sink 失效和禁止第二 cursor 测试|
+|RUNNING→COMPLETED 仅依赖 Controller 顺序|待修订|条件关闭|StateStore 在 pending 前重读 task plan、required task、Manifest、transaction、final summary 与 recovery marker，并验证受控 completion_evidence|A3 补 pending/running/retry/failed task、删减 required IDs、Hash/transaction 冲突和恢复追赶反例|
+|Completed recovery replay 未定义合法后继|待修订|条件关闭|outcome 冻结恢复事实；重放只读验证 Journal 单调链、合法状态边、Publication 和 lock successor/release，不将历史完成当作当前 readiness|A3 补精确状态、后续 COMPLETED/解锁/Publication、再次受审计 recovery 和版本倒退反例|
 
 ## 3. 基线与范围
 
@@ -135,7 +148,7 @@
 |---|---|---|---|
 |Association 身份边界|条件关闭|规则 Association 只能作为支持证据，不等于身份确认|A1 待实施|
 |Comparability 硬门控|条件关闭|缺失/非法字段 Fail Closed；只有 schema 合法且明确非 verified 时只允许 Static Audit|Phase 0/A1 待实施|
-|Phase A Capability|条件关闭|机器 policy 先拒绝非法 identity、校验 evidence_valid 全局门槛，再以 typed rule 求值 Difference/Directional；Physical/Pattern/Prediction 固定 blocked|Phase 0/A1 待实施|
+|Phase A Capability|条件关闭|机器 policy 内置全部 enum/value_ref，先拒绝非法 identity、校验 evidence_valid 全局门槛，再以 typed rule 求值 Difference/Directional；Physical/Pattern/Prediction 固定 blocked|Phase 0/A1 待实施|
 |历史证据来源|条件关闭|Previous Value 只能来自对应 round 的 `memory_before_query.csv`；当前记录使用中性 observation join，不依赖评估标签|A1 待实施|
 |面积测量口径|条件关闭|当前与历史统一为巡检级最大 mask 面积|A1 待实施|
 |Registration/Scale/Uncertainty|条件关闭|均要求显式 provenance，缺失时采用保守默认值|Phase 0/A1 待实施|
@@ -148,7 +161,7 @@
 |唯一 DAG/Executor|条件关闭|只扩展现有 DAG、DAGExecutor、Registry 和 RunManager|A1/A3 待实施|
 |A1 Claim/Evidence|条件关闭|新节点默认不激活；sandbox 中逐节点重定向到 Run-local work/artifacts/staging，不得修改正式目录|A1 待实施|
 |A2 Publication|条件关闭|Manifest-last、完整文件集合、固定 publication transaction 路径、COMPLETED/phase 追赶、cleanup 诊断、existed_before 回滚、逐父目录 fsync 和 transaction-scoped final_summary 隔离已定义|A2 待实施|
-|A3 State/Lock/WAL|条件关闭|双入口、Canonical attempts、无歧义七类 checkpoint、增量 reducer、显式 State version、现有 Executor 内部串行 Coordinator、统一 WAL 和 intent/outcome recovery 审计已定义|A3 待实施|
+|A3 State/Lock/WAL|条件关闭|双入口、Canonical attempts、checkpoint/transition ID、确定 mutation timestamp、Controller-owned 单 queue/cursor、COMPLETED 不变量、统一 WAL 和可单调复核的 intent/outcome recovery 审计已定义|A3 待实施|
 |Memory/Growth 报告分离|条件关闭|结构化数据保留，正式报告必须经过 Claim Gate|A1 待实施|
 |Visualization/FinalReport|条件关闭|必须读取当前 Run 的 ClaimDecision 和 Comparison Evidence|A1 待实施|
 |Web 边界|条件关闭|Phase A 不修改 Web，也不声称 Web 是 Manifest 权威 reader|Phase E 待实施|
