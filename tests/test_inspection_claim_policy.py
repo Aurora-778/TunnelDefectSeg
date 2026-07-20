@@ -277,6 +277,21 @@ def test_mixed_sources_policy_is_explicitly_static_only():
     ]
 
 
+def test_policy_rejects_static_only_mixed_source_in_verified_allowlist(tmp_path):
+    policy = load_claim_policy()
+    policy["source_comparability_rules"]["verified_comparable_allowed_sources"].append(
+        "mixed_sources"
+    )
+    path = tmp_path / "contradictory-policy.json"
+    path.write_text(json.dumps(policy, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(
+        ClaimPolicyError,
+        match="mixed_sources cannot be verified.*static_only",
+    ):
+        load_claim_policy(path)
+
+
 def test_verified_fixture_is_rejected_outside_test_profile():
     decision = evaluate_claim_evidence(
         valid_evidence(
@@ -343,6 +358,11 @@ def test_decision_provenance_covers_policy_and_evaluator_bytes():
     assert decision["claim_evaluator_sha256"] == claim_policy_module._normalized_source_sha256(
         evaluator_bytes
     )
+    assert policy["provenance_contract"] == {
+        "claim_evaluator_sha256_scope": "normalized_utf8_source_bytes_lf",
+        "claim_evaluator_sha256_is_semantic_hash": False,
+        "cache_lifecycle": "process_lifetime_snapshot_restart_required",
+    }
 
 
 def test_evaluator_hash_is_stable_across_lf_and_crlf():
@@ -352,6 +372,23 @@ def test_evaluator_hash_is_stable_across_lf_and_crlf():
     assert claim_policy_module._normalized_source_sha256(
         lf_source
     ) == claim_policy_module._normalized_source_sha256(crlf_source)
+
+
+def test_non_utf8_evaluator_source_is_claim_policy_error(monkeypatch):
+    claim_policy_module._evaluator_source_sha256.cache_clear()
+    original_read_bytes = Path.read_bytes
+
+    def non_utf8_read_bytes(path):
+        if path.resolve() == Path(claim_policy_module.__file__).resolve():
+            return b"\xff\xfe\x00"
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", non_utf8_read_bytes)
+    try:
+        with pytest.raises(ClaimPolicyError, match="claim evaluator source is not UTF-8"):
+            claim_policy_module._evaluator_source_sha256()
+    finally:
+        claim_policy_module._evaluator_source_sha256.cache_clear()
 
 
 def test_evaluator_source_read_failure_is_claim_policy_error(monkeypatch):
@@ -409,6 +446,66 @@ def test_default_policy_file_is_read_once(monkeypatch):
         claim_policy_module._canonical_default_policy_json.cache_clear()
 
     assert policy_read_count == 1
+
+
+def test_default_policy_cache_returns_uncontaminated_copies():
+    policy = load_claim_policy()
+    policy["source_comparability_rules"]["verified_comparable_allowed_sources"].append(
+        "mixed_sources"
+    )
+    policy["required_language_qualifiers"]["static_only"] = "mutated by caller"
+
+    reloaded = load_claim_policy()
+
+    assert "mixed_sources" not in reloaded["source_comparability_rules"][
+        "verified_comparable_allowed_sources"
+    ]
+    assert reloaded["required_language_qualifiers"]["static_only"] != "mutated by caller"
+
+
+def test_default_policy_disk_change_requires_process_restart(tmp_path, monkeypatch):
+    original_policy = load_claim_policy()
+    policy_path = tmp_path / "inspection_claim_policy.json"
+    policy_path.write_text(json.dumps(original_policy, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(claim_policy_module, "DEFAULT_POLICY_PATH", policy_path)
+    claim_policy_module._canonical_default_policy_json.cache_clear()
+
+    try:
+        cached_policy = load_claim_policy()
+        changed_policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        changed_policy["required_language_qualifiers"]["static_only"] = "disk hot update"
+        policy_path.write_text(json.dumps(changed_policy, ensure_ascii=False), encoding="utf-8")
+
+        reloaded = load_claim_policy()
+
+        assert reloaded == cached_policy
+        assert reloaded["required_language_qualifiers"]["static_only"] != "disk hot update"
+    finally:
+        claim_policy_module._canonical_default_policy_json.cache_clear()
+
+
+def test_evaluator_source_disk_change_requires_process_restart(monkeypatch):
+    claim_policy_module._evaluator_source_sha256.cache_clear()
+    original_read_bytes = Path.read_bytes
+    source_versions = iter((b"first evaluator source\n", b"changed evaluator source\n"))
+    read_count = 0
+
+    def changing_read_bytes(path):
+        nonlocal read_count
+        if path.resolve() == Path(claim_policy_module.__file__).resolve():
+            read_count += 1
+            return next(source_versions)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", changing_read_bytes)
+    try:
+        first_hash = claim_policy_module._evaluator_source_sha256()
+        second_hash = claim_policy_module._evaluator_source_sha256()
+    finally:
+        claim_policy_module._evaluator_source_sha256.cache_clear()
+
+    assert first_hash == second_hash
+    assert read_count == 1
 
 
 def test_non_object_evidence_fails_closed():

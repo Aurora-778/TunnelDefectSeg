@@ -2,6 +2,11 @@
   "schema_version": "claim_policy_v5",
   "profile": "phase_a",
   "evaluator_contract_version": "phase_a_claim_evaluator_v1",
+  "provenance_contract": {
+    "claim_evaluator_sha256_scope": "normalized_utf8_source_bytes_lf",
+    "claim_evaluator_sha256_is_semantic_hash": false,
+    "cache_lifecycle": "process_lifetime_snapshot_restart_required"
+  },
   "observation_source_enum": [
     "kict_static_mask_cyclic_demo",
     "real_inspection_mask_input",

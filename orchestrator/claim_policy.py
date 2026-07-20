@@ -23,6 +23,7 @@ POLICY_ROOT_FIELDS = {
     "schema_version",
     "profile",
     "evaluator_contract_version",
+    "provenance_contract",
     "observation_source_enum",
     "comparability_status_enum",
     "previous_entity_type_enum",
@@ -56,7 +57,11 @@ class ClaimPolicyError(ValueError):
 
 
 def load_claim_policy(path: Path | None = None) -> dict[str, Any]:
-    """Load and strictly validate the fixed Phase A machine policy."""
+    """Load and strictly validate the fixed Phase A machine policy.
+
+    The default policy is a process-lifetime snapshot loaded on first use.
+    Updating the policy or evaluator on disk requires a process restart.
+    """
 
     policy_path = Path(path) if path is not None else DEFAULT_POLICY_PATH
     if policy_path.resolve() == DEFAULT_POLICY_PATH.resolve():
@@ -292,6 +297,12 @@ def _validate_policy_data(policy: Any) -> None:
         raise ClaimPolicyError("claim policy identity is invalid")
     if policy["evaluator_contract_version"] != SUPPORTED_EVALUATOR_CONTRACT_VERSION:
         raise ClaimPolicyError("claim policy evaluator contract is unsupported")
+    if policy["provenance_contract"] != {
+        "claim_evaluator_sha256_scope": "normalized_utf8_source_bytes_lf",
+        "claim_evaluator_sha256_is_semantic_hash": False,
+        "cache_lifecycle": "process_lifetime_snapshot_restart_required",
+    }:
+        raise ClaimPolicyError("claim policy provenance contract is invalid")
 
     observation_sources = _require_closed_string_list(policy, "observation_source_enum")
     comparability_statuses = _require_closed_string_list(policy, "comparability_status_enum")
@@ -365,6 +376,13 @@ def _validate_policy_data(policy: Any) -> None:
     )
     if not set(verified_sources).issubset(observation_sources):
         raise ClaimPolicyError("claim policy verified sources are outside the source enum")
+    if (
+        source_rules["mixed_sources_policy"] == "static_only"
+        and "mixed_sources" in verified_sources
+    ):
+        raise ClaimPolicyError(
+            "claim policy mixed_sources cannot be verified when mixed_sources_policy is static_only"
+        )
 
     qualifiers = policy["required_language_qualifiers"]
     if not isinstance(qualifiers, dict) or set(qualifiers) != {
@@ -528,6 +546,8 @@ def _policy_sha256(policy: Mapping[str, Any]) -> str:
 
 @lru_cache(maxsize=1)
 def _evaluator_source_sha256() -> str:
+    """Return the process-lifetime normalized source hash, not a semantic hash."""
+
     source_path = Path(__file__)
     try:
         source_bytes = source_path.read_bytes()
