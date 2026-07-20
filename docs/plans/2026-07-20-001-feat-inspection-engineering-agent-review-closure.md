@@ -58,6 +58,20 @@
 |生产 Evidence 依赖评估标签|待修订|条件关闭|以 `(inspection_id,current_observation_id)` 连接并复核 frame/image；三侧显式携带中性键，`label_disease_id` 只保留评估用途|Phase 0 固定中性 join schema；A1 补删除 label 后结果不变测试|
 |A1/A2/A3 独立验收路径含糊|待修订|条件关闭|A1 只做禁用态组件与 sandbox；A2 只在 sandbox 验证发布；A3 才接管双入口和正式发布|每段单独提交、review；上一段 P0/P1 清零后继续|
 
+## 2.2 第三轮严格 Review 的条件关闭项
+
+以下项目在 `docs: close engineering agent plan durability gaps` Review 中重新进入“待修订”。本次只修订计划合同，当前最多恢复为“条件关闭”；Phase 0 schema、实现和反例测试仍未开始：
+
+|问题|Review 入场状态|当前状态|计划修订|实现条件|
+|---|---|---|---|---|
+|Evidence 非法污染 Association identity|待修订|条件关闭|observation/comparability 非法只置 `evidence_valid=false` 并阻断 Claim，不改写 identity state|Phase 0 分离两类 schema/error code；A1 补合法 Association+非法 comparability 反例|
+|Unmatched 携带历史 Memory 指针|待修订|条件关闭|unmatched 必须为 canonical 空 `memory_id`，非空直接 `association_invalid`|Phase 0 固定 null/空值合同；A1 补空字符串、null、非空 ID 反例|
+|Legacy fingerprint canonical 规则不完整|待修订|条件关闭|固定精确字段白名单、POSIX 路径、UTC 时间、Decimal/布尔和 canonical JSON；禁止自动吸收新列|Phase 0 固定 serializer/schema version；A1 补等价表达、CSV 重排和新增答案列反例|
+|COMPLETED 早于 transaction phase 持久化|待修订|条件关闭|StateStore 已 COMPLETED、Manifest 匹配时只幂等补写 state_completed 并执行 cleanup-only，禁止回滚|A2 覆盖 COMPLETED 后、phase 更新前硬崩溃|
+|WAL committed 早于 state rename 目录持久化|待修订|条件关闭|replace state 后先 mandatory 父目录 sync 和重读复核，再追加 committed；committed 恢复仍复核 canonical state|A3 补 sync 失败、replace 后崩溃和 committed/state 不一致反例|
+|Publication transaction 权威路径与生命周期未固定|待修订|条件关闭|同目录完整临时文件经 fsync/目录同步/复核后原子提升到唯一 `runs/<run_id>/publication_transaction.json`；首次可见即为完整 backup_ready，同一 Run 只允许一个事务，backup 删除后保留 cleanup_complete 审计状态|A2 补临时提升前崩溃、损坏权威文件、第二事务拒绝、backup 清理与 phase 未追上反例|
+|Cleanup 诊断持久化失败仍可能伪报成功|待修订|条件关闭|transaction cleanup_pending 与 Run-level marker 独立尝试；任一失败均不走正常解锁/成功路径|A2 补单侧、双侧 marker 写入失败和部分 backup 删除反例|
+
 ## 3. 基线与范围
 
 |检查项|状态|证据|实现状态|
@@ -86,8 +100,8 @@
 |---|---|---|---|
 |唯一 DAG/Executor|条件关闭|只扩展现有 DAG、DAGExecutor、Registry 和 RunManager|A1/A3 待实施|
 |A1 Claim/Evidence|条件关闭|新节点默认不激活；sandbox 中逐节点重定向到 Run-local work/artifacts/staging，不得修改正式目录|A1 待实施|
-|A2 Publication|条件关闭|Manifest-last、完整文件集合、existed_before 回滚、逐父目录 fsync 和 transaction-scoped final_summary 隔离已定义|A2 待实施|
-|A3 State/Lock/WAL|条件关闭|双入口、nullable/预留 run_id、初始 allocation token、Canonical State、统一 checkpoint/transition WAL 和强制恢复入口已定义|A3 待实施|
+|A2 Publication|条件关闭|Manifest-last、完整文件集合、固定 publication transaction 路径、COMPLETED/phase 追赶、cleanup 诊断、existed_before 回滚、逐父目录 fsync 和 transaction-scoped final_summary 隔离已定义|A2 待实施|
+|A3 State/Lock/WAL|条件关闭|双入口、nullable/预留 run_id、初始 allocation token、Canonical State、state rename 先于 committed 的 mandatory durability、统一 checkpoint/transition WAL 和强制恢复入口已定义|A3 待实施|
 |Memory/Growth 报告分离|条件关闭|结构化数据保留，正式报告必须经过 Claim Gate|A1 待实施|
 |Visualization/FinalReport|条件关闭|必须读取当前 Run 的 ClaimDecision 和 Comparison Evidence|A1 待实施|
 |Web 边界|条件关闭|Phase A 不修改 Web，也不声称 Web 是 Manifest 权威 reader|Phase E 待实施|

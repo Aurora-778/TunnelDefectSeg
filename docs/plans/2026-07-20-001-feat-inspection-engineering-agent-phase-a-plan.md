@@ -805,15 +805,21 @@ AND use_disease_id_score=false
 ELSE association_status=unmatched
 AND association_mode=no_id
 AND use_disease_id_score=false
+AND memory_id 为 canonical 空值
 → association_rejected
-→ memory_id 为空合法
 → needs_manual_review=true 只保留为复核建议，不把 identity_evidence_state 改成 pending
+
+ELSE association_status=unmatched
+AND memory_id 非空
+→ association_invalid
 
 ELSE
 → association_invalid
 ```
 
-因此，合法 baseline 的“无 Association 行”不会先落入 `association_invalid`，但整个 Association Artifact 缺失、Schema/Hash 非法或 baseline 出现自匹配仍必须 invalid；`association_pending_review` 只用于已经选中历史 Memory、但证据边界要求人工复核的 matched 记录。任何输入组合只能产生一个 `identity_evidence_state`。
+因此，合法 baseline 的“无 Association 行”不会先落入 `association_invalid`，但整个 Association Artifact 缺失、Schema/Hash 非法或 baseline 出现自匹配仍必须 invalid；`association_pending_review` 只用于已经选中历史 Memory、但证据边界要求人工复核的 matched 记录。`unmatched` 的 `memory_id` 必须规范化为空，携带任何历史 Memory 指针均是结构矛盾。任何输入组合只能产生一个 `identity_evidence_state`。
+
+`memory_id` 的 canonical 空值合同固定为：CSV 中为空单元格，读取后规范化为 JSON `null`。空白字符串、`"null"`、`"None"`、`"N/A"` 和任何占位 ID 均非 canonical 值并必须 Invalid。
 
 ## 4.4 语义边界
 
@@ -1211,9 +1217,9 @@ Manifest 明确标记为 baseline round，主 Association Artifact 存在且 Sch
 Association 行存在且 association_status=unmatched
 AND association_mode=no_id
 AND use_disease_id_score=false
+AND memory_id 为 canonical 空值
 → identity_evidence_state = association_rejected
 → previous_entity_type = not_applicable
-→ memory_id 为空是合法状态
 → needs_manual_review=true 只表示建议复核，不覆盖 rejected 身份状态
 → 只生成当前观测 Static Audit
 ```
@@ -1239,6 +1245,7 @@ Association query composite key 重复或无法连接当前主表
 matched 记录的 round 不存在
 matched 记录的 memory_before 不存在
 matched 记录的 memory_id 为空或不唯一
+unmatched 记录携带非空 memory_id
 当前记录不唯一
 来源 Hash 不一致
 ```
@@ -1252,7 +1259,7 @@ difference_valid = false
 
 Claim Gate FAIL CLOSED 或逐记录阻断。
 
-不得把合法 baseline 的 Association 行缺失或 unmatched 的空 `memory_id` 归入 Invalid；unmatched 本身必须有合法 Association 行。也不得把非 baseline query 的意外 Association 断链降级为 Current-only。
+不得把合法 baseline 的 Association 行缺失或 unmatched 的 canonical 空 `memory_id` 归入 Invalid；unmatched 本身必须有合法 Association 行，且不得携带历史 Memory 指针。也不得把非 baseline query 的意外 Association 断链降级为 Current-only。
 
 ## 7.2.1 Current Observation ID 合同
 
@@ -1265,9 +1272,8 @@ Prepared real inspection
 
 Legacy KICT simulated
 → 在 Run-local 输入投影阶段生成并持久化 local_observation_id
-→ source_record_fingerprint = SHA-256(canonical JSON of normalized non-answer frame fields)
-→ fingerprint 输入至少包含 inspection_id/frame_id/image_id/timestamp、图像与 mask 的仓库相对路径、几何字段和 disease_type
-→ fingerprint 明确排除 disease_id、label_disease_id、GT、split、review 和 audit 字段
+→ source_record_fingerprint = SHA-256(UTF-8 canonical JSON of the exact whitelist below)
+→ 禁止从源行自动吸收新增列；白名单外字段一律不进入 fingerprint
 → local_observation_id = legacy::<完整 source_record_fingerprint>
 → current_observation_id = <inspection_id>::<local_observation_id>
 → 相同 fingerprint 的重复源行视为不可区分的重复观测并 Fail Closed，不使用行号消歧
@@ -1280,6 +1286,48 @@ Engineering aggregate
 → 必须记录稳定排序、去重后的 source_observation_ids
 → 每个 current_observation_id 必须唯一映射到一个当前 Engineering 聚合行
 ```
+
+Legacy fingerprint 的唯一字段白名单固定为：
+
+```text
+inspection_id
+frame_id
+image_id
+timestamp
+mileage_m
+ring_id
+clock_direction
+disease_type
+kict_image_path
+kict_mask_path
+kict_area_px
+kict_bbox_x1
+kict_bbox_y1
+kict_bbox_x2
+kict_bbox_y2
+kict_center_x
+kict_center_y
+kict_mask_width
+kict_mask_height
+has_crack
+observation_source
+comparability_status
+```
+
+Canonical serialization 合同：
+
+```text
+字符串      → trim 后做 Unicode NFC；标识符保留大小写
+路径        → 相对 Run metadata 中固定且仓库内的 dataset_root、POSIX 分隔符、禁止绝对路径与 `..`；dataset_root 本身必须是 project-root-relative POSIX 路径
+timestamp   → 解析后转 UTC，固定输出 `YYYY-MM-DDTHH:MM:SS.ffffffZ`；legacy 无时区值按 Run metadata 中固定的 dataset_timezone 解释，该字段缺失时 Fail Closed
+整数        → 十进制无前导 `+`、无前导零（0 除外）
+小数        → Decimal 规范化，禁止 NaN/Infinity，禁止科学计数法，删除末尾 0，`-0` 归一为 `0`
+布尔        → JSON true/false
+JSON        → 仅输出上述固定键，按 key 字典序，UTF-8，无 BOM，紧凑 separators
+缺失白名单字段 → Fail Closed；禁止用空字符串猜测缺失值
+```
+
+`disease_id`、`label_disease_id`、任何 GT/gold/match-answer、split/partition、review、audit 和未来新增列均不在白名单内，不得进入 fingerprint。Phase 0 必须用等价数字、等价路径、时区和 CSV 重排 fixture 验证 Hash 稳定性，并验证新增答案列不改变 Hash。
 
 Frame/Observation 主表以 `(inspection_id, current_observation_id)` 唯一；`frame_id`、`image_id` 必须与 Association 回写值一致。重复、缺失、孤立或一对多 Engineering 映射全部 Fail Closed。Legacy 源 CSV 重排不得改变 fingerprint/current_observation_id。现有 schema 尚未携带该中性键，因此 Phase 0 必须先完成 schema/version 合同，A1 不得临时借用 `disease_id`/`label_disease_id`。
 
@@ -1334,6 +1382,7 @@ identity_evidence_state
 temporal_order_valid
 difference_valid
 relative_difference_valid
+evidence_valid
 invalid_reason
 comparison_comparability_status
 comparability_reason
@@ -1405,10 +1454,11 @@ simulated_metadata_comparable
 
 ```text
 evidence_valid = false
-identity_evidence_state = association_invalid
 Claim Gate FAIL CLOSED
 不得生成可发布 Static Audit
 ```
+
+`identity_evidence_state` 只由第 4.3 节的 Association 结构与结果映射决定。Observation/comparability 校验失败不得把原本合法的 `association_supported`、`association_rejected`、`association_pending_review` 或 `association_not_applicable` 改写为 `association_invalid`；它只使 Evidence 失效并阻断 Claim。Association 自身结构非法时才使用 `association_invalid`。
 
 只有 schema 合法、且值明确属于后三种非 verified 状态时，才允许降级到 `static_descriptive_audit`。`mixed_sources` 和 `legacy_unverified_source` 是合法来源声明，但不会自动提升可比性。
 
@@ -1930,26 +1980,28 @@ Staging final_summary.md 生成并通过验证
 
 ```text
 1. 确认 Run-local comparison_evidence 与 claim_decision 已经原子落盘并通过 Hash/Schema 校验；
-2. 创建 runs/<run_id>/publication_backup/；
-3. 为每个目标记录 destination_path、staging_path、existed_before、backup_path、old_sha256、new_sha256 和 parent_directory；`final_summary.md` 也属于 transaction target；只对 existed_before=true 的文件创建备份；
-4. 对旧 Manifest、全部 backup 文件和完整 transaction_state.json 分别完成 flush+fsync；同步 publication_backup/ 目录以持久化备份文件条目，再同步 runs/<run_id>/ 以持久化 publication_backup 目录条目；随后重新读取并复核 backup/transaction Hash。该步骤完全成功前禁止替换任何正式目标；
+2. 创建 `runs/<run_id>/publication_backup/` 和同目录临时事务文件 `runs/<run_id>/.publication_transaction.<transaction_id>.tmp`；此时不得创建或覆盖权威 `publication_transaction.json`；
+3. 为每个目标记录 destination_path、staging_path、existed_before、backup_path、old_sha256、new_sha256 和 parent_directory；`final_summary.md` 也属于 transaction target；只对 existed_before=true 的文件创建备份，并在临时事务文件中一次写全 `backup_ready` schema；
+4. 对旧 Manifest、全部 backup 文件和完整临时事务文件分别完成 flush+fsync；同步 publication_backup/ 目录以持久化备份文件条目，再同步 runs/<run_id>/；重新读取并复核 backup/临时事务 Hash 后，使用 `os.replace()` 将临时事务原子提升为唯一权威 `runs/<run_id>/publication_transaction.json`，再次同步 Run 目录并重读复核。权威文件首次可见时必须已经是完整 `backup_ready` 记录；该步骤完全成功前禁止替换任何正式目标；
 5. 对每个待发布 Staging 文件完成 flush+fsync 并复核 new_sha256；`current_publication_manifest.json` 不属于 Staging Artifact；
 6. 将除 `final_summary.md` 外的每个待发布 Staging Artifact 原子替换到正式路径，并复核 SHA-256；
-7. 对步骤 6 影响的每个唯一正式目标父目录分别执行 durability sync；随后将 transaction_state phase 原子更新为 files_replaced 并持久化；任一步骤失败立即回滚；
+7. 对步骤 6 影响的每个唯一正式目标父目录分别执行 durability sync；随后将 publication transaction phase 原子更新为 files_replaced 并持久化；任一步骤失败立即回滚；
 8. 将 staging/final_summary.md 原子提升为 runs/<run_id>/final_summary.md，并复核 SHA-256，再同步 runs/<run_id>/ 父目录；
-9. 将 transaction_state phase 原子更新为 final_summary_ready，flush+fsync 文件并同步其父目录；
+9. 将 publication transaction phase 原子更新为 final_summary_ready，flush+fsync 文件并同步其父目录；
 10. 生成 current_publication_manifest.json.tmp，记录 transaction_id、正式文件、Run-local 证据和 final_summary 的 Hash；
-11. flush+fsync 临时 Manifest，计算 new_manifest_sha256；将 transaction_state phase 原子更新为 manifest_commit_intent，记录该 Hash 并完成文件/目录持久化；
+11. flush+fsync 临时 Manifest，计算 new_manifest_sha256；将 publication transaction phase 原子更新为 manifest_commit_intent，记录该 Hash 并完成文件/目录持久化；
 12. os.replace(tmp, current_publication_manifest.json)，这是唯一可见提交点；
 13. 单独同步 Manifest 所在父目录；失败时按“Manifest 已提交、COMPLETED 前”路径隔离并回滚；
-14. 将 transaction_state phase 原子更新为 manifest_committed 并持久化；
+14. 将 publication transaction phase 原子更新为 manifest_committed 并持久化；
 15. StateStore.transition_status(RUNNING → COMPLETED)；
-16. 将 transaction_state phase 原子更新为 state_completed 并持久化；
-17. 在仍持有 Active Run Lock 时清理 backup；清理成功后同步 runs/<run_id>/ 父目录；
-18. 释放 Active Run Lock。
+16. 将 publication transaction phase 原子更新为 state_completed 并持久化；
+17. 在仍持有 Active Run Lock 时清理 backup；清理成功后同步 runs/<run_id>/，删除本事务旧 cleanup marker，将事务 phase 持久化为 cleanup_complete 并再次同步 Run 目录；
+18. 只有 cleanup_complete，或已持久化 cleanup_pending 和 Run-level recovery marker 两者都验证成功时，才释放 Active Run Lock。
 ```
 
-若步骤 17 清理失败，必须在 backup 内持久化 `PUBLICATION_CLEANUP_PENDING.json`，记录 transaction_id、Manifest Hash 和 cleanup error，随后才释放 Active Run Lock。该状态不撤销已经验证且状态为 COMPLETED 的发布；后续恢复只能在重新验证 COMPLETED state 与当前 Manifest 完全一致后重试清理，禁止把 cleanup-only 残留解释成待回滚事务。
+若步骤 17 清理失败，必须独立尝试：（1）将权威 `publication_transaction.json` 的 phase 持久化为 `cleanup_pending`；（2）在 backup 外的固定路径 `runs/<run_id>/PUBLICATION_CLEANUP_PENDING.json` 持久化 Run-level recovery marker，记录 transaction_id、Manifest Hash 和 cleanup error。两次写入必须分别 flush+fsync 并同步 Run 目录，一侧失败不得跳过另一侧尝试。只有两个诊断都成功时才可释放 Active Run Lock，并且 workflow 结果必须明确为 `COMPLETED_WITH_CLEANUP_PENDING`，不得返回普通发布成功。该值只是 workflow/publication 结果代码，不是新的 Canonical StateStore 状态；Run 仍是 COMPLETED。任一诊断无法持久化时，禁止走正常解锁/成功返回路径；保留 Active Lock 和可用的任一诊断，以 `PUBLICATION_RECOVERY_REQUIRED` Fail Closed。该状态不撤销已经验证且状态为 COMPLETED 的发布；后续恢复只能在重新验证 COMPLETED state 与当前 Manifest 完全一致后重试清理，禁止把 cleanup-only 残留解释成待回滚事务。
+
+任何后续 Publication 在替换新的 current Manifest 之前，必须在同一 Active Run Lock 保护下检查历史 Run-level cleanup marker/非终结 transaction phase。发现 cleanup pending 时先按 cleanup-only 合同处理；无法清理时阻断新 Publication，禁止先替换 current Manifest，否则旧 cleanup 事务将无法再用其 Manifest Hash 完成验证。
 
 Publication 不允许把“平台不支持目录 `fsync`”静默当作成功。Phase 0/A2 必须实现并验证一个最小 `sync_parent_directory(path)` 平台适配点：POSIX 使用目录句柄 `fsync`；Windows 使用经专项测试确认具有 write-through/目录持久化语义的标准库或系统调用。能力探测失败时，sandbox 可以验证 Fail Closed 路径，但 A3 不得启用正式 Publication，也不得声称 crash-durable。该适配点只负责目录持久化，不扩展为第二套文件系统或事务框架。
 
@@ -2114,7 +2166,7 @@ expected_source_artifact_paths == manifest_source_artifact_paths
 Manifest 尚未提交
 → 先将本事务新生成的 staging/final_summary.md 或 runs/<run_id>/final_summary.md 移动到 staging/invalidated_final_summary.<transaction_id>.md，并同步其源/目标父目录
 → invalidated 目标已存在或隔离失败时写 recovery marker 并 FAIL CLOSED，不覆盖历史审计文件
-→ 再按 transaction_state 逆序回滚每个正式目标
+→ 再按 publication transaction 逆序回滚每个正式目标
 → existed_before=true：从 backup 恢复并复核旧 Hash
 → existed_before=false：删除本次新建的正式文件
 → final_summary target 已先隔离新文件；随后按 existed_before 恢复旧 summary，或在首次创建时确认 canonical final_summary 不存在
@@ -2132,7 +2184,19 @@ Manifest 尚未提交
 → FAIL CLOSED
 ```
 
-Publication Transaction 必须在 `transaction_state.json` 记录以下阶段：
+Publication Transaction 的唯一权威状态路径固定为：
+
+```text
+runs/<run_id>/publication_transaction.json
+```
+
+该文件在 `publication_backup/` 之外，只能由同目录完整临时文件原子提升而来，从 `backup_ready` 首次可见后持续存在，不随 backup 清理删除。成功清理后将 phase 置为 `cleanup_complete` 并作为只读事务审计记录保留；恢复和 Resume 禁止从 backup 内猜测或重建第二份权威状态。同一 Run 只允许一个 Publication transaction；已存在任何非 legacy 权威事务文件时，不得启动第二个 transaction。
+
+若崩溃发生在临时事务提升前，且权威 `publication_transaction.json` 尚不存在，则任何 `.publication_transaction.<transaction_id>.tmp` 都只是未提交准备记录：恢复器必须先确认没有正式目标、final summary 或 current Manifest 被本事务修改，再将临时文件和对应 backup 隔离供审计或安全清理。无法证明正式位置未变化时 Fail Closed。权威文件一旦存在却缺字段、phase 非法或 Hash 不一致，必须视为损坏的事务状态并 Fail Closed，禁止把它降级解释为“尚未开始”。
+
+尚未进入 Publication 的新 Run，以及 Phase A 之前的 legacy Run，可以没有该文件；这不得被伪装成一个已启动事务。若只出现 pre-promotion 临时事务或 `publication_backup/` 而权威文件尚不存在，只能进入下述“提升前崩溃”恢复分支，不能猜测为 `backup_ready`。若出现 Run-level cleanup/recovery marker、current Manifest 声明来自该 Run，或无法证明正式目标尚未被本事务修改，权威 transaction 文件缺失必须 Fail Closed。
+
+Publication Transaction 必须在 `publication_transaction.json` 记录以下阶段：
 
 ```text
 backup_ready
@@ -2142,9 +2206,10 @@ manifest_commit_intent
 manifest_committed
 state_completed
 cleanup_pending
+cleanup_complete
 ```
 
-`transaction_state.json` 至少包含：
+`publication_transaction.json` 至少包含：
 
 ```json
 {
@@ -2171,10 +2236,10 @@ cleanup_pending
 
 `existed_before=false` 时 `backup_path` 和 `old_sha256` 必须为 null。`old_manifest_existed=false` 时 `old_manifest_backup_path` 和 `old_manifest_sha256` 必须为 null。进入 `manifest_commit_intent` 前，`new_manifest_sha256` 必须由已经 fsync 的临时 Manifest 计算并持久化。回滚完成后，正式文件路径集合与旧 Manifest 必须完全一致；首次发布回滚后，正式位置不得残留本事务新增文件或 current Manifest。
 
-Controller 启动或恢复时若发现未清理的 publication backup：
+Controller 启动或恢复时必须先读取权威 `publication_transaction.json`；若发现未清理的 publication backup、Run-level cleanup marker 或未终结 phase：
 
 ```text
-先同时读取 transaction_state、current_publication_manifest.json 和 new_manifest_sha256
+先同时读取 publication_transaction.json、current_publication_manifest.json 和 new_manifest_sha256
 
 当前 Manifest 不存在，或仍等于 old_manifest Hash
 → 视为 Manifest 未提交
@@ -2183,20 +2248,28 @@ Controller 启动或恢复时若发现未清理的 publication backup：
 → 恢复完整后标记当前 Run FAILED
 
 当前 Manifest 的 transaction_id/new_manifest_sha256 与本事务完全一致
-→ 无论 transaction_state 仍为 manifest_commit_intent 还是已为 manifest_committed，都视为 Manifest 已提交
+→ 无论 publication transaction 仍为 manifest_commit_intent 还是已为 manifest_committed，都视为 Manifest 已提交
 → 验证新 Manifest、全部正式文件、Run-local 证据和 final_summary Hash
 → state 仍为预期 RUNNING 且 plan_fingerprint/run_id 一致时，幂等补做 COMPLETED
-→ 任一校验失败或 state 冲突时，先隔离新 Manifest，再将 runs/<run_id>/final_summary.md 原子移动到 staging/invalidated_final_summary.<transaction_id>.md 并写 invalidation reason，然后按 transaction_state 逆序恢复旧发布
+→ 补做 COMPLETED 成功后立即持久化 transaction phase=state_completed，再进入 cleanup-only
+→ StateStore 已为 COMPLETED，当前 Manifest 与本事务匹配，transaction phase 仍为 manifest_commit_intent/manifest_committed 且没有 cleanup marker 时，这是“COMPLETED 已持久化、事务 phase 尚未追上”的明确崩溃窗口
+→ 该窗口必须重新验证 state/Manifest/全部 Hash，幂等补写 state_completed，然后只执行 cleanup-only；禁止回滚、隔离 final_summary 或降级 Run
+→ StateStore 是 FAILED/其他不允许状态，或 state/Manifest/plan_fingerprint/run_id 任一校验失败时，才视为真实 state 冲突：先隔离新 Manifest，再将 runs/<run_id>/final_summary.md 原子移动到 staging/invalidated_final_summary.<transaction_id>.md 并写 invalidation reason，然后按 publication transaction 逆序恢复旧发布
 → final_summary 隔离、旧发布恢复或旧 Manifest 恢复任一步骤不完整时，写 recovery marker 并 FAIL CLOSED
 
 当前 Manifest 存在但 transaction_id/Hash 既不匹配旧 Manifest，也不匹配本事务
 → PUBLICATION_CONFLICT
 → 不覆盖未知 Manifest，写 recovery marker 并 FAIL CLOSED
 
-StateStore 已为 COMPLETED，当前 Manifest transaction_id/Hash 与本事务一致，且只剩 publication_backup/PUBLICATION_CLEANUP_PENDING.json
+StateStore 已为 COMPLETED，当前 Manifest transaction_id/Hash 与本事务一致，transaction phase 为 state_completed/cleanup_pending，且 publication_backup 或 Run-level PUBLICATION_CLEANUP_PENDING.json 仍存在
 → 这是 cleanup-only recovery
 → 重新验证全部正式文件和 final_summary Hash 后只重试删除 backup
+→ 清理成功后删除 Run-level marker，将 transaction phase 幂等持久化为 cleanup_complete
 → 禁止恢复旧文件、隔离 final_summary 或降级 Run 状态
+
+StateStore 已为 COMPLETED，Manifest/Hash 匹配，backup 和 marker 都不存在，transaction phase 仍为 state_completed
+→ 视为清理已完成、phase 未追上的幂等窗口
+→ 复核 Run 目录后只补写 cleanup_complete
 ```
 
 `invalidated_final_summary.<transaction_id>.md` 必须使用本事务不可变 ID。目标已存在表示事务审计状态冲突，必须 Fail Closed；禁止覆盖、复用固定文件名或静默追加。
@@ -2791,15 +2864,17 @@ last_operation_payload_sha256
 ```text
 获取 state lock
 → 读取 state 与 state_journal
-→ 相同 operation_kind + operation_id 已 committed：验证 payload_sha256 后返回原结果
+→ 相同 operation_kind + operation_id 已 committed：验证 payload_sha256，并复核 canonical state 的 resulting version/last_operation_*/payload Hash 后才返回原结果；不一致时 STATE_CONFLICT
 → 相同 ID 但 payload 不同：STATE_CONFLICT
 → 验证 expected status/version
-→ 追加 pending，flush+fsync
+→ 追加 pending，flush+fsync，并同步 Journal 父目录（首次创建 Journal 时尤为必须）
 → 原子替换 state.json；同时写 resulting version 和 last_operation_* 三字段
-→ 追加 committed，flush+fsync
-→ 平台允许时 fsync 目录
-→ 释放 state lock
+→ 必须立即对 state.json 父目录执行 durability sync，然后重读 state.json 并复核 resulting version/last_operation_*/payload Hash
+→ 只有 state 文件和目录持久化、复核全部成功后，才追加 committed 并 flush+fsync Journal
+→ 再同步 Journal 父目录，随后释放 state lock
 ```
+
+对 Phase A 声称支持的单机 NTFS 和本地 Linux 文件系统，state 父目录持久化是 mandatory，不得使用“平台允许时”降级为可选。能力探测或目录同步失败时，必须在写 committed 之前 Fail Closed。
 
 因此 `checkpoint_context()` 的任务开始、成功、失败和 Retry checkpoint 与 `transition_status()` 使用同一套 CAS/WAL 顺序；不得建立第二份 checkpoint journal。
 
@@ -2835,7 +2910,9 @@ pending + state 为其他版本或状态
 → STATE_CONFLICT
 
 committed 已存在
-→ 同一 operation_kind + operation_id 且 payload 相同：返回原结果
+→ 先验证 canonical state 的 resulting version、last_operation_kind/id/payload_sha256 与 committed 完全一致
+→ 同一 operation_kind + operation_id、payload 相同且 canonical state 一致：返回原结果
+→ committed 存在但 canonical state 仍是旧版本或 last_operation 不一致：STATE_CONFLICT / FAIL CLOSED，不得伪报成功
 → payload 不同：STATE_CONFLICT
 → 不增加 state_version
 ```
@@ -3080,7 +3157,10 @@ Growth 公式是否变化
 7 = WAITING_FOR_REVIEW
 8 = LOCK_ERROR
 9 = STATE_CONFLICT
+10 = PUBLICATION_RECOVERY_REQUIRED
 ```
+
+`COMPLETED_WITH_CLEANUP_PENDING` 在 Canonical StateStore 中仍是 COMPLETED，但 CLI 不得返回 0；使用退出码 10，并在结构化结果中区分 `cleanup_pending` 与“诊断持久化失败”。后者必须同时保留 `PUBLICATION_RECOVERY_REQUIRED` 诊断。
 
 CLI 测试不能只调用 Python 函数。
 
@@ -3137,7 +3217,7 @@ staging/final_summary.md 已生成但尚未提升 → 移动为 staging/invalida
 runs/<run_id>/final_summary.md 已提升但 Manifest 尚未提交 → 移回 staging/invalidated_final_summary.<transaction_id>.md
 invalidated 目标已存在或隔离失败 → 写 recovery marker 并 FAIL CLOSED，禁止覆盖历史审计文件
 不更新 current_publication_manifest
-按 transaction_state 恢复旧目标并删除 existed_before=false 的新目标
+按 publication_transaction.json 恢复旧目标并删除 existed_before=false 的新目标
 生成 failure_summary
 状态进入 FAILED
 ```
@@ -3312,10 +3392,23 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 59. `reserved_run_id=null` 的过期 allocating lock 可按合同恢复，异常目录 Fail Closed。
 60. Controller resume 和每个 StateStore mutation 均先恢复或拒绝 unresolved pending。
 61. 公开 `recover()` 只获取一次锁，持锁 mutation 只调用内部 locked recovery，不发生嵌套加锁。
-62. crash 发生在 Manifest replace 后、transaction_state 更新前时，通过 transaction_id/new_manifest_sha256 正确识别为已提交。
-63. backup、transaction_state 与 reserved_run_id 锁更新均在影响正式文件/创建 Run 目录前完成文件和目录持久化。
+62. crash 发生在 Manifest replace 后、publication transaction phase 更新前时，通过 transaction_id/new_manifest_sha256 正确识别为已提交。
+63. backup、publication_transaction.json 与 reserved_run_id 锁更新均在影响正式文件/创建 Run 目录前完成文件和目录持久化。
 64. Active Lock 的首次获取仍使用 `O_EXCL`，两个并发进程不能通过临时文件 replace 同时获得锁。
 65. COMPLETED Run 的 backup 清理失败只进入 cleanup_pending；恢复只重试清理，不回滚有效发布。
+66. unmatched 记录携带非空 `memory_id` 时必须 `association_invalid`；canonical 空值时才可 `association_rejected`。
+67. observation/comparability 非法只使 Evidence invalid 并阻断 Claim，不改写原本合法的 Association identity state。
+68. Legacy fingerprint 对等价数字、POSIX/Windows 路径表达、时区和 CSV 重排保持稳定；新增答案/审计列不改变 Hash；缺失白名单字段 Fail Closed。
+69. Manifest 匹配、StateStore 已 COMPLETED、publication transaction 仍为 manifest_committed 且无 cleanup marker 时，只补写 state_completed 并清理，禁止回滚。
+70. `state.json` replace 后、committed 追加前必须完成父目录 durability sync 和重读复核；同步失败不得出现 committed。
+71. committed 存在但 canonical state 版本/last_operation/payload Hash 不一致时 Fail Closed，不得返回幂等成功。
+72. `publication_transaction.json` 只能存在于固定 Run-local 权威路径，backup 清理后保留 cleanup_complete 审计状态。
+73. cleanup 失败时 transaction phase 和 Run-level marker 必须独立尝试持久化；任一诊断写入失败均不得返回普通成功或走正常解锁路径。
+74. backup 已删除但 transaction phase 仍为 state_completed 时，只幂等补写 cleanup_complete。
+75. 新 Publication 发现历史 cleanup pending 时必须先解决或阻断，不得先替换 current Manifest。
+76. cleanup pending/recovery required 时 CLI 返回 10 而非 0，同时 Canonical StateStore 仍保持 COMPLETED。
+77. `publication_transaction.json` 首次可见时必须是经 fsync、目录同步和重读复核的完整 `backup_ready` 记录；临时事务不得被恢复器当作已开始修改正式目标。
+78. 同一 Run 不得启动第二个 Publication transaction；损坏或不完整的权威事务文件必须 Fail Closed。
 
 ---
 
