@@ -1039,7 +1039,20 @@ claim_policy:
       - validate_global_preconditions
       - evaluate_capability
       - apply_controlled_template
+    capability_order:
+      - static_descriptive_audit
+      - descriptive_difference_claim
+      - directional_change_claim
+      - physical_quantity_change_claim
+      - multi_timepoint_pattern_claim
+      - prediction_claim
     short_circuit_on_failure: true
+    allowed_operators:
+      - strict_equals
+      - in_enum
+      - greater_than_or_equal
+    unknown_field_or_operator: fail_closed
+    ambiguous_or_no_matching_branch: fail_closed
 
   profiles:
     phase_a:
@@ -1047,12 +1060,12 @@ claim_policy:
         - association_supported
         - association_rejected
         - association_pending_review
-        - association_invalid
         - association_not_applicable
       rejected_identity_evidence_states:
-        - human_verified
-        - ground_truth_verified
-      rejected_reason: UNTRUSTED_IDENTITY_VERIFICATION
+        association_invalid: INVALID_ASSOCIATION_EVIDENCE
+        human_verified: UNTRUSTED_IDENTITY_VERIFICATION
+        ground_truth_verified: UNTRUSTED_IDENTITY_VERIFICATION
+      unknown_identity_evidence_state: INVALID_IDENTITY_EVIDENCE_STATE
 
   global_preconditions:
     - field: evidence_valid
@@ -1063,6 +1076,10 @@ claim_policy:
         reason: EVIDENCE_INVALID
         stop_evaluation: true
 
+  default_decision:
+    decision: blocked
+    reason: NO_UNIQUE_CAPABILITY_DECISION
+
   states:
     - allowed
     - allowed_with_limits
@@ -1071,36 +1088,43 @@ claim_policy:
 
   static_descriptive_audit:
     allowed:
-      when:
-        - evidence_schema_valid == true
-        - current_record_valid == true
-        - current_observation_source_declared == true
-        - current_observation_source in observation_source_enum
-        - current_comparability_status in comparability_status_enum
+      when_all:
+        - {field: identity_evidence_state, operator: in_enum, value_ref: profiles.phase_a.accepted_identity_evidence_states}
+        - {field: evidence_schema_valid, operator: strict_equals, value: true}
+        - {field: current_record_valid, operator: strict_equals, value: true}
+        - {field: current_observation_source_declared, operator: strict_equals, value: true}
+        - {field: current_observation_source, operator: in_enum, value_ref: observation_source_enum}
+        - {field: current_comparability_status, operator: in_enum, value_ref: comparability_status_enum}
+      decision: allowed
+      template_id: static_descriptive_audit_v1
 
   descriptive_difference_claim:
     allowed_with_limits:
-      when:
-        - identity_evidence_state == association_supported
-        - current_comparability_status == verified_comparable
-        - previous_comparability_status == verified_comparable
-        - comparison_comparability_status == verified_comparable
-        - current_observation_source_declared == true
-        - previous_observation_sources_declared == true
-        - valid_timepoint_count >= 2
-        - metric_consistent == true
-        - measurement_method_consistent == true
-        - difference_valid == true
+      when_all:
+        - {field: identity_evidence_state, operator: strict_equals, value: association_supported}
+        - {field: current_comparability_status, operator: strict_equals, value: verified_comparable}
+        - {field: previous_comparability_status, operator: strict_equals, value: verified_comparable}
+        - {field: comparison_comparability_status, operator: strict_equals, value: verified_comparable}
+        - {field: current_observation_source_declared, operator: strict_equals, value: true}
+        - {field: previous_observation_sources_declared, operator: strict_equals, value: true}
+        - {field: valid_timepoint_count, operator: greater_than_or_equal, value: 2}
+        - {field: metric_consistent, operator: strict_equals, value: true}
+        - {field: measurement_method_consistent, operator: strict_equals, value: true}
+        - {field: difference_valid, operator: strict_equals, value: true}
+      decision: allowed_with_limits
+      template_id: descriptive_difference_limited_v1
 
   directional_change_claim:
     allowed_with_limits:
-      when:
-        - descriptive_difference_claim == allowed_with_limits
-        - identity_evidence_state == association_supported
-        - registration_status == registered
-        - temporal_order_valid == true
-        - needs_manual_review == false
-        - comparison_comparability_status == verified_comparable
+      when_all:
+        - {field: capability_results.descriptive_difference_claim, operator: strict_equals, value: allowed_with_limits}
+        - {field: identity_evidence_state, operator: strict_equals, value: association_supported}
+        - {field: registration_status, operator: strict_equals, value: registered}
+        - {field: temporal_order_valid, operator: strict_equals, value: true}
+        - {field: needs_manual_review, operator: strict_equals, value: false}
+        - {field: comparison_comparability_status, operator: strict_equals, value: verified_comparable}
+      decision: allowed_with_limits
+      template_id: directional_change_limited_v1
 
     does_not_require:
       - physical_scale_calibrated
@@ -1120,12 +1144,16 @@ claim_policy:
 
 Phase A policy 不定义 `phase_a_enabled`，也不包含 `human_verified` / `ground_truth_verified` 的 `allowed` 分支。Evaluator 只读取 policy 中固定的 `evaluator.profile=phase_a`；运行参数、Evidence、Task 或 Agent 输出均不得覆盖它。全局前置条件一旦失败，后续 capability 和模板求值均不得执行；capability 分支不能覆盖 profile/global 的 blocked 决策，多个分支同时命中或没有唯一结果时也必须 Fail Closed。
 
+`when_all` 不是通用表达式 DSL。每个条件只能包含 `field`、`operator`，以及二选一的 `value`（typed literal）或 `value_ref`（只引用 policy 内已声明的固定枚举路径）；两者同时存在或同时缺失均为 schema error。`in_enum` 必须使用 `value_ref`，`strict_equals` / `greater_than_or_equal` 必须使用 `value`，禁止交叉使用。operator 只能取 `allowed_operators` 闭集，field 只能来自 Phase 0 固定的 Evidence/previous capability result schema；禁止执行字符串表达式、动态属性访问、脚本或任意函数。Capability 必须按 `capability_order` 逐项求值，只有后序 capability 可以读取前序 `capability_results`；循环引用、前向引用、未知字段、未知 value_ref、未知 operator、类型不匹配、重复 capability key 或无法得到唯一决策均按 `default_decision` blocked。
+
 求值优先级与反例矩阵：
 
 |输入|预期决策|原因|
 |---|---|---|
 |`profile` 缺失、未知或被运行输入覆盖|全部 blocked|`INVALID_CLAIM_POLICY_PROFILE`，不进入 global/capability|
 |Phase A 的 `identity_evidence_state=human_verified` 或 `ground_truth_verified`|全部 blocked|`UNTRUSTED_IDENTITY_VERIFICATION`，不进入 global/capability|
+|`identity_evidence_state=association_invalid`，即使错误携带 `evidence_valid=true`|全部 blocked|profile 阶段返回 `INVALID_ASSOCIATION_EVIDENCE`，不进入 global/capability|
+|未知 identity state，或 `when_all` 使用未知 field/operator|全部 blocked|schema/profile 校验失败，不执行自由文本表达式|
 |`evidence_valid` 缺失、`false`、`null` 或字符串 `"true"`|全部 blocked|`EVIDENCE_INVALID`，不进入任何 capability|
 |`evidence_valid=true`，`association_rejected`，当前记录 schema 合法|仅 Static Audit 可 allowed|Difference/Directional 仍 blocked|
 |`evidence_valid=true`，`association_supported`，双侧 verified 且 Difference 条件全部成立|Difference 可 `allowed_with_limits`|不得提升为无条件 allowed|
@@ -2658,7 +2686,18 @@ Publication transaction、current Manifest 与 cleanup/recovery marker 状态
 
 只有 recovery lock 的 hostname 等于当前主机、其 PID 和 Active Lock owner PID 均已确认死亡，且 token、target Hash、run_id、State 与 Publication 证据能够唯一证明归属时才允许继续。Active Lock 仍是被锁定的 target 时，仅允许移除遗留 recovery lock 后重新走标准接管；Active Lock 已为 `phase=recovering` 时，还必须确认 `recovery_of_lock_token` 对应 target，之后才允许移除遗留 recovery lock并继续同一 Run 恢复。跨主机、活 PID、未知 PID 状态、任意 Hash/token 不匹配、Journal 未解决、Manifest/transaction 冲突或证据缺失都必须 Fail Closed。
 
-解除前必须先写不可覆盖的审计记录 `runs/<run_id>/lock_recovery_audit/<UTC>-<recovery_token>.json`，内容至少包含操作者标识、reason、命令参数、recovery/Active Lock 原文 Hash、run_id、State version/status、Publication 状态、验证结果和 UTC 时间。审计文件必须以排他创建写入、flush+fsync、同步审计目录与 `runs/<run_id>`；目标审计文件已存在、写入或目录同步失败时不得删除 recovery lock。删除 recovery lock 后必须同步 `runs/`，并由标准 recovery 流程重新验证全部证据；“删除遗留锁”本身不得报告 Run 恢复成功。A3 必须覆盖正确解除、错误 token/Hash、活 PID、跨主机、损坏 State/Publication、审计文件冲突、审计写失败和目录同步失败反例。
+审计 basename 固定为 Windows/POSIX 均安全的 `<YYYYMMDDTHHMMSSffffffZ>.<recovery_token>`；时间只能使用 UTC 数字、`T`、`Z`，不得含冒号、斜杠或本地时区文本，token 必须通过 UUID canonical 校验。清理使用两条不可覆盖记录：
+
+```text
+runs/<run_id>/lock_recovery_audit/<basename>.intent.json
+runs/<run_id>/lock_recovery_audit/<basename>.outcome.<attempt_number>.json
+```
+
+解除前必须先以 `O_EXCL` 写 intent，内容至少包含操作者 OS identity、reason、命令参数、recovery/Active Lock 原文 Hash、run_id、State version/status、Publication 状态、逐项验证结果和 UTC 时间，并 flush+fsync、同步审计目录与 `runs/<run_id>`；intent 写入或同步失败时不得删除 recovery lock。已存在且 Hash/字段完全一致的 intent 只能用于续接同一 recovery_token，任何差异均 Fail Closed。随后尝试删除 recovery lock并同步 `runs/`。无论删除、目录同步还是后续标准 recovery 成功或失败，都必须以 `O_EXCL` 写递增的 outcome，记录 `audit_attempt_number`、`removed | remove_failed | directory_sync_failed | standard_recovery_failed | standard_recovery_completed`、错误摘要和完成时间，并同步审计目录与 Run 目录。不得修改 intent 或既有 outcome，不得把仅有 intent 或非 completed outcome 解释为清理成功。
+
+启动、Resume 和新人工恢复命令发现 intent 存在但没有任何 `standard_recovery_completed` outcome 时必须 Fail Closed，并通过 intent 中的 token/Hash 与现有最大 attempt number 续接同一审计；下一次尝试只能写 `max(attempt_number)+1`，不得生成新的 basename 绕过未完成审计。若 outcome 写入或同步失败，intent 本身继续作为 recovery sentinel，Active Lock 保持不变或保留当前可验证状态，命令返回 `LOCK_ERROR/PUBLICATION_RECOVERY_REQUIRED`，不得报告正常成功。删除遗留 recovery lock 不等于恢复成功；只有标准 recovery 再次验证并完成、且 completed outcome 已持久化后，命令才可报告该 recovery 操作完成。
+
+若已存在 `standard_recovery_completed` outcome，后续同 token 命令只能执行只读幂等复核：intent、全部 outcome、当前 State、Publication、Active Lock/recovery lock 状态必须共同证明该清理已经完成，之后返回既有审计结果，不得再次删除、改写锁或追加“成功” outcome。completed outcome 与当前锁/State/Publication 任一矛盾、attempt 序号不连续、出现多个互相冲突的 completed outcome，均按审计冲突 Fail Closed。A3 必须覆盖正确解除、重复调用无副作用、错误 token/Hash、活 PID、跨主机、损坏 State/Publication、Windows 文件名、intent/outcome 冲突、删除失败、目录同步失败、outcome 写失败、递增续接和恢复者再次崩溃反例。
 
 接管后的处理固定为：RUNNING/WAITING_FOR_REVIEW/BLOCKED 先执行 StateStore recovery，再由显式 resume/retry 决策继续；FAILED 仅在无 pending Journal/Publication recovery 时释放；COMPLETED 先完成第 11.6 节 cleanup-only recovery，再释放。恢复者在 `phase=recovering` 持久化后再次崩溃时，下一恢复者必须按同一规则验证新的 target lock token/Hash 并继续，不得把 recovering 当作可删除的过期 allocation lock。任何 Hash、token、Journal、Manifest 或 transaction 冲突均保留 Active Lock 并 Fail Closed，禁止启动另一个 Run。
 
@@ -2742,7 +2781,7 @@ class StateStore:
         allocation_token,
         plan_fingerprint,
         initial_context,
-    ) -> StateMutationResult:
+    ) -> StateSnapshot:
         ...
 
     def load(self, *, run_id) -> StateSnapshot:
@@ -2754,12 +2793,7 @@ class StateStore:
         run_id,
         expected_status,
         expected_state_version,
-        event_id,
-        task_status,
-        completed_tasks,
-        failed_tasks,
-        task_attempts,
-        context_snapshot,
+        checkpoint_event,
     ) -> StateMutationResult:
         ...
 
@@ -2779,7 +2813,7 @@ class StateStore:
         ...
 ```
 
-`initialize_run()` 不接受 `initial_status`；它只允许创建 `status=CREATED`、`state_version=0` 的完整 state，并必须显式接收、校验和写入 `allocation_token`、`plan_fingerprint`。`StateSnapshot` 至少返回完整 canonical state 和 `state_version`；`StateMutationResult` 至少返回 `operation_id`、`resulting_state_version` 与完整的新 canonical state，禁止 mutation 返回 `None` 后由调用方猜测版本。
+`initialize_run()` 不接受 `initial_status`；它只允许创建 `status=CREATED`、`state_version=0` 的完整 state，并必须显式接收、校验和写入 `allocation_token`、`plan_fingerprint`。初始化不进入 WAL，`last_operation_*` 保持 canonical null，因此它返回 `StateSnapshot`，不得伪造 initialization operation ID。只有 `checkpoint_context()` 与 `transition_status()` 返回 `StateMutationResult`。`StateSnapshot` 至少返回完整 canonical state 和 `state_version`；`StateMutationResult` 至少返回 `operation_id`、`resulting_state_version` 与完整的新 canonical state，禁止 mutation 返回 `None` 后由调用方猜测版本。
 
 两种轻量返回合同固定为普通不可变 Mapping，不新增状态对象层级：
 
@@ -2799,15 +2833,50 @@ StateMutationResult = {
 }
 ```
 
-上述字段全部 required；`canonical_state.state_version` 必须严格等于外层 version，run_id 也必须一致，否则调用方以 `STATE_CONFLICT` Fail Closed。
+上述字段全部 required；`canonical_state.state_version` 必须严格等于外层 version，run_id 也必须一致，否则调用方以 `STATE_CONFLICT` Fail Closed。`StateSnapshot` 没有 `operation_id`；`StateMutationResult.operation_id` 必须是非空 canonical ID，不能为 null。
 
 版本所有权固定为单一 Run-local State Coordinator：
 
 1. 新 Run 从 `initialize_run()` 的返回值取得 `expected_state_version=0`；Resume 必须先 `recover()`，再从其返回的 canonical state 恢复版本和 `task_attempts`。
-2. DAG task/Agent 不得直接调用 StateStore。并发 task 完成事件先进入 Coordinator 的有序 mutation queue；只有 Coordinator 串行调用 `checkpoint_context()` / `transition_status()`。
+2. DAG task/Agent 不得直接调用 StateStore。全部七类 checkpoint 请求与 Controller transition 都先进入现有 `DAGExecutor`/Controller 内部的同一有序 mutation queue；只有该内部 Coordinator 串行调用 `checkpoint_context()` / `transition_status()`。Coordinator 只是现有执行器中的私有队列、pure reducer 和 version cursor，不新增公开类、服务、线程、Executor、Registry 或 RunManager。
 3. 每次成功 mutation 后，Coordinator 只使用返回的 `resulting_state_version` 更新下一次 CAS 版本；不得从 context、metadata、进程全局变量或文件修改时间推断。
 4. CAS 冲突时禁止盲重试。Coordinator 先执行显式 recovery/load，检查相同 operation 是否已 committed/aborted，再决定返回幂等结果、使用下一业务 attempt，或以 `STATE_CONFLICT` 停止。
 5. Controller 状态迁移与 Executor checkpoint 共用同一 Coordinator/version cursor；Resume 和并发完成不得各自持有隐式版本副本。
+
+`checkpoint_event` 是受控增量，不是 worker 提交的完整 state 快照。固定最小 schema：
+
+```text
+checkpoint_event = {
+  operation_id,
+  checkpoint_kind,
+  task_id,                 # run_initialized 时为 canonical null
+  attempt_number,          # run_initialized 时为 canonical null
+  expected_task_status,
+  next_task_status,
+  retry_disposition,       # none | retry | terminal
+  next_attempt_number,     # 非 retry 时为 canonical null
+  controlled_context_delta,
+  error_summary,
+  created_at
+}
+```
+
+Worker 只能返回 task result 或受控错误摘要，不能传入 `task_status`、`task_attempts`、`completed_tasks`、`failed_tasks` 或完整 `context_snapshot`。Coordinator 必须在 state lock 内读取最新 canonical state，由固定 reducer 应用一条 checkpoint event，再生成下一完整 state；任何 event 中的 expected task status、attempt 或 delta namespace 与最新 state 冲突均 `STATE_CONFLICT`。除 `run_initialized` 只能写固定 `task_plan` namespace 外，`controlled_context_delta` 只允许写当前 task 的 `outputs.<task_id>` 和预先声明的 task-local namespace，禁止覆盖其他 task、顶层 status、attempt、completed/failed 集合或 shared identity fields。
+
+七类 event 的 canonical 字段合同固定如下；表中 `null` 是 JSON null，`{}` 是空 object，不能用空字符串替代。`created_at` 必须是 UTC `YYYY-MM-DDTHH:MM:SS.ffffffZ`，只用于审计，不参与 operation ID、排序或 CAS：
+
+|checkpoint_kind|task_id / attempt_number|expected -> next task status|retry_disposition / next_attempt_number|controlled_context_delta|error_summary|
+|---|---|---|---|---|---|
+|`run_initialized`|`null / null`|`null -> null`|`none / null`|required；仅含稳定排序 task plan、deps 和 plan_fingerprint|`null`|
+|`task_skipped`|task / `0`|`pending -> skipped`|`none / null`|`{}`；skip reason 使用受控 task-local reason code|required 的受控 skip reason，不得含任意 traceback|
+|`task_cache_hit`|task / `0`|`pending -> success`|`none / null`|required 的受控 output delta 和 cache provenance|`null`|
+|`task_started`|task / `n>=1`|`pending` 或 `retry_scheduled -> running`|`none / null`|`{}`|`null`|
+|`task_succeeded`|task / `n>=1`|`running -> success`|`none / null`|required 的受控 output delta|`null`|
+|`task_failed` retryable|task / `n>=1`|`running -> retry_pending`|`retry / n+1`|仅含受控 task-local failure provenance 和 retry policy snapshot|required、脱敏且有长度上限的错误摘要|
+|`task_failed` terminal|task / `n>=1`|`running -> failed`|`terminal / null`|仅含受控 task-local failure provenance|required、脱敏且有长度上限的错误摘要|
+|`task_retry_scheduled`|task / `n>=1`|`retry_pending -> retry_scheduled`|`retry / n+1`|required；只含已提交 failed payload 引用、受控 backoff 参数和 policy Hash|`null`|
+
+字段组合不在上表、额外未知字段、attempt 与 operation ID 不一致、retry policy snapshot/Hash 与 Run 初始计划不一致，均在追加 WAL pending 前 Fail Closed。`task_skipped` 的 skip reason、`task_failed` 的 error summary 和 retry backoff 都必须来自 Phase 0 闭集 schema；不得把自由文本异常、凭据、本机绝对路径或完整 traceback 写进 Canonical State。
 
 `load()` 是无副作用读取，不得隐式执行恢复。它必须校验 state schema，并检查 Journal 是否存在未解决 pending、中间损坏或 committed/state 不一致；发现任一情况时返回 `STATE_RECOVERY_REQUIRED`/`STATE_CONFLICT`，不得把可能过期的 `state.json` 当作可继续执行状态。需要继续执行的调用方必须先显式 `recover()`，随后 mutation 仍在自己的 state lock 内重复恢复和 CAS。
 
@@ -2837,19 +2906,36 @@ context_snapshot
 checkpoint_context()
 ```
 
-传入的 `event_id` 实际承担 WAL `operation_id`，必须是“单次 checkpoint 事件”的稳定唯一 ID，而不是可复用的 task_id。Phase A 使用以下闭集：
+`checkpoint_event.operation_id` 是 WAL 的稳定唯一 ID。`run_id` 与 `task_id` 都必须匹配 `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`，冒号、斜杠、反斜杠、空白和 Unicode 同形字符均禁止；因此 operation ID 不需要转义且可无歧义解析。唯一性作用域是当前 `runs/<run_id>/state_journal.jsonl`，但所有 task ID 仍显式携带 run_id，避免日志聚合后碰撞。Phase A 使用以下闭集：
 
 |Checkpoint kind|固定 operation ID|attempt 合同|
 |---|---|---|
-|`run_initialized`|`run:<run_id>:run_initialized`|不使用 task attempt；只记录 DAG 规划后首个标准化 task map，不能替代 `initialize_run()`|
-|`task_skipped`|`task:<task_id>:attempt:0:skipped`|仅依赖失败、任务从未开始执行时使用|
-|`task_cache_hit`|`task:<task_id>:attempt:0:cache_hit`|仅缓存校验通过、Agent 未执行时使用|
-|`task_started`|`task:<task_id>:attempt:<n>:started`|真实执行从 `n=1` 开始|
-|`task_succeeded`|`task:<task_id>:attempt:<n>:succeeded`|必须对应同 attempt 的 committed started|
-|`task_failed`|`task:<task_id>:attempt:<n>:failed`|该 attempt 已终止，包含受控错误摘要|
-|`task_retry_scheduled`|`task:<task_id>:attempt:<n>:retry_scheduled`|必须对应同 attempt 的 failed，并记录 `next_attempt=n+1`|
+|`run_initialized`|`run:<run_id>:checkpoint:run_initialized`|task/attempt 为 null；只记录 DAG 规划后首个标准化 task map，不能替代 `initialize_run()`|
+|`task_skipped`|`run:<run_id>:task:<task_id>:attempt:0:skipped`|仅依赖失败、任务从未开始执行时使用|
+|`task_cache_hit`|`run:<run_id>:task:<task_id>:attempt:0:cache_hit`|仅缓存校验通过、Agent 未执行时使用|
+|`task_started`|`run:<run_id>:task:<task_id>:attempt:<n>:started`|真实执行从 `n=1` 开始|
+|`task_succeeded`|`run:<run_id>:task:<task_id>:attempt:<n>:succeeded`|必须对应同 attempt 的 committed started|
+|`task_failed`|`run:<run_id>:task:<task_id>:attempt:<n>:failed`|该 attempt 已终止；payload 必须区分 retry/terminal|
+|`task_retry_scheduled`|`run:<run_id>:task:<task_id>:attempt:<n>:retry_scheduled`|必须对应同 attempt 的 retryable failed，并记录 `next_attempt=n+1`|
 
-`attempt_number` 是 Canonical State 的 `task_attempts[task_id]`，值为非负整数；0 只用于 skipped/cache-hit，真实执行从 1 开始。`task_started` 提交时在同一 CAS mutation 中把受控 task attempt 提升为 n；Resume 必须从 canonical `task_attempts` 继续，禁止把局部 `attempts=0` 当作真相。failed 后仅在 `retry_scheduled` committed 后允许下一 attempt；aborted operation ID 永久不得再次追加 pending，业务重试必须使用下一 attempt 和新的 operation ID。同一持久化重放必须复用相同 ID 与完全相同 payload。
+Run 启动顺序固定为 `initialize CREATED → transition CREATED→PLANNED → run_initialized checkpoint(expected_status=PLANNED) → transition PLANNED→RUNNING`。`run_initialized` payload 必须包含稳定排序的 task ID、依赖和 plan_fingerprint；崩溃发生在该 checkpoint 前时，Resume 只允许从 Hash 完全一致的计划重建相同 payload 并复用同一 operation ID，计划缺失或 Hash 变化均 Fail Closed。进入 Canonical State `RUNNING` 前必须确认 run_initialized committed，禁止在空 task map 上启动 worker。Active Lock 的 `phase=running` 只表示 Run 所有权已建立，不等于 Canonical State 已进入 RUNNING，也不授权提前启动 worker。
+
+Canonical `task_status[task_id]` 只允许 `pending | running | retry_pending | retry_scheduled | success | failed | skipped`。`attempt_number` 是 Canonical State 的 `task_attempts[task_id]`，值为非负整数；0 只用于 skipped/cache-hit，真实执行从 1 开始。`task_started` 提交时在同一 CAS mutation 中把受控 task attempt 提升为 n；Resume 必须从 canonical `task_attempts` 继续，禁止把局部 `attempts=0` 当作真相。
+
+状态归约固定为：
+
+```text
+run_initialized:      {} -> 全部 task=pending，attempt=0
+task_skipped:         pending -> skipped；不加入 completed_tasks/failed_tasks，终态由 task_status 表示
+task_cache_hit:       pending -> success；加入 completed_tasks，写受控 output delta
+task_started(n):      pending/retry_scheduled -> running；task_attempts=n
+task_succeeded(n):    running -> success；加入 completed_tasks，写受控 output delta
+task_failed(n,retry): running -> retry_pending；不加入 failed_tasks
+task_retry_scheduled: retry_pending -> retry_scheduled；next_attempt=n+1
+task_failed(n,terminal): running -> failed；只在此分支加入 failed_tasks
+```
+
+`task_failed` payload 必须携带 `retry_disposition=retry|terminal`。`retry` 时必须同时携带由固定 retry policy 算出的 `next_attempt_number=n+1` 和 backoff 参数；`terminal` 时 next attempt 为 canonical null。若崩溃发生在 retryable `task_failed` committed 后、`task_retry_scheduled` 尚未出现，`StateStore.recover()` 只完成既有 WAL 的恢复并返回 canonical `retry_pending`；随后 Resume Coordinator 必须验证唯一 committed failed payload，再通过正常 `checkpoint_context()` 以固定 operation ID 提交 `task_retry_scheduled`。不得在 StateStore 内部凭空创建 workflow operation，不得把任务加入 `failed_tasks`、不得直接运行下一 attempt。若该 retry-scheduled WAL operation已经进入 aborted，说明持久化操作未应用且 deterministic ID 已终结；当前 Run 必须 Fail Closed/进入人工诊断，不允许在同一 Run 中伪造另一个 schedule ID 或直接启动下一 attempt。正常业务失败不是 WAL aborted：它必须先 committed failed + committed retry_scheduled，再使用下一 attempt 的新 started ID。同一持久化重放必须复用相同 ID 与完全相同 payload。
 
 对当前 `orchestrator/executor.py` 四类 `_checkpoint()` 调用位置的迁移规则固定为：
 
@@ -2857,10 +2943,10 @@ checkpoint_context()
 |---|---|
 |`run_async()` 初始化 task map 后的首次 `_checkpoint()`|`run_initialized`|
 |依赖失败分支标记 `skipped` 后的 `_checkpoint()`|对应 task 的 `task_skipped`|
-|`_run_task()` 将任务置为 running 后的 `_checkpoint()`|该 canonical attempt 的 `task_started`|
+|`_run_task()` 当前将任务置为 running 后的 `_checkpoint()`|迁移到 Coordinator：先提交该 canonical attempt 的 `task_started`，成功后才启动 worker；worker 不写 StateStore|
 |`asyncio.as_completed()` 收到普通结果后的 `_checkpoint()`|普通成功为 `task_succeeded`，最终失败为 `task_failed`，cache 返回必须由 event 的 `cached=true` 映射为 `task_cache_hit`，不得伪装成 executed succeeded|
 
-当前 retry 分支只记录 event、没有 checkpoint；A3 迁移必须在退避等待前增加 `task_failed`，随后增加 `task_retry_scheduled`，两者均完成后才允许开始下一 attempt。不得只对最终失败写 `task_failed`，也不得让 retry event 绕过 WAL/CAS。
+当前 retry 分支只记录 event、没有 checkpoint；A3 迁移必须让 worker 把失败结果返回现有 Executor 内部 Coordinator，由 Coordinator 连续提交 retryable `task_failed` 与 `task_retry_scheduled`，两者之间不得处理其他 task/transition event；崩溃是唯一允许的中断。Resume 发现 `retry_pending` 时，必须在 Journal 中找到唯一、payload Hash 一致的同 task/attempt committed retryable failed，并据此幂等补写 schedule；缺失、重复或不一致均 Fail Closed。schedule committed 后，Coordinator 才执行受控退避并提交下一 `task_started` 后重新启动 worker。最终失败只提交 terminal `task_failed`。七类事件都走同一内部 mutation queue；不得只对最终失败写 checkpoint，不得让 worker/Retry event 绕过 WAL/CAS，也不得为此新增第二套调度器。
 
 ### 顶层状态迁移
 
@@ -3012,7 +3098,7 @@ aborted
 ```text
 schema_version
 operation_kind        # context_checkpoint | status_transition
-operation_id          # checkpoint 使用唯一 checkpoint event_id；transition 使用 transition_id
+operation_id          # checkpoint 使用 checkpoint_event.operation_id；transition 使用 transition_id
 phase                 # pending | committed | aborted
 expected_state_version
 resulting_state_version
@@ -3020,6 +3106,7 @@ expected_status
 resulting_status
 timestamp
 payload_sha256
+resulting_state_sha256
 record_checksum
 ```
 
@@ -3040,13 +3127,13 @@ last_operation_payload_sha256
 ```text
 获取 state lock
 → 读取 state 与 state_journal
-→ 相同 operation_kind + operation_id 已 committed：验证 payload_sha256，并复核 canonical state 的 resulting version/last_operation_*/payload Hash 后才返回原结果；不一致时 STATE_CONFLICT
+→ 相同 operation_kind + operation_id 已 committed：验证 payload_sha256，并复核 canonical state 的 resulting version/last_operation_*/payload Hash/resulting_state_sha256 后才返回原结果；不一致时 STATE_CONFLICT
 → 相同 ID 但 payload 不同：STATE_CONFLICT
 → 验证 expected status/version
 → 追加 pending，flush+fsync，并同步 Journal 父目录（首次创建 Journal 时尤为必须）
-→ 原子替换 state.json；同时写 resulting version 和 last_operation_* 三字段
+→ 原子替换 state.json；同时写 resulting version 和 last_operation_* 三字段，并使 canonical state Hash 等于 pending.resulting_state_sha256
 → 必须立即对 state.json 父目录执行 durability sync，然后重读 state.json 并复核 resulting version/last_operation_*/payload Hash
-→ 只有 state 文件和目录持久化、复核全部成功后，才追加 committed 并 flush+fsync Journal
+→ 只有 state 文件和目录持久化、复核 resulting_state_sha256 全部成功后，才追加 committed 并 flush+fsync Journal
 → 再同步 Journal 父目录，随后释放 state lock
 ```
 
@@ -3075,26 +3162,28 @@ record_checksum 不匹配
 ## 16.4 恢复规则
 
 ```text
-pending + state 的 version/last_operation_id/payload_sha256 均表明操作已应用
+pending + state 的 version/last_operation_id/payload_sha256/resulting_state_sha256 均表明操作已应用
 → 补写 committed
 
 pending + state 仍为 expected version/status
 → 追加 aborted
 → aborted 是该 operation_id 的终结记录，完成 flush+fsync 和 Journal 父目录同步后才允许返回
-→ 业务重试必须使用新的 operation_id；原调用方若以相同 ID/相同 payload 重放，只返回该 operation 已 aborted，不得追加第二个 pending；相同 ID/不同 payload 为 STATE_CONFLICT
+→ 原调用方若以相同 ID/相同 payload 重放，只返回该 operation 已 aborted，不得追加第二个 pending；相同 ID/不同 payload为 STATE_CONFLICT
+→ status transition 可在重新读取 canonical state 后使用语义明确的新 transition_id；task checkpoint 的 ID 由 run/task/attempt/kind 唯一决定，aborted 后当前 Run 必须 Fail Closed，不得跳号伪造新 checkpoint
+→ 正常 task 业务重试只来自 committed retryable failure + committed retry_scheduled，不得把 WAL aborted 当作业务失败
 
 pending + state 为其他版本或状态
 → STATE_CONFLICT
 
 committed 已存在
-→ 先验证 canonical state 的 resulting version、last_operation_kind/id/payload_sha256 与 committed 完全一致
+→ 先验证 canonical state 的 resulting version、last_operation_kind/id/payload_sha256 和完整 canonical state Hash 与 committed.resulting_state_sha256 完全一致
 → 同一 operation_kind + operation_id、payload 相同且 canonical state 一致：返回原结果
 → committed 存在但 canonical state 仍是旧版本或 last_operation 不一致：STATE_CONFLICT / FAIL CLOSED，不得伪报成功
 → payload 不同：STATE_CONFLICT
 → 不增加 state_version
 ```
 
-`checkpoint_context()` 恢复后必须验证 `task_status`、`completed_tasks`、`failed_tasks` 和 `context_snapshot` 的规范化 Hash 与 pending payload 一致；只比较 `state_version` 不足以证明 checkpoint 已应用。
+`checkpoint_context()` 的 pending payload 只保存 canonical `checkpoint_event`、`expected_state_version` 与 reducer 计算出的 `resulting_state_sha256`，不保存 worker 提供的完整 state。恢复后必须重放同一 pure reducer，并验证 resulting version、`last_operation_*`、受影响 task 的 status/attempt、completed/failed 集合、受控 context delta 和完整 canonical state Hash 均与 pending 预期一致；只比较 `state_version` 不足以证明 checkpoint 已应用。
 
 ---
 
@@ -3612,8 +3701,8 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 76. cleanup pending/recovery required 时 CLI 返回 10 而非 0，同时 Canonical StateStore 仍保持 COMPLETED。
 77. `publication_transaction.json` 首次可见时必须是经 fsync、目录同步和重读复核的完整 `backup_ready` 记录；临时事务不得被恢复器当作已开始修改正式目标。
 78. 同一 Run 不得启动第二个 Publication transaction；损坏或不完整的权威事务文件必须 Fail Closed。
-79. `evidence_valid != true` 时所有 Claim capability 均 blocked；Phase A 输入不得自行声明 human/GT verified。
-80. 同一 task attempt 的 started/succeeded/failed/retry checkpoint 使用不同 operation_id；aborted operation_id 不得追加第二个 pending。
+79. `evidence_valid != true` 时所有 Claim capability 均 blocked；Phase A 输入不得自行声明 human/GT verified；`association_invalid + evidence_valid=true` 的矛盾 artifact 仍在 profile 阶段阻断。
+80. 七类 checkpoint 使用包含 canonical run/task ID 的不同 operation_id；task/run ID 不符合闭集正则时拒绝；aborted operation_id 不得追加第二个 pending。
 81. 初始 state.json 必须在 Active Lock 进入 running 前以完整 v1 schema 原子创建并完成目录持久化。
 82. 同机死亡 running lock 只能在 recovery O_EXCL 互斥、token/Hash/Run 状态复核后接管；跨主机、活 PID 或冲突状态 Fail Closed。
 83. Active Lock 释放必须验证 lock_token，并通过 token-scoped tombstone 持久化删除；不得直接删除未知所有者锁。
@@ -3621,19 +3710,26 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 85. Canonical 状态只能沿唯一允许边迁移；WAITING/BLOCKED 可显式恢复，FAILED/COMPLETED 不得迁出。
 86. `StateStore.load()` 发现 unresolved pending、Journal 损坏或 committed/state 不一致时必须拒绝返回可执行状态，且不得隐式修改文件。
 87. Active Lock phase 只允许 allocating/running/recovering；恢复者在 recovering 阶段崩溃后仍可按 token/Hash 合同再次恢复，不得误删或启动新 Run。
-88. Claim evaluator 严格按 profile、global preconditions、capability、controlled template 顺序短路；字符串 `"true"`、缺失 evidence_valid 和未知 profile 均不得进入 capability。
+88. Claim evaluator 严格按 profile、global preconditions、capability、controlled template 顺序短路；字符串 `"true"`、缺失 evidence_valid、association_invalid 和未知 profile 均不得进入 capability。
 89. Phase A 对输入或 Agent 生成的 human/GT verified 均返回 `UNTRUSTED_IDENTITY_VERIFICATION`，不存在可由参数开启的 `phase_a_enabled` 分支。
-90. `run_initialized`、skipped、cache hit、started、succeeded、failed、retry scheduled 七类 checkpoint 均使用固定且互不冲突的 operation ID。
-91. Resume 从 canonical `task_attempts` 恢复下一 attempt；aborted ID 不得重新 pending，业务重试只能使用下一 attempt。
-92. 当前 DAGExecutor 四类 `_checkpoint()` 调用和 retry-only event 均按第 15.3 节迁移；cache hit 不得冒充真实执行成功。
-93. `initialize_run()` 显式接收 allocation_token/plan_fingerprint、固定创建 CREATED，并返回 state version；任意初始状态参数都被拒绝。
-94. checkpoint/transition 返回 resulting_state_version；并发 task 完成只由单一 Coordinator 串行提交，CAS 冲突不依赖隐式共享版本或盲重试。
+90. `run_initialized`、skipped、cache hit、started、succeeded、failed、retry scheduled 七类 checkpoint 均使用固定且互不冲突的 operation ID；自由文本 predicate/未知 operator 不可执行。
+91. Resume 从 canonical `task_attempts` 恢复下一 attempt；aborted ID 不得重新 pending或在同一 Run 中伪造替代 checkpoint，正常业务重试只能来自 committed retry schedule 并使用下一 attempt。
+92. 当前 DAGExecutor 四类 `_checkpoint()` 调用和 retry-only event 均按第 15.3 节迁移；worker 不写 StateStore，cache hit 不得冒充真实执行成功。
+93. `initialize_run()` 显式接收 allocation_token/plan_fingerprint、固定创建 CREATED，并返回无 operation_id 的 StateSnapshot；任意初始状态参数都被拒绝。
+94. checkpoint/transition 返回 resulting_state_version；七类事件只由现有 Executor 内部 Coordinator 以增量 reducer 串行提交，CAS 冲突不依赖隐式共享版本、完整旧快照或盲重试。
 95. Resume、并发完成和 Controller transition 的版本 cursor 均来自 StateStore 返回值；重启后不得从 context 或 metadata 猜测。
 96. Artifact Isolation 能发现 publication transaction、Manifest、State、metadata、Lock 的临时文件以及 release/recovery 残留；成功与失败测试结束后均无未知临时文件。
 97. 故障 fixture 允许保留的 recovery 证据必须以精确相对路径和 Hash 断言，不能进入全局忽略列表。
 98. recovery lock 仅能由显式人工恢复命令在同机死亡 PID、token/Hash/run_id/State/Publication 全部匹配时解除；其他情况 Fail Closed。
-99. recovery lock 解除前必须持久化不可覆盖审计记录并同步父目录；审计冲突、写入或同步失败时不得删除锁。
-100. 删除遗留 recovery lock 不等于恢复成功；后续标准 recovery 必须再次验证，并覆盖错误 token、活 PID、跨主机和损坏状态反例。
+99. recovery lock 解除前必须持久化 Windows-safe、不可覆盖的 intent；每次结果使用递增 outcome 记录并同步父目录，审计冲突、写入或同步失败时不得报告成功。
+100. 删除遗留 recovery lock 不等于恢复成功；只有标准 recovery 完成且 `standard_recovery_completed` outcome 持久化才成功，并覆盖错误 token、活 PID、跨主机、损坏状态和恢复者再次崩溃反例。
+101. retryable `task_failed` 不进入 failed_tasks；terminal failure 才进入，crash 发生在 failed/retry_scheduled 之间时只允许幂等补写 retry_scheduled。
+102. Worker 不能提交 task_status/task_attempts/完整 context；Coordinator 必须从最新 canonical state 应用受控 task-local delta，防止并发结果互相覆盖。
+103. `StateMutationResult.operation_id` 只属于 WAL mutation，initialize/load/recover 的 StateSnapshot 不伪造 operation ID。
+104. Run 必须按 CREATED→PLANNED→run_initialized committed→RUNNING 顺序启动；空 task map、plan fingerprint 变化或初始化 checkpoint 未提交时不得启动 worker。
+105. Claim typed rule 必须用 `value` 与 `value_ref` 二选一表达字面值或枚举引用；未知引用和混用必须 blocked。
+106. 七类 checkpoint 的 canonical null、状态、attempt、retry 和 delta 组合必须逐类校验；未知组合不得进入 WAL。
+107. 已有 completed recovery audit 的重复命令只能只读复核并返回既有结果；不得重复删除、改锁或追加成功记录。
 
 ---
 
@@ -3750,15 +3846,22 @@ A1 专项执行修改正式 data/simulated、outputs 或 progressive 产物
 A1 新节点在默认 legacy CLI 中提前启用
 Evidence invalid 仍能生成 Static Audit 或其他 Claim
 Phase A 接受输入自称 human_verified/ground_truth_verified
+association_invalid 即使伪造 evidence_valid=true 仍可进入 Static Audit
 Claim machine policy 缺少 global_preconditions、求值顺序，或仍含未定义 phase_a_enabled
+Claim capability 依赖可执行自由文本表达式或开放 operator 集合
 COMPLETED 早于 Publication Commit 或 final_summary
-同一 checkpoint event_id 被 started/succeeded/retry 复用
+同一 checkpoint operation_id 被 started/succeeded/retry 复用
 run/skipped/cache checkpoint 没有固定 operation ID，或 Resume 将 attempt 重置为零
-StateStore initialize 接受任意 initial_status，或 mutation 不返回 resulting_state_version
+run_initialized 未提交、task map 为空或 plan fingerprint 变化时仍进入 RUNNING
+run/task ID 可包含分隔符导致 operation ID 无法唯一解析
+StateStore initialize 接受任意 initial_status、伪造 operation_id，或 mutation 不返回 resulting_state_version
 并发 checkpoint/Controller transition 依赖隐式共享版本而不是单一 Coordinator
+Worker 可提交完整旧 state/context 快照，或 retryable failure 被加入 failed_tasks
+failed committed、retry_scheduled 未提交的崩溃窗口没有唯一恢复动作
 初始 state.json 尚未持久化就把 Active Lock 更新为 running
 死亡 running lock 没有安全恢复分支，或释放锁时不校验 lock_token
 遗留 recovery lock 可按年龄删除，或解除前没有 token/Hash/State/Publication 复核与审计记录
+recovery 审计文件名在 Windows 非法，或只有 intent 没有可续接的最终 outcome
 WAITING_FOR_REVIEW/BLOCKED 没有合法恢复边，或 FAILED/COMPLETED 可以迁出
 StateStore.load 在 unresolved Journal 下仍返回可继续执行状态
 成功或失败测试遗留未知 transaction/Manifest/State/Lock 临时文件

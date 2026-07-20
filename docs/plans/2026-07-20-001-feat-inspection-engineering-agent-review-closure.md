@@ -80,7 +80,7 @@
 |---|---|---|---|---|
 |Evidence invalid 未成为 Claim 全局门槛|待修订|条件关闭|`evidence_valid == true` 成为所有 capability 的前置条件，非法 Evidence 不得降级为 Static Audit|A1 补每个 capability 的 invalid-evidence 反例|
 |Phase A 可被输入伪造 Human/GT verified|待修订|条件关闭|Human/GT 状态仅为后续保留枚举；Phase A 输入或 Agent 生成该状态均 Fail Closed|Phase 0 固定 profile/schema；A1 补手工篡改反例|
-|Checkpoint operation_id 在任务阶段间冲突|待修订|条件关闭|event_id 固定为 task/attempt/checkpoint_kind；业务阶段和重试具有明确唯一性，aborted ID 不得重新 pending|A3 补 started→succeeded、failed→retry 和 aborted 重放反例|
+|Checkpoint operation_id 在任务阶段间冲突|待修订|条件关闭|operation ID 固定包含 run/task/attempt/checkpoint_kind；业务阶段和重试具有明确唯一性，aborted ID 不得重新 pending|A3 补 started→succeeded、failed→retry 和 aborted 重放反例|
 |Canonical State 初始化合同缺失|待修订|条件关闭|固定 inspection_state_v1 schema；state 必须早于 running lock 原子创建、目录同步并重读复核|A3 补 metadata/state 各崩溃窗口与重复初始化反例|
 |Running Active Lock 无安全恢复|待修订|条件关闭|锁 phase 固定 allocating/running/recovering；仅同机死 PID 可在带 provenance 的 O_EXCL recovery lock 下先提升为 recovering，恢复者再次崩溃仍按 token/Hash 续接；遗留 recovery lock 保守阻断|A3 补双恢复者、recovering 二次崩溃、遗留 recovery lock、活 PID、跨主机、token/Hash 冲突测试|
 |Active Lock 释放缺所有权保护|待修订|条件关闭|释放前复核 lock_token，原子移动到 token-scoped tombstone 并同步目录；新获取者持久化后复检；遗留 tombstone 仅可经终态/transaction 验证的 cleanup-only recovery 删除|A3 补锁被替换、获取/释放交错、遗留 tombstone、移动失败和目录同步失败反例|
@@ -101,6 +101,24 @@
 |Artifact Isolation 漏掉事务临时文件|待修订|条件关闭|保护 publication transaction、Manifest、State、metadata、Lock 临时文件及 release/recovery 残留；成功/失败均拒绝未知临时文件|A1/A2/A3 在 tmp_path 覆盖 added/removed/modified/空目录与残留扫描|
 |遗留 recovery lock 无人工解除合同|待修订|条件关闭|仅显式本机 recovery 命令可解除；强制验证 hostname/PID/token/target Hash/run_id/State/Publication，先写不可覆盖审计并同步目录|A3 覆盖合法解除、活 PID、跨主机、错误证据、审计冲突/写入/同步失败|
 
+## 2.5 第六轮严格 Review 的条件关闭项
+
+以下项目在 `docs: close engineering agent execution contract gaps` Review 中重新进入“待修订”。本次进行了相邻合同的完整对抗审计并修订计划；当前最多标记“条件关闭”，不表示 Phase 0 schema、A1/A3 代码或故障注入测试已经完成：
+
+|问题|Review 入场状态|当前状态|计划修订|实现条件|
+|---|---|---|---|---|
+|association_invalid 仍可能穿过机器 policy|待修订|条件关闭|从 accepted state 移除并在 profile 阶段以 `INVALID_ASSOCIATION_EVIDENCE` 拒绝；即使伪造 evidence_valid=true 也不进入 capability|Phase 0 固定矛盾组合 schema；A1 补直接篡改 artifact 反例|
+|Claim 条件仍是未定义自由文本表达式|待修订|条件关闭|条件统一为 `{field,operator,value}` typed rule，operator/field 使用闭集并固定 capability order；未知、循环/前向引用、歧义或无唯一分支均 blocked|Phase 0 固定字段/枚举/operator/order schema；A1 不实现通用 DSL|
+|initialize_run 返回合同与 null operation 冲突|待修订|条件关闭|initialize 固定返回无 operation_id 的 StateSnapshot；只有 checkpoint/transition 返回 StateMutationResult|A3 补返回 schema、null/伪造 operation ID 反例|
+|并发完整快照覆盖与 Retry 终态混用|待修订|条件关闭|七类事件全部进入现有 Executor 内部串行队列；StateStore 接受受控 delta；retryable/terminal failure 使用不同归约并定义中间崩溃恢复；RUNNING 前要求 run_initialized committed|A3 补双任务交错、旧快照、空 task map、failed/retry 崩溃和 terminal 状态反例|
+|Operation ID 解析与作用域不唯一|待修订|条件关闭|run/task ID 使用禁止分隔符的闭集正则，task operation 显式携带 run_id，唯一性固定为 per-run Journal|Phase 0 固定 identifier schema；A3 补非法 ID 和聚合日志碰撞反例|
+|State Coordinator 可能膨胀为第二套框架|待修订|条件关闭|明确只允许现有 DAGExecutor/Controller 内部私有 queue/reducer/version cursor，不新增公开组件或调度器|A3 在现有调用链内实现并做架构 diff 审查|
+|WAL recovery 仍按完整 worker 快照验证|待修订|条件关闭|pending 只保存 checkpoint event 和 resulting state Hash；恢复重放 pure reducer 并核对完整 canonical state，不信任 worker snapshot|A3 补 delta 重放、state Hash 不符和跨 task 覆盖反例|
+|Recovery 审计缺少跨平台名称和最终结果|待修订|条件关闭|固定 Windows-safe UTC basename、不可覆盖 intent、递增 outcome 与未完成审计 sentinel；completed outcome 前不得成功|A3 补 Windows 路径、删除/同步/outcome 写失败、递增续接和再次崩溃反例|
+|Typed rule 的 literal 与 enum reference 仍可能混淆|待修订|条件关闭|固定 `value`/`value_ref` 二选一；未知引用、同时存在或同时缺失均 blocked|Phase 0 固定 machine schema；A1 补 malformed rule 反例|
+|七类 checkpoint 的空值和 delta 合同不唯一|待修订|条件关闭|逐 kind 固定 task/attempt/status/retry/delta/error 字段组合和 UTC 时间格式，未知组合在 WAL 前拒绝|Phase 0 固定 event schema；A3 补逐类合法/非法矩阵|
+|Completed recovery audit 重放可能产生二次副作用|待修订|条件关闭|completed 后仅允许只读复核并返回既有结果；锁/State/Publication 矛盾或冲突 completed 记录 Fail Closed|A3 补重复命令无副作用和审计矛盾反例|
+
 ## 3. 基线与范围
 
 |检查项|状态|证据|实现状态|
@@ -117,7 +135,7 @@
 |---|---|---|---|
 |Association 身份边界|条件关闭|规则 Association 只能作为支持证据，不等于身份确认|A1 待实施|
 |Comparability 硬门控|条件关闭|缺失/非法字段 Fail Closed；只有 schema 合法且明确非 verified 时只允许 Static Audit|Phase 0/A1 待实施|
-|Phase A Capability|条件关闭|机器 policy 先校验固定 profile 与 evidence_valid 全局门槛，再求值 Difference/Directional；Physical/Pattern/Prediction 固定 blocked|Phase 0/A1 待实施|
+|Phase A Capability|条件关闭|机器 policy 先拒绝非法 identity、校验 evidence_valid 全局门槛，再以 typed rule 求值 Difference/Directional；Physical/Pattern/Prediction 固定 blocked|Phase 0/A1 待实施|
 |历史证据来源|条件关闭|Previous Value 只能来自对应 round 的 `memory_before_query.csv`；当前记录使用中性 observation join，不依赖评估标签|A1 待实施|
 |面积测量口径|条件关闭|当前与历史统一为巡检级最大 mask 面积|A1 待实施|
 |Registration/Scale/Uncertainty|条件关闭|均要求显式 provenance，缺失时采用保守默认值|Phase 0/A1 待实施|
@@ -130,7 +148,7 @@
 |唯一 DAG/Executor|条件关闭|只扩展现有 DAG、DAGExecutor、Registry 和 RunManager|A1/A3 待实施|
 |A1 Claim/Evidence|条件关闭|新节点默认不激活；sandbox 中逐节点重定向到 Run-local work/artifacts/staging，不得修改正式目录|A1 待实施|
 |A2 Publication|条件关闭|Manifest-last、完整文件集合、固定 publication transaction 路径、COMPLETED/phase 追赶、cleanup 诊断、existed_before 回滚、逐父目录 fsync 和 transaction-scoped final_summary 隔离已定义|A2 待实施|
-|A3 State/Lock/WAL|条件关闭|双入口、预留 run_id、Canonical task attempts、七类 checkpoint ID、显式 State version 返回/单一 Coordinator、统一 WAL 和带审计的 recovery lock 人工解除已定义|A3 待实施|
+|A3 State/Lock/WAL|条件关闭|双入口、Canonical attempts、无歧义七类 checkpoint、增量 reducer、显式 State version、现有 Executor 内部串行 Coordinator、统一 WAL 和 intent/outcome recovery 审计已定义|A3 待实施|
 |Memory/Growth 报告分离|条件关闭|结构化数据保留，正式报告必须经过 Claim Gate|A1 待实施|
 |Visualization/FinalReport|条件关闭|必须读取当前 Run 的 ClaimDecision 和 Comparison Evidence|A1 待实施|
 |Web 边界|条件关闭|Phase A 不修改 Web，也不声称 Web 是 Manifest 权威 reader|Phase E 待实施|
