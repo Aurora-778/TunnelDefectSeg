@@ -1,0 +1,52 @@
+{
+  "schema_version": "claim_policy_v5",
+  "profile": "phase_a",
+  "observation_source_enum": [
+    "kict_static_mask_cyclic_demo",
+    "real_inspection_mask_input",
+    "verified_fixture",
+    "mixed_sources",
+    "legacy_unverified_source"
+  ],
+  "comparability_status_enum": [
+    "verified_comparable",
+    "not_longitudinally_comparable",
+    "insufficient_history",
+    "simulated_metadata_comparable"
+  ],
+  "accepted_identity_evidence_states": [
+    "association_supported",
+    "association_rejected",
+    "association_pending_review",
+    "association_not_applicable"
+  ],
+  "rejected_identity_evidence_states": {
+    "association_invalid": "INVALID_ASSOCIATION_EVIDENCE",
+    "human_verified": "UNTRUSTED_IDENTITY_VERIFICATION",
+    "ground_truth_verified": "UNTRUSTED_IDENTITY_VERIFICATION"
+  },
+  "global_precondition": {
+    "field": "evidence_valid",
+    "operator": "strict_equals",
+    "value": true,
+    "failure_reason": "EVIDENCE_INVALID"
+  },
+  "capability_order": [
+    "static_descriptive_audit",
+    "descriptive_difference_claim",
+    "directional_change_claim",
+    "physical_quantity_change_claim",
+    "multi_timepoint_pattern_claim",
+    "prediction_claim"
+  ],
+  "fixed_blocked_capabilities": {
+    "physical_quantity_change_claim": "PHASE_A_NO_PHYSICAL_QUANTITY_EVIDENCE",
+    "multi_timepoint_pattern_claim": "PHASE_A_NO_THREE_TIMEPOINT_EVIDENCE",
+    "prediction_claim": "PHASE_A_NO_VALIDATED_PREDICTION_MODEL"
+  },
+  "required_language_qualifiers": {
+    "identity_boundary": "不构成真实身份确认",
+    "rule_association": "基于当前规则关联候选",
+    "static_only": "当前证据不可纵向比较，仅允许静态描述审计，不构成方向性变化结论"
+  }
+}
