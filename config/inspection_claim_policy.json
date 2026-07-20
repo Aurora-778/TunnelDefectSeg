@@ -15,6 +15,18 @@
     "insufficient_history",
     "simulated_metadata_comparable"
   ],
+  "previous_entity_type_enum": [
+    "not_applicable",
+    "memory_snapshot"
+  ],
+  "registration_status_enum": [
+    "registered",
+    "not_verified"
+  ],
+  "execution_profile_enum": [
+    "phase_a1_sandbox",
+    "test"
+  ],
   "accepted_identity_evidence_states": [
     "association_supported",
     "association_rejected",
@@ -46,6 +58,7 @@
     "prediction_claim": "PHASE_A_NO_VALIDATED_PREDICTION_MODEL"
   },
   "source_comparability_rules": {
+    "mixed_sources_policy": "static_only",
     "verified_comparable_allowed_sources": [
       "real_inspection_mask_input",
       "verified_fixture"

@@ -8,6 +8,7 @@ it does not infer identity, recompute association scores, or publish outputs.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
@@ -17,7 +18,6 @@ from typing import Any
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "inspection_claim_policy.json"
 SUPPORTED_POLICY_SCHEMA_VERSION = "claim_policy_v5"
 SUPPORTED_EVALUATOR_CONTRACT_VERSION = "phase_a_claim_evaluator_v1"
-EVALUATOR_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 POLICY_ROOT_FIELDS = {
     "schema_version",
@@ -25,6 +25,9 @@ POLICY_ROOT_FIELDS = {
     "evaluator_contract_version",
     "observation_source_enum",
     "comparability_status_enum",
+    "previous_entity_type_enum",
+    "registration_status_enum",
+    "execution_profile_enum",
     "accepted_identity_evidence_states",
     "rejected_identity_evidence_states",
     "global_precondition",
@@ -56,12 +59,28 @@ def load_claim_policy(path: Path | None = None) -> dict[str, Any]:
     """Load and strictly validate the fixed Phase A machine policy."""
 
     policy_path = Path(path) if path is not None else DEFAULT_POLICY_PATH
-    policy = _read_policy_file(policy_path)
+    if policy_path.resolve() == DEFAULT_POLICY_PATH.resolve():
+        return _default_policy_copy()
 
-    if policy_path.resolve() != DEFAULT_POLICY_PATH.resolve():
-        canonical_policy = _read_policy_file(DEFAULT_POLICY_PATH)
-        _require_canonical_policy(policy, canonical_policy)
+    policy = _read_policy_file(policy_path)
+    _require_canonical_policy(policy, _default_policy_copy())
     return policy
+
+
+@lru_cache(maxsize=1)
+def _canonical_default_policy_json() -> str:
+    policy = _read_policy_file(DEFAULT_POLICY_PATH)
+    return json.dumps(
+        policy,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _default_policy_copy() -> dict[str, Any]:
+    return json.loads(_canonical_default_policy_json())
 
 
 def _read_policy_file(policy_path: Path) -> dict[str, Any]:
@@ -85,50 +104,67 @@ def evaluate_claim_evidence(
     policy: Mapping[str, Any] | None = None,
     profile: str = "phase_a",
 ) -> dict[str, Any]:
-    """Evaluate one evidence record without reading or writing pipeline artifacts."""
+    """Load or validate a policy, then evaluate one evidence record."""
 
-    trusted_policy = dict(policy) if policy is not None else load_claim_policy()
-    _validate_policy_mapping(trusted_policy)
+    if policy is None:
+        trusted_policy = load_claim_policy()
+    else:
+        trusted_policy = _validate_policy_mapping(policy)
+    return _evaluate_validated_claim_evidence(
+        evidence,
+        trusted_policy,
+        profile=profile,
+        evaluator_sha256=_evaluator_source_sha256(),
+    )
+
+
+def _evaluate_validated_claim_evidence(
+    evidence: Mapping[str, Any],
+    policy: Mapping[str, Any],
+    *,
+    profile: str,
+    evaluator_sha256: str,
+) -> dict[str, Any]:
+    """Pure Claim evaluation for an already validated policy mapping."""
 
     if not isinstance(evidence, Mapping):
-        return _blocked_decision("", trusted_policy, "EVIDENCE_NOT_OBJECT")
+        return _blocked_decision("", policy, "EVIDENCE_NOT_OBJECT", evaluator_sha256)
 
     evidence_id = evidence.get("evidence_id", "")
     normalized_id = evidence_id.strip() if isinstance(evidence_id, str) else ""
 
+    def blocked(reason: str) -> dict[str, Any]:
+        return _blocked_decision(normalized_id, policy, reason, evaluator_sha256)
+
     if "profile" in evidence:
-        return _blocked_decision(normalized_id, trusted_policy, "INPUT_PROFILE_OVERRIDE")
-    if profile != trusted_policy["profile"]:
-        return _blocked_decision(normalized_id, trusted_policy, "INVALID_CLAIM_POLICY_PROFILE")
+        return blocked("INPUT_PROFILE_OVERRIDE")
+    if profile != policy["profile"]:
+        return blocked("INVALID_CLAIM_POLICY_PROFILE")
 
     identity_state = evidence.get("identity_evidence_state")
     if not isinstance(identity_state, str):
-        return _blocked_decision(normalized_id, trusted_policy, "INVALID_IDENTITY_EVIDENCE_STATE")
-    rejected_reason = trusted_policy["rejected_identity_evidence_states"].get(identity_state)
+        return blocked("INVALID_IDENTITY_EVIDENCE_STATE")
+    rejected_reason = policy["rejected_identity_evidence_states"].get(identity_state)
     if rejected_reason:
-        return _blocked_decision(normalized_id, trusted_policy, rejected_reason)
-    if identity_state not in trusted_policy["accepted_identity_evidence_states"]:
-        return _blocked_decision(normalized_id, trusted_policy, "INVALID_IDENTITY_EVIDENCE_STATE")
+        return blocked(rejected_reason)
+    if identity_state not in policy["accepted_identity_evidence_states"]:
+        return blocked("INVALID_IDENTITY_EVIDENCE_STATE")
 
-    global_precondition = trusted_policy["global_precondition"]
+    global_precondition = policy["global_precondition"]
     if evidence.get(global_precondition["field"]) is not global_precondition["value"]:
-        return _blocked_decision(
-            normalized_id,
-            trusted_policy,
-            global_precondition["failure_reason"],
-        )
+        return blocked(global_precondition["failure_reason"])
 
-    schema_error = _validate_evidence_schema(evidence, trusted_policy)
+    schema_error = _validate_evidence_schema(evidence, policy)
     if schema_error:
-        return _blocked_decision(normalized_id, trusted_policy, schema_error)
+        return blocked(schema_error)
 
-    capabilities = {name: "blocked" for name in trusted_policy["capability_order"]}
+    capabilities = {name: "blocked" for name in policy["capability_order"]}
     capability_reasons = {
-        name: "CAPABILITY_REQUIREMENTS_NOT_MET" for name in trusted_policy["capability_order"]
+        name: "CAPABILITY_REQUIREMENTS_NOT_MET" for name in policy["capability_order"]
     }
-    template_ids: dict[str, str | None] = {name: None for name in trusted_policy["capability_order"]}
+    template_ids: dict[str, str | None] = {name: None for name in policy["capability_order"]}
 
-    static_rule = trusted_policy["capability_rules"]["static_descriptive_audit"]
+    static_rule = policy["capability_rules"]["static_descriptive_audit"]
     capabilities["static_descriptive_audit"] = static_rule["allowed_status"]
     capability_reasons["static_descriptive_audit"] = static_rule["allowed_reason"]
     template_ids["static_descriptive_audit"] = static_rule["template_id"]
@@ -147,7 +183,7 @@ def evaluate_claim_evidence(
         )
     )
     if difference_allowed:
-        difference_rule = trusted_policy["capability_rules"]["descriptive_difference_claim"]
+        difference_rule = policy["capability_rules"]["descriptive_difference_claim"]
         capabilities["descriptive_difference_claim"] = difference_rule["allowed_status"]
         capability_reasons["descriptive_difference_claim"] = difference_rule["allowed_reason"]
         template_ids["descriptive_difference_claim"] = difference_rule["template_id"]
@@ -161,19 +197,19 @@ def evaluate_claim_evidence(
         )
     )
     if directional_allowed:
-        directional_rule = trusted_policy["capability_rules"]["directional_change_claim"]
+        directional_rule = policy["capability_rules"]["directional_change_claim"]
         capabilities["directional_change_claim"] = directional_rule["allowed_status"]
         capability_reasons["directional_change_claim"] = directional_rule["allowed_reason"]
         template_ids["directional_change_claim"] = directional_rule["template_id"]
 
-    for capability, reason in trusted_policy["fixed_blocked_capabilities"].items():
+    for capability, reason in policy["fixed_blocked_capabilities"].items():
         capability_reasons[capability] = reason
 
-    qualifiers = [trusted_policy["required_language_qualifiers"]["identity_boundary"]]
+    qualifiers = [policy["required_language_qualifiers"]["identity_boundary"]]
     if identity_state != "association_not_applicable":
-        qualifiers.append(trusted_policy["required_language_qualifiers"]["rule_association"])
+        qualifiers.append(policy["required_language_qualifiers"]["rule_association"])
     if identity_state == "association_pending_review":
-        qualifiers.append(trusted_policy["required_language_qualifiers"]["pending_review"])
+        qualifiers.append(policy["required_language_qualifiers"]["pending_review"])
     if any(
         evidence[field] != "verified_comparable"
         for field in (
@@ -182,23 +218,23 @@ def evaluate_claim_evidence(
             "comparison_comparability_status",
         )
     ):
-        qualifiers.append(trusted_policy["required_language_qualifiers"]["static_only"])
+        qualifiers.append(policy["required_language_qualifiers"]["static_only"])
 
     reason_codes = _deduplicate(
         [
             capability_reasons[name]
-            for name in trusted_policy["capability_order"]
+            for name in policy["capability_order"]
             if capability_reasons[name] != "CAPABILITY_REQUIREMENTS_NOT_MET"
         ]
     )
     return {
         "schema_version": "claim_decision_v4",
-        "profile": trusted_policy["profile"],
+        "profile": policy["profile"],
         "decision_id": f"CD-{normalized_id}" if normalized_id else "",
         "evidence_id": normalized_id,
-        "claim_policy_sha256": _policy_sha256(trusted_policy),
-        "claim_evaluator_contract_version": trusted_policy["evaluator_contract_version"],
-        "claim_evaluator_sha256": EVALUATOR_SOURCE_SHA256,
+        "claim_policy_sha256": _policy_sha256(policy),
+        "claim_evaluator_contract_version": policy["evaluator_contract_version"],
+        "claim_evaluator_sha256": evaluator_sha256,
         "capabilities": capabilities,
         "capability_reasons": capability_reasons,
         "template_ids": template_ids,
@@ -207,7 +243,7 @@ def evaluate_claim_evidence(
     }
 
 
-def _validate_policy_mapping(policy: Mapping[str, Any]) -> None:
+def _validate_policy_mapping(policy: Mapping[str, Any]) -> dict[str, Any]:
     """Apply the same validation to an injected policy without trusting it."""
 
     if not isinstance(policy, dict):
@@ -224,7 +260,8 @@ def _validate_policy_mapping(policy: Mapping[str, Any]) -> None:
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ClaimPolicyError("claim policy must contain JSON-compatible values") from exc
     _validate_policy_data(parsed)
-    _require_canonical_policy(parsed, _read_policy_file(DEFAULT_POLICY_PATH))
+    _require_canonical_policy(parsed, _default_policy_copy())
+    return parsed
 
 
 def _require_canonical_policy(
@@ -258,6 +295,9 @@ def _validate_policy_data(policy: Any) -> None:
 
     observation_sources = _require_closed_string_list(policy, "observation_source_enum")
     comparability_statuses = _require_closed_string_list(policy, "comparability_status_enum")
+    _require_closed_string_list(policy, "previous_entity_type_enum")
+    _require_closed_string_list(policy, "registration_status_enum")
+    _require_closed_string_list(policy, "execution_profile_enum")
     accepted_states = _require_closed_string_list(policy, "accepted_identity_evidence_states")
     capability_order = _require_closed_string_list(policy, "capability_order")
     if "verified_comparable" not in comparability_statuses:
@@ -313,9 +353,12 @@ def _validate_policy_data(policy: Any) -> None:
 
     source_rules = policy["source_comparability_rules"]
     if not isinstance(source_rules, dict) or set(source_rules) != {
-        "verified_comparable_allowed_sources"
+        "mixed_sources_policy",
+        "verified_comparable_allowed_sources",
     }:
         raise ClaimPolicyError("claim policy source comparability rules are invalid")
+    if source_rules["mixed_sources_policy"] != "static_only":
+        raise ClaimPolicyError("claim policy mixed source rule must remain static_only in Phase A")
     verified_sources = _require_closed_string_list(
         source_rules,
         "verified_comparable_allowed_sources",
@@ -385,6 +428,11 @@ def _validate_evidence_schema(evidence: Mapping[str, Any], policy: Mapping[str, 
 
     previous_entity_type = evidence.get("previous_entity_type")
     identity_state = evidence["identity_evidence_state"]
+    if (
+        not isinstance(previous_entity_type, str)
+        or previous_entity_type not in policy["previous_entity_type_enum"]
+    ):
+        return "EVIDENCE_SCHEMA_INVALID"
     if previous_entity_type == "not_applicable":
         if identity_state not in {"association_rejected", "association_not_applicable"}:
             return "EVIDENCE_SCHEMA_INVALID"
@@ -416,7 +464,11 @@ def _validate_evidence_schema(evidence: Mapping[str, Any], policy: Mapping[str, 
     if previous_entity_type == "not_applicable" and valid_timepoint_count != 1:
         return "EVIDENCE_SCHEMA_INVALID"
 
-    if evidence.get("registration_status") not in {"registered", "not_verified"}:
+    registration_status = evidence.get("registration_status")
+    if (
+        not isinstance(registration_status, str)
+        or registration_status not in policy["registration_status_enum"]
+    ):
         return "EVIDENCE_SCHEMA_INVALID"
     if identity_state == "association_pending_review" and evidence["needs_manual_review"] is not True:
         return "EVIDENCE_SCHEMA_INVALID"
@@ -424,7 +476,13 @@ def _validate_evidence_schema(evidence: Mapping[str, Any], policy: Mapping[str, 
         return "EVIDENCE_SCHEMA_INVALID"
 
     all_sources = [current_source, *previous_sources]
-    if "verified_fixture" in all_sources and evidence.get("execution_profile") != "test":
+    execution_profile = evidence.get("execution_profile")
+    if (
+        not isinstance(execution_profile, str)
+        or execution_profile not in policy["execution_profile_enum"]
+    ):
+        return "EVIDENCE_SCHEMA_INVALID"
+    if "verified_fixture" in all_sources and execution_profile != "test":
         return "VERIFIED_FIXTURE_OUTSIDE_TEST"
     return None
 
@@ -433,6 +491,7 @@ def _blocked_decision(
     evidence_id: str,
     policy: Mapping[str, Any],
     reason: str,
+    evaluator_sha256: str,
 ) -> dict[str, Any]:
     capabilities = {name: "blocked" for name in policy["capability_order"]}
     capability_reasons = {
@@ -447,7 +506,7 @@ def _blocked_decision(
         "evidence_id": evidence_id,
         "claim_policy_sha256": _policy_sha256(policy),
         "claim_evaluator_contract_version": policy["evaluator_contract_version"],
-        "claim_evaluator_sha256": EVALUATOR_SOURCE_SHA256,
+        "claim_evaluator_sha256": evaluator_sha256,
         "capabilities": capabilities,
         "capability_reasons": capability_reasons,
         "template_ids": {name: None for name in policy["capability_order"]},
@@ -465,6 +524,27 @@ def _policy_sha256(policy: Mapping[str, Any]) -> str:
         allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+@lru_cache(maxsize=1)
+def _evaluator_source_sha256() -> str:
+    source_path = Path(__file__)
+    try:
+        source_bytes = source_path.read_bytes()
+    except OSError as exc:
+        raise ClaimPolicyError(f"unable to read claim evaluator source: {source_path}") from exc
+    return _normalized_source_sha256(source_bytes, source_path=source_path)
+
+
+def _normalized_source_sha256(source_bytes: bytes, *, source_path: Path | None = None) -> str:
+    try:
+        source_text = source_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        label = source_path if source_path is not None else "<provided evaluator source>"
+        raise ClaimPolicyError(f"claim evaluator source is not UTF-8: {label}") from exc
+
+    normalized_source = source_text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+    return hashlib.sha256(normalized_source).hexdigest()
 
 
 def _compose_comparability_status(

@@ -198,6 +198,24 @@ def test_malformed_source_values_fail_closed_without_type_error(field, value):
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        ("registration_status", {}),
+        ("registration_status", []),
+        ("previous_entity_type", {}),
+        ("previous_entity_type", []),
+        ("execution_profile", {}),
+        ("execution_profile", []),
+    ],
+)
+def test_malformed_evidence_enums_fail_closed_without_type_error(field, value):
+    decision = evaluate_claim_evidence(valid_evidence(**{field: value}))
+
+    assert set(decision["capabilities"].values()) == {"blocked"}
+    assert decision["reason_codes"][0] == "EVIDENCE_SCHEMA_INVALID"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
         ("current_observation_source", "unknown_source"),
         ("current_comparability_status", "maybe_comparable"),
         ("previous_comparability_status", "maybe_comparable"),
@@ -248,6 +266,15 @@ def test_unverified_sources_cannot_claim_verified_comparability(source, side):
 
     assert set(decision["capabilities"].values()) == {"blocked"}
     assert decision["reason_codes"][0] == "EVIDENCE_SCHEMA_INVALID"
+
+
+def test_mixed_sources_policy_is_explicitly_static_only():
+    policy = load_claim_policy()
+
+    assert policy["source_comparability_rules"]["mixed_sources_policy"] == "static_only"
+    assert "mixed_sources" not in policy["source_comparability_rules"][
+        "verified_comparable_allowed_sources"
+    ]
 
 
 def test_verified_fixture_is_rejected_outside_test_profile():
@@ -313,7 +340,75 @@ def test_decision_provenance_covers_policy_and_evaluator_bytes():
 
     assert decision["claim_policy_sha256"] == hashlib.sha256(policy_bytes).hexdigest()
     assert decision["claim_evaluator_contract_version"] == "phase_a_claim_evaluator_v1"
-    assert decision["claim_evaluator_sha256"] == hashlib.sha256(evaluator_bytes).hexdigest()
+    assert decision["claim_evaluator_sha256"] == claim_policy_module._normalized_source_sha256(
+        evaluator_bytes
+    )
+
+
+def test_evaluator_hash_is_stable_across_lf_and_crlf():
+    lf_source = b"def evaluate():\n    return True\n"
+    crlf_source = lf_source.replace(b"\n", b"\r\n")
+
+    assert claim_policy_module._normalized_source_sha256(
+        lf_source
+    ) == claim_policy_module._normalized_source_sha256(crlf_source)
+
+
+def test_evaluator_source_read_failure_is_claim_policy_error(monkeypatch):
+    claim_policy_module._evaluator_source_sha256.cache_clear()
+    original_read_bytes = Path.read_bytes
+
+    def failing_read_bytes(path):
+        if path.resolve() == Path(claim_policy_module.__file__).resolve():
+            raise OSError("source unavailable")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", failing_read_bytes)
+    try:
+        with pytest.raises(ClaimPolicyError, match="unable to read claim evaluator source"):
+            claim_policy_module._evaluator_source_sha256()
+    finally:
+        claim_policy_module._evaluator_source_sha256.cache_clear()
+
+
+def test_validated_internal_evaluator_performs_no_file_reads(monkeypatch):
+    policy = load_claim_policy()
+
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("pure evaluator attempted file I/O")
+
+    monkeypatch.setattr(Path, "read_text", unexpected_read)
+    monkeypatch.setattr(Path, "read_bytes", unexpected_read)
+    decision = claim_policy_module._evaluate_validated_claim_evidence(
+        valid_evidence(),
+        policy,
+        profile="phase_a",
+        evaluator_sha256="e" * 64,
+    )
+
+    assert decision["capabilities"]["directional_change_claim"] == "allowed_with_limits"
+    assert decision["claim_evaluator_sha256"] == "e" * 64
+
+
+def test_default_policy_file_is_read_once(monkeypatch):
+    claim_policy_module._canonical_default_policy_json.cache_clear()
+    original_read_text = Path.read_text
+    policy_read_count = 0
+
+    def counting_read_text(path, *args, **kwargs):
+        nonlocal policy_read_count
+        if path.resolve() == claim_policy_module.DEFAULT_POLICY_PATH.resolve():
+            policy_read_count += 1
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    try:
+        evaluate_claim_evidence(valid_evidence())
+        evaluate_claim_evidence(valid_evidence())
+    finally:
+        claim_policy_module._canonical_default_policy_json.cache_clear()
+
+    assert policy_read_count == 1
 
 
 def test_non_object_evidence_fails_closed():
