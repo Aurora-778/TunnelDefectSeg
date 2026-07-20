@@ -1,6 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+from threading import Event, Lock
 
 import pytest
 
@@ -375,7 +377,7 @@ def test_evaluator_hash_is_stable_across_lf_and_crlf():
 
 
 def test_non_utf8_evaluator_source_is_claim_policy_error(monkeypatch):
-    claim_policy_module._evaluator_source_sha256.cache_clear()
+    claim_policy_module._clear_evaluator_source_cache_for_tests()
     original_read_bytes = Path.read_bytes
 
     def non_utf8_read_bytes(path):
@@ -388,11 +390,11 @@ def test_non_utf8_evaluator_source_is_claim_policy_error(monkeypatch):
         with pytest.raises(ClaimPolicyError, match="claim evaluator source is not UTF-8"):
             claim_policy_module._evaluator_source_sha256()
     finally:
-        claim_policy_module._evaluator_source_sha256.cache_clear()
+        claim_policy_module._clear_evaluator_source_cache_for_tests()
 
 
 def test_evaluator_source_read_failure_is_claim_policy_error(monkeypatch):
-    claim_policy_module._evaluator_source_sha256.cache_clear()
+    claim_policy_module._clear_evaluator_source_cache_for_tests()
     original_read_bytes = Path.read_bytes
 
     def failing_read_bytes(path):
@@ -405,7 +407,7 @@ def test_evaluator_source_read_failure_is_claim_policy_error(monkeypatch):
         with pytest.raises(ClaimPolicyError, match="unable to read claim evaluator source"):
             claim_policy_module._evaluator_source_sha256()
     finally:
-        claim_policy_module._evaluator_source_sha256.cache_clear()
+        claim_policy_module._clear_evaluator_source_cache_for_tests()
 
 
 def test_validated_internal_evaluator_performs_no_file_reads(monkeypatch):
@@ -428,7 +430,7 @@ def test_validated_internal_evaluator_performs_no_file_reads(monkeypatch):
 
 
 def test_default_policy_file_is_read_once(monkeypatch):
-    claim_policy_module._canonical_default_policy_json.cache_clear()
+    claim_policy_module._clear_default_policy_cache_for_tests()
     original_read_text = Path.read_text
     policy_read_count = 0
 
@@ -443,7 +445,7 @@ def test_default_policy_file_is_read_once(monkeypatch):
         evaluate_claim_evidence(valid_evidence())
         evaluate_claim_evidence(valid_evidence())
     finally:
-        claim_policy_module._canonical_default_policy_json.cache_clear()
+        claim_policy_module._clear_default_policy_cache_for_tests()
 
     assert policy_read_count == 1
 
@@ -468,7 +470,7 @@ def test_default_policy_disk_change_requires_process_restart(tmp_path, monkeypat
     policy_path = tmp_path / "inspection_claim_policy.json"
     policy_path.write_text(json.dumps(original_policy, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setattr(claim_policy_module, "DEFAULT_POLICY_PATH", policy_path)
-    claim_policy_module._canonical_default_policy_json.cache_clear()
+    claim_policy_module._clear_default_policy_cache_for_tests()
 
     try:
         cached_policy = load_claim_policy()
@@ -481,11 +483,11 @@ def test_default_policy_disk_change_requires_process_restart(tmp_path, monkeypat
         assert reloaded == cached_policy
         assert reloaded["required_language_qualifiers"]["static_only"] != "disk hot update"
     finally:
-        claim_policy_module._canonical_default_policy_json.cache_clear()
+        claim_policy_module._clear_default_policy_cache_for_tests()
 
 
 def test_evaluator_source_disk_change_requires_process_restart(monkeypatch):
-    claim_policy_module._evaluator_source_sha256.cache_clear()
+    claim_policy_module._clear_evaluator_source_cache_for_tests()
     original_read_bytes = Path.read_bytes
     source_versions = iter((b"first evaluator source\n", b"changed evaluator source\n"))
     read_count = 0
@@ -502,10 +504,128 @@ def test_evaluator_source_disk_change_requires_process_restart(monkeypatch):
         first_hash = claim_policy_module._evaluator_source_sha256()
         second_hash = claim_policy_module._evaluator_source_sha256()
     finally:
-        claim_policy_module._evaluator_source_sha256.cache_clear()
+        claim_policy_module._clear_evaluator_source_cache_for_tests()
 
     assert first_hash == second_hash
     assert read_count == 1
+
+
+def test_default_policy_concurrent_cold_start_reads_once(monkeypatch):
+    claim_policy_module._clear_default_policy_cache_for_tests()
+    original_read_text = Path.read_text
+    read_started = Event()
+    release_read = Event()
+    count_lock = Lock()
+    read_count = 0
+
+    def blocking_read_text(path, *args, **kwargs):
+        nonlocal read_count
+        if path.resolve() == claim_policy_module.DEFAULT_POLICY_PATH.resolve():
+            with count_lock:
+                read_count += 1
+            read_started.set()
+            assert release_read.wait(timeout=5)
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", blocking_read_text)
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(load_claim_policy) for _ in range(8)]
+            assert read_started.wait(timeout=5)
+            release_read.set()
+            policies = [future.result(timeout=5) for future in futures]
+    finally:
+        release_read.set()
+        claim_policy_module._clear_default_policy_cache_for_tests()
+
+    assert read_count == 1
+    assert all(policy == policies[0] for policy in policies)
+    assert len({id(policy) for policy in policies}) == len(policies)
+
+
+def test_evaluator_concurrent_cold_start_reads_once(monkeypatch):
+    claim_policy_module._clear_evaluator_source_cache_for_tests()
+    original_read_bytes = Path.read_bytes
+    read_started = Event()
+    release_read = Event()
+    count_lock = Lock()
+    read_count = 0
+
+    def blocking_read_bytes(path):
+        nonlocal read_count
+        if path.resolve() == Path(claim_policy_module.__file__).resolve():
+            with count_lock:
+                read_count += 1
+            read_started.set()
+            assert release_read.wait(timeout=5)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", blocking_read_bytes)
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [
+                pool.submit(claim_policy_module._evaluator_source_sha256)
+                for _ in range(8)
+            ]
+            assert read_started.wait(timeout=5)
+            release_read.set()
+            hashes = [future.result(timeout=5) for future in futures]
+    finally:
+        release_read.set()
+        claim_policy_module._clear_evaluator_source_cache_for_tests()
+
+    assert read_count == 1
+    assert len(set(hashes)) == 1
+
+
+def test_default_policy_failed_initialization_can_retry(monkeypatch):
+    claim_policy_module._clear_default_policy_cache_for_tests()
+    original_read_text = Path.read_text
+    attempts = 0
+
+    def fail_once_read_text(path, *args, **kwargs):
+        nonlocal attempts
+        if path.resolve() == claim_policy_module.DEFAULT_POLICY_PATH.resolve():
+            attempts += 1
+            if attempts == 1:
+                raise OSError("temporary policy read failure")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_once_read_text)
+    try:
+        with pytest.raises(ClaimPolicyError, match="unable to read claim policy"):
+            load_claim_policy()
+        policy = load_claim_policy()
+    finally:
+        claim_policy_module._clear_default_policy_cache_for_tests()
+
+    assert policy["schema_version"] == "claim_policy_v5"
+    assert attempts == 2
+
+
+def test_evaluator_failed_initialization_can_retry(monkeypatch):
+    claim_policy_module._clear_evaluator_source_cache_for_tests()
+    original_read_bytes = Path.read_bytes
+    attempts = 0
+
+    def fail_once_read_bytes(path):
+        nonlocal attempts
+        if path.resolve() == Path(claim_policy_module.__file__).resolve():
+            attempts += 1
+            if attempts == 1:
+                raise OSError("temporary evaluator read failure")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_once_read_bytes)
+    try:
+        with pytest.raises(ClaimPolicyError, match="unable to read claim evaluator source"):
+            claim_policy_module._evaluator_source_sha256()
+        evaluator_hash = claim_policy_module._evaluator_source_sha256()
+    finally:
+        claim_policy_module._clear_evaluator_source_cache_for_tests()
+
+    assert len(evaluator_hash) == 64
+    assert attempts == 2
 
 
 def test_non_object_evidence_fails_closed():

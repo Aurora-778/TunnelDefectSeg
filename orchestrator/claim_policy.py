@@ -8,10 +8,10 @@ it does not infer identity, recompute association scores, or publish outputs.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 
@@ -51,6 +51,11 @@ EVIDENCE_BOOL_FIELDS = (
     "needs_manual_review",
 )
 
+_DEFAULT_POLICY_CACHE_LOCK = Lock()
+_DEFAULT_POLICY_JSON_CACHE: str | None = None
+_EVALUATOR_SOURCE_CACHE_LOCK = Lock()
+_EVALUATOR_SOURCE_SHA256_CACHE: str | None = None
+
 
 class ClaimPolicyError(ValueError):
     """Raised when the trusted machine policy itself is malformed."""
@@ -72,16 +77,32 @@ def load_claim_policy(path: Path | None = None) -> dict[str, Any]:
     return policy
 
 
-@lru_cache(maxsize=1)
 def _canonical_default_policy_json() -> str:
-    policy = _read_policy_file(DEFAULT_POLICY_PATH)
-    return json.dumps(
-        policy,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
+    global _DEFAULT_POLICY_JSON_CACHE
+
+    cached = _DEFAULT_POLICY_JSON_CACHE
+    if cached is not None:
+        return cached
+    with _DEFAULT_POLICY_CACHE_LOCK:
+        cached = _DEFAULT_POLICY_JSON_CACHE
+        if cached is None:
+            policy = _read_policy_file(DEFAULT_POLICY_PATH)
+            cached = json.dumps(
+                policy,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            _DEFAULT_POLICY_JSON_CACHE = cached
+    return cached
+
+
+def _clear_default_policy_cache_for_tests() -> None:
+    global _DEFAULT_POLICY_JSON_CACHE
+
+    with _DEFAULT_POLICY_CACHE_LOCK:
+        _DEFAULT_POLICY_JSON_CACHE = None
 
 
 def _default_policy_copy() -> dict[str, Any]:
@@ -544,16 +565,34 @@ def _policy_sha256(policy: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-@lru_cache(maxsize=1)
 def _evaluator_source_sha256() -> str:
     """Return the process-lifetime normalized source hash, not a semantic hash."""
 
-    source_path = Path(__file__)
-    try:
-        source_bytes = source_path.read_bytes()
-    except OSError as exc:
-        raise ClaimPolicyError(f"unable to read claim evaluator source: {source_path}") from exc
-    return _normalized_source_sha256(source_bytes, source_path=source_path)
+    global _EVALUATOR_SOURCE_SHA256_CACHE
+
+    cached = _EVALUATOR_SOURCE_SHA256_CACHE
+    if cached is not None:
+        return cached
+    with _EVALUATOR_SOURCE_CACHE_LOCK:
+        cached = _EVALUATOR_SOURCE_SHA256_CACHE
+        if cached is None:
+            source_path = Path(__file__)
+            try:
+                source_bytes = source_path.read_bytes()
+            except OSError as exc:
+                raise ClaimPolicyError(
+                    f"unable to read claim evaluator source: {source_path}"
+                ) from exc
+            cached = _normalized_source_sha256(source_bytes, source_path=source_path)
+            _EVALUATOR_SOURCE_SHA256_CACHE = cached
+    return cached
+
+
+def _clear_evaluator_source_cache_for_tests() -> None:
+    global _EVALUATOR_SOURCE_SHA256_CACHE
+
+    with _EVALUATOR_SOURCE_CACHE_LOCK:
+        _EVALUATOR_SOURCE_SHA256_CACHE = None
 
 
 def _normalized_source_sha256(source_bytes: bytes, *, source_path: Path | None = None) -> str:
