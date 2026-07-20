@@ -2587,11 +2587,14 @@ os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
   "hostname": "host-a",
   "lock_token": "uuid",
   "recovery_of_lock_token": null,
+  "recovery_token": null,
+  "recovery_intent_path": null,
+  "recovery_intent_sha256": null,
   "created_at": "..."
 }
 ```
 
-Active Lock 的 `phase` 闭集为 `allocating | running | recovering`；缺失或未知值均 Fail Closed。初次获取时 `recovery_of_lock_token` 必须为 null；恢复接管时必须等于被替换锁的 lock_token。`recovering` 只表示一个已验证归属的 stale running/recovering Run 正在执行 State/Publication recovery，不表示可以启动新的业务 Run。
+Active Lock 的 `phase` 闭集为 `allocating | running | recovering`；缺失或未知值均 Fail Closed。初次获取及普通 running 时四个 recovery 字段必须为 null；恢复接管时 `recovery_of_lock_token` 必须等于被替换锁的 lock_token，recovery token/intent path/intent SHA 必须精确引用本次已持久化的统一 takeover intent。`recovering` 只表示一个已验证归属的 stale allocating/running/recovering Run 正在执行 allocation/State/Publication recovery，不表示可以启动新的业务 Run。
 
 首次锁必须使用上面的 `O_CREAT | O_EXCL` 返回句柄直接写入完整 JSON，随后 flush+fsync 该句柄并同步 `runs/` 目录；不得用可覆盖现有锁的 `os.replace()` 获取锁。只有排他创建和持久化全部成功后，进程才可进入 allocation。首次写入失败时，仅持有本次 `lock_token` 的创建者可以删除未完成锁并同步目录；无法证明所有权、清理失败或发现 malformed lock 时必须 Fail Closed。新获取者在 O_EXCL 成功并持久化后，还必须重新检查 `.active_run.recovery.lock` 和任意 `.active_run.release.*` tombstone；若检查到并发恢复/释放痕迹，必须按自己的 lock_token 安全撤销本次获取、同步目录并返回 `ACTIVE_RUN_CONFLICT`，不得进入 allocation。
 
@@ -2617,8 +2620,8 @@ Active Lock 的 `phase` 闭集为 `allocating | running | recovering`；缺失�
     },
 )
 → metadata.json 首次原子写入成功后，Run 才算 created
-→ 使用 StateStore.initialize_run() 原子创建完整 state.json 和 genesis state_journal_tail.json，初始 status=CREATED、state_version=0、last_operation_* 均为 null；Journal 必须不存在或为空
-→ metadata.json、state.json 及 Run 目录均完成 flush+fsync、父目录 durability sync 和重读复核后，才允许更新锁为 running
+→ 使用 StateStore.initialize_run() 在同一 state lock 内分别原子创建完整 state.json 和 genesis state_journal_tail.json；两份文件不是跨文件原子提交，固定先提升 state、同步/重读，再提升 anchor、同步/重读；初始 status=CREATED、state_version=0、last_operation_* 均为 null，Journal 必须不存在或为空
+→ metadata.json、state.json、genesis anchor 及 Run 目录均完成 flush+fsync、父目录 durability sync 和重读复核后，才允许更新锁为 running
 → 原子更新锁：
    phase=running
    run_id=reserved_run_id
@@ -2671,12 +2674,19 @@ reserved_run_id 目录存在但 metadata.json 不存在
 → 目录为空时仅可在审计记录后删除该目录和锁
 → 目录非空或清理失败时写 .allocation_recovery_required 并 FAIL CLOSED
 
-metadata.json 存在且 allocation_token/run_id 与锁一致，但 state.json 缺失或初始化未通过复核
-→ 将该 Run 标记 allocation_recovery_required 并 FAIL CLOSED；不得猜测或补造初始 State
+metadata.json 存在且 allocation_token/run_id 与锁一致，但 state.json 与 state_journal_tail.json 均缺失
+→ 初始化尚未提交；写 .allocation_recovery_required 并 FAIL CLOSED，不得猜测或补造初始 State/anchor
 
-metadata.json 与 state.json 均存在，allocation_token/run_id 一致，state 为合法 CREATED/version=0 且 Journal 不存在或为空
-→ 将该 Run 标记 FAILED / allocation_aborted
-→ 删除锁
+state.json 已存在但 anchor 缺失，或 anchor 已存在但 state.json 缺失
+→ 这是两次原子替换之间的部分初始化；写 .allocation_recovery_required 并 FAIL CLOSED
+→ 不得调用 checkpoint_context/transition_status，不得尝试 CREATED→FAILED，也不得删除已有一侧
+
+state.json 与 anchor 均存在，但 state 不是合法 CREATED/version=0/last_operation_*=null，anchor 不是合法 genesis（tail index/checksum 均为 null、size=0），任一 Hash/schema/run/allocation 不一致，或 Journal 非空
+→ 写 .allocation_recovery_required 并 FAIL CLOSED；保留两份文件和临时残留供审计，不得自动修补或执行 WAL
+
+metadata.json、state.json 与 genesis anchor 均合法，allocation_token/run_id 一致，Journal 不存在或为空
+→ 才允许进入标准 allocation abort：使用现有接管审计把 Active Lock 持久化为 recovering，经 StateStore 合法执行唯一 CREATED→FAILED transition并完成 outcome
+→ FAILED State、统一 recovery outcome 和目录同步全部完成后才删除锁；任一步失败均保留 recovery 证据并 FAIL CLOSED
 
 metadata token/run_id 不一致、目录名称不一致或状态不一致
 → FAIL CLOSED
@@ -2686,11 +2696,49 @@ metadata token/run_id 不一致、目录名称不一致或状态不一致
 
 `phase=running` 或 `phase=recovering` 的 Active Lock 不能永久悬挂，也不能通过直接删除后猜测 Run 归属。仅当锁声明的 hostname 为当前主机且 PID 已不存在时，允许进入恢复；PID 仍存在、跨主机或进程状态无法可靠判断时一律 Fail Closed，不实施自动接管。
 
-同机死进程恢复使用一个最小恢复互斥文件 `runs/.active_run.recovery.lock`，同样以 `O_CREAT | O_EXCL` 获取。该文件必须完整记录 `schema_version=active_run_recovery_lock_v1`、recovery_token、pid、hostname、target_lock_token、target_lock_sha256、run_id 和 created_at，并完成文件及 `runs/` 目录持久化。恢复者必须在持有该互斥文件期间重读 Active Lock，并确认原 `lock_token`、文件 Hash、run_id、allocation_token 和 phase 未变化；随后验证 Run metadata、Canonical State、State Journal 与 Publication transaction。只有归属和基础 schema 验证通过，才可将 Active Lock 原子更新为带新 `lock_token`、`recovery_of_lock_token`、同一 run_id 且 `phase=recovering` 的内容，完成文件及 `runs/` 目录持久化后释放 recovery lock。随后执行 State/Publication recovery；仍需继续业务执行时再把 Active Lock 原子更新为 `phase=running` 并持久化，已进入 FAILED/COMPLETED 的 Run 则按终态合同直接完成清理和释放。其他进程无法获取 recovery lock 时不得参与接管；普通新 Run 分配也不得绕过已有 Active Lock。
+同机死进程恢复使用一个最小恢复互斥文件 `runs/.active_run.recovery.lock`，同样以 `O_CREAT | O_EXCL` 获取。该文件必须完整记录 `schema_version=active_run_recovery_lock_v1`、recovery_token、pid、hostname、target_lock_token、target_lock_sha256、run_id 和 created_at，并完成文件及 `runs/` 目录持久化。恢复者必须在持有该互斥文件期间重读 Active Lock，并确认原 `lock_token`、文件 Hash、run_id、allocation_token 和 phase 未变化；随后验证 Run metadata、Canonical State、State Journal 与 Publication transaction。
+
+每次自动接管都必须先生成 canonical `new_lock_token` 和第 14.4.1 节统一审计 basename，并在替换 Active Lock 前以 `O_EXCL` 写入 `runs/<run_id>/lock_recovery_audit/<basename>.intent.json`。自动与人工流程共用唯一 `active_run_recovery_audit_v1` intent schema：
+
+```text
+schema_version=active_run_recovery_audit_v1
+actor_kind=automatic_controller | authorized_manual_operator
+recovery_action=takeover | resume_stale_recovery
+operator_identity              # automatic 时 canonical null
+reason                         # automatic 使用受控 reason code
+run_id
+allocation_token
+recovery_token
+old_lock_token
+new_lock_token
+target_lock_sha256
+target_phase
+hostname
+target_pid
+actor_pid
+plan_fingerprint
+target_state_version
+target_state_status
+target_state_sha256
+target_journal_tail_record_index
+target_journal_tail_record_checksum
+target_journal_tail_anchor_sha256
+target_publication_transaction_sha256  # 不存在时 canonical null
+target_manifest_sha256                 # 不存在时 canonical null
+validation_results                     # 固定键布尔 object
+created_at
+intent_checksum
+```
+
+intent 必须使用第 16.1 节 canonical JSON/SHA-256 规则，flush+fsync 文件、同步审计目录和 Run 目录并重读复核。只有 intent 持久化成功且 target Active Lock 再次完全匹配，才可将 Active Lock 原子更新为带 `new_lock_token`、`recovery_of_lock_token=old_lock_token`、recovery token、intent POSIX 相对路径/SHA-256、同一 run_id/allocation_token 且 `phase=recovering` 的内容。Active Lock 文件和 `runs/` 目录持久化并重读复核后才可释放 recovery mutex；该 mutex 可以删除，但不可覆盖 intent 必须持续保留，供 WAL terminal 行和后续重放验证。
+
+随后执行 allocation/State/Publication recovery。接管者补写旧 pending 的 WAL terminal 行只能引用 Active Lock 中同一路径/Hash 的 `active_run_recovery_audit_v1` intent；`recovery_audit_ref` 必须同时保存该 intent 的项目相对 POSIX 路径和 SHA-256，二者必须与 Active Lock 中的引用逐字节一致。全部 recovery 完成后，必须使用同一 basename/outcome schema 以 `O_EXCL` 写 `standard_recovery_completed` outcome，冻结最终 Journal tail/anchor、Canonical State、Publication、当前 `phase=recovering` Active Lock Hash，以及预先生成的唯一 successor Active Lock canonical bytes/Hash（终态释放则 successor 为 canonical null）；outcome 写入及目录同步完成前不得推进锁、释放终态锁或报告成功。outcome 写入失败时保留 intent 和 `phase=recovering` Active Lock 并 Fail Closed。
+
+写入 completed outcome 的同一个、仍持有有效 recovery mutex/lock token 的恢复调用，随后只允许执行 outcome 已冻结的那一次 exact successor 动作：仍需继续业务执行时，把 Active Lock 原子替换为已承诺的 `phase=running` bytes 并将 recovery 字段清为 canonical null；已进入 FAILED/COMPLETED 时，按 outcome 承诺的终态清理/释放动作执行。实际 successor bytes/Hash、token 或 phase 与 outcome 不一致时 Fail Closed，不得另算新 successor。这个单次 finalization 是 completed outcome 的组成步骤，不属于后文的“后续重放命令”；它完成并同步父目录后才可报告成功。任何稍后重新启动或重复调用、只要已观察到 completed outcome，就必须进入只读重放，不能再次执行 successor 动作。其他进程无法获取 recovery mutex 时不得参与接管；普通新 Run 分配也不得绕过已有 Active Lock。
 
 若 `.active_run.recovery.lock` 已存在，Phase A 不自动删除或接管它：持有进程仍存活、跨主机、文件损坏或同机 PID 已死亡均先返回 `LOCK_ERROR/PUBLICATION_RECOVERY_REQUIRED`，保留 Active Lock 和 recovery lock 供人工核对。该保守边界避免为“恢复锁的恢复”再建立第三层锁；不得因 recovery lock 看似过期就静默删除。
 
-Phase A 是单机本地工程原型；人工解除 recovery lock 只授权给“当前项目根与 `runs/` 目录的本机 OS 所有者账号”，并且只能通过 A3 计划中的显式 recovery 命令执行。不提供远程/API 解除入口，不接受仅拥有 Web 访问权或报告审阅权的操作者。普通启动、`--resume`、测试清理和按文件年龄清理均无权删除。命令必须要求操作者显式提供 `recovery_token`、`target_lock_sha256`、`run_id` 和非空 reason，并在删除前逐项验证：
+Phase A 是单机本地工程原型；人工解除 recovery lock 只授权给“当前项目根与 `runs/` 目录的本机 OS 所有者账号”，并且只能通过 A3 计划中的显式 recovery 命令执行。不提供远程/API 解除入口，不接受仅拥有 Web 访问权或报告审阅权的操作者。普通启动、`--resume`、测试清理和按文件年龄清理均无权删除。人工命令不得定义第二套审计 schema：必须复用上述 basename、`active_run_recovery_audit_v1` intent 和 outcome 状态闭集。命令必须要求操作者显式提供 `recovery_token`、`target_lock_sha256`、`run_id` 和非空 reason，并在删除前逐项验证：
 
 ```text
 recovery lock schema/recovery_token/hostname/PID
@@ -2710,13 +2758,13 @@ runs/<run_id>/lock_recovery_audit/<basename>.intent.json
 runs/<run_id>/lock_recovery_audit/<basename>.outcome.<attempt_number>.json
 ```
 
-解除前必须先以 `O_EXCL` 写 intent，内容至少包含操作者 OS identity、reason、命令参数、recovery/Active Lock 原文 Hash、run_id、State version/status、Publication 状态、逐项验证结果和 UTC 时间，并 flush+fsync、同步审计目录与 `runs/<run_id>`；intent 写入或同步失败时不得删除 recovery lock。已存在且 Hash/字段完全一致的 intent 只能用于续接同一 recovery_token，任何差异均 Fail Closed。随后尝试删除 recovery lock并同步 `runs/`。无论删除、目录同步还是后续标准 recovery 成功或失败，都必须以 `O_EXCL` 写递增的 outcome，记录 `audit_attempt_number`、`removed | remove_failed | directory_sync_failed | standard_recovery_failed | standard_recovery_completed`、错误摘要和完成时间，并同步审计目录与 Run 目录。不得修改 intent 或既有 outcome，不得把仅有 intent 或非 completed outcome 解释为清理成功。
+解除前必须先以 `O_EXCL` 写统一 intent；若自动接管已留下同 recovery_token 的 intent，人工命令只能在全部 immutable 字段/Hash 一致时续接该 intent，不能创建另一 basename 绕过。人工 intent 额外通过同一 schema 的 `actor_kind/operator_identity/reason` 字段表达操作者，不增加未知字段。intent 还必须冻结 recovery/Active Lock 原文 Hash、State version/status、Publication 状态和逐项验证结果，flush+fsync、同步审计目录与 `runs/<run_id>`；写入或同步失败时不得删除 recovery lock。随后尝试删除 recovery lock并同步 `runs/`。无论删除、目录同步还是后续标准 recovery 成功或失败，都必须以 `O_EXCL` 写递增的统一 outcome，记录 `audit_attempt_number`、`removed | remove_failed | directory_sync_failed | standard_recovery_failed | standard_recovery_completed`、错误摘要和完成时间，并同步审计目录与 Run 目录。不得修改 intent 或既有 outcome，不得把仅有 intent 或非 completed outcome 解释为清理成功。
 
 启动、Resume 和新人工恢复命令发现 intent 存在但没有任何 `standard_recovery_completed` outcome 时必须 Fail Closed，并通过 intent 中的 token/Hash 与现有最大 attempt number 续接同一审计；下一次尝试只能写 `max(attempt_number)+1`，不得生成新的 basename 绕过未完成审计。若 outcome 写入或同步失败，intent 本身继续作为 recovery sentinel，Active Lock 保持不变或保留当前可验证状态，命令返回 `LOCK_ERROR/PUBLICATION_RECOVERY_REQUIRED`，不得报告正常成功。删除遗留 recovery lock 不等于恢复成功；只有标准 recovery 再次验证并完成、且 completed outcome 已持久化后，命令才可报告该 recovery 操作完成。
 
-`standard_recovery_completed` outcome 必须冻结恢复完成时的 `run_id`、`allocation_token`、`plan_fingerprint`、recovery/target token 与 Hash、recovered `state_version/status/state_sha256`、State Journal `tail_record_index/tail_record_checksum`、Publication transaction/Manifest 的存在状态与 Hash，以及 successor Active Lock token/phase/Hash（完成时不存在则为 canonical null）。这些是历史恢复事实，不要求 Run 此后停留在同一业务状态。
+`standard_recovery_completed` outcome 必须冻结 intent 路径/SHA-256、当前执行者的 `actor_kind/operator_identity`、恢复完成时的 `run_id`、`allocation_token`、`plan_fingerprint`、old/new/recovery token 与 target Hash、recovered `state_version/status/state_sha256`、State Journal `tail_record_index/tail_record_checksum/tail_anchor_sha256`、Publication transaction/Manifest 的存在状态与 Hash、当前 recovering Active Lock Hash，以及 exact successor Active Lock canonical bytes/token/phase/Hash（终态释放则为 canonical null）。这些是历史恢复事实，不要求 Run 此后停留在同一业务状态。自动接管和人工续接只能在 `actor_kind/recovery_action/operator_identity` 取值上不同，字段闭集、checksum、attempt 序号、intent 不可覆盖和 outcome 单调追加规则完全相同；人工续接自动 intent 时，当前人工 actor 记录在新 outcome，不能改写原 intent。
 
-若已存在 `standard_recovery_completed` outcome，后续同 token 命令只能执行只读幂等复核，不得再次删除、改写锁、恢复 State/Publication 或追加“成功” outcome。合法结果只有：
+若调用开始时已存在 `standard_recovery_completed` outcome，或本次调用并非写入该 outcome 后立即执行 exact successor 的原恢复调用，则只能执行只读幂等复核，不得再次删除、改写锁、恢复 State/Publication 或追加“成功” outcome。合法结果只有：
 
 1. **精确状态**：当前证据仍与 completed outcome 完全一致；
 2. **单调后继**：run_id/allocation_token/plan_fingerprint 不变，current state_version 不小于 recovered version；第 16 节定义的 Journal record index/previous checksum 链必须从 outcome 的 tail tuple 无缺口连接到当前 tail，并逐 operation 验证 owner token、expected/resulting version、状态边和 resulting State Hash；原 target recovery lock 不得以相同 token/Hash 重新出现；
@@ -2786,7 +2834,7 @@ Phase A Canonical State 的最小 schema 固定为：
 }
 ```
 
-`initialize_run()` 只能在持有对应 Run 的 state lock、目标 `state.json` 与 `state_journal_tail.json` 均不存在且 Journal 不存在或为空时执行。它通过同目录临时文件写完整 v1 state 和 genesis tail anchor，逐文件 flush+fsync、原子提升，强制同步 Run 目录并重读复核；任何已有 state/anchor、非空 Journal、token/run_id/plan fingerprint 冲突均 Fail Closed。初始化不写 pending/committed，因为其发生在 Run 尚未开放给 DAGExecutor 的 allocation transaction 内；Active Lock 只有在 state、genesis anchor 和目录持久化完成后才能进入 running。
+`initialize_run()` 只能在持有对应 Run 的 state lock、目标 `state.json` 与 `state_journal_tail.json` 均不存在且 Journal 不存在或为空时执行。它先在同目录分别写完、flush+fsync 两个临时文件，再固定按“原子提升 state → 同步 Run 目录并重读 state → 原子提升 genesis anchor → 再同步 Run 目录并重读两者”执行；这是两个可恢复的原子替换，不是跨文件原子提交。任何已有 state/anchor、非空 Journal、token/run_id/plan fingerprint 冲突均 Fail Closed。初始化不写 pending/committed，因为其发生在 Run 尚未开放给 DAGExecutor 的 allocation transaction 内；Active Lock 只有在 state、genesis anchor 和目录持久化完成后才能进入 running。A3 必须在每个临时文件写入、state replace、第一次目录同步、anchor replace 和第二次目录同步之后分别注入硬崩溃，证明部分初始化只能落入第 14.4 节 recovery marker 分支，不能启动 worker或写 CREATED→FAILED WAL。
 
 ## 15.2 StateStore API
 
@@ -3220,7 +3268,24 @@ record_checksum
 
 普通 pending/committed/aborted 行必须满足 `append_actor_lock_token == operation_owner_lock_token == 当前 expected_lock_token` 且 `recovery_audit_ref=null`。合法接管补完旧 pending 时，terminal 行必须复制 pending 的旧 `operation_owner_lock_token`，以当前新 token 写 `append_actor_lock_token`，并在 `recovery_audit_ref` 中固定记录已持久化的 recovery intent POSIX 相对路径/SHA-256、Active Lock SHA-256 和 `recovery_of_lock_token`；缺少、无法解析或不能形成唯一接管链均 Fail Closed。旧业务 sink 仍不能创建新 pending 或追加 terminal 行。
 
-Journal 链合同固定为：首个完整记录 `record_index=0` 且 `previous_record_checksum=null`；后续每行 index 必须恰为前一完整行 index+1，`previous_record_checksum` 必须等于前一行 `record_checksum`。每一行只允许上述固定字段，未知或缺失字段拒绝。`record_checksum` 固定为：移除 `record_checksum` 字段后，对剩余完整 record 使用 UTF-8、无 BOM、key 字典序、`ensure_ascii=false`、紧凑 separators `(',', ':')`、禁止 NaN/Infinity 的 canonical JSON bytes 计算 SHA-256，并输出 64 位小写十六进制。envelope 中 null/bool/integer 必须使用 JSON 原生类型，版本/index/字节长度不得使用浮点数；UTC 时间固定为 `YYYY-MM-DDTHH:MM:SS.ffffffZ` 字符串；受控 payload 中的非整数十进制必须先按其 schema 转为 canonical decimal string。该计算覆盖 record_index、previous_record_checksum、两个 token、recovery_audit_ref、payload Hash 和 mutation timestamp，但排除 record_checksum 自身。anchor_checksum 使用同一规则并排除自身。
+Journal 链合同固定为：首个完整记录 `record_index=0` 且 `previous_record_checksum=null`；后续每行 index 必须恰为前一完整行 index+1，`previous_record_checksum` 必须等于前一行 `record_checksum`。每一行只允许上述固定字段，未知或缺失字段拒绝。`record_checksum` 固定为：移除 `record_checksum` 字段后，对剩余完整 record 使用 UTF-8、无 BOM、key 按 Unicode code point 升序、`ensure_ascii=false`、紧凑 separators `(',', ':')`、禁止 NaN/Infinity 的 canonical JSON bytes 计算 SHA-256，并输出 64 位小写十六进制。envelope 中 null/bool/integer 必须使用 JSON 原生类型，版本/index/字节长度不得使用浮点数；UTC 时间固定为 `YYYY-MM-DDTHH:MM:SS.ffffffZ` 字符串。该计算覆盖 record_index、previous_record_checksum、两个 token、recovery_audit_ref、payload Hash 和 mutation timestamp，但排除 record_checksum 自身。anchor_checksum 和 recovery audit checksum 使用同一规则并排除各自 checksum 字段。
+
+受控 payload 的 decimal 字段不得使用 JSON float。生产者必须直接写 canonical decimal JSON string，validator 不做静默归一化；唯一语法为 `^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$`，并额外禁止 `-0`。因此不允许前导 `+`、整数前导零、指数、末尾小数点或小数尾随零；零只能写为 `"0"`，非零小数示例为 `"0.125"`、`"-0.125"`、`"12.34"`。对 decimal-string 字段，`"1"` 是 1 的唯一表示，`"1.0"`、`"1.00"`、`"1e0"`、`"-0"` 均拒绝；未加引号的 JSON integer `1` 只允许出现在 schema 明确声明为 integer 的字段，不能代替 decimal string。NaN、Infinity、`-Infinity` 和任何 JSON 浮点 number 在解析/schema 层直接拒绝。相同语义 decimal 值必须在进入 payload 和 payload_sha256 计算前已经具有唯一字符串 bytes。
+
+Decimal 反例矩阵固定如下；“输入”表示 decimal 字段收到的原始 JSON token，不能先经浮点解析或格式化：
+
+|输入|结果|理由或 canonical bytes|
+|---|---|---|
+|`"1"`|接受|唯一 canonical bytes 为 UTF-8 `22 31 22`|
+|`1`|拒绝|decimal 字段不得使用 JSON integer；仅 integer schema 可接受该 token|
+|`"1.0"`|拒绝|尾随小数零|
+|`"1.00"`|拒绝|尾随小数零且与 `"1"` 语义重复|
+|`"1e0"`|拒绝|禁止指数形式|
+|`"-0"`|拒绝|零只能是 `"0"`|
+|`NaN`|拒绝|非标准 JSON 且非有限数字|
+|`Infinity` / `-Infinity`|拒绝|非标准 JSON 且非有限数字|
+
+Phase 0 serializer/validator 必须对该矩阵逐 token 测试，并证明 Windows/POSIX 对所有接受值产生完全相同的 UTF-8 bytes 和 SHA-256。
 
 追加前必须在 state lock 内从 genesis 验证到 anchor 指向的 tail，且该位置的 index/checksum/精确文件字节长度必须与 anchor 一致；不能只验证最后一行。单独的前向 checksum chain 无法发现合法前缀截断，删除检测来自独立持久化的 tail anchor。链和 anchor 都只提供 Run-local self-consistency，不是签名或外部来源认证。
 
@@ -3876,6 +3941,9 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 115. 每个 checkpoint、transition 和 mutating recovery 都验证当前 Active Lock token；同一 operation 保持原 owner，接管补写使用独立 append actor/recovery reference，旧 sink 即使 state version 尚未变化也不能写新 pending。
 116. State Journal 使用固定 canonical SHA-256 前向链和独立持久化 tail anchor；删除已 anchor 的 pending/aborted/committed 尾行、插入、重排、冲突 suffix 及越过审计 tail 的截断均 Fail Closed，协调回滚 Journal/anchor/State 不被夸大为可检测。
 117. committed task plan 的每项都包含布尔 `required`，StateStore 自行派生 required task 集合；Phase A core task 不得由 completion_evidence 降级为 optional。
+118. 自动接管和人工恢复共用唯一 `active_run_recovery_audit_v1` intent/outcome schema；任何 Active Lock takeover replace 前均已有不可覆盖 intent，接管 WAL terminal 精确引用其路径/Hash，completed outcome 冻结最终 State/Journal/Publication 和 exact successor lock 证据。
+119. `state.json` 与 genesis anchor 只允许按固定顺序分别原子提升；任一单侧存在、损坏、非 genesis 或 Journal 非空都写 allocation recovery marker 并 Fail Closed，只有两侧均合法且 Journal 为空才允许标准 allocation abort。
+120. Decimal canonical validator 必须接受 decimal string `"1"`、拒绝 `"1.0"`、`"1.00"`、`"1e0"`、`"-0"`、NaN 和 Infinity；不得把 JSON float 或静默归一化后的值送入 payload Hash。
 118. Completed recovery audit 只读接受 RUNNING 中合法出现、或被后续 committed COMPLETED operation 引用的 Publication；FAILED 后新增、晚于 COMPLETED 或第二 transaction 均 Fail Closed。
 
 ---
@@ -4001,6 +4069,11 @@ COMPLETED 早于 Publication Commit 或 final_summary
 RUNNING→COMPLETED 未由 StateStore 复核 required task、Manifest、transaction 和 final_summary Hash
 Manifest 已提交、State 仍为 RUNNING但 transaction 为 manifest_commit_intent 时直接调用只接受 manifest_committed 的 COMPLETED guard
 State 已为 COMPLETED 却把 manifest_commit_intent 静默追赶为已提交，而没有把不可能顺序作为冲突
+自动接管在不可覆盖 takeover intent 持久化前替换 Active Lock，或自动/人工恢复使用不同审计 schema
+接管 WAL terminal 的 recovery_audit_ref 与 Active Lock 引用的 intent 路径/Hash 不一致
+completed recovery outcome 未冻结 exact successor lock，或后续重放再次执行锁替换/删除副作用
+state.json 与 genesis anchor 只有一侧存在、任一侧损坏或 Journal 非空时仍启动 worker、执行 State WAL 或猜测补造另一侧
+decimal payload 接受 JSON float、指数、负零、前导/尾随零变体，或 validator 静默归一化后再计算 Hash
 State mutation 未校验 expected_lock_token，或 Resume 后旧 sink 仍可写 pending
 Journal 只有独立 record checksum 或前向链、没有持久化 tail anchor，却声称能够发现完整合法 suffix 删除
 同一 operation 接管恢复时混用原 owner token 与当前 append actor，或 recovery terminal 行没有权威 audit reference

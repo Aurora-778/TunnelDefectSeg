@@ -155,6 +155,16 @@
 |接管补写旧 pending 的 owner token 语义不唯一|待修订|条件关闭|operation_owner_lock_token 跨 phase 不变；append_actor_lock_token 表示当前写入者，接管 terminal 行必须引用已持久化 recovery intent 和 Active Lock Hash|A3 补普通写入、合法接管、旧 sink、错误 owner/actor/reference 和接管链断裂反例|
 |record_checksum canonical bytes 未定义|待修订|条件关闭|固定字段闭集、SHA-256、UTF-8 无 BOM、字典序 key、紧凑 separators、禁止非有限数字及 canonical 类型/时间规则|Phase 0 固定 serializer/schema；A3 补跨平台相同 Hash、未知字段、float/NaN、字段重排和 checksum mismatch 测试|
 
+## 2.9 第十轮严格 Review 的条件关闭项
+
+以下问题在 `docs: close engineering agent journal contract gaps` Review 中先恢复为“待修订”。本次仅修订计划合同，当前最多标记为“条件关闭”；自动接管审计、genesis 初始化、decimal serializer 及其故障注入均尚未实现，Phase 0/A1/A2/A3 仍未开始：
+
+|问题|Review 入场状态|当前状态|计划修订|实现条件|
+|---|---|---|---|---|
+|自动 Active Lock 接管缺少持久化 intent|待修订|条件关闭|自动与人工恢复共用 `active_run_recovery_audit_v1`；每次 takeover replace 前先持久化不可覆盖 intent，WAL terminal 精确引用其路径/Hash，completed outcome 冻结 State/Journal/Publication 和 exact successor lock|A3 补 intent 前崩溃、intent 后/lock replace 前崩溃、接管后 WAL terminal、outcome 后 successor 前崩溃、人工续接自动 intent、错误 Hash/多归属和重放无副作用反例|
+|state.json 与 genesis anchor 存在部分初始化窗口|待修订|条件关闭|明确两份文件按固定顺序分别原子提升而非跨文件原子提交；单侧存在、损坏、非 genesis 或 Journal 非空统一写 allocation recovery marker 并 Fail Closed，只有两侧均合法且 Journal 为空才允许标准 allocation abort|A3 在 temp 写入、state replace、第一次目录同步、anchor replace、第二次目录同步后逐点注入崩溃，并证明部分初始化不写 State WAL、不启动 worker|
+|Decimal canonical 表示仍有多义性|待修订|条件关闭|decimal 字段固定为满足唯一正则且排除负零的 JSON string；禁止 JSON float/integer 替代、指数、非有限数、前导零和尾随小数零，并固定 `1/1.0/1.00/1e0/-0/NaN/Infinity` token 矩阵|Phase 0 固定 serializer/validator；A3 补逐 token、跨平台 UTF-8 bytes/Hash 和禁止静默归一化测试|
+
 ## 3. 基线与范围
 
 |检查项|状态|证据|实现状态|
@@ -184,7 +194,7 @@
 |唯一 DAG/Executor|条件关闭|只扩展现有 DAG、DAGExecutor、Registry 和 RunManager|A1/A3 待实施|
 |A1 Claim/Evidence|条件关闭|新节点默认不激活；sandbox 中逐节点重定向到 Run-local work/artifacts/staging，不得修改正式目录|A1 待实施|
 |A2 Publication|条件关闭|Manifest-last、完整文件集合、固定 publication transaction 路径、Manifest replace 后的 phase 追赶、cleanup 诊断、existed_before 回滚、逐父目录 fsync 和 transaction-scoped final_summary 隔离已定义|A2 待实施|
-|A3 State/Lock/WAL|条件关闭|Canonical attempts、required task plan、deterministic mutation time、Active Lock fencing、owner/append actor 分离、Controller-owned 单 queue/cursor、canonical checksum WAL + tail anchor、COMPLETED 不变量和只读 recovery audit 已定义|A3 待实施|
+|A3 State/Lock/WAL|条件关闭|Canonical attempts、required task plan、deterministic mutation time、Active Lock fencing、统一自动/人工 recovery intent/outcome、genesis 双文件部分初始化 Fail Closed、owner/append actor 分离、Controller-owned 单 queue/cursor、canonical checksum WAL + tail anchor、decimal 唯一字节规则、COMPLETED 不变量和只读 recovery replay 已定义|A3 待实施|
 |Memory/Growth 报告分离|条件关闭|结构化数据保留，正式报告必须经过 Claim Gate|A1 待实施|
 |Visualization/FinalReport|条件关闭|必须读取当前 Run 的 ClaimDecision 和 Comparison Evidence|A1 待实施|
 |Web 边界|条件关闭|Phase A 不修改 Web，也不声称 Web 是 Manifest 权威 reader|Phase E 待实施|
