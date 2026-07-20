@@ -13,7 +13,7 @@ import hashlib
 import json
 from pathlib import Path
 from threading import Condition
-from typing import Any
+from typing import Any, NoReturn
 
 
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "inspection_claim_policy.json"
@@ -54,11 +54,11 @@ EVIDENCE_BOOL_FIELDS = (
 
 _DEFAULT_POLICY_CACHE_CONDITION = Condition()
 _DEFAULT_POLICY_JSON_CACHE: str | None = None
-_DEFAULT_POLICY_IN_FLIGHT: Future[str] | None = None
+_DEFAULT_POLICY_IN_FLIGHT: Future[tuple[str | None, BaseException | None]] | None = None
 _DEFAULT_POLICY_IN_FLIGHT_PARTICIPANTS = 0
 _EVALUATOR_SOURCE_CACHE_CONDITION = Condition()
 _EVALUATOR_SOURCE_SHA256_CACHE: str | None = None
-_EVALUATOR_SOURCE_IN_FLIGHT: Future[str] | None = None
+_EVALUATOR_SOURCE_IN_FLIGHT: Future[tuple[str | None, BaseException | None]] | None = None
 _EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS = 0
 
 
@@ -91,10 +91,14 @@ def _canonical_default_policy_json() -> str:
     if cached is not None:
         return cached
     with _DEFAULT_POLICY_CACHE_CONDITION:
-        cached = _DEFAULT_POLICY_JSON_CACHE
-        if cached is not None:
-            return cached
-        flight = _DEFAULT_POLICY_IN_FLIGHT
+        while True:
+            cached = _DEFAULT_POLICY_JSON_CACHE
+            if cached is not None:
+                return cached
+            flight = _DEFAULT_POLICY_IN_FLIGHT
+            if flight is None or not flight.done():
+                break
+            _DEFAULT_POLICY_CACHE_CONDITION.wait()
         owns_flight = flight is None
         if owns_flight:
             flight = Future()
@@ -114,23 +118,29 @@ def _canonical_default_policy_json() -> str:
                 allow_nan=False,
             )
         except BaseException as exc:
-            flight.set_exception(exc)
+            flight.set_result((None, exc))
             _finish_default_policy_flight(flight)
             raise
         else:
             with _DEFAULT_POLICY_CACHE_CONDITION:
                 _DEFAULT_POLICY_JSON_CACHE = cached
-            flight.set_result(cached)
+            flight.set_result((cached, None))
             _finish_default_policy_flight(flight)
             return cached
 
     try:
-        return flight.result()
+        value, failure = flight.result()
+        if failure is not None:
+            _raise_shared_initialization_failure(failure)
+        assert value is not None
+        return value
     finally:
         _finish_default_policy_flight(flight)
 
 
-def _finish_default_policy_flight(flight: Future[str]) -> None:
+def _finish_default_policy_flight(
+    flight: Future[tuple[str | None, BaseException | None]],
+) -> None:
     global _DEFAULT_POLICY_IN_FLIGHT
     global _DEFAULT_POLICY_IN_FLIGHT_PARTICIPANTS
 
@@ -634,10 +644,14 @@ def _evaluator_source_sha256() -> str:
     if cached is not None:
         return cached
     with _EVALUATOR_SOURCE_CACHE_CONDITION:
-        cached = _EVALUATOR_SOURCE_SHA256_CACHE
-        if cached is not None:
-            return cached
-        flight = _EVALUATOR_SOURCE_IN_FLIGHT
+        while True:
+            cached = _EVALUATOR_SOURCE_SHA256_CACHE
+            if cached is not None:
+                return cached
+            flight = _EVALUATOR_SOURCE_IN_FLIGHT
+            if flight is None or not flight.done():
+                break
+            _EVALUATOR_SOURCE_CACHE_CONDITION.wait()
         owns_flight = flight is None
         if owns_flight:
             flight = Future()
@@ -654,27 +668,33 @@ def _evaluator_source_sha256() -> str:
         except OSError as exc:
             error = ClaimPolicyError(f"unable to read claim evaluator source: {source_path}")
             error.__cause__ = exc
-            flight.set_exception(error)
+            flight.set_result((None, error))
             _finish_evaluator_source_flight(flight)
             raise error
         except BaseException as exc:
-            flight.set_exception(exc)
+            flight.set_result((None, exc))
             _finish_evaluator_source_flight(flight)
             raise
         else:
             with _EVALUATOR_SOURCE_CACHE_CONDITION:
                 _EVALUATOR_SOURCE_SHA256_CACHE = cached
-            flight.set_result(cached)
+            flight.set_result((cached, None))
             _finish_evaluator_source_flight(flight)
             return cached
 
     try:
-        return flight.result()
+        value, failure = flight.result()
+        if failure is not None:
+            _raise_shared_initialization_failure(failure)
+        assert value is not None
+        return value
     finally:
         _finish_evaluator_source_flight(flight)
 
 
-def _finish_evaluator_source_flight(flight: Future[str]) -> None:
+def _finish_evaluator_source_flight(
+    flight: Future[tuple[str | None, BaseException | None]],
+) -> None:
     global _EVALUATOR_SOURCE_IN_FLIGHT
     global _EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS
 
@@ -685,6 +705,16 @@ def _finish_evaluator_source_flight(flight: Future[str]) -> None:
         if _EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS == 0:
             _EVALUATOR_SOURCE_IN_FLIGHT = None
         _EVALUATOR_SOURCE_CACHE_CONDITION.notify_all()
+
+
+def _raise_shared_initialization_failure(failure: BaseException) -> NoReturn:
+    try:
+        cloned = type(failure)(*failure.args)
+    except Exception:
+        cloned = ClaimPolicyError(str(failure))
+    if failure.__cause__ is not None:
+        raise cloned from failure.__cause__
+    raise cloned
 
 
 def _wait_for_evaluator_source_flight_participants_for_tests(

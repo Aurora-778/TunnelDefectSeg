@@ -663,8 +663,8 @@ def test_default_policy_concurrent_failure_is_shared_then_retry_succeeds(monkeyp
         try:
             load_claim_policy()
         except ClaimPolicyError as exc:
-            return str(exc)
-        return "unexpected success"
+            return exc
+        raise AssertionError("concurrent failure unexpectedly succeeded")
 
     monkeypatch.setattr(Path, "read_text", fail_first_read)
     try:
@@ -675,7 +675,9 @@ def test_default_policy_concurrent_failure_is_shared_then_retry_succeeds(monkeyp
             failures = [future.result(timeout=5) for future in futures]
 
         assert attempts == 1
-        assert all("unable to read claim policy" in failure for failure in failures)
+        assert all("unable to read claim policy" in str(failure) for failure in failures)
+        assert len({id(failure) for failure in failures}) == len(failures)
+        assert len({id(failure.__cause__) for failure in failures}) == 1
         policy = load_claim_policy()
     finally:
         release_failure.set()
@@ -709,8 +711,8 @@ def test_evaluator_concurrent_failure_is_shared_then_retry_succeeds(monkeypatch)
         try:
             claim_policy_module._evaluator_source_sha256()
         except ClaimPolicyError as exc:
-            return str(exc)
-        return "unexpected success"
+            return exc
+        raise AssertionError("concurrent failure unexpectedly succeeded")
 
     monkeypatch.setattr(Path, "read_bytes", fail_first_read)
     try:
@@ -721,7 +723,12 @@ def test_evaluator_concurrent_failure_is_shared_then_retry_succeeds(monkeypatch)
             failures = [future.result(timeout=5) for future in futures]
 
         assert attempts == 1
-        assert all("unable to read claim evaluator source" in failure for failure in failures)
+        assert all(
+            "unable to read claim evaluator source" in str(failure)
+            for failure in failures
+        )
+        assert len({id(failure) for failure in failures}) == len(failures)
+        assert len({id(failure.__cause__) for failure in failures}) == 1
         evaluator_hash = claim_policy_module._evaluator_source_sha256()
     finally:
         release_failure.set()
