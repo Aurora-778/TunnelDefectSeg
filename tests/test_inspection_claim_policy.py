@@ -1,7 +1,10 @@
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
+import orchestrator.claim_policy as claim_policy_module
 from orchestrator.claim_policy import (
     ClaimPolicyError,
     evaluate_claim_evidence,
@@ -112,6 +115,46 @@ def test_non_supported_identity_states_allow_static_audit_only(identity_state):
     assert decision["capabilities"]["directional_change_claim"] == "blocked"
 
 
+def test_pending_review_has_explicit_manual_review_qualifier():
+    decision = evaluate_claim_evidence(
+        valid_evidence(
+            identity_evidence_state="association_pending_review",
+            needs_manual_review=True,
+        )
+    )
+
+    assert decision["capabilities"]["static_descriptive_audit"] == "allowed"
+    assert decision["capabilities"]["descriptive_difference_claim"] == "blocked"
+    assert decision["template_ids"]["descriptive_difference_claim"] is None
+    assert "当前关联仍需人工复核，仅允许静态描述审计，不构成方向性变化结论" in decision[
+        "required_language_qualifiers"
+    ]
+
+
+def test_minimal_current_only_baseline_allows_static_audit():
+    decision = evaluate_claim_evidence(
+        valid_evidence(
+            identity_evidence_state="association_not_applicable",
+            current_comparability_status="insufficient_history",
+            previous_entity_type="not_applicable",
+            previous_observation_sources=[],
+            previous_comparability_status="insufficient_history",
+            comparison_comparability_status="insufficient_history",
+            valid_timepoint_count=1,
+            metric_consistent=False,
+            measurement_method_consistent=False,
+            difference_valid=False,
+            registration_status="not_verified",
+            temporal_order_valid=False,
+            needs_manual_review=False,
+        )
+    )
+
+    assert decision["capabilities"]["static_descriptive_audit"] == "allowed"
+    assert set(decision["capabilities"].values()) == {"allowed", "blocked"}
+    assert decision["template_ids"]["static_descriptive_audit"] == "static_descriptive_audit_v1"
+
+
 @pytest.mark.parametrize(
     ("identity_state", "reason"),
     [
@@ -125,6 +168,31 @@ def test_rejected_identity_state_blocks_even_valid_evidence(identity_state, reas
 
     assert set(decision["capabilities"].values()) == {"blocked"}
     assert decision["reason_codes"][0] == reason
+
+
+@pytest.mark.parametrize("identity_state", [[], {}, 1])
+def test_malformed_identity_state_fails_closed_without_type_error(identity_state):
+    decision = evaluate_claim_evidence(valid_evidence(identity_evidence_state=identity_state))
+
+    assert set(decision["capabilities"].values()) == {"blocked"}
+    assert decision["reason_codes"][0] == "INVALID_IDENTITY_EVIDENCE_STATE"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("current_observation_source", {}),
+        ("current_observation_source", []),
+        ("previous_observation_sources", [{}]),
+        ("previous_observation_sources", ["real_inspection_mask_input", {}]),
+        ("previous_observation_sources", [[]]),
+    ],
+)
+def test_malformed_source_values_fail_closed_without_type_error(field, value):
+    decision = evaluate_claim_evidence(valid_evidence(**{field: value}))
+
+    assert set(decision["capabilities"].values()) == {"blocked"}
+    assert decision["reason_codes"][0] == "EVIDENCE_SCHEMA_INVALID"
 
 
 @pytest.mark.parametrize(
@@ -162,6 +230,21 @@ def test_cyclic_kict_source_cannot_claim_verified_comparability():
             current_comparability_status="verified_comparable",
         )
     )
+
+    assert set(decision["capabilities"].values()) == {"blocked"}
+    assert decision["reason_codes"][0] == "EVIDENCE_SCHEMA_INVALID"
+
+
+@pytest.mark.parametrize("source", ["legacy_unverified_source", "mixed_sources"])
+@pytest.mark.parametrize("side", ["current", "previous"])
+def test_unverified_sources_cannot_claim_verified_comparability(source, side):
+    overrides = {}
+    if side == "current":
+        overrides["current_observation_source"] = source
+    else:
+        overrides["previous_observation_sources"] = [source]
+
+    decision = evaluate_claim_evidence(valid_evidence(**overrides))
 
     assert set(decision["capabilities"].values()) == {"blocked"}
     assert decision["reason_codes"][0] == "EVIDENCE_SCHEMA_INVALID"
@@ -205,6 +288,32 @@ def test_policy_rejects_enum_drift_with_same_schema_version(tmp_path):
 
     with pytest.raises(ClaimPolicyError, match="comparability_status_enum"):
         load_claim_policy(path)
+
+
+@pytest.mark.parametrize("root", [None, 1, "phase_a", [], ["schema_version"]])
+def test_policy_rejects_non_object_root(tmp_path, root):
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps(root), encoding="utf-8")
+
+    with pytest.raises(ClaimPolicyError, match="root must be an object"):
+        load_claim_policy(path)
+
+
+def test_decision_provenance_covers_policy_and_evaluator_bytes():
+    policy = load_claim_policy()
+    decision = evaluate_claim_evidence(valid_evidence(), policy=policy)
+    policy_bytes = json.dumps(
+        policy,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    evaluator_bytes = Path(claim_policy_module.__file__).read_bytes()
+
+    assert decision["claim_policy_sha256"] == hashlib.sha256(policy_bytes).hexdigest()
+    assert decision["claim_evaluator_contract_version"] == "phase_a_claim_evaluator_v1"
+    assert decision["claim_evaluator_sha256"] == hashlib.sha256(evaluator_bytes).hexdigest()
 
 
 def test_non_object_evidence_fails_closed():

@@ -15,53 +15,14 @@ from typing import Any
 
 
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "inspection_claim_policy.json"
-
-CAPABILITY_ORDER = (
-    "static_descriptive_audit",
-    "descriptive_difference_claim",
-    "directional_change_claim",
-    "physical_quantity_change_claim",
-    "multi_timepoint_pattern_claim",
-    "prediction_claim",
-)
-
-FIXED_BLOCKED_CAPABILITIES = {
-    "physical_quantity_change_claim": "PHASE_A_NO_PHYSICAL_QUANTITY_EVIDENCE",
-    "multi_timepoint_pattern_claim": "PHASE_A_NO_THREE_TIMEPOINT_EVIDENCE",
-    "prediction_claim": "PHASE_A_NO_VALIDATED_PREDICTION_MODEL",
-}
-
-OBSERVATION_SOURCES = (
-    "kict_static_mask_cyclic_demo",
-    "real_inspection_mask_input",
-    "verified_fixture",
-    "mixed_sources",
-    "legacy_unverified_source",
-)
-
-COMPARABILITY_STATUSES = (
-    "verified_comparable",
-    "not_longitudinally_comparable",
-    "insufficient_history",
-    "simulated_metadata_comparable",
-)
-
-ACCEPTED_IDENTITY_STATES = (
-    "association_supported",
-    "association_rejected",
-    "association_pending_review",
-    "association_not_applicable",
-)
-
-REJECTED_IDENTITY_STATES = {
-    "association_invalid": "INVALID_ASSOCIATION_EVIDENCE",
-    "human_verified": "UNTRUSTED_IDENTITY_VERIFICATION",
-    "ground_truth_verified": "UNTRUSTED_IDENTITY_VERIFICATION",
-}
+SUPPORTED_POLICY_SCHEMA_VERSION = "claim_policy_v5"
+SUPPORTED_EVALUATOR_CONTRACT_VERSION = "phase_a_claim_evaluator_v1"
+EVALUATOR_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 POLICY_ROOT_FIELDS = {
     "schema_version",
     "profile",
+    "evaluator_contract_version",
     "observation_source_enum",
     "comparability_status_enum",
     "accepted_identity_evidence_states",
@@ -69,6 +30,8 @@ POLICY_ROOT_FIELDS = {
     "global_precondition",
     "capability_order",
     "fixed_blocked_capabilities",
+    "source_comparability_rules",
+    "capability_rules",
     "required_language_qualifiers",
 }
 
@@ -93,6 +56,15 @@ def load_claim_policy(path: Path | None = None) -> dict[str, Any]:
     """Load and strictly validate the fixed Phase A machine policy."""
 
     policy_path = Path(path) if path is not None else DEFAULT_POLICY_PATH
+    policy = _read_policy_file(policy_path)
+
+    if policy_path.resolve() != DEFAULT_POLICY_PATH.resolve():
+        canonical_policy = _read_policy_file(DEFAULT_POLICY_PATH)
+        _require_canonical_policy(policy, canonical_policy)
+    return policy
+
+
+def _read_policy_file(policy_path: Path) -> dict[str, Any]:
     try:
         raw = policy_path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -130,17 +102,20 @@ def evaluate_claim_evidence(
         return _blocked_decision(normalized_id, trusted_policy, "INVALID_CLAIM_POLICY_PROFILE")
 
     identity_state = evidence.get("identity_evidence_state")
+    if not isinstance(identity_state, str):
+        return _blocked_decision(normalized_id, trusted_policy, "INVALID_IDENTITY_EVIDENCE_STATE")
     rejected_reason = trusted_policy["rejected_identity_evidence_states"].get(identity_state)
     if rejected_reason:
         return _blocked_decision(normalized_id, trusted_policy, rejected_reason)
     if identity_state not in trusted_policy["accepted_identity_evidence_states"]:
         return _blocked_decision(normalized_id, trusted_policy, "INVALID_IDENTITY_EVIDENCE_STATE")
 
-    if evidence.get("evidence_valid") is not True:
+    global_precondition = trusted_policy["global_precondition"]
+    if evidence.get(global_precondition["field"]) is not global_precondition["value"]:
         return _blocked_decision(
             normalized_id,
             trusted_policy,
-            trusted_policy["global_precondition"]["failure_reason"],
+            global_precondition["failure_reason"],
         )
 
     schema_error = _validate_evidence_schema(evidence, trusted_policy)
@@ -153,9 +128,10 @@ def evaluate_claim_evidence(
     }
     template_ids: dict[str, str | None] = {name: None for name in trusted_policy["capability_order"]}
 
-    capabilities["static_descriptive_audit"] = "allowed"
-    capability_reasons["static_descriptive_audit"] = "STATIC_DESCRIPTIVE_AUDIT_ALLOWED"
-    template_ids["static_descriptive_audit"] = "static_descriptive_audit_v1"
+    static_rule = trusted_policy["capability_rules"]["static_descriptive_audit"]
+    capabilities["static_descriptive_audit"] = static_rule["allowed_status"]
+    capability_reasons["static_descriptive_audit"] = static_rule["allowed_reason"]
+    template_ids["static_descriptive_audit"] = static_rule["template_id"]
 
     difference_allowed = all(
         (
@@ -171,9 +147,10 @@ def evaluate_claim_evidence(
         )
     )
     if difference_allowed:
-        capabilities["descriptive_difference_claim"] = "allowed_with_limits"
-        capability_reasons["descriptive_difference_claim"] = "DESCRIPTIVE_DIFFERENCE_ALLOWED_WITH_LIMITS"
-        template_ids["descriptive_difference_claim"] = "descriptive_difference_limited_v1"
+        difference_rule = trusted_policy["capability_rules"]["descriptive_difference_claim"]
+        capabilities["descriptive_difference_claim"] = difference_rule["allowed_status"]
+        capability_reasons["descriptive_difference_claim"] = difference_rule["allowed_reason"]
+        template_ids["descriptive_difference_claim"] = difference_rule["template_id"]
 
     directional_allowed = all(
         (
@@ -184,9 +161,10 @@ def evaluate_claim_evidence(
         )
     )
     if directional_allowed:
-        capabilities["directional_change_claim"] = "allowed_with_limits"
-        capability_reasons["directional_change_claim"] = "DIRECTIONAL_CHANGE_ALLOWED_WITH_LIMITS"
-        template_ids["directional_change_claim"] = "directional_change_limited_v1"
+        directional_rule = trusted_policy["capability_rules"]["directional_change_claim"]
+        capabilities["directional_change_claim"] = directional_rule["allowed_status"]
+        capability_reasons["directional_change_claim"] = directional_rule["allowed_reason"]
+        template_ids["directional_change_claim"] = directional_rule["template_id"]
 
     for capability, reason in trusted_policy["fixed_blocked_capabilities"].items():
         capability_reasons[capability] = reason
@@ -194,6 +172,8 @@ def evaluate_claim_evidence(
     qualifiers = [trusted_policy["required_language_qualifiers"]["identity_boundary"]]
     if identity_state != "association_not_applicable":
         qualifiers.append(trusted_policy["required_language_qualifiers"]["rule_association"])
+    if identity_state == "association_pending_review":
+        qualifiers.append(trusted_policy["required_language_qualifiers"]["pending_review"])
     if any(
         evidence[field] != "verified_comparable"
         for field in (
@@ -217,6 +197,8 @@ def evaluate_claim_evidence(
         "decision_id": f"CD-{normalized_id}" if normalized_id else "",
         "evidence_id": normalized_id,
         "claim_policy_sha256": _policy_sha256(trusted_policy),
+        "claim_evaluator_contract_version": trusted_policy["evaluator_contract_version"],
+        "claim_evaluator_sha256": EVALUATOR_SOURCE_SHA256,
         "capabilities": capabilities,
         "capability_reasons": capability_reasons,
         "template_ids": template_ids,
@@ -230,14 +212,38 @@ def _validate_policy_mapping(policy: Mapping[str, Any]) -> None:
 
     if not isinstance(policy, dict):
         raise ClaimPolicyError("claim policy root must be an object")
-    serialized = json.dumps(policy, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    parsed = json.loads(serialized)
+    try:
+        serialized = json.dumps(
+            policy,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        parsed = json.loads(serialized)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ClaimPolicyError("claim policy must contain JSON-compatible values") from exc
     _validate_policy_data(parsed)
+    _require_canonical_policy(parsed, _read_policy_file(DEFAULT_POLICY_PATH))
 
 
-def _validate_policy_data(policy: dict[str, Any]) -> None:
+def _require_canonical_policy(
+    policy: Mapping[str, Any],
+    canonical_policy: Mapping[str, Any],
+) -> None:
+    for field in sorted(POLICY_ROOT_FIELDS):
+        if policy[field] != canonical_policy[field]:
+            raise ClaimPolicyError(
+                f"claim policy {field} does not match the checked-in Phase A policy; "
+                "upgrade schema_version for policy changes"
+            )
+
+
+def _validate_policy_data(policy: Any) -> None:
     """Validate the one supported, closed Phase A policy schema."""
 
+    if not isinstance(policy, dict):
+        raise ClaimPolicyError("claim policy root must be an object")
     fields = set(policy)
     unknown = sorted(fields - POLICY_ROOT_FIELDS)
     missing = sorted(POLICY_ROOT_FIELDS - fields)
@@ -245,16 +251,34 @@ def _validate_policy_data(policy: dict[str, Any]) -> None:
         raise ClaimPolicyError(f"claim policy has unknown fields: {', '.join(unknown)}")
     if missing:
         raise ClaimPolicyError(f"claim policy is missing fields: {', '.join(missing)}")
-    if policy["schema_version"] != "claim_policy_v5" or policy["profile"] != "phase_a":
+    if policy["schema_version"] != SUPPORTED_POLICY_SCHEMA_VERSION or policy["profile"] != "phase_a":
         raise ClaimPolicyError("claim policy identity is invalid")
-    _require_exact_string_list(policy, "observation_source_enum", OBSERVATION_SOURCES)
-    _require_exact_string_list(policy, "comparability_status_enum", COMPARABILITY_STATUSES)
-    _require_exact_string_list(policy, "accepted_identity_evidence_states", ACCEPTED_IDENTITY_STATES)
-    _require_exact_string_list(policy, "capability_order", CAPABILITY_ORDER)
-    if policy["rejected_identity_evidence_states"] != REJECTED_IDENTITY_STATES:
-        raise ClaimPolicyError("claim policy rejected identity states do not match Phase A")
-    if policy["fixed_blocked_capabilities"] != FIXED_BLOCKED_CAPABILITIES:
-        raise ClaimPolicyError("claim policy fixed blocked capabilities do not match Phase A")
+    if policy["evaluator_contract_version"] != SUPPORTED_EVALUATOR_CONTRACT_VERSION:
+        raise ClaimPolicyError("claim policy evaluator contract is unsupported")
+
+    observation_sources = _require_closed_string_list(policy, "observation_source_enum")
+    comparability_statuses = _require_closed_string_list(policy, "comparability_status_enum")
+    accepted_states = _require_closed_string_list(policy, "accepted_identity_evidence_states")
+    capability_order = _require_closed_string_list(policy, "capability_order")
+    if "verified_comparable" not in comparability_statuses:
+        raise ClaimPolicyError("claim policy comparability statuses are incomplete")
+
+    rejected_states = policy["rejected_identity_evidence_states"]
+    if (
+        not isinstance(rejected_states, dict)
+        or not rejected_states
+        or any(
+            not isinstance(key, str)
+            or not key
+            or not isinstance(value, str)
+            or not value
+            for key, value in rejected_states.items()
+        )
+    ):
+        raise ClaimPolicyError("claim policy rejected identity states are invalid")
+    if set(accepted_states) & set(rejected_states):
+        raise ClaimPolicyError("claim policy accepted and rejected identity states overlap")
+
     if policy["global_precondition"] != {
         "field": "evidence_valid",
         "operator": "strict_equals",
@@ -262,10 +286,48 @@ def _validate_policy_data(policy: dict[str, Any]) -> None:
         "failure_reason": "EVIDENCE_INVALID",
     }:
         raise ClaimPolicyError("claim policy global precondition is invalid")
+
+    fixed_blocked = policy["fixed_blocked_capabilities"]
+    if not isinstance(fixed_blocked, dict) or set(fixed_blocked) != set(capability_order[3:]):
+        raise ClaimPolicyError("claim policy fixed blocked capabilities are invalid")
+    if any(not isinstance(value, str) or not value for value in fixed_blocked.values()):
+        raise ClaimPolicyError("claim policy fixed blocked reasons are invalid")
+
+    capability_rules = policy["capability_rules"]
+    if not isinstance(capability_rules, dict) or set(capability_rules) != set(capability_order[:3]):
+        raise ClaimPolicyError("claim policy capability rules are invalid")
+    for capability, rule in capability_rules.items():
+        if not isinstance(rule, dict) or set(rule) != {
+            "allowed_status",
+            "allowed_reason",
+            "template_id",
+        }:
+            raise ClaimPolicyError(f"claim policy rule is invalid: {capability}")
+        if rule["allowed_status"] not in {"allowed", "allowed_with_limits"}:
+            raise ClaimPolicyError(f"claim policy allowed status is invalid: {capability}")
+        if any(
+            not isinstance(rule[field], str) or not rule[field]
+            for field in ("allowed_reason", "template_id")
+        ):
+            raise ClaimPolicyError(f"claim policy rule metadata is invalid: {capability}")
+
+    source_rules = policy["source_comparability_rules"]
+    if not isinstance(source_rules, dict) or set(source_rules) != {
+        "verified_comparable_allowed_sources"
+    }:
+        raise ClaimPolicyError("claim policy source comparability rules are invalid")
+    verified_sources = _require_closed_string_list(
+        source_rules,
+        "verified_comparable_allowed_sources",
+    )
+    if not set(verified_sources).issubset(observation_sources):
+        raise ClaimPolicyError("claim policy verified sources are outside the source enum")
+
     qualifiers = policy["required_language_qualifiers"]
     if not isinstance(qualifiers, dict) or set(qualifiers) != {
         "identity_boundary",
         "rule_association",
+        "pending_review",
         "static_only",
     }:
         raise ClaimPolicyError("claim policy language qualifier fields are invalid")
@@ -289,9 +351,11 @@ def _validate_evidence_schema(evidence: Mapping[str, Any], policy: Mapping[str, 
 
     current_source = evidence.get("current_observation_source")
     previous_sources = evidence.get("previous_observation_sources")
-    if current_source not in policy["observation_source_enum"]:
+    if not isinstance(current_source, str) or current_source not in policy["observation_source_enum"]:
         return "EVIDENCE_SCHEMA_INVALID"
-    if not isinstance(previous_sources, list):
+    if not isinstance(previous_sources, list) or any(
+        not isinstance(source, str) for source in previous_sources
+    ):
         return "EVIDENCE_SCHEMA_INVALID"
     if previous_sources != sorted(set(previous_sources)):
         return "EVIDENCE_SCHEMA_INVALID"
@@ -303,17 +367,19 @@ def _validate_evidence_schema(evidence: Mapping[str, Any], policy: Mapping[str, 
         "previous_comparability_status",
         "comparison_comparability_status",
     ):
-        if evidence.get(field) not in policy["comparability_status_enum"]:
+        value = evidence.get(field)
+        if not isinstance(value, str) or value not in policy["comparability_status_enum"]:
             return "EVIDENCE_SCHEMA_INVALID"
 
-    if (
-        current_source == "kict_static_mask_cyclic_demo"
-        and evidence["current_comparability_status"] == "verified_comparable"
+    verified_sources = policy["source_comparability_rules"][
+        "verified_comparable_allowed_sources"
+    ]
+    if evidence["current_comparability_status"] == "verified_comparable" and (
+        current_source not in verified_sources
     ):
         return "EVIDENCE_SCHEMA_INVALID"
-    if (
-        "kict_static_mask_cyclic_demo" in previous_sources
-        and evidence["previous_comparability_status"] == "verified_comparable"
+    if evidence["previous_comparability_status"] == "verified_comparable" and any(
+        source not in verified_sources for source in previous_sources
     ):
         return "EVIDENCE_SCHEMA_INVALID"
 
@@ -380,6 +446,8 @@ def _blocked_decision(
         "decision_id": f"CD-{evidence_id}" if evidence_id else "",
         "evidence_id": evidence_id,
         "claim_policy_sha256": _policy_sha256(policy),
+        "claim_evaluator_contract_version": policy["evaluator_contract_version"],
+        "claim_evaluator_sha256": EVALUATOR_SOURCE_SHA256,
         "capabilities": capabilities,
         "capability_reasons": capability_reasons,
         "template_ids": {name: None for name in policy["capability_order"]},
@@ -416,14 +484,19 @@ def _compose_comparability_status(
     return "not_longitudinally_comparable"
 
 
-def _require_exact_string_list(
+def _require_closed_string_list(
     mapping: Mapping[str, Any],
     field: str,
-    expected: tuple[str, ...],
-) -> None:
+) -> list[str]:
     value = mapping.get(field)
-    if not isinstance(value, list) or tuple(value) != expected:
-        raise ClaimPolicyError(f"claim policy {field} does not match Phase A")
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(item, str) or not item for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise ClaimPolicyError(f"claim policy {field} must be a non-empty unique string list")
+    return value
 
 
 def _deduplicate(values: list[str]) -> list[str]:
