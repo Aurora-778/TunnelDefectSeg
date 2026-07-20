@@ -1,92 +1,93 @@
 # TunnelDefect 工程 Agent 化 CEPlan v6 Review 关闭表
 
-> 对应计划：`docs/plans/2026-07-20-001-feat-inspection-engineering-agent-phase-a-plan.md`  
-> 基线：Git `main@7203da7`  
-> 状态：计划审查已收束，Phase 0 与 Phase A 尚未实施  
+> 对应计划：`docs/plans/2026-07-20-001-feat-inspection-engineering-agent-phase-a-plan.md`
+> 基线：Git `main@7203da7`
+> 状态：本轮 Review 问题已修订；总体计划仅条件关闭，Phase 0 schema review 尚未完成
 > 更新日期：2026-07-20
 
 ## 1. 使用说明
 
-本表只记录 CEPlan 的设计问题是否已经在计划中得到明确回答，不代表对应代码已经实现或验收通过。
+本表只记录 CEPlan 的设计问题如何处理，不代表代码已经实现或验收通过。
 
 状态含义：
 
-- `计划已关闭`：计划已经给出唯一边界、合同或验收方式。
-- `事实已核验`：已对当前仓库基线做只读核验。
-- `Phase 0 待实施`：需要先落地合同、配置和 fixture。
-- `Phase A 待实施`：需要后续单独执行开发与验收。
-- `阻断`：进入下一阶段前必须先解决。
+- `事实已核验`：已对 `main@7203da7` 做只读核验。
+- `本轮已修订`：本轮 Review 指出的计划问题已写入 CEPlan。
+- `条件关闭`：计划已有明确方案，但必须经过 Phase 0 schema review 和反例审查后才能进入实现。
+- `Phase 0 待实施`：合同、配置或 fixture 尚未落盘。
+- `Phase A1/A2/A3 待实施`：代码、测试和验收均未开始。
+- `阻断`：解决前不得进入对应后续阶段。
 
-## 2. 基线与范围
+## 2. 本轮 Review 问题
 
-|检查项|状态|关闭证据|实现状态|
+|问题|状态|修订结果|后续条件|
 |---|---|---|---|
-|仓库基线|事实已核验|当前 `main@7203da7`，与计划基线一致|无代码变更|
-|工作树状态|事实已核验|存在与计划无关的 Web/视频 WIP，计划已改为要求隔离|不得触碰或提交 WIP|
-|核心算法边界|计划已关闭|禁止修改 Association 阈值与评分、Memory 聚合、Growth 数值公式|Phase A 必须用 semantic snapshot 复核|
-|主流程语义|计划已关闭|保持 history-only、no-id；with-id 仅为评估上界|尚未迁移 DAG|
-|禁止扩展|计划已关闭|排除 LLM、多 Agent 对话、数据库、向量检索、Hungarian、SLAM 等|无新增依赖|
+|可比性门控缺失|本轮已修订|Evidence 与 Claim Policy 增加 observation source 和三层 comparability；非 verified 只能 Static Audit|Phase 0 固定 schema 与反例|
+|Physical/Multi-timepoint 能力超出证据|本轮已修订|Phase A 与 Prediction 一并固定 blocked|后续阶段另立计划|
+|Evidence/Claim 权威路径断链|本轮已修订|唯一权威路径固定为当前 Run 的 `artifacts/`；Staging 只保存发布物和受控镜像|A1 验证原子生成与 Hash|
+|Manifest 早于 final summary|本轮已修订|final summary 和全部必要文件先落盘，Manifest 最后提交|A2 做崩溃反例|
+|Manifest 提交后恢复缺失|本轮已修订|增加 transaction phase 和幂等完成/隔离回滚规则|A2 验证每个崩溃点|
+|Web 读取范围冲突|本轮已修订|Phase A consumers 限定为 workflow/CLI；现有 Web 保持 legacy reader，延后到 Phase E|Phase A 不得宣称 Web 已接入|
+|面积口径不唯一|本轮已修订|固定为 `inspection_level_max_mask_area_px`，两侧均使用巡检级最大 mask 面积|A1 验证唯一 Engineering 映射|
+|allocation token 二次写入窗口|本轮已修订|token 必须进入 Run metadata 首次写入|A3 验证初始写失败恢复|
+|Phase A 过大|本轮已修订|拆为 A1 Claim/Evidence、A2 Publication、A3 State/Lock/WAL|逐段 review，禁止合并大提交|
+|关闭表过早宣称完成|本轮已修订|关键合同统一改为条件关闭|Phase 0 review 后再更新|
+|受限词扫描误伤免责声明|本轮已修订|主校验改为 template/decision 映射；词扫描仅为补充防线|Phase 0 固定模板合同|
 
-## 3. Claim 与证据合同
+## 3. 基线与范围
 
-|检查项|状态|关闭证据|实现状态|
+|检查项|状态|证据|实现状态|
 |---|---|---|---|
-|Association 身份边界|计划已关闭|规则 Association 只能作为支持证据，不等于身份确认|Phase A 待实施|
-|Claim Capability|计划已关闭|区分静态审计、描述性差异、方向性变化、物理量变化、多时点模式和预测|Phase 0 待实施|
-|规则关联语言上限|计划已关闭|`association_supported` 最高只能 `allowed_with_limits`|Phase A 待实施|
-|历史证据来源|计划已关闭|Previous Value 只能定位到对应 round 的 `memory_before_query.csv`|Phase A 待实施|
-|伪 Observation 防线|计划已关闭|禁止构造不存在的 `previous_observation_id`|Phase A 待实施|
-|Registration/Scale/Uncertainty|计划已关闭|均要求显式 provenance，缺失时使用保守默认值|Phase 0 待实施|
-|ClaimDecision v4|计划已关闭|逐记录决策 schema、状态与发布语言已定义|Phase 0 待实施|
+|仓库基线|事实已核验|计划基于 `main@7203da7`|无代码变更|
+|工作树状态|事实已核验|存在与计划无关的 Web/视频 WIP，必须隔离|不得触碰或提交 WIP|
+|核心算法边界|条件关闭|禁止修改 Association 阈值/评分、Memory 聚合和 Growth 数值公式|A1/A2/A3 均需 semantic snapshot|
+|主流程语义|条件关闭|保持 history-only、no-id；with-id 仅为评估上界|尚未迁移 DAG|
+|禁止扩展|条件关闭|排除 LLM、多 Agent 对话、数据库、向量检索、Hungarian、SLAM 等|无新增依赖|
 
-## 4. DAG 与报告发布
+## 4. Claim 与证据合同
 
-|检查项|状态|关闭证据|实现状态|
+|检查项|状态|证据|实现状态|
 |---|---|---|---|
-|唯一 Phase A DAG|计划已关闭|只在现有 DAG 中增加 comparison evidence、claim gate 与报告节点|Phase A 待实施|
-|重复框架风险|计划已关闭|禁止新增第二套 Executor、Registry、RunManager 或 DAG Builder|Phase A 实现时复核|
-|Memory 数据与报告分离|计划已关闭|Memory CSV 保留聚合语义，正式报告必须经过 Claim Gate|Phase A 待实施|
-|Growth 数据与报告分离|计划已关闭|Growth 保留现有数值公式，正式报告发布权移到门控后|Phase A 待实施|
-|Visualization/Recheck 门控|计划已关闭|必须实际读取并验证 ClaimDecision|Phase A 待实施|
-|FinalReport 门控|计划已关闭|必须消费 ClaimDecision、Comparison Evidence 和受门控报告|Phase A 待实施|
-|旧成功产物误用|计划已关闭|当前发布结果必须由 Publication Manifest 与 hash 唯一标识|Phase A 待实施|
+|Association 身份边界|条件关闭|规则 Association 只能作为支持证据，不等于身份确认|A1 待实施|
+|Comparability 硬门控|条件关闭|任一侧非 verified 时只允许 Static Audit|Phase 0/A1 待实施|
+|Phase A Capability|条件关闭|Difference/Directional 受严格门控；Physical/Pattern/Prediction 固定 blocked|Phase 0/A1 待实施|
+|历史证据来源|条件关闭|Previous Value 只能来自对应 round 的 `memory_before_query.csv`|A1 待实施|
+|面积测量口径|条件关闭|当前与历史统一为巡检级最大 mask 面积|A1 待实施|
+|Registration/Scale/Uncertainty|条件关闭|均要求显式 provenance，缺失时采用保守默认值|Phase 0/A1 待实施|
+|ClaimDecision|条件关闭|逐记录 schema、模板映射、来源 Hash 和失效规则已定义|仍需 Phase 0 schema review|
 
-## 5. 事务、状态与恢复
+## 5. DAG、发布与状态
 
-|检查项|状态|关闭证据|实现状态|
+|检查项|状态|证据|实现状态|
 |---|---|---|---|
-|Staging 与 manifest-last|计划已关闭|全部正式产物先进入 Run Staging，最后提交 Publication Manifest|Phase A 待实施|
-|发布回滚|计划已关闭|逐文件发布失败必须回滚；回滚不完整时隔离 manifest 并写 recovery marker|Phase A 待实施|
-|双入口合同|计划已关闭|Prepared Dataset 与 Legacy Simulated 共用锁、StateStore、DAGExecutor 和发布事务|Phase 0/Phase A 待实施|
-|Active Run Lock|计划已关闭|保留 `run_NNN`，定义 allocation 过渡与崩溃恢复|Phase A 待实施|
-|Canonical State|计划已关闭|区分 Context Checkpoint 与顶层状态迁移|Phase A 待实施|
-|CAS/WAL|计划已关闭|定义状态锁、CAS、transition journal、截断与损坏规则|Phase A 待实施|
-|COMPLETED 顺序|计划已关闭|Publication Commit 与 final summary 必须早于 COMPLETED|Phase A 待实施|
+|唯一 DAG/Executor|条件关闭|只扩展现有 DAG、DAGExecutor、Registry 和 RunManager|A1/A3 待实施|
+|A1 Claim/Evidence|条件关闭|只生成 Run-local artifacts 与受门控 Staging 报告|A1 待实施|
+|A2 Publication|条件关闭|Manifest-last、事务阶段和提交前/后恢复已定义|A2 待实施|
+|A3 State/Lock/WAL|条件关闭|双入口、初始 allocation token、Canonical State、CAS/WAL 已定义|A3 待实施|
+|Memory/Growth 报告分离|条件关闭|结构化数据保留，正式报告必须经过 Claim Gate|A1 待实施|
+|Visualization/FinalReport|条件关闭|必须读取当前 Run 的 ClaimDecision 和 Comparison Evidence|A1 待实施|
+|Web 边界|条件关闭|Phase A 不修改 Web，也不声称 Web 是 Manifest 权威 reader|Phase E 待实施|
 
 ## 6. 安全与验收
 
-|检查项|状态|关闭证据|实现状态|
+|检查项|状态|证据|实现状态|
 |---|---|---|---|
-|Path Safety|计划已关闭|所有输入、Staging、Run 与发布路径要求项目根约束和路径级检查|Phase A 待实施|
-|Artifact Isolation|计划已关闭|要求 added/removed/modified 均为空，CLI 在临时项目副本执行|Phase A 待实施|
-|Semantic Snapshot|计划已关闭|默认只 diff；写入必须显式给出 reviewed reason|Phase A 待实施|
-|CLI 退出码|计划已关闭|成功、请求错误、readiness、锁、执行、验证、review 和状态冲突均有固定退出码|Phase A 待实施|
-|Phase A 必测|计划已关闭|计划列出 32 项边界与故障测试|尚未创建测试|
-|Phase A 验收|计划已关闭|给出 plan-only、prepared、legacy、validator、重点、快速和全量回归命令|尚未执行|
+|Path Safety|条件关闭|Task dataset_id、项目根与路径级检查已定义|A3 待实施|
+|Artifact Isolation|条件关闭|要求 added/removed/modified 为空，CLI 在临时项目副本执行|A1/A2/A3 待实施|
+|Semantic Snapshot|条件关闭|默认只 diff，更新必须提供 reviewed reason|A1/A2/A3 待实施|
+|CLI 退出码|条件关闭|成功、readiness、锁、执行、验证和状态冲突均有固定码|A3 待实施|
+|阶段验收|条件关闭|A1/A2/A3 必须分别 review；上一阶段有 P0/P1 时不得继续|尚未执行|
 
 ## 7. 当前阻断项
-
-进入 Phase A 前，以下项目必须先完成：
 
 - [ ] 创建 Phase 0 五份合同文档。
 - [ ] 创建 `config/inspection_workflow.yaml`。
 - [ ] 创建有效与无效 task fixture。
 - [ ] 对 ClaimDecision、Comparison Evidence、Publication Manifest 和 StateStore API 做 schema review。
-- [ ] 明确现有 Web/视频 WIP 的隔离方式，确保 Phase A 提交不包含这些文件。
-- [ ] 对计划第 29 节的 20 项最终自检逐项给出证据。
+- [ ] 对不可比较输入、物理量、多时点、Manifest 提交后崩溃和 allocation 初始写失败建立反例。
+- [ ] 明确现有 Web/视频 WIP 的隔离方式。
+- [ ] 对计划最终自检逐项给出代码或测试证据。
 
 ## 8. 结论
 
-CEPlan v6 已把工程 Agent 化限制为现有 DAG 上的确定性协调、证据门控、状态恢复和发布事务，没有把项目扩展为 LLM Agent 平台或第二套编排框架。
-
-当前可以宣布的是“计划审查已收束”。当前不能宣布 Phase 0 或 Phase A 已完成，也不能使用计划第 30 节的完成式项目表述。
+本轮 Review 指出的合同矛盾已进入 CEPlan，但整体计划仍只是“条件关闭”。当前只允许进入 Phase 0 合同与 schema review，不允许直接开始 Phase A1，更不能宣布 Phase A、Web Manifest 接入或工程 Agent 闭环已经完成。
