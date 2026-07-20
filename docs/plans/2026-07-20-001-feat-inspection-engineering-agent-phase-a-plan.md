@@ -519,6 +519,42 @@ Phase A3: 双入口 Controller + Active Run Lock + Canonical State/CAS/WAL
 - A3 验收后，Prepared 与 Legacy 入口才共同启用锁、StateStore、现有 DAGExecutor 和 Publication。
 - 每一段必须独立 review、通过专项测试和 Artifact Isolation；前一段未关闭 P0/P1 时不得进入下一段。
 
+### 2.4.1 A1 Run-local 输出隔离合同
+
+A1 不得在仓库根目录直接运行仍指向正式路径的 legacy full pipeline。A1 的专项执行器测试必须通过现有 Agent 的显式输出参数或最小兼容开关，将本轮所有可写路径覆盖到当前 Run：
+
+```text
+runs/<run_id>/work/
+├─ disease_engineering_report.csv
+├─ disease_growth_results.csv
+├─ disease_memory_bank.csv
+├─ disease_association_records.csv
+└─ main_progressive/
+
+runs/<run_id>/artifacts/
+├─ comparison_evidence.csv
+├─ comparison_evidence_manifest.json
+└─ claim_decision.json
+
+runs/<run_id>/staging/
+└─ 受 Claim Gate 控制的人类可读报告与可视化
+```
+
+固定映射：
+
+|现有节点|A1 允许输出|A1 禁止输出|
+|---|---|---|
+|Engineering|`runs/<run_id>/work/disease_engineering_report.csv`；内部中性 Markdown 可写 Staging|`data/simulated/*`、正式 `outputs/*`|
+|Growth|`runs/<run_id>/work/disease_growth_results.csv`；受门控报告写 Staging|旧 Growth Markdown/Summary 正式路径|
+|Memory|`runs/<run_id>/work/disease_memory_bank.csv`；旧 `_write_reports()` 关闭，受门控报告写 Staging|正式 Memory 报告路径|
+|Association|`runs/<run_id>/work/disease_association_records.csv` 和 Run-local `main_progressive/`|正式 Association CSV 和正式 progressive 目录|
+|Visualization/Recheck|只读取 Run-local Evidence/ClaimDecision，全部写 Staging|正式图片、正式 CSV、正式报告|
+|FinalReport|只读取 Run-local/ Staging 当前 Run 产物，写 `staging/final_project_report.md` 等|正式 Final Report/Summary/Insights|
+
+A1 只增加路径覆盖和报告写入模式，不改变任何算法公式、阈值或 DAG 依赖。默认 legacy 参数在 A1 期间保持原行为；A1 验收只能在 `tmp_path` 或临时项目副本中运行，不得以默认路径执行。A3 接管前，仓库根目录的 `data/simulated/`、`outputs/` 和正式 progressive 目录在 A1 测试前后必须满足 added/removed/modified 均为空。
+
+上述映射是 A1 的执行合同，不是第二份 DAG。依赖顺序仍只来自 `config/dag.yaml`；路径覆盖由现有 Agent 输入参数和同一份运行上下文完成，禁止新增 Executor、Registry 或并行编排配置。
+
 ---
 
 # 3. 唯一 Phase A DAG
@@ -954,8 +990,11 @@ claim_policy:
   static_descriptive_audit:
     allowed:
       when:
+        - evidence_schema_valid == true
         - current_record_valid == true
         - current_observation_source_declared == true
+        - current_observation_source in observation_source_enum
+        - current_comparability_status in comparability_status_enum
 
   descriptive_difference_claim:
     allowed:
@@ -1032,10 +1071,26 @@ association_invalid
 current_observation_source 未声明
 → Claim Gate FAIL CLOSED
 
+current_observation_source 缺失、为空或存在未知枚举
+→ Evidence INVALID
+→ Claim Gate FAIL CLOSED
+
+previous_observation_sources 缺失、类型错误、存在未知枚举，或在存在历史 Memory Snapshot 时为空
+→ Evidence INVALID
+→ Claim Gate FAIL CLOSED
+
+previous_entity_type=not_applicable 且 previous/comparison comparability 均为 insufficient_history
+→ previous_observation_sources=[] 合法
+
+current_comparability_status / previous_comparability_status / comparison_comparability_status 缺失、为空或存在未知枚举
+→ Evidence INVALID
+→ Claim Gate FAIL CLOSED
+→ 不得按“非 verified”降级为 Static Audit
+
 previous_observation_sources 未声明
 → descriptive / directional 全部 blocked
 
-current_comparability_status != verified_comparable
+三个 comparability 字段均通过 required/enum 校验，且 current_comparability_status != verified_comparable
 或 previous_comparability_status != verified_comparable
 或 comparison_comparability_status != verified_comparable
 → 仅 static_descriptive_audit 可允许
@@ -1059,7 +1114,7 @@ vs.
 historical memory snapshot
 ```
 
-固定：
+存在历史比较对象时固定：
 
 ```text
 previous_entity_type = memory_snapshot
@@ -1070,6 +1125,18 @@ previous_entity_type = memory_snapshot
 ```text
 observation_to_observation
 ```
+
+首次观测、unmatched 或 association_rejected 且不存在历史 Memory Snapshot 时使用：
+
+```text
+previous_entity_type = not_applicable
+previous_observation_sources = []
+previous_comparability_status = insufficient_history
+comparison_comparability_status = insufficient_history
+difference_valid = false
+```
+
+该分支只能形成当前观测的 Static Audit，不得伪造 `memory_id` 或历史来源。
 
 ## 7.2 数据定位流程
 
@@ -1180,6 +1247,50 @@ source_memory_snapshot_sha256
 source_engineering_artifact_sha256
 ```
 
+### 7.3.1 Observation 与 Comparability 必填枚举
+
+以下字段属于 Comparison Evidence 的 required 字段，不得为空、缺失或使用未知值：
+
+```text
+current_observation_source
+current_comparability_status
+previous_observation_sources
+previous_comparability_status
+comparison_comparability_status
+```
+
+Phase A `observation_source` 采用闭集枚举：
+
+```text
+kict_static_mask_cyclic_demo
+real_inspection_mask_input
+verified_fixture
+mixed_sources
+legacy_unverified_source
+```
+
+`previous_observation_sources` 必须存在且类型为去重、稳定排序的列表，每一项均来自同一枚举。只有 `previous_entity_type=not_applicable` 且 previous/comparison comparability 均为 `insufficient_history` 时允许空列表；存在历史 Memory Snapshot 时必须非空。新增来源必须升级 Claim/Evidence schema 版本并经过 Phase 0 review，禁止用任意非空字符串绕过校验。`verified_fixture` 仅允许 `execution_profile=test`，任何准备发布到正式 Manifest 的 Run 出现该来源都必须 Fail Closed。
+
+Phase A `comparability_status` 采用闭集枚举：
+
+```text
+verified_comparable
+not_longitudinally_comparable
+insufficient_history
+simulated_metadata_comparable
+```
+
+字段缺失、空值或不在枚举内：
+
+```text
+evidence_valid = false
+identity_evidence_state = association_invalid
+Claim Gate FAIL CLOSED
+不得生成可发布 Static Audit
+```
+
+只有 schema 合法、且值明确属于后三种非 verified 状态时，才允许降级到 `static_descriptive_audit`。`mixed_sources` 和 `legacy_unverified_source` 是合法来源声明，但不会自动提升可比性。
+
 ## 7.4 历史数值字段
 
 第一版至少支持明确可追溯的：
@@ -1192,7 +1303,9 @@ inspection_level_max_mask_area_px:
   measurement_unit              ← pixel²
 ```
 
-当前 Engineering 行必须通过当前 query 内部的 `(inspection_id, label_disease_id)` 唯一定位；这里的 `label_disease_id` 只用于定位当前巡检内的工程聚合记录，禁止进入 Association score、ranking 或跨巡检身份判断。
+当前记录必须先通过 Association query 的中性复合键 `(inspection_id, frame_id, image_id, current_observation_id)` 在源 Frame/Observation records 中唯一定位，再通过 `current_observation_id`、来源记录指纹或 Engineering 中显式的 `source_observation_ids` 映射到唯一 Engineering 聚合行。Phase 0 若发现现有 Engineering schema 无法完成该映射，必须增加中性的来源引用字段并升级 schema；不得退回使用评估标签定位。
+
+`label_disease_id` 只能在 Association 完成后用于 benchmark/evaluation 对照。Comparison Evidence、ClaimDecision、报告渲染和跨巡检身份判断均不得把它作为 required join key，也不得因其缺失而改变生产 Claim 结果。
 
 `previous_memory_snapshot_value` 必须来自对应 round 的 `memory_before_query.csv`。两侧均为巡检级最大 mask 面积，不允许把单帧 `kict_area_px` 与巡检级 `last_area_px` 混合比较。
 
@@ -1372,7 +1485,8 @@ Schema 示例：
       },
       "required_language_qualifiers": [
         "基于当前规则关联候选",
-        "不构成真实身份确认"
+        "不构成真实身份确认",
+        "当前证据不可纵向比较，仅允许静态描述审计，不构成方向性变化结论"
       ],
       "reason_codes": [
         "RULE_ASSOCIATION_ONLY",
@@ -1582,6 +1696,14 @@ required_language_qualifiers
 
 Renderer 只能从 Claim Policy 注册的受控模板生成正式结论；Validator 必须逐记录验证 `template_id` 与 ClaimDecision capability/status 一致，并确认必要限定语存在。
 
+当 `comparison_comparability_status != verified_comparable` 且 schema 合法时，ClaimDecision 必须加入受控限定语模板：
+
+```text
+当前证据不可纵向比较，仅允许静态描述审计，不构成方向性变化结论
+```
+
+缺少该限定语时 Publication Validation 必须失败，不能只依赖 `reason_codes` 或受限词扫描推断边界。
+
 受限词扫描只作为补充防线，扫描以下高风险词：
 
 ```text
@@ -1635,6 +1757,8 @@ runs/<run_id>/artifacts/
 └─ claim_decision.json
 
 runs/<run_id>/staging/
+├─ disease_engineering_report.md
+├─ disease_engineering_report_summary.md
 ├─ disease_growth_analysis_report.md
 ├─ disease_growth_analysis_summary.md
 ├─ memory_agent_report.md
@@ -1712,8 +1836,48 @@ Phase A 不修改现有 Web。现有 Web 在 Phase E 接入 Manifest 前仍是 l
   "plan_fingerprint": "sha256...",
   "published_at": "...",
   "source_artifacts": {
+    "engineering_report": {
+      "path": "runs/run_012/work/disease_engineering_report.csv",
+      "sha256": "..."
+    },
+    "growth_results": {
+      "path": "runs/run_012/work/disease_growth_results.csv",
+      "sha256": "..."
+    },
+    "memory_bank": {
+      "path": "runs/run_012/work/disease_memory_bank.csv",
+      "sha256": "..."
+    },
+    "association_records": {
+      "path": "runs/run_012/work/disease_association_records.csv",
+      "sha256": "..."
+    },
+    "association_manifest": {
+      "path": "runs/run_012/work/main_progressive/association_manifest.json",
+      "sha256": "..."
+    },
+    "association_round_I002_query_frames": {
+      "path": "runs/run_012/work/main_progressive/round_I002/query_frames.csv",
+      "sha256": "..."
+    },
+    "association_round_I002_memory_before": {
+      "path": "runs/run_012/work/main_progressive/round_I002/memory_before_query.csv",
+      "sha256": "..."
+    },
+    "association_round_I002_records": {
+      "path": "runs/run_012/work/main_progressive/round_I002/association_records.csv",
+      "sha256": "..."
+    },
+    "association_round_I002_memory_after": {
+      "path": "runs/run_012/work/main_progressive/round_I002/memory_after_query.csv",
+      "sha256": "..."
+    },
     "comparison_evidence": {
       "path": "runs/run_012/artifacts/comparison_evidence.csv",
+      "sha256": "..."
+    },
+    "comparison_evidence_manifest": {
+      "path": "runs/run_012/artifacts/comparison_evidence_manifest.json",
       "sha256": "..."
     },
     "claim_decision": {
@@ -1726,17 +1890,85 @@ Phase A 不修改现有 Web。现有 Web 在 Phase E 接入 Manifest 前仍是 l
     }
   },
   "artifacts": {
+    "disease_engineering_report": {
+      "path": "outputs/disease_engineering_report.md",
+      "sha256": "..."
+    },
+    "disease_engineering_report_summary": {
+      "path": "outputs/disease_engineering_report_summary.md",
+      "sha256": "..."
+    },
+    "disease_growth_analysis_report": {
+      "path": "outputs/disease_growth_analysis_report.md",
+      "sha256": "..."
+    },
+    "disease_growth_analysis_summary": {
+      "path": "outputs/disease_growth_analysis_summary.md",
+      "sha256": "..."
+    },
+    "memory_agent_report": {
+      "path": "outputs/memory_agent_report.md",
+      "sha256": "..."
+    },
+    "disease_memory_bank_summary": {
+      "path": "outputs/disease_memory_bank_summary.md",
+      "sha256": "..."
+    },
+    "priority_recheck_list": {
+      "path": "data/simulated/priority_recheck_list.csv",
+      "sha256": "..."
+    },
+    "visualization_report": {
+      "path": "outputs/visualization_report.md",
+      "sha256": "..."
+    },
+    "visualization_summary": {
+      "path": "outputs/visualization_summary.md",
+      "sha256": "..."
+    },
+    "recheck_list_report": {
+      "path": "outputs/recheck_list_report.md",
+      "sha256": "..."
+    },
     "final_project_report": {
       "path": "outputs/final_project_report.md",
       "sha256": "..."
     },
-    "growth_report": {
-      "path": "outputs/disease_growth_analysis_report.md",
+    "system_summary": {
+      "path": "outputs/system_summary.md",
+      "sha256": "..."
+    },
+    "key_insights": {
+      "path": "outputs/key_insights.md",
+      "sha256": "..."
+    },
+    "claim_decision_mirror": {
+      "path": "outputs/claim_decision.json",
+      "sha256": "..."
+    },
+    "visualizations/area_audit.png": {
+      "path": "outputs/visualizations/area_audit.png",
       "sha256": "..."
     }
   }
 }
 ```
+
+以上只展示单个可视化文件的结构；真实 Manifest 必须穷举本次 Staging 中全部待发布文件，禁止只登记代表性样例。`visualizations/` 必须递归展开为以 POSIX 相对路径稳定排序的逐文件条目，每个文件独立记录 SHA-256；不得只记录目录路径、mtime 或目录总大小。
+
+发布前必须计算并比较：
+
+```text
+expected_publication_paths = Staging 中除 final_summary.md 外的全部待发布文件映射到正式路径后的集合
+manifest_artifact_paths = Manifest artifacts 中全部 path 的集合
+expected_source_artifact_paths = 本 Run work/artifacts 目录以及其 manifest 递归引用的全部必要机器 Artifact 集合
+manifest_source_artifact_paths = Manifest source_artifacts 中全部 path 的集合
+
+expected_publication_paths == manifest_artifact_paths
+expected_source_artifact_paths == manifest_source_artifact_paths
+```
+
+同时验证无重复路径、无未登记文件、无 Manifest 指向但 Staging/Run-local 来源不存在的文件。Association Manifest 引用的 round/query/memory/association 文件必须展开到 `source_artifacts`，或以显式的递归 child-artifacts 列表逐文件记录路径与 Hash；只登记顶层 Manifest 而不验证其引用文件不算完整。`claim_decision_mirror` 的 Hash 还必须等于 Run-local 权威 `claim_decision.json`。任一集合或 Hash 不一致均不得提交 Manifest。
 
 ## 11.6 发布失败
 
@@ -1776,7 +2008,8 @@ manifest_committed 之前崩溃
 manifest_committed 之后、COMPLETED 之前崩溃
 → 验证新 Manifest、全部正式文件、Run-local 证据和 final_summary Hash
 → state 仍为预期 RUNNING 且 plan_fingerprint/run_id 一致时，幂等补做 COMPLETED
-→ 任一校验失败或 state 冲突时，隔离新 Manifest，尝试恢复旧发布；恢复不完整则写 recovery marker 并 FAIL CLOSED
+→ 任一校验失败或 state 冲突时，先隔离新 Manifest，再将 runs/<run_id>/final_summary.md 原子移动到 staging/invalidated_final_summary.md 并写 invalidation reason，然后尝试恢复旧发布
+→ final_summary 隔离、旧发布恢复或旧 Manifest 恢复任一步骤不完整时，写 recovery marker 并 FAIL CLOSED
 ```
 
 不得在 Manifest 已提交后继续套用“Manifest 不更新”的失败描述；该窗口必须按上述提交后恢复规则处理。
@@ -1785,7 +2018,7 @@ manifest_committed 之后、COMPLETED 之前崩溃
 
 ```text
 不得保留可被识别为成功结果的 runs/<run_id>/final_summary.md
-若 final_summary 已在 Manifest 提交前生成但随后回滚失败，则移动到 Staging 审计区并标记 invalidated
+无论 Manifest 提交前或提交后，只要当前 Run 最终不是 COMPLETED，已生成的 final_summary 都必须移动到 Staging 审计区并标记 invalidated
 生成 runs/<run_id>/failure_summary.md
 保留 Staging 供审计
 ```
@@ -2015,6 +2248,34 @@ os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
 在持锁情况下：
 
 ```text
+在锁内计算唯一 reserved_run_id=run_NNN
+→ 原子更新锁：
+   phase=allocating
+   allocation_token=<uuid>
+   reserved_run_id=run_NNN
+→ 此时尚未创建 Run 目录
+→ RunManager.create_run(
+    run_id=reserved_run_id,
+    dag_config=...,
+    initial_metadata={
+        "allocation_token": allocation_token,
+        "task_id": task_id,
+        "lock_token": lock_token,
+        "reserved_run_id": reserved_run_id,
+    },
+)
+→ metadata.json 首次原子写入成功后，Run 才算 created
+→ 原子更新锁：
+   phase=running
+   run_id=reserved_run_id
+→ DAGExecutor(..., run_id=reserved_run_id)
+```
+
+`RunManager.create_run()` 必须接受锁内已预留的 `run_id`，不得再次调用 `_next_run_number()`。目录创建和首次 metadata 写入之间发生硬崩溃时，锁内 `reserved_run_id` 是恢复该无 metadata 目录的唯一权威引用。
+
+禁止以下旧顺序：
+
+```text
 RunManager.create_run(
     dag_config=...,
     initial_metadata={
@@ -2030,23 +2291,28 @@ RunManager.create_run(
 → DAGExecutor(..., run_id=run_NNN)
 ```
 
-`allocation_token` 必须在 `metadata.json` 的首次写入中出现，禁止先写无 token metadata 再 patch。若首次 metadata 写入失败，`create_run()` 必须清理未发布的空 Run 目录；清理失败时保留显式 recovery marker 并 FAIL CLOSED。
+`allocation_token` 必须在 `metadata.json` 的首次写入中出现，禁止先写无 token metadata 再 patch。若首次 metadata 写入失败，`create_run()` 必须清理未发布的空 Run 目录；清理失败时在 `reserved_run_id` 目录内保留显式 `.allocation_recovery_required` marker 并 FAIL CLOSED。
 
 ## 14.4 Allocation 崩溃恢复
 
 当锁为 `allocating` 且同主机 PID 不存在：
 
 ```text
-按 allocation_token 搜索 metadata.json
+先读取锁中的 reserved_run_id 和 allocation_token
+→ 只检查 runs/<reserved_run_id>/，禁止扫描后猜测其他 Run
 
-未找到 Run
+reserved_run_id 目录不存在
 → 可审计删除锁
 
-找到唯一 created Run
+reserved_run_id 目录存在但 metadata.json 不存在
+→ 目录为空时仅可在审计记录后删除该目录和锁
+→ 目录非空或清理失败时写 .allocation_recovery_required 并 FAIL CLOSED
+
+metadata.json 存在且 allocation_token/run_id 与锁一致，状态为 created
 → 将该 Run 标记 FAILED / allocation_aborted
 → 删除锁
 
-找到多个 Run 或状态不一致
+metadata token/run_id 不一致、目录名称不一致或状态不一致
 → FAIL CLOSED
 ```
 
@@ -2105,6 +2371,7 @@ class StateStore:
         self,
         *,
         run_id,
+        expected_status,
         expected_state_version,
         event_id,
         task_status,
@@ -2256,13 +2523,15 @@ transition_id
 
 # 16. WAL 与崩溃恢复
 
-## 16.1 Transition Journal
+## 16.1 Unified State Journal
+
+Phase A 只允许一份 State WAL：
 
 ```text
-runs/<run_id>/transition_log.jsonl
+runs/<run_id>/state_journal.jsonl
 ```
 
-记录类型：
+`checkpoint_context()` 与 `transition_status()` 都必须写入该 Journal，不得只有顶层状态迁移受 WAL 保护。记录阶段：
 
 ```text
 pending
@@ -2270,36 +2539,50 @@ committed
 aborted
 ```
 
-每行：
+每行公共字段：
 
 ```text
 schema_version
-transition_id
-phase
+operation_kind        # context_checkpoint | status_transition
+operation_id          # checkpoint 使用 event_id；transition 使用 transition_id
+phase                 # pending | committed | aborted
 expected_state_version
 resulting_state_version
-from_status
-to_status
+expected_status
+resulting_status
 timestamp
 payload_sha256
 record_checksum
 ```
 
-Checksum 对除 `record_checksum` 外的规范化 JSON 计算。
+`status_transition` 的 `resulting_status` 是 `next_status`；`context_checkpoint` 的 `resulting_status` 必须等于 `expected_status`，只能更新 task/context 字段和 `state_version`，不得伪造顶层状态迁移。
 
-## 16.2 写入顺序
+Canonical `state.json` 必须额外保存：
+
+```text
+last_operation_kind
+last_operation_id
+last_operation_payload_sha256
+```
+
+这三个字段与 `state_version` 一起用于判断 pending 是否已经应用。Checksum 对除 `record_checksum` 外的规范化 JSON 计算。
+
+## 16.2 两类写入的统一顺序
 
 ```text
 获取 state lock
-→ 读取 state 与 journal
-→ 相同 transition_id 已 committed：返回原结果
+→ 读取 state 与 state_journal
+→ 相同 operation_kind + operation_id 已 committed：验证 payload_sha256 后返回原结果
+→ 相同 ID 但 payload 不同：STATE_CONFLICT
 → 验证 expected status/version
 → 追加 pending，flush+fsync
-→ 原子替换 state.json
+→ 原子替换 state.json；同时写 resulting version 和 last_operation_* 三字段
 → 追加 committed，flush+fsync
 → 平台允许时 fsync 目录
 → 释放 state lock
 ```
+
+因此 `checkpoint_context()` 的任务开始、成功、失败和 Retry checkpoint 与 `transition_status()` 使用同一套 CAS/WAL 顺序；不得建立第二份 checkpoint journal。
 
 ## 16.3 JSONL 损坏
 
@@ -2315,27 +2598,30 @@ Checksum 对除 `record_checksum` 外的规范化 JSON 计算。
 record_checksum 不匹配
 → FAIL CLOSED
 
-同一 transition_id 有冲突 committed
+同一 operation_kind + operation_id 有冲突 committed
 → STATE_CONFLICT
 ```
 
 ## 16.4 恢复规则
 
 ```text
-pending + state 已应用
+pending + state 的 version/last_operation_id/payload_sha256 均表明操作已应用
 → 补写 committed
 
 pending + state 仍为 expected version/status
 → 追加 aborted
-→ 允许使用新 transition_id 重试
+→ 允许使用新 operation_id 重试；使用相同 ID 时 payload 必须完全一致
 
 pending + state 为其他版本或状态
 → STATE_CONFLICT
 
 committed 已存在
-→ 同一 transition_id 返回原结果
+→ 同一 operation_kind + operation_id 且 payload 相同：返回原结果
+→ payload 不同：STATE_CONFLICT
 → 不增加 state_version
 ```
+
+`checkpoint_context()` 恢复后必须验证 `task_status`、`completed_tasks`、`failed_tasks` 和 `context_snapshot` 的规范化 Hash 与 pending payload 一致；只比较 `state_version` 不足以证明 checkpoint 已应用。
 
 ---
 
@@ -2678,12 +2964,22 @@ orchestrator/agents/
 ├─ growth_report_agent.py
 └─ memory_report_agent.py
 
+现有文件的最小兼容修改范围：
+├─ config/dag.yaml                         # 只增加新节点/依赖与 Run-local 路径引用，保留单一 DAG
+├─ orchestrator/registry.py                # 只注册 A1 新节点
+├─ orchestrator/agents/engineering_report_agent.py
+├─ orchestrator/agents/growth_analysis_agent.py
+├─ orchestrator/agents/memory_agent.py
+├─ orchestrator/agents/association_agent.py
+├─ orchestrator/agents/visualization_agent.py
+└─ orchestrator/agents/final_report_agent.py
+
 docs/
 ├─ inspection_claim_policy.md
 └─ inspection_comparison_evidence_contract.md
 ```
 
-A1 只建立 Run-local Evidence/Claim 和受门控 Staging 报告，不发布到正式 `outputs/`。
+A1 对现有 Agent 只允许增加“不改变默认 legacy 行为”的显式输出路径/报告模式参数，并按 2.4.1 的映射关闭正式写入。不得在 A1 修改评分、聚合、Growth 数值公式或默认 CLI 发布行为。A1 只建立 Run-local Evidence/Claim 和受门控 Staging 报告，不发布到正式 `outputs/`。
 
 ## 24.2 Phase A2
 
@@ -2731,7 +3027,7 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 1. `association_supported` 不等于身份确认。
 2. 规则关联下 Difference/Directional 最高为 `allowed_with_limits`。
 3. 只有 Human/GT verified 才允许无条件“同一病害”文案。
-4. `previous_entity_type=memory_snapshot`。
+4. 存在历史对象时 `previous_entity_type=memory_snapshot`；无历史对象的 Static Audit 使用 `not_applicable` 且不伪造 Memory。
 5. Schema 不存在 `previous_observation_id`。
 6. Association Manifest 可定位唯一 `memory_before_query.csv`。
 7. Memory ID 缺失或不唯一时阻断。
@@ -2760,7 +3056,7 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 30. Publication Commit 和 final_summary 早于 COMPLETED。
 31. Association 阈值、Memory 语义和 Growth 数值公式不变。
 32. Artifact Isolation 的 added/removed/modified 全为空。
-33. 任一侧 `comparability_status != verified_comparable` 时只允许 Static Audit。
+33. comparability/observation source 缺失或非法时 Fail Closed；只有 schema 合法的明确非 verified 状态才允许 Static Audit。
 34. Phase A 的 Physical、Multi-timepoint 和 Prediction capability 始终 blocked。
 35. Comparison Evidence 与 ClaimDecision 只生成在当前 Run 的 `artifacts/`，下游不读取旧 `outputs/`。
 36. final_summary 和全部必要文件早于 Publication Manifest 提交点。
@@ -2768,6 +3064,13 @@ A3 才接通 Prepared/Legacy 双入口、Active Run Lock、Canonical State/CAS/W
 38. `allocation_token` 出现在 Run metadata 首次写入中，不存在二次 patch 窗口。
 39. A1/A2/A3 分段独立验收，前一段存在 P0/P1 时阻止后一段。
 40. Phase A 不声称现有 Web 已接入 canonical state 或 Publication Manifest。
+41. A1 专项执行前后，正式 `data/simulated/`、`outputs/` 和 progressive 产物 added/removed/modified 均为空。
+42. Manifest artifacts 与 Staging 待发布文件集合完全一致，包含全部可视化逐文件 Hash 和 ClaimDecision 镜像。
+43. Manifest 提交后发生 state 冲突时，`final_summary.md` 被隔离并标记 invalidated。
+44. Run 目录创建后、metadata 首次写入前崩溃时，可通过锁中的 `reserved_run_id` 定位并 Fail Closed 恢复。
+45. `checkpoint_context()` 与 `transition_status()` 均写入同一 State Journal，pending checkpoint 可幂等恢复。
+46. 不可比较的 ClaimDecision 缺少受控静态审计限定语时不得发布。
+47. Comparison Evidence 不依赖 `label_disease_id` 定位当前生产记录；删除评估标签后 Claim 结果保持一致。
 
 ---
 
@@ -2843,6 +3146,7 @@ python -m pytest -q -p no:cacheprovider
 仍把 matched 写成身份确认
 规则关联可以无条件使用“同一病害”
 不可纵向比较记录可以产生 Difference/Directional Claim
+observation_source/comparability_status 缺失或非法时仍可生成 Static Audit
 Physical/Multi-timepoint/Prediction 在 Phase A 不是固定 blocked
 历史值来源不是明确 Memory Snapshot
 当前值和历史值使用不同面积口径
@@ -2853,19 +3157,25 @@ Memory 人类报告可绕过 Claim Gate
 旧报告文件存在即可被视为当前结果
 缺少 Publication Manifest
 Comparison Evidence/ClaimDecision 存在多个权威生成位置
+Comparison Evidence 依赖 label_disease_id 作为生产连接键
 final_summary 或必要文件晚于 Publication Manifest 提交
+Manifest 未穷举全部 Staging 发布文件或未展开可视化逐文件 Hash
 Manifest 提交后崩溃没有恢复规则
+失败 Run 仍保留成功式 final_summary
 发布失败不能回滚或隔离 Manifest
 Legacy 模式伪装成 Prepared Dataset
 新旧入口不共享锁/StateStore/DAG/Publication
 无理由改用 ULID
 allocation_token 不是 Run metadata 首次写入内容
+Run 目录创建前锁内没有 reserved_run_id，导致无 metadata 崩溃目录无法归属
 DAGExecutor 仍直接写两套状态真相
 Context Checkpoint 与 Status Transition 混用
+checkpoint_context 不进入统一 State Journal 或没有幂等恢复规则
 WAL 截断/损坏规则未实现
 CLI 测试写入真实仓库
 Snapshot 可自动重录
 跳过 A1/A2/A3 分段验收
+A1 专项执行修改正式 data/simulated、outputs 或 progressive 产物
 COMPLETED 早于 Publication Commit 或 final_summary
 Semantic Snapshot 显示核心算法漂移
 Artifact Validator、重点测试或快速回归失败
@@ -2929,7 +3239,7 @@ Manifest 驱动的当前发布结果
 4. 是否禁止伪造 `previous_observation_id`？
 5. Registration、Scale、Uncertainty 是否都有 Provenance？
 6. observation_source 与 comparability_status 是否进入 Evidence 和 Claim Policy？
-7. 不可纵向比较记录是否只能进行 Static Audit？
+7. 缺失/非法 observation 或 comparability 是否 Fail Closed，明确不可比较记录是否只能进行 Static Audit？
 8. Phase A 的 Physical/Multi-timepoint/Prediction 是否固定 blocked？
 9. Visualization 是否实际读取 ClaimDecision？
 10. FinalReport 是否实际读取 ClaimDecision？
@@ -2937,20 +3247,25 @@ Manifest 驱动的当前发布结果
 12. 内部 Memory Snapshot 报告是否使用中性模板？
 13. Manifest 提交前失败是否不会更新 Publication Manifest？
 14. Manifest 提交后崩溃是否有幂等完成或隔离回滚规则？
-15. 当前正式报告是否由 Manifest 与 Hash 唯一标识？
-16. Legacy Simulated 是否不伪装成 Prepared Dataset？
-17. 新旧入口是否共享同一锁、StateStore、DAG 和发布流程？
-18. 是否保留 `run_NNN`？
-19. allocation_token 是否在 Run metadata 首次写入中出现？
-20. Allocation Lock 的 `run_id=null` 过渡是否有恢复规则？
-21. StateStore 是否区分 Context Checkpoint 和 Status Transition？
-22. WAL 是否处理末尾截断、中间损坏和冲突 Commit？
-23. CLI 测试是否在 tmp_path 项目副本中运行？
-24. Snapshot 是否禁止测试自动更新？
-25. final_summary 和必要文件是否早于 Publication Manifest 提交？
-26. Publication Commit 与 final_summary 是否早于 COMPLETED？
-27. A1/A2/A3 是否逐段完成 review 和验收？
-28. 是否明确 Phase A 未改造现有 Web reader？
+15. Manifest 是否穷举全部发布文件、展开可视化逐文件 Hash，并与 Staging 集合完全一致？
+16. 当前正式报告是否由 Manifest 与 Hash 唯一标识？
+17. Legacy Simulated 是否不伪装成 Prepared Dataset？
+18. 新旧入口是否共享同一锁、StateStore、DAG 和发布流程？
+19. 是否保留 `run_NNN`？
+20. allocation_token 是否在 Run metadata 首次写入中出现？
+21. Run 目录创建前，Allocation Lock 是否已持久化 reserved_run_id？
+22. StateStore 是否区分 Context Checkpoint 和 Status Transition？
+23. 两类写入是否都进入同一 State Journal 并支持幂等恢复？
+24. WAL 是否处理末尾截断、中间损坏和冲突 Commit？
+25. CLI 测试是否在 tmp_path 项目副本中运行？
+26. Snapshot 是否禁止测试自动更新？
+27. final_summary 和必要文件是否早于 Publication Manifest 提交？
+28. 失败 Run 的 final_summary 是否始终被隔离并标记 invalidated？
+29. Publication Commit 与 final_summary 是否早于 COMPLETED？
+30. A1 是否通过 Run-local 路径覆盖避免修改正式 data/outputs/progressive？
+31. A1/A2/A3 是否逐段完成 review 和验收？
+32. Comparison Evidence 是否不依赖 label_disease_id 作为生产连接键？
+33. 是否明确 Phase A 未改造现有 Web reader？
 
 整体验收时任一为“否”，不得宣布 Phase A 完成；分段实施时，前置阶段相关问题任一为“否”，不得进入下一段。
 

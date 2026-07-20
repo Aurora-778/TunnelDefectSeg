@@ -2,7 +2,7 @@
 
 > 对应计划：`docs/plans/2026-07-20-001-feat-inspection-engineering-agent-phase-a-plan.md`
 > 基线：Git `main@7203da7`
-> 状态：本轮 Review 问题已修订；总体计划仅条件关闭，Phase 0 schema review 尚未完成
+> 状态：两轮 Review 问题已写入计划；新增修订仅条件关闭，Phase 0 schema review 尚未完成
 > 更新日期：2026-07-20
 
 ## 1. 使用说明
@@ -34,6 +34,22 @@
 |关闭表过早宣称完成|本轮已修订|关键合同统一改为条件关闭|Phase 0 review 后再更新|
 |受限词扫描误伤免责声明|本轮已修订|主校验改为 template/decision 映射；词扫描仅为补充防线|Phase 0 固定模板合同|
 
+## 2.1 第二轮严格 Review 的条件关闭项
+
+下列条目只表示计划已经给出待实现合同，不表示代码已修复、测试已通过或 Phase A 可以开始：
+
+|问题|状态|计划修订|实现条件|
+|---|---|---|---|
+|非法可比性被降级为 Static Audit|条件关闭|required/enum 校验前置；缺失、空值、未知枚举一律 Fail Closed；只有合法的明确非 verified 状态可 Static Audit|Phase 0 固定枚举与非法 fixture；A1 实现 Gate|
+|A1 仍可能写正式产物|条件关闭|增加逐节点 Run-local 路径覆盖表；A1 只能在临时项目或显式覆盖模式运行，正式目录前后必须无变化|A1 补路径覆盖、Artifact Isolation 和默认兼容测试|
+|Publication Manifest 不完整|条件关闭|Manifest 必须穷举全部待发布文件；可视化目录展开为稳定逐文件 Hash；Manifest 与 Staging 集合必须完全一致|A2 补新增/遗漏/重复/目录残留反例|
+|提交后回滚遗留 final_summary|条件关闭|任何最终非 COMPLETED 的 Run 都必须隔离 final_summary 并标记 invalidated|A2 覆盖 Manifest 已提交后 state 冲突和隔离失败|
+|Run 目录无 token 崩溃窗口|条件关闭|目录创建前在 Active Lock 持久化 `reserved_run_id` 和 allocation token；恢复只处理该预留目录|A3 覆盖 mkdir 后、metadata 首写前硬崩溃|
+|Context Checkpoint 不在 WAL|条件关闭|checkpoint 与 status transition 使用同一 State Journal、统一 CAS/pending/committed/aborted 恢复|A3 固定 journal schema 并补幂等/冲突反例|
+|不可比较限定语未强制|条件关闭|ClaimDecision 必须携带受控“仅静态审计、不构成方向性变化结论”模板；缺失不得发布|Phase 0 固定模板 ID；A1 补 renderer/validator 测试|
+|生产 Evidence 依赖评估标签|条件关闭|以 query composite key/current_observation_id/来源指纹连接 Engineering；`label_disease_id` 只保留评估用途|Phase 0 固定中性 join schema；A1 补删除 label 后结果不变测试|
+|A1/A2/A3 独立验收路径含糊|条件关闭|A1 只做 Run-local 与 Staging，A2 只在 sandbox 验证发布，A3 才接管双入口和正式发布|每段单独提交、review；上一段 P0/P1 清零后继续|
+
 ## 3. 基线与范围
 
 |检查项|状态|证据|实现状态|
@@ -49,21 +65,21 @@
 |检查项|状态|证据|实现状态|
 |---|---|---|---|
 |Association 身份边界|条件关闭|规则 Association 只能作为支持证据，不等于身份确认|A1 待实施|
-|Comparability 硬门控|条件关闭|任一侧非 verified 时只允许 Static Audit|Phase 0/A1 待实施|
+|Comparability 硬门控|条件关闭|缺失/非法字段 Fail Closed；只有 schema 合法且明确非 verified 时只允许 Static Audit|Phase 0/A1 待实施|
 |Phase A Capability|条件关闭|Difference/Directional 受严格门控；Physical/Pattern/Prediction 固定 blocked|Phase 0/A1 待实施|
-|历史证据来源|条件关闭|Previous Value 只能来自对应 round 的 `memory_before_query.csv`|A1 待实施|
+|历史证据来源|条件关闭|Previous Value 只能来自对应 round 的 `memory_before_query.csv`；当前记录使用中性 observation join，不依赖评估标签|A1 待实施|
 |面积测量口径|条件关闭|当前与历史统一为巡检级最大 mask 面积|A1 待实施|
 |Registration/Scale/Uncertainty|条件关闭|均要求显式 provenance，缺失时采用保守默认值|Phase 0/A1 待实施|
-|ClaimDecision|条件关闭|逐记录 schema、模板映射、来源 Hash 和失效规则已定义|仍需 Phase 0 schema review|
+|ClaimDecision|条件关闭|逐记录 schema、模板映射、来源 Hash、可比性限定语和失效规则已定义|仍需 Phase 0 schema review|
 
 ## 5. DAG、发布与状态
 
 |检查项|状态|证据|实现状态|
 |---|---|---|---|
 |唯一 DAG/Executor|条件关闭|只扩展现有 DAG、DAGExecutor、Registry 和 RunManager|A1/A3 待实施|
-|A1 Claim/Evidence|条件关闭|只生成 Run-local artifacts 与受门控 Staging 报告|A1 待实施|
-|A2 Publication|条件关闭|Manifest-last、事务阶段和提交前/后恢复已定义|A2 待实施|
-|A3 State/Lock/WAL|条件关闭|双入口、初始 allocation token、Canonical State、CAS/WAL 已定义|A3 待实施|
+|A1 Claim/Evidence|条件关闭|逐节点显式重定向到 Run-local work/artifacts/staging，不得修改正式目录|A1 待实施|
+|A2 Publication|条件关闭|Manifest-last、完整文件集合、逐文件 Hash、提交前/后恢复和 final_summary 隔离已定义|A2 待实施|
+|A3 State/Lock/WAL|条件关闭|双入口、预留 run_id、初始 allocation token、Canonical State、统一 checkpoint/transition WAL 已定义|A3 待实施|
 |Memory/Growth 报告分离|条件关闭|结构化数据保留，正式报告必须经过 Claim Gate|A1 待实施|
 |Visualization/FinalReport|条件关闭|必须读取当前 Run 的 ClaimDecision 和 Comparison Evidence|A1 待实施|
 |Web 边界|条件关闭|Phase A 不修改 Web，也不声称 Web 是 Manifest 权威 reader|Phase E 待实施|
