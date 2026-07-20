@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
-from threading import Event, Lock
+from threading import Barrier, Event, Lock
 
 import pytest
 
@@ -513,6 +513,7 @@ def test_evaluator_source_disk_change_requires_process_restart(monkeypatch):
 def test_default_policy_concurrent_cold_start_reads_once(monkeypatch):
     claim_policy_module._clear_default_policy_cache_for_tests()
     original_read_text = Path.read_text
+    start_barrier = Barrier(8)
     read_started = Event()
     release_read = Event()
     count_lock = Lock()
@@ -528,10 +529,16 @@ def test_default_policy_concurrent_cold_start_reads_once(monkeypatch):
         return original_read_text(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", blocking_read_text)
+
+    def load_after_barrier():
+        start_barrier.wait(timeout=5)
+        return load_claim_policy()
+
     try:
         with ThreadPoolExecutor(max_workers=8) as pool:
-            futures = [pool.submit(load_claim_policy) for _ in range(8)]
+            futures = [pool.submit(load_after_barrier) for _ in range(8)]
             assert read_started.wait(timeout=5)
+            assert claim_policy_module._wait_for_default_policy_flight_participants_for_tests(8)
             release_read.set()
             policies = [future.result(timeout=5) for future in futures]
     finally:
@@ -546,6 +553,7 @@ def test_default_policy_concurrent_cold_start_reads_once(monkeypatch):
 def test_evaluator_concurrent_cold_start_reads_once(monkeypatch):
     claim_policy_module._clear_evaluator_source_cache_for_tests()
     original_read_bytes = Path.read_bytes
+    start_barrier = Barrier(8)
     read_started = Event()
     release_read = Event()
     count_lock = Lock()
@@ -561,13 +569,16 @@ def test_evaluator_concurrent_cold_start_reads_once(monkeypatch):
         return original_read_bytes(path)
 
     monkeypatch.setattr(Path, "read_bytes", blocking_read_bytes)
+
+    def load_after_barrier():
+        start_barrier.wait(timeout=5)
+        return claim_policy_module._evaluator_source_sha256()
+
     try:
         with ThreadPoolExecutor(max_workers=8) as pool:
-            futures = [
-                pool.submit(claim_policy_module._evaluator_source_sha256)
-                for _ in range(8)
-            ]
+            futures = [pool.submit(load_after_barrier) for _ in range(8)]
             assert read_started.wait(timeout=5)
+            assert claim_policy_module._wait_for_evaluator_source_flight_participants_for_tests(8)
             release_read.set()
             hashes = [future.result(timeout=5) for future in futures]
     finally:
@@ -622,6 +633,98 @@ def test_evaluator_failed_initialization_can_retry(monkeypatch):
             claim_policy_module._evaluator_source_sha256()
         evaluator_hash = claim_policy_module._evaluator_source_sha256()
     finally:
+        claim_policy_module._clear_evaluator_source_cache_for_tests()
+
+    assert len(evaluator_hash) == 64
+    assert attempts == 2
+
+
+def test_default_policy_concurrent_failure_is_shared_then_retry_succeeds(monkeypatch):
+    claim_policy_module._clear_default_policy_cache_for_tests()
+    original_read_text = Path.read_text
+    start_barrier = Barrier(8)
+    release_failure = Event()
+    count_lock = Lock()
+    attempts = 0
+
+    def fail_first_read(path, *args, **kwargs):
+        nonlocal attempts
+        if path.resolve() == claim_policy_module.DEFAULT_POLICY_PATH.resolve():
+            with count_lock:
+                attempts += 1
+                attempt = attempts
+            if attempt == 1:
+                assert release_failure.wait(timeout=5)
+                raise OSError("shared policy initialization failure")
+        return original_read_text(path, *args, **kwargs)
+
+    def load_after_barrier():
+        start_barrier.wait(timeout=5)
+        try:
+            load_claim_policy()
+        except ClaimPolicyError as exc:
+            return str(exc)
+        return "unexpected success"
+
+    monkeypatch.setattr(Path, "read_text", fail_first_read)
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(load_after_barrier) for _ in range(8)]
+            assert claim_policy_module._wait_for_default_policy_flight_participants_for_tests(8)
+            release_failure.set()
+            failures = [future.result(timeout=5) for future in futures]
+
+        assert attempts == 1
+        assert all("unable to read claim policy" in failure for failure in failures)
+        policy = load_claim_policy()
+    finally:
+        release_failure.set()
+        claim_policy_module._clear_default_policy_cache_for_tests()
+
+    assert policy["schema_version"] == "claim_policy_v5"
+    assert attempts == 2
+
+
+def test_evaluator_concurrent_failure_is_shared_then_retry_succeeds(monkeypatch):
+    claim_policy_module._clear_evaluator_source_cache_for_tests()
+    original_read_bytes = Path.read_bytes
+    start_barrier = Barrier(8)
+    release_failure = Event()
+    count_lock = Lock()
+    attempts = 0
+
+    def fail_first_read(path):
+        nonlocal attempts
+        if path.resolve() == Path(claim_policy_module.__file__).resolve():
+            with count_lock:
+                attempts += 1
+                attempt = attempts
+            if attempt == 1:
+                assert release_failure.wait(timeout=5)
+                raise OSError("shared evaluator initialization failure")
+        return original_read_bytes(path)
+
+    def load_after_barrier():
+        start_barrier.wait(timeout=5)
+        try:
+            claim_policy_module._evaluator_source_sha256()
+        except ClaimPolicyError as exc:
+            return str(exc)
+        return "unexpected success"
+
+    monkeypatch.setattr(Path, "read_bytes", fail_first_read)
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(load_after_barrier) for _ in range(8)]
+            assert claim_policy_module._wait_for_evaluator_source_flight_participants_for_tests(8)
+            release_failure.set()
+            failures = [future.result(timeout=5) for future in futures]
+
+        assert attempts == 1
+        assert all("unable to read claim evaluator source" in failure for failure in failures)
+        evaluator_hash = claim_policy_module._evaluator_source_sha256()
+    finally:
+        release_failure.set()
         claim_policy_module._clear_evaluator_source_cache_for_tests()
 
     assert len(evaluator_hash) == 64

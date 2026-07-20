@@ -8,10 +8,11 @@ it does not infer identity, recompute association scores, or publish outputs.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import Future
 import hashlib
 import json
 from pathlib import Path
-from threading import Lock
+from threading import Condition
 from typing import Any
 
 
@@ -51,10 +52,14 @@ EVIDENCE_BOOL_FIELDS = (
     "needs_manual_review",
 )
 
-_DEFAULT_POLICY_CACHE_LOCK = Lock()
+_DEFAULT_POLICY_CACHE_CONDITION = Condition()
 _DEFAULT_POLICY_JSON_CACHE: str | None = None
-_EVALUATOR_SOURCE_CACHE_LOCK = Lock()
+_DEFAULT_POLICY_IN_FLIGHT: Future[str] | None = None
+_DEFAULT_POLICY_IN_FLIGHT_PARTICIPANTS = 0
+_EVALUATOR_SOURCE_CACHE_CONDITION = Condition()
 _EVALUATOR_SOURCE_SHA256_CACHE: str | None = None
+_EVALUATOR_SOURCE_IN_FLIGHT: Future[str] | None = None
+_EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS = 0
 
 
 class ClaimPolicyError(ValueError):
@@ -78,14 +83,28 @@ def load_claim_policy(path: Path | None = None) -> dict[str, Any]:
 
 
 def _canonical_default_policy_json() -> str:
+    global _DEFAULT_POLICY_IN_FLIGHT
+    global _DEFAULT_POLICY_IN_FLIGHT_PARTICIPANTS
     global _DEFAULT_POLICY_JSON_CACHE
 
     cached = _DEFAULT_POLICY_JSON_CACHE
     if cached is not None:
         return cached
-    with _DEFAULT_POLICY_CACHE_LOCK:
+    with _DEFAULT_POLICY_CACHE_CONDITION:
         cached = _DEFAULT_POLICY_JSON_CACHE
-        if cached is None:
+        if cached is not None:
+            return cached
+        flight = _DEFAULT_POLICY_IN_FLIGHT
+        owns_flight = flight is None
+        if owns_flight:
+            flight = Future()
+            _DEFAULT_POLICY_IN_FLIGHT = flight
+        _DEFAULT_POLICY_IN_FLIGHT_PARTICIPANTS += 1
+        _DEFAULT_POLICY_CACHE_CONDITION.notify_all()
+
+    assert flight is not None
+    if owns_flight:
+        try:
             policy = _read_policy_file(DEFAULT_POLICY_PATH)
             cached = json.dumps(
                 policy,
@@ -94,14 +113,53 @@ def _canonical_default_policy_json() -> str:
                 separators=(",", ":"),
                 allow_nan=False,
             )
-            _DEFAULT_POLICY_JSON_CACHE = cached
-    return cached
+        except BaseException as exc:
+            flight.set_exception(exc)
+            _finish_default_policy_flight(flight)
+            raise
+        else:
+            with _DEFAULT_POLICY_CACHE_CONDITION:
+                _DEFAULT_POLICY_JSON_CACHE = cached
+            flight.set_result(cached)
+            _finish_default_policy_flight(flight)
+            return cached
+
+    try:
+        return flight.result()
+    finally:
+        _finish_default_policy_flight(flight)
+
+
+def _finish_default_policy_flight(flight: Future[str]) -> None:
+    global _DEFAULT_POLICY_IN_FLIGHT
+    global _DEFAULT_POLICY_IN_FLIGHT_PARTICIPANTS
+
+    with _DEFAULT_POLICY_CACHE_CONDITION:
+        if _DEFAULT_POLICY_IN_FLIGHT is not flight:
+            raise RuntimeError("default policy single-flight identity changed")
+        _DEFAULT_POLICY_IN_FLIGHT_PARTICIPANTS -= 1
+        if _DEFAULT_POLICY_IN_FLIGHT_PARTICIPANTS == 0:
+            _DEFAULT_POLICY_IN_FLIGHT = None
+        _DEFAULT_POLICY_CACHE_CONDITION.notify_all()
+
+
+def _wait_for_default_policy_flight_participants_for_tests(
+    expected: int,
+    timeout: float = 5.0,
+) -> bool:
+    with _DEFAULT_POLICY_CACHE_CONDITION:
+        return _DEFAULT_POLICY_CACHE_CONDITION.wait_for(
+            lambda: _DEFAULT_POLICY_IN_FLIGHT_PARTICIPANTS >= expected,
+            timeout=timeout,
+        )
 
 
 def _clear_default_policy_cache_for_tests() -> None:
     global _DEFAULT_POLICY_JSON_CACHE
 
-    with _DEFAULT_POLICY_CACHE_LOCK:
+    with _DEFAULT_POLICY_CACHE_CONDITION:
+        if _DEFAULT_POLICY_IN_FLIGHT is not None:
+            raise RuntimeError("cannot clear default policy cache during initialization")
         _DEFAULT_POLICY_JSON_CACHE = None
 
 
@@ -568,30 +626,84 @@ def _policy_sha256(policy: Mapping[str, Any]) -> str:
 def _evaluator_source_sha256() -> str:
     """Return the process-lifetime normalized source hash, not a semantic hash."""
 
+    global _EVALUATOR_SOURCE_IN_FLIGHT
+    global _EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS
     global _EVALUATOR_SOURCE_SHA256_CACHE
 
     cached = _EVALUATOR_SOURCE_SHA256_CACHE
     if cached is not None:
         return cached
-    with _EVALUATOR_SOURCE_CACHE_LOCK:
+    with _EVALUATOR_SOURCE_CACHE_CONDITION:
         cached = _EVALUATOR_SOURCE_SHA256_CACHE
-        if cached is None:
+        if cached is not None:
+            return cached
+        flight = _EVALUATOR_SOURCE_IN_FLIGHT
+        owns_flight = flight is None
+        if owns_flight:
+            flight = Future()
+            _EVALUATOR_SOURCE_IN_FLIGHT = flight
+        _EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS += 1
+        _EVALUATOR_SOURCE_CACHE_CONDITION.notify_all()
+
+    assert flight is not None
+    if owns_flight:
+        try:
             source_path = Path(__file__)
-            try:
-                source_bytes = source_path.read_bytes()
-            except OSError as exc:
-                raise ClaimPolicyError(
-                    f"unable to read claim evaluator source: {source_path}"
-                ) from exc
+            source_bytes = source_path.read_bytes()
             cached = _normalized_source_sha256(source_bytes, source_path=source_path)
-            _EVALUATOR_SOURCE_SHA256_CACHE = cached
-    return cached
+        except OSError as exc:
+            error = ClaimPolicyError(f"unable to read claim evaluator source: {source_path}")
+            error.__cause__ = exc
+            flight.set_exception(error)
+            _finish_evaluator_source_flight(flight)
+            raise error
+        except BaseException as exc:
+            flight.set_exception(exc)
+            _finish_evaluator_source_flight(flight)
+            raise
+        else:
+            with _EVALUATOR_SOURCE_CACHE_CONDITION:
+                _EVALUATOR_SOURCE_SHA256_CACHE = cached
+            flight.set_result(cached)
+            _finish_evaluator_source_flight(flight)
+            return cached
+
+    try:
+        return flight.result()
+    finally:
+        _finish_evaluator_source_flight(flight)
+
+
+def _finish_evaluator_source_flight(flight: Future[str]) -> None:
+    global _EVALUATOR_SOURCE_IN_FLIGHT
+    global _EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS
+
+    with _EVALUATOR_SOURCE_CACHE_CONDITION:
+        if _EVALUATOR_SOURCE_IN_FLIGHT is not flight:
+            raise RuntimeError("evaluator source single-flight identity changed")
+        _EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS -= 1
+        if _EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS == 0:
+            _EVALUATOR_SOURCE_IN_FLIGHT = None
+        _EVALUATOR_SOURCE_CACHE_CONDITION.notify_all()
+
+
+def _wait_for_evaluator_source_flight_participants_for_tests(
+    expected: int,
+    timeout: float = 5.0,
+) -> bool:
+    with _EVALUATOR_SOURCE_CACHE_CONDITION:
+        return _EVALUATOR_SOURCE_CACHE_CONDITION.wait_for(
+            lambda: _EVALUATOR_SOURCE_IN_FLIGHT_PARTICIPANTS >= expected,
+            timeout=timeout,
+        )
 
 
 def _clear_evaluator_source_cache_for_tests() -> None:
     global _EVALUATOR_SOURCE_SHA256_CACHE
 
-    with _EVALUATOR_SOURCE_CACHE_LOCK:
+    with _EVALUATOR_SOURCE_CACHE_CONDITION:
+        if _EVALUATOR_SOURCE_IN_FLIGHT is not None:
+            raise RuntimeError("cannot clear evaluator source cache during initialization")
         _EVALUATOR_SOURCE_SHA256_CACHE = None
 
 
