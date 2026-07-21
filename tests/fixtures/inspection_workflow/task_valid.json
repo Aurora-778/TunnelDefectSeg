@@ -1,0 +1,15 @@
+{
+  "schema_version": "inspection_task_v1",
+  "task_id": "task_001",
+  "task_type": "inspection_analysis",
+  "input": {
+    "input_mode": "prepared_dataset",
+    "dataset_id": "pilot_001"
+  },
+  "requested_outputs": [
+    "association",
+    "growth_report",
+    "visualization",
+    "final_report"
+  ]
+}

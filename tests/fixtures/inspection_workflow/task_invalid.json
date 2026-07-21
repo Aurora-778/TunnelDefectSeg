@@ -1,0 +1,12 @@
+{
+  "schema_version": "inspection_task_v1",
+  "task_id": "task_002",
+  "task_type": "inspection_analysis",
+  "input": {
+    "input_mode": "prepared_dataset",
+    "dataset_id": "../pilot_001"
+  },
+  "requested_outputs": [
+    "association"
+  ]
+}

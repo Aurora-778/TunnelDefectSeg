@@ -1,0 +1,30 @@
+{
+  "schema_version": "inspection_workflow_v1",
+  "task_request_schema_version": "inspection_task_v1",
+  "output_mapping": {
+    "association": "association",
+    "growth_report": "growth_analysis",
+    "visualization": "visualization",
+    "final_report": "final_report"
+  },
+  "validation_policy": {
+    "prepared_input_mode": "prepared_dataset",
+    "task_type": "inspection_analysis",
+    "require_inference_ready": true,
+    "reject_unknown_fields": true
+  },
+  "path_policy": {
+    "prepared_dataset_base": "data/prepared_inspections",
+    "allow_symlinks": false
+  },
+  "lock_policy": {
+    "enabled": false,
+    "activation_phase": "phase_a3"
+  },
+  "publication_policy": {
+    "enabled": false,
+    "activation_phase": "phase_a2_sandbox_then_phase_a3",
+    "manifest_last": true,
+    "manifest_path": "outputs/current_publication_manifest.json"
+  }
+}
