@@ -96,6 +96,7 @@ _ALLOWED_IDENTITY_STATES = {
 _HASH_RE = re.compile(r"[0-9a-f]{64}\Z")
 _DECIMAL_RE = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?\Z")
 _RELATIVE_DIFFERENCE_QUANTUM = Decimal("0.000001")
+_MAX_MASK_AREA_PX = (1 << 63) - 1
 _UTC_TIMESTAMP_RE = re.compile(
     r"[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"
     r"T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\.[0-9]{6}Z\Z"
@@ -171,6 +172,23 @@ def _require_bool(value: Any, *, field: str, label: str) -> bool:
 def _require_nonnegative_int(value: Any, *, field: str, label: str) -> int:
     if type(value) is not int or value < 0:
         raise ComparisonEvidenceContractError(f"{label} {field} must be a non-negative integer")
+    return value
+
+
+def _require_mask_area_int(
+    value: Any,
+    *,
+    field: str,
+    label: str,
+    allow_negative: bool = False,
+) -> int:
+    if type(value) is not int or (value < 0 and not allow_negative):
+        qualifier = "an integer" if allow_negative else "a non-negative integer"
+        raise ComparisonEvidenceContractError(f"{label} {field} must be {qualifier}")
+    if value.bit_length() > 63:
+        raise ComparisonEvidenceContractError(
+            f"{label} {field} magnitude must not exceed {_MAX_MASK_AREA_PX} pixels"
+        )
     return value
 
 
@@ -350,7 +368,7 @@ def _validate_common_fields(
         raise ComparisonEvidenceContractError(f"{label} measurement_unit must be pixel²")
     _require_string(record["metric_type"], field="metric_type", label=label)
     _require_string(record["value_domain"], field="value_domain", label=label)
-    _require_nonnegative_int(record["current_value"], field="current_value", label=label)
+    _require_mask_area_int(record["current_value"], field="current_value", label=label)
     _require_nonnegative_int(record["valid_timepoint_count"], field="valid_timepoint_count", label=label)
 
     identity_state = _require_string(
@@ -552,14 +570,17 @@ def _validate_previous_branch(record: Mapping[str, Any], *, label: str) -> None:
         raise ComparisonEvidenceContractError(
             f"{label} memory_snapshot requires at least two valid timepoints"
         )
-    previous_value = _require_nonnegative_int(
+    previous_value = _require_mask_area_int(
         record["previous_memory_snapshot_value"],
         field="previous_memory_snapshot_value",
         label=label,
     )
-    absolute_difference = record["absolute_difference"]
-    if type(absolute_difference) is not int:
-        raise ComparisonEvidenceContractError(f"{label} absolute_difference must be an integer")
+    absolute_difference = _require_mask_area_int(
+        record["absolute_difference"],
+        field="absolute_difference",
+        label=label,
+        allow_negative=True,
+    )
     if absolute_difference != record["current_value"] - previous_value:
         raise ComparisonEvidenceContractError(
             f"{label} absolute_difference does not match current and previous values"

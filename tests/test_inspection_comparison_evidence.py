@@ -17,6 +17,7 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
 SHA_D = "d" * 64
+MAX_MASK_AREA_PX = (1 << 63) - 1
 
 
 def baseline_evidence(**overrides):
@@ -363,34 +364,66 @@ def test_relative_difference_uses_six_digit_round_half_up_contract():
     )
 
     large = matched_evidence(
-        current_value=10**40 + 1,
+        current_value=10**18 + 1,
         previous_memory_snapshot_value=1,
-        absolute_difference=10**40,
-        relative_difference="1" + "0" * 40,
+        absolute_difference=10**18,
+        relative_difference="1" + "0" * 18,
     )
-    assert validate_comparison_evidence_records([large])[0]["relative_difference"] == "1" + "0" * 40
+    assert validate_comparison_evidence_records([large])[0]["relative_difference"] == "1" + "0" * 18
 
 
-def test_relative_difference_handles_integers_beyond_python_string_conversion_limit():
-    huge = 10**5000
+def test_mask_area_integer_bound_accepts_signed_64_bit_limits():
+    positive_absolute_limit = matched_evidence(
+        current_value=MAX_MASK_AREA_PX,
+        previous_memory_snapshot_value=0,
+        absolute_difference=MAX_MASK_AREA_PX,
+        relative_difference=None,
+        relative_difference_valid=False,
+    )
+    assert (
+        validate_comparison_evidence_records([positive_absolute_limit])[0]["absolute_difference"]
+        == MAX_MASK_AREA_PX
+    )
+
     positive = matched_evidence(
-        current_value=huge + 1,
+        current_value=MAX_MASK_AREA_PX,
         previous_memory_snapshot_value=1,
-        absolute_difference=huge,
-        relative_difference="1" + "0" * 5000,
+        absolute_difference=MAX_MASK_AREA_PX - 1,
+        relative_difference="9223372036854775806",
     )
     assert (
         validate_comparison_evidence_records([positive])[0]["relative_difference"]
-        == "1" + "0" * 5000
+        == "9223372036854775806"
     )
 
     negative = matched_evidence(
         current_value=0,
-        previous_memory_snapshot_value=huge,
-        absolute_difference=-huge,
+        previous_memory_snapshot_value=MAX_MASK_AREA_PX,
+        absolute_difference=-MAX_MASK_AREA_PX,
         relative_difference="-1",
     )
     assert validate_comparison_evidence_records([negative])[0]["relative_difference"] == "-1"
+
+
+@pytest.mark.parametrize(
+    ("field", "overrides"),
+    [
+        ("current_value", {"current_value": MAX_MASK_AREA_PX + 1}),
+        ("previous_memory_snapshot_value", {"previous_memory_snapshot_value": MAX_MASK_AREA_PX + 1}),
+        ("absolute_difference", {"absolute_difference": MAX_MASK_AREA_PX + 1}),
+        ("absolute_difference", {"absolute_difference": -(MAX_MASK_AREA_PX + 1)}),
+        ("current_value", {"current_value": 10**5000}),
+        ("previous_memory_snapshot_value", {"previous_memory_snapshot_value": 10**5000}),
+        ("absolute_difference", {"absolute_difference": 10**5000}),
+        ("absolute_difference", {"absolute_difference": -(10**5000)}),
+    ],
+)
+def test_mask_area_integer_bound_rejects_huge_values_without_string_conversion(field, overrides):
+    with pytest.raises(
+        ComparisonEvidenceContractError,
+        match=rf"{field} magnitude must not exceed {MAX_MASK_AREA_PX} pixels",
+    ):
+        validate_comparison_evidence_records([matched_evidence(**overrides)])
 
 
 @pytest.mark.parametrize("comparison_status", ["insufficient_history", "not_longitudinally_comparable"])
