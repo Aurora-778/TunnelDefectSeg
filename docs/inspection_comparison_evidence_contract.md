@@ -33,3 +33,24 @@ The sole metric is `inspection_level_max_mask_area_px` on both current and previ
 `previous_entity_type=not_applicable` uses canonical null for scalar `previous_*` references, an empty list for source lists, and zero only for count fields. It never fabricates a Memory snapshot.
 
 This Phase 0 document freezes the contract. Evidence generation starts in A1 and must write only Run-local artifacts.
+
+## Executable Phase 0 Record Contract
+
+`orchestrator/inspection_workflow/comparison_evidence.py` defines the side-effect-free
+`comparison_evidence_v1` record validator. It accepts already normalized in-memory
+records only; it does not read an Association Manifest, authenticate hashes, generate
+Evidence, evaluate claims, or write Run artifacts. A1 must establish those provenance
+facts before calling this validator.
+
+The validator fixes one record per `(current_inspection_id,
+current_observation_id)`, rejects unknown fields and duplicate evidence IDs, and uses
+the Claim Policy's canonical source/comparability enums and composition function.
+Baseline/current-only, rejected, supported, pending-review, and invalid branches have
+distinct canonical contracts. `not_applicable` uses null previous scalars, empty
+source lists, zero source count, one timepoint, and no temporal/difference validity.
+Memory-backed records retain raw pixel-area differences for audit even when the
+comparison is not longitudinally comparable.
+
+This is a Phase 0 schema boundary, not A1 implementation. It does not create
+`comparison_evidence.csv`, its Manifest, ClaimDecision, Staging reports, or formal
+`data/outputs` files.

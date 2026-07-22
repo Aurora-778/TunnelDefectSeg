@@ -557,7 +557,7 @@ def _validate_evidence_schema(evidence: Mapping[str, Any], policy: Mapping[str, 
     else:
         return "EVIDENCE_SCHEMA_INVALID"
 
-    expected_comparison_status = _compose_comparability_status(
+    expected_comparison_status = compose_comparability_status(
         previous_entity_type=previous_entity_type,
         current_status=evidence["current_comparability_status"],
         previous_status=evidence["previous_comparability_status"],
@@ -748,12 +748,14 @@ def _normalized_source_sha256(source_bytes: bytes, *, source_path: Path | None =
     return hashlib.sha256(normalized_source).hexdigest()
 
 
-def _compose_comparability_status(
+def compose_comparability_status(
     *,
     previous_entity_type: str,
     current_status: str,
     previous_status: str,
 ) -> str:
+    """Compose the canonical comparison status used by Evidence and Claim Policy."""
+
     if (
         previous_entity_type == "not_applicable"
         or current_status == "insufficient_history"

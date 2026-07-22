@@ -7,6 +7,12 @@ from .contracts import (
     validate_task_request,
     validate_workflow_policy,
 )
+from .comparison_evidence import (
+    COMPARISON_EVIDENCE_FIELDS,
+    COMPARISON_EVIDENCE_SCHEMA_VERSION,
+    ComparisonEvidenceContractError,
+    validate_comparison_evidence_records,
+)
 from .observation_identity import (
     LEGACY_FINGERPRINT_FIELDS,
     ObservationIdentityError,
@@ -25,6 +31,9 @@ from .source_references import (
 )
 
 __all__ = [
+    "COMPARISON_EVIDENCE_FIELDS",
+    "COMPARISON_EVIDENCE_SCHEMA_VERSION",
+    "ComparisonEvidenceContractError",
     "InspectionWorkflowContractError",
     "LEGACY_FINGERPRINT_FIELDS",
     "ObservationIdentityError",
@@ -37,6 +46,7 @@ __all__ = [
     "project_legacy_observation_identities",
     "project_prepared_observation_identities",
     "validate_association_observation_references",
+    "validate_comparison_evidence_records",
     "validate_engineering_observation_references",
     "validate_frame_observation_references",
     "validate_source_reference_contract",
