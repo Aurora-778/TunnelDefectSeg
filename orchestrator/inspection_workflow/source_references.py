@@ -118,7 +118,7 @@ def _validate_current_observation_id(
 def validate_frame_observation_references(
     records: Iterable[Mapping[str, Any]],
     *,
-    fieldnames: Iterable[str] | None = None,
+    fieldnames: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Validate one non-empty observation-grain Frame relation."""
 
@@ -129,7 +129,8 @@ def validate_frame_observation_references(
         raise SourceReferenceContractError("frame records must contain at least one current observation")
 
     seen_observations: set[tuple[str, str]] = set()
-    seen_composites: set[tuple[str, str, str]] = set()
+    image_by_frame: dict[tuple[str, str], str] = {}
+    frame_by_image: dict[tuple[str, str], str] = {}
     for row_number, row in enumerate(rows, start=1):
         label = f"frame records row {row_number}"
         _validate_row_fields(row, FRAME_REFERENCE_FIELDS, label=label)
@@ -155,12 +156,21 @@ def validate_frame_observation_references(
             )
         seen_observations.add(observation_key)
 
-        composite_key = (inspection_id, frame_id, image_id)
-        if composite_key in seen_composites:
+        frame_key = (inspection_id, frame_id)
+        previous_image_id = image_by_frame.setdefault(frame_key, image_id)
+        if previous_image_id != image_id:
             raise SourceReferenceContractError(
-                f"duplicate frame composite key: {inspection_id} / {frame_id} / {image_id}"
+                f"{label} maps {inspection_id} / {frame_id} to multiple image_id values: "
+                f"{previous_image_id}, {image_id}"
             )
-        seen_composites.add(composite_key)
+
+        image_key = (inspection_id, image_id)
+        previous_frame_id = frame_by_image.setdefault(image_key, frame_id)
+        if previous_frame_id != frame_id:
+            raise SourceReferenceContractError(
+                f"{label} maps {inspection_id} / {image_id} to multiple frame_id values: "
+                f"{previous_frame_id}, {frame_id}"
+            )
     return deepcopy([dict(row) for row in rows])
 
 
@@ -185,7 +195,7 @@ def validate_association_observation_references(
     association_records: Iterable[Mapping[str, Any]],
     *,
     baseline_inspection_ids: Iterable[str],
-    fieldnames: Iterable[str] | None = None,
+    fieldnames: Sequence[str] | None = None,
     artifact_schema_version: Any = None,
 ) -> list[dict[str, Any]]:
     """Validate exact query references while permitting a proven header-only baseline."""
@@ -274,7 +284,7 @@ def validate_engineering_observation_references(
     frame_records: Iterable[Mapping[str, Any]],
     engineering_records: Iterable[Mapping[str, Any]],
     *,
-    fieldnames: Iterable[str] | None = None,
+    fieldnames: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Require stable, non-overlapping Engineering coverage of every current observation."""
 
@@ -336,11 +346,11 @@ def validate_source_reference_contract(
     *,
     baseline_inspection_ids: Iterable[str],
     artifact_schema_version: Any,
-    frame_fieldnames: Iterable[str],
-    association_fieldnames: Iterable[str],
-    engineering_fieldnames: Iterable[str],
+    frame_fieldnames: Sequence[str],
+    association_fieldnames: Sequence[str],
+    engineering_fieldnames: Sequence[str],
 ) -> dict[str, Any]:
-    """Validate the three Run-local relations without reading or writing artifacts."""
+    """Validate in-memory relation consistency without establishing source provenance."""
 
     if artifact_schema_version != SOURCE_REFERENCE_SCHEMA_VERSION:
         raise SourceReferenceContractError(

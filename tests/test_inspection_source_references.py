@@ -22,6 +22,8 @@ from orchestrator.inspection_workflow.source_references import (
     FRAME_REFERENCE_FIELDS,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 def frame(inspection_id="I002", local_id="obs_01", frame_id="40", image_id="I002_000040", **extra):
     row = {
@@ -170,14 +172,51 @@ def test_frame_reference_fields_fail_closed(field, value, message):
         validate_frame_observation_references([row])
 
 
-def test_frame_reference_rejects_duplicate_neutral_key_and_duplicate_composite_key():
+def test_frame_reference_rejects_duplicate_neutral_key():
     with pytest.raises(SourceReferenceContractError, match="duplicate frame observation key"):
         validate_frame_observation_references([frame(), frame(frame_id="41", image_id="I002_000041")])
 
-    with pytest.raises(SourceReferenceContractError, match="duplicate frame composite key"):
-        validate_frame_observation_references(
-            [frame(), frame(local_id="obs_02", current_observation_id="I002::obs_02")]
-        )
+
+def test_frame_reference_allows_multiple_observations_in_the_same_frame():
+    rows = [frame(), frame(local_id="obs_02")]
+
+    assert validate_frame_observation_references(rows) == rows
+
+
+def test_frame_reference_rejects_one_frame_mapped_to_multiple_images():
+    rows = [frame(), frame(local_id="obs_02", image_id="I002_000041")]
+
+    with pytest.raises(SourceReferenceContractError, match="multiple image_id values"):
+        validate_frame_observation_references(rows)
+
+
+def test_frame_reference_rejects_one_image_mapped_to_multiple_frames():
+    rows = [frame(), frame(local_id="obs_02", frame_id="41")]
+
+    with pytest.raises(SourceReferenceContractError, match="multiple frame_id values"):
+        validate_frame_observation_references(rows)
+
+
+def test_complete_contract_accepts_two_observations_from_one_frame():
+    baseline = frame(inspection_id="I001", image_id="I001_000040")
+    first = frame()
+    second = frame(local_id="obs_02")
+    result = validate_source_reference_contract(
+        [baseline, first, second],
+        [association(first), association(second, association_id="ASSOC-I002-second")],
+        [
+            engineering(inspection_id="I001", source_ids=["I001::obs_01"]),
+            engineering(source_ids=["I002::obs_01", "I002::obs_02"]),
+        ],
+        baseline_inspection_ids={"I001"},
+        artifact_schema_version=SOURCE_REFERENCE_SCHEMA_VERSION,
+        frame_fieldnames=FRAME_REFERENCE_FIELDS,
+        association_fieldnames=ASSOCIATION_REFERENCE_FIELDS,
+        engineering_fieldnames=ENGINEERING_REFERENCE_FIELDS,
+    )
+
+    assert len(result["frame_records"]) == 3
+    assert len(result["association_records"]) == 2
 
 
 def test_single_inspection_baseline_accepts_valid_header_only_association():
@@ -489,6 +528,21 @@ def test_reference_validators_reject_malformed_record_collections(validator, arg
 def test_artifact_fieldnames_must_preserve_header_sequence(fieldnames):
     with pytest.raises(SourceReferenceContractError, match="fieldnames must be a sequence"):
         validate_frame_observation_references([frame()], fieldnames=fieldnames)
+
+
+def test_artifact_fieldname_generator_is_rejected_by_the_sequence_api():
+    fieldnames = (name for name in FRAME_REFERENCE_FIELDS)
+
+    with pytest.raises(SourceReferenceContractError, match="fieldnames must be a sequence"):
+        validate_frame_observation_references([frame()], fieldnames=fieldnames)  # type: ignore[arg-type]
+
+
+def test_contract_documentation_marks_manifest_provenance_as_external():
+    text = (PROJECT_ROOT / "docs" / "inspection_comparison_evidence_contract.md").read_text(encoding="utf-8")
+
+    assert "complete in-memory relation validation" in text
+    assert "cannot make a wrong baseline trustworthy" in text
+    assert "must combine this validator with a validated history-only Association manifest" in text
 
 
 def test_reference_contract_does_not_require_or_consult_label_fields():
