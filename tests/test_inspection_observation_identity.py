@@ -268,7 +268,12 @@ def test_legacy_projection_adds_full_fingerprint_based_ids_without_mutating_inpu
 
 @pytest.mark.parametrize(
     "field",
-    ["source_record_fingerprint", "local_observation_id", "current_observation_id"],
+    [
+        "source_reference_schema_version",
+        "source_record_fingerprint",
+        "local_observation_id",
+        "current_observation_id",
+    ],
 )
 def test_legacy_projection_rejects_conflicting_existing_derived_identity(field):
     row = legacy_row(**{field: "wrong"})

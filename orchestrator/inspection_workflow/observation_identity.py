@@ -14,6 +14,8 @@ import unicodedata
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .source_references import SOURCE_REFERENCE_SCHEMA_VERSION
+
 
 class ObservationIdentityError(ValueError):
     """Raised when an observation cannot receive a trustworthy neutral ID."""
@@ -338,10 +340,17 @@ def project_prepared_observation_identities(
             expected=current_id,
             label=f"prepared record {row_number}",
         )
+        _reject_conflicting_derived_field(
+            record,
+            field="source_reference_schema_version",
+            expected=SOURCE_REFERENCE_SCHEMA_VERSION,
+            label=f"prepared record {row_number}",
+        )
         copied = deepcopy(dict(record))
         copied["association_inspection_id"] = inspection_id
         copied["local_observation_id"] = local_id
         copied["current_observation_id"] = current_id
+        copied["source_reference_schema_version"] = SOURCE_REFERENCE_SCHEMA_VERSION
         projected.append(copied)
     return projected
 
@@ -377,6 +386,7 @@ def project_legacy_observation_identities(
         local_id = f"legacy::{fingerprint}"
         current_id = f"{canonical['inspection_id']}::{local_id}"
         for field, expected in (
+            ("source_reference_schema_version", SOURCE_REFERENCE_SCHEMA_VERSION),
             ("source_record_fingerprint", fingerprint),
             ("local_observation_id", local_id),
             ("current_observation_id", current_id),
@@ -389,6 +399,7 @@ def project_legacy_observation_identities(
             )
         copied = deepcopy(dict(record))
         copied.update(canonical)
+        copied["source_reference_schema_version"] = SOURCE_REFERENCE_SCHEMA_VERSION
         copied["source_record_fingerprint"] = fingerprint
         copied["local_observation_id"] = local_id
         copied["current_observation_id"] = current_id
@@ -406,6 +417,7 @@ if _PARTITIONED_FIELDS != set(LEGACY_FINGERPRINT_FIELDS):  # pragma: no cover - 
 __all__ = [
     "LEGACY_FINGERPRINT_FIELDS",
     "ObservationIdentityError",
+    "SOURCE_REFERENCE_SCHEMA_VERSION",
     "canonical_legacy_source_record_bytes",
     "legacy_source_record_fingerprint",
     "project_legacy_observation_identities",
