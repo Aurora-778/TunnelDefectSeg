@@ -351,6 +351,17 @@ def test_relative_difference_uses_six_digit_round_half_up_contract():
     )
     assert validate_comparison_evidence_records([half_up])[0]["relative_difference"] == "0.000001"
 
+    negative_half_up = matched_evidence(
+        current_value=1_999_999,
+        previous_memory_snapshot_value=2_000_000,
+        absolute_difference=-1,
+        relative_difference="-0.000001",
+    )
+    assert (
+        validate_comparison_evidence_records([negative_half_up])[0]["relative_difference"]
+        == "-0.000001"
+    )
+
     large = matched_evidence(
         current_value=10**40 + 1,
         previous_memory_snapshot_value=1,
@@ -358,6 +369,28 @@ def test_relative_difference_uses_six_digit_round_half_up_contract():
         relative_difference="1" + "0" * 40,
     )
     assert validate_comparison_evidence_records([large])[0]["relative_difference"] == "1" + "0" * 40
+
+
+def test_relative_difference_handles_integers_beyond_python_string_conversion_limit():
+    huge = 10**5000
+    positive = matched_evidence(
+        current_value=huge + 1,
+        previous_memory_snapshot_value=1,
+        absolute_difference=huge,
+        relative_difference="1" + "0" * 5000,
+    )
+    assert (
+        validate_comparison_evidence_records([positive])[0]["relative_difference"]
+        == "1" + "0" * 5000
+    )
+
+    negative = matched_evidence(
+        current_value=0,
+        previous_memory_snapshot_value=huge,
+        absolute_difference=-huge,
+        relative_difference="-1",
+    )
+    assert validate_comparison_evidence_records([negative])[0]["relative_difference"] == "-1"
 
 
 @pytest.mark.parametrize("comparison_status", ["insufficient_history", "not_longitudinally_comparable"])

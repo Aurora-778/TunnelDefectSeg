@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
+from decimal import Decimal, DecimalException, InvalidOperation, ROUND_HALF_UP, localcontext
 import re
 from typing import Any
 
@@ -211,10 +211,15 @@ def _require_decimal(value: Any, *, field: str, label: str, optional: bool = Fal
 
 
 def _canonical_relative_difference(absolute_difference: int, previous_value: int) -> str:
-    integer_digits = max(len(str(abs(absolute_difference))), len(str(previous_value)))
+    absolute_decimal = Decimal(abs(absolute_difference))
+    previous_decimal = Decimal(previous_value)
+    integer_digits = max(
+        1 if absolute_decimal.is_zero() else absolute_decimal.adjusted() + 1,
+        previous_decimal.adjusted() + 1,
+    )
     with localcontext() as context:
         context.prec = integer_digits + 8
-        rounded = (Decimal(absolute_difference) / Decimal(previous_value)).quantize(
+        rounded = (Decimal(absolute_difference) / previous_decimal).quantize(
             _RELATIVE_DIFFERENCE_QUANTUM,
             rounding=ROUND_HALF_UP,
         )
@@ -572,10 +577,15 @@ def _validate_previous_branch(record: Mapping[str, Any], *, label: str) -> None:
             raise ComparisonEvidenceContractError(
                 f"{label} non-zero previous value requires a retained relative difference"
             )
-        expected_relative_difference = _canonical_relative_difference(
-            absolute_difference,
-            previous_value,
-        )
+        try:
+            expected_relative_difference = _canonical_relative_difference(
+                absolute_difference,
+                previous_value,
+            )
+        except DecimalException as exc:
+            raise ComparisonEvidenceContractError(
+                f"{label} relative_difference exceeds the supported Decimal range"
+            ) from exc
         if relative_difference != expected_relative_difference:
             raise ComparisonEvidenceContractError(
                 f"{label} relative_difference must equal {expected_relative_difference} "
