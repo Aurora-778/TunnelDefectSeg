@@ -16,6 +16,8 @@ The prepared task object contains exactly `schema_version`, `task_id`, `task_typ
 
 `config/inspection_workflow.yaml` is intentionally JSON-compatible YAML so the Phase 0 contract can be parsed deterministically with the Python standard library. It contains output mapping and validation/path/lock/publication policy only. It must not copy DAG dependencies or retry settings from `config/dag.yaml`.
 
+`inspection_workflow_v1` is a Phase 0-only schema and therefore requires `contract_phase=phase_0_only`, `lock_policy.enabled=false`, and `publication_policy.enabled=false`. A2/A3 must introduce and validate a new workflow schema version before enabling publication or locking. Changing only either `enabled` value in the v1 file is invalid and must remain Fail Closed.
+
 Phase 0 validates the frozen output names and unambiguous task identifiers. A3 Planner integration must additionally resolve those identifiers against the then-current `config/dag.yaml`; Phase 0 does not claim that DAG execution is wired.
 
 ## Phase Boundaries
@@ -28,4 +30,4 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
 
 ## Fail-Closed Rules
 
-Unknown fields, unsafe identifiers, unsupported outputs, duplicate outputs, legacy input disguised as a prepared task, malformed roots, and policy drift are rejected. A valid TaskRequest is still not inference-ready until the existing prepared-dataset readiness gate verifies its sibling artifacts in Phase A3.
+Unknown fields, unsafe identifiers, Windows reserved device names, trailing-dot aliases, unsupported outputs, duplicate outputs, legacy input disguised as a prepared task, malformed roots, and policy drift are rejected. A valid TaskRequest is still not inference-ready until the existing prepared-dataset readiness gate verifies its sibling artifacts in Phase A3.

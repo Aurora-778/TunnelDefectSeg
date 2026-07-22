@@ -21,6 +21,7 @@ def test_phase_zero_workflow_policy_is_valid_and_inactive():
     policy = load_workflow_policy()
 
     assert policy["schema_version"] == "inspection_workflow_v1"
+    assert policy["contract_phase"] == "phase_0_only"
     assert policy["lock_policy"] == {"enabled": False, "activation_phase": "phase_a3"}
     assert policy["publication_policy"]["enabled"] is False
     assert policy["publication_policy"]["manifest_last"] is True
@@ -49,7 +50,22 @@ def test_invalid_fixture_rejects_dataset_path_traversal():
 
 @pytest.mark.parametrize(
     "dataset_id",
-    ["", ".", "..", "../pilot", "pilot/sub", r"pilot\\sub", "C:pilot", "pilot::one", "巡检一"],
+    [
+        "",
+        ".",
+        "..",
+        "../pilot",
+        "pilot/sub",
+        r"pilot\\sub",
+        "C:pilot",
+        "pilot::one",
+        "https://example.test/pilot",
+        "file:///C:/pilot",
+        r"\\server\share",
+        "/var/tmp/pilot",
+        r"C:\\temp\\pilot",
+        "巡检一",
+    ],
 )
 def test_dataset_id_is_an_identifier_not_a_path(dataset_id):
     task = json.loads((FIXTURE_ROOT / "task_valid.json").read_text(encoding="utf-8"))
@@ -57,6 +73,44 @@ def test_dataset_id_is_an_identifier_not_a_path(dataset_id):
 
     with pytest.raises(InspectionWorkflowContractError, match="dataset_id"):
         validate_task_request(task)
+
+
+@pytest.mark.parametrize(
+    "dataset_id",
+    [
+        "CON",
+        "con",
+        "CON.demo",
+        "PRN",
+        "aux",
+        "NUL",
+        *(f"COM{number}" for number in range(1, 10)),
+        *(f"lpt{number}" for number in range(1, 10)),
+    ],
+)
+def test_dataset_id_rejects_windows_reserved_device_names(dataset_id):
+    task = json.loads((FIXTURE_ROOT / "task_valid.json").read_text(encoding="utf-8"))
+    task["input"]["dataset_id"] = dataset_id
+
+    with pytest.raises(InspectionWorkflowContractError, match="dataset_id"):
+        validate_task_request(task)
+
+
+@pytest.mark.parametrize("dataset_id", ["pilot.", "pilot..", "safe.name."])
+def test_dataset_id_rejects_windows_trailing_dot_aliases(dataset_id):
+    task = json.loads((FIXTURE_ROOT / "task_valid.json").read_text(encoding="utf-8"))
+    task["input"]["dataset_id"] = dataset_id
+
+    with pytest.raises(InspectionWorkflowContractError, match="dataset_id"):
+        validate_task_request(task)
+
+
+@pytest.mark.parametrize("dataset_id", ["COM10", "LPT10", "connection", "auxiliary", "pilot.name"])
+def test_dataset_id_does_not_reject_non_reserved_prefixes(dataset_id):
+    task = json.loads((FIXTURE_ROOT / "task_valid.json").read_text(encoding="utf-8"))
+    task["input"]["dataset_id"] = dataset_id
+
+    assert validate_task_request(task)["input"]["dataset_id"] == dataset_id
 
 
 @pytest.mark.parametrize("field", ["gold_match_id", "dataset_partition", "review_status", "audit_note"])
@@ -115,6 +169,14 @@ def test_policy_drift_cannot_enable_phase_zero_lock_or_publication():
         changed[section]["enabled"] = True
         with pytest.raises(InspectionWorkflowContractError, match="must remain disabled"):
             validate_workflow_policy(changed)
+
+
+def test_phase_zero_schema_rejects_contract_phase_drift():
+    policy = load_workflow_policy()
+    policy["contract_phase"] = "phase_a3"
+
+    with pytest.raises(InspectionWorkflowContractError, match="contract_phase must be phase_0_only"):
+        validate_workflow_policy(policy)
 
 
 def test_policy_requires_the_frozen_output_mapping_key_set():

@@ -1,5 +1,6 @@
 {
   "schema_version": "inspection_workflow_v1",
+  "contract_phase": "phase_0_only",
   "task_request_schema_version": "inspection_task_v1",
   "output_mapping": {
     "association": "association",

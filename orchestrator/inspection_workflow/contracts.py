@@ -14,10 +14,19 @@ DEFAULT_WORKFLOW_POLICY_PATH = PROJECT_ROOT / "config" / "inspection_workflow.ya
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 DATASET_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+WINDOWS_RESERVED_DATASET_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
 REQUIRED_OUTPUT_NAMES = {"association", "growth_report", "visualization", "final_report"}
 
 POLICY_ROOT_FIELDS = {
     "schema_version",
+    "contract_phase",
     "task_request_schema_version",
     "output_mapping",
     "validation_policy",
@@ -92,6 +101,8 @@ def validate_workflow_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
     _require_exact_fields(policy, POLICY_ROOT_FIELDS, label="workflow policy")
     if policy["schema_version"] != "inspection_workflow_v1":
         raise InspectionWorkflowContractError("workflow policy schema_version must be inspection_workflow_v1")
+    if policy["contract_phase"] != "phase_0_only":
+        raise InspectionWorkflowContractError("inspection_workflow_v1 contract_phase must be phase_0_only")
     if policy["task_request_schema_version"] != "inspection_task_v1":
         raise InspectionWorkflowContractError(
             "workflow policy task_request_schema_version must be inspection_task_v1"
@@ -187,10 +198,13 @@ def validate_task_request(
     if task_input["input_mode"] != policy["validation_policy"]["prepared_input_mode"]:
         raise InspectionWorkflowContractError("Phase 0 TaskRequest only accepts prepared_dataset input")
     dataset_id = _require_string(task_input["dataset_id"], label="dataset_id")
+    windows_base_name = dataset_id.split(".", 1)[0].upper()
     if (
         not DATASET_ID_PATTERN.fullmatch(dataset_id)
         or dataset_id in {".", ".."}
         or "::" in dataset_id
+        or dataset_id.endswith(".")
+        or windows_base_name in WINDOWS_RESERVED_DATASET_NAMES
     ):
         raise InspectionWorkflowContractError("dataset_id must be a safe identifier, not a path")
 
