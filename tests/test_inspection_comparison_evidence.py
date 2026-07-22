@@ -287,7 +287,10 @@ def test_insufficient_history_has_priority_over_other_comparability(side):
     ],
 )
 def test_not_applicable_previous_fields_have_one_canonical_representation(field, value):
-    with pytest.raises(ComparisonEvidenceContractError, match="not_applicable|one valid timepoint"):
+    with pytest.raises(
+        ComparisonEvidenceContractError,
+        match="not_applicable|one valid timepoint|requires difference_valid=false",
+    ):
         validate_comparison_evidence_records([baseline_evidence(**{field: value})])
 
 
@@ -313,6 +316,68 @@ def test_memory_area_difference_and_decimal_representation_are_canonical():
     for value in ("0.20", "1e-1", "-0"):
         with pytest.raises(ComparisonEvidenceContractError, match="canonical decimal"):
             validate_comparison_evidence_records([matched_evidence(relative_difference=value)])
+
+    with pytest.raises(ComparisonEvidenceContractError, match="relative_difference must equal 0.2"):
+        validate_comparison_evidence_records([matched_evidence(relative_difference="9")])
+
+
+def test_relative_difference_uses_six_digit_round_half_up_contract():
+    rounded = matched_evidence(
+        current_value=4,
+        previous_memory_snapshot_value=3,
+        absolute_difference=1,
+        relative_difference="0.333333",
+    )
+    assert validate_comparison_evidence_records([rounded])[0]["relative_difference"] == "0.333333"
+
+    with pytest.raises(ComparisonEvidenceContractError, match="relative_difference must equal 0.333333"):
+        validate_comparison_evidence_records(
+            [dict(rounded, relative_difference="0.333334")]
+        )
+
+    negative = matched_evidence(
+        current_value=5,
+        previous_memory_snapshot_value=6,
+        absolute_difference=-1,
+        relative_difference="-0.166667",
+    )
+    assert validate_comparison_evidence_records([negative])[0]["relative_difference"] == "-0.166667"
+
+    half_up = matched_evidence(
+        current_value=2_000_001,
+        previous_memory_snapshot_value=2_000_000,
+        absolute_difference=1,
+        relative_difference="0.000001",
+    )
+    assert validate_comparison_evidence_records([half_up])[0]["relative_difference"] == "0.000001"
+
+    large = matched_evidence(
+        current_value=10**40 + 1,
+        previous_memory_snapshot_value=1,
+        absolute_difference=10**40,
+        relative_difference="1" + "0" * 40,
+    )
+    assert validate_comparison_evidence_records([large])[0]["relative_difference"] == "1" + "0" * 40
+
+
+@pytest.mark.parametrize("comparison_status", ["insufficient_history", "not_longitudinally_comparable"])
+def test_nonverified_comparison_cannot_mark_difference_valid(comparison_status):
+    overrides = {
+        "difference_valid": True,
+        "comparison_comparability_status": comparison_status,
+    }
+    if comparison_status == "insufficient_history":
+        overrides["current_comparability_status"] = "insufficient_history"
+    else:
+        overrides.update(
+            current_observation_source="kict_static_mask_cyclic_demo",
+            current_comparability_status="not_longitudinally_comparable",
+            previous_observation_sources=["kict_static_mask_cyclic_demo"],
+            previous_comparability_status="not_longitudinally_comparable",
+        )
+
+    with pytest.raises(ComparisonEvidenceContractError, match="requires difference_valid=false"):
+        validate_comparison_evidence_records([matched_evidence(**overrides)])
 
 
 @pytest.mark.parametrize(
@@ -459,6 +524,38 @@ def test_non_identity_evidence_failure_preserves_supported_identity_but_blocks_c
     assert validated["identity_evidence_state"] == "association_supported"
     assert set(decision["capabilities"].values()) == {"blocked"}
     assert decision["reason_codes"][0] == "EVIDENCE_INVALID"
+
+
+def test_missing_engineering_hash_is_retained_as_invalid_without_rewriting_identity():
+    record = matched_evidence(
+        evidence_valid=False,
+        difference_valid=False,
+        invalid_reason="source_engineering_artifact_missing",
+        source_engineering_artifact_sha256=None,
+    )
+
+    validated = validate_comparison_evidence_records([record])[0]
+    decision = evaluate_claim_evidence(validated)
+
+    assert validated["identity_evidence_state"] == "association_supported"
+    assert validated["source_engineering_artifact_sha256"] is None
+    assert set(decision["capabilities"].values()) == {"blocked"}
+
+    with pytest.raises(ComparisonEvidenceContractError, match="requires evidence_valid=false"):
+        validate_comparison_evidence_records(
+            [matched_evidence(source_engineering_artifact_sha256=None)]
+        )
+
+    with pytest.raises(ComparisonEvidenceContractError, match="requires a null"):
+        validate_comparison_evidence_records(
+            [
+                matched_evidence(
+                    evidence_valid=False,
+                    difference_valid=False,
+                    invalid_reason="source_engineering_artifact_missing",
+                )
+            ]
+        )
 
 
 def test_false_schema_or_source_prerequisite_requires_invalid_evidence():

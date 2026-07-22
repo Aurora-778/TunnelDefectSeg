@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 import re
 from typing import Any
 
@@ -95,6 +95,7 @@ _ALLOWED_IDENTITY_STATES = {
 }
 _HASH_RE = re.compile(r"[0-9a-f]{64}\Z")
 _DECIMAL_RE = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?\Z")
+_RELATIVE_DIFFERENCE_QUANTUM = Decimal("0.000001")
 _UTC_TIMESTAMP_RE = re.compile(
     r"[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"
     r"T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\.[0-9]{6}Z\Z"
@@ -209,6 +210,18 @@ def _require_decimal(value: Any, *, field: str, label: str, optional: bool = Fal
     return value
 
 
+def _canonical_relative_difference(absolute_difference: int, previous_value: int) -> str:
+    integer_digits = max(len(str(abs(absolute_difference))), len(str(previous_value)))
+    with localcontext() as context:
+        context.prec = integer_digits + 8
+        rounded = (Decimal(absolute_difference) / Decimal(previous_value)).quantize(
+            _RELATIVE_DIFFERENCE_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        )
+    value = format(rounded, "f").rstrip("0").rstrip(".")
+    return "0" if value in {"", "-0"} else value
+
+
 def _validate_common_fields(
     record: Mapping[str, Any],
     *,
@@ -314,6 +327,10 @@ def _validate_common_fields(
         raise ComparisonEvidenceContractError(
             f"{label} comparison_comparability_status must be {expected_status}"
         )
+    if expected_status != "verified_comparable" and record["difference_valid"] is not False:
+        raise ComparisonEvidenceContractError(
+            f"{label} {expected_status} comparison requires difference_valid=false"
+        )
 
     _require_string(record["comparison_group_id"], field="comparison_group_id", label=label)
     if record["metric_name"] != "inspection_level_max_mask_area_px":
@@ -413,8 +430,28 @@ def _validate_common_fields(
         raise ComparisonEvidenceContractError(f"{label} measurement_uncertainty must be non-negative")
 
     _require_string(record["comparability_reason"], field="comparability_reason", label=label)
-    for field in ("source_current_record_fingerprint", "source_engineering_artifact_sha256"):
-        _require_hash(record[field], field=field, label=label)
+    _require_hash(
+        record["source_current_record_fingerprint"],
+        field="source_current_record_fingerprint",
+        label=label,
+    )
+    engineering_hash = _require_hash(
+        record["source_engineering_artifact_sha256"],
+        field="source_engineering_artifact_sha256",
+        label=label,
+        optional=True,
+    )
+    if engineering_hash is None:
+        if record["evidence_valid"] is not False or invalid_reason != "source_engineering_artifact_missing":
+            raise ComparisonEvidenceContractError(
+                f"{label} missing source_engineering_artifact_sha256 requires "
+                "evidence_valid=false and invalid_reason=source_engineering_artifact_missing"
+            )
+    elif invalid_reason == "source_engineering_artifact_missing":
+        raise ComparisonEvidenceContractError(
+            f"{label} source_engineering_artifact_missing requires a null "
+            "source_engineering_artifact_sha256"
+        )
     association_hashes = (
         "source_association_artifact_sha256",
         "source_association_manifest_sha256",
@@ -528,10 +565,21 @@ def _validate_previous_branch(record: Mapping[str, Any], *, label: str) -> None:
                 f"{label} zero previous value requires null/false relative difference"
             )
     else:
-        _require_decimal(record["relative_difference"], field="relative_difference", label=label)
+        relative_difference = _require_decimal(
+            record["relative_difference"], field="relative_difference", label=label
+        )
         if record["relative_difference_valid"] is not True:
             raise ComparisonEvidenceContractError(
                 f"{label} non-zero previous value requires a retained relative difference"
+            )
+        expected_relative_difference = _canonical_relative_difference(
+            absolute_difference,
+            previous_value,
+        )
+        if relative_difference != expected_relative_difference:
+            raise ComparisonEvidenceContractError(
+                f"{label} relative_difference must equal {expected_relative_difference} "
+                "using six fractional digits and ROUND_HALF_UP"
             )
     _require_hash(record["source_memory_snapshot_sha256"], field="source_memory_snapshot_sha256", label=label)
     if record["temporal_order_valid"] and record["current_timestamp"] <= record["previous_last_seen_timestamp"]:

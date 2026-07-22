@@ -30,6 +30,10 @@ The validator is side-effect-free and provides complete in-memory relation valid
 
 The sole metric is `inspection_level_max_mask_area_px` on both current and previous sides. Comparability composition first preserves `insufficient_history`, then allows dual `verified_comparable`, and otherwise yields `not_longitudinally_comparable`. Missing or illegal observation/comparability fields make `evidence_valid=false`; they do not rewrite identity evidence.
 
+`absolute_difference` must equal current minus previous pixel area. For a non-zero previous value, `relative_difference` is recomputed with `Decimal`, rounded to six fractional digits using `ROUND_HALF_UP`, then normalized by removing trailing fractional zeros. Zero previous area uses canonical null/false relative-difference fields. Only `verified_comparable` records may set `difference_valid=true`; insufficient-history and non-longitudinally-comparable records retain raw area values for audit but must set it false.
+
+A missing Engineering source hash is represented only as `source_engineering_artifact_sha256=null`, `evidence_valid=false`, and `invalid_reason=source_engineering_artifact_missing`. This non-identity provenance failure does not rewrite an otherwise valid `identity_evidence_state` and cannot be hidden with a placeholder hash.
+
 `previous_entity_type=not_applicable` uses canonical null for scalar `previous_*` references, an empty list for source lists, and zero only for count fields. It never fabricates a Memory snapshot.
 
 This Phase 0 document freezes the contract. Evidence generation starts in A1 and must write only Run-local artifacts.
