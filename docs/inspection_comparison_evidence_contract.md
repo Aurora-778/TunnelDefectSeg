@@ -12,7 +12,11 @@ Three branches are fixed:
 
 ## Observation Identity
 
-Prepared data uses `<inspection_id>::<local_observation_id>`. Legacy input will use a Phase 0 canonical source-record fingerprint built only from the fixed whitelist in the approved CEPlan. It must be stable across row order, equivalent project-relative path separators, equivalent decimals, and timezone normalization. It must not absorb new columns automatically.
+Phase 0 provides a side-effect-free observation identity projection in `orchestrator/inspection_workflow/observation_identity.py`. Prepared data uses `<association_inspection_id>::<local_observation_id>` and rejects duplicate IDs within one inspection. Legacy input uses `legacy::<full SHA-256 source_record_fingerprint>` as its local ID and prefixes it with `inspection_id` for `current_observation_id`. These IDs are neutral observation keys, not cross-inspection disease identities or labels.
+
+The Legacy fingerprint consumes exactly the frozen 22-field whitelist from the approved CEPlan. Canonical JSON stores normalized integer and decimal source values as JSON strings, stores `has_crack` as a JSON boolean, sorts keys, uses compact separators, and encodes UTF-8 without BOM. The projected record also carries these canonical whitelist values, so its identity and visible source fields cannot disagree. Paths are interpreted only as paths relative to the fixed project-root-relative POSIX `dataset_root`; slash direction is normalized, while absolute paths, URIs, UNC paths, drive paths, and parent traversal are rejected. Phase 0 performs lexical path validation only; A3 readiness must resolve the declared root and enforce physical containment/symlink policy before execution. Naive timestamps require the Run's IANA `dataset_timezone`; all timestamps become six-digit UTC values. Ambiguous or nonexistent local times fail closed.
+
+CSV row order and fields outside the whitelist do not affect a fingerprint. In particular, `disease_id`, `label_disease_id`, GT/gold/match answers, split/partition, review/audit fields, and future columns are ignored. Missing whitelist fields, indistinguishable duplicate fingerprints, and pre-existing derived identity fields that disagree with recomputation fail closed. Reapplying the projection to an already consistent record is idempotent. This Phase 0 module does not yet modify Frame, Association, Engineering, or formal pipeline artifacts; A1 must propagate the validated key without using it in scoring.
 
 ## Comparison Boundary
 
