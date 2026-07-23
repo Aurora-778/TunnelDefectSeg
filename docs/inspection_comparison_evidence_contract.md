@@ -36,7 +36,20 @@ A missing Engineering source hash is represented only as `source_engineering_art
 
 `previous_entity_type=not_applicable` uses canonical null for scalar `previous_*` references, an empty list for source lists, and zero only for count fields. It never fabricates a Memory snapshot.
 
-This Phase 0 document freezes the contract. Evidence generation starts in A1 and must write only Run-local artifacts.
+This Phase 0 document freezes the record contract. The first A1 sandbox artifact
+boundary is implemented by `orchestrator/inspection_workflow/a1_artifacts.py` and
+the directly instantiated `ComparisonEvidenceAgent`. It accepts only already
+normalized records that pass this complete validator, writes deterministic UTF-8
+CSV to `runs/<run_id>/artifacts/comparison_evidence.csv`, and commits
+`comparison_evidence_manifest.json` last. The manifest binds the exact Run-local
+Association, Association Manifest, Engineering, and any declared Memory,
+registration, or scale source bytes by size and SHA-256.
+
+This is not yet source-to-Evidence projection or default workflow integration.
+The A1 component is available only with `execution_profile=phase_a1_sandbox` in a
+temporary project root outside the live repository. It has no Registry, DAG, CLI,
+Web, or formal publication entry point and cannot accept caller-selected output
+paths. Identical reruns are idempotent; a changed existing A1 artifact fails closed.
 
 ## Executable Phase 0 Record Contract
 
@@ -55,9 +68,13 @@ source lists, zero source count, one timepoint, and no temporal/difference valid
 Memory-backed records retain raw pixel-area differences for audit even when the
 comparison is not longitudinally comparable.
 
-This is a Phase 0 schema boundary, not A1 implementation. It does not create
-`comparison_evidence.csv`, its Manifest, ClaimDecision, Staging reports, or formal
-`data/outputs` files.
+The Phase 0 validator remains side-effect free. The separate A1 sandbox wrapper now
+creates the Run-local CSV and manifest, while the Claim Gate wrapper creates the
+authoritative Run-local `claim_decision.json`. A controlled renderer can create only
+`runs/<run_id>/staging/claim_audit_report.md` plus a byte-identical Staging
+ClaimDecision mirror. These wrappers do not create formal `data/outputs` files and
+do not claim that A1 source-to-Evidence projection, A2 publication, or A3 workflow
+integration is complete.
 
 ## Executable History-only Memory Snapshot Contract
 

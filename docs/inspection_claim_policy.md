@@ -47,4 +47,14 @@ therefore fails closed. This verifies internal consistency only. Phase
 A1 must obtain the expected digest from its validated Run-local artifact/Manifest,
 atomically write the authoritative ClaimDecision under the current Run, and keep all
 rendering and staging outputs inside the explicit sandbox profile. Publication and
-the compatibility mirror remain A2/A3 responsibilities.
+the formal `outputs/claim_decision.json` compatibility mirror remain A2/A3
+responsibilities.
+
+The first A1 sandbox Claim Gate now performs that narrow artifact closure. It
+revalidates the Evidence CSV, its manifest, and every declared source artifact
+before building `runs/<run_id>/artifacts/claim_decision.json`. A minimal controlled
+renderer then revalidates both authoritative artifacts and may write only
+`runs/<run_id>/staging/claim_audit_report.md` and a byte-identical Staging decision
+mirror. It never reads legacy Growth text as a claim source. Default CLI/DAG/Registry
+integration, full report replacement, Publication, State, and Lock behavior remain
+disabled for later A1/A2/A3 work.
