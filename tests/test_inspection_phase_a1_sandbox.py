@@ -331,6 +331,22 @@ def test_evidence_csv_rejects_noncanonical_list_json(tmp_path):
         )
 
 
+@pytest.mark.parametrize("raw_value", ["[NaN]", "[Infinity]", "[-Infinity]"])
+def test_evidence_csv_rejects_non_finite_list_json(tmp_path, raw_value):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    result = ComparisonEvidenceAgent().run(context)
+    data = (project_root / result["comparison_evidence_path"]).read_bytes()
+
+    with pytest.raises(PhaseA1ArtifactError, match="non-finite JSON"):
+        parse_comparison_evidence_csv(
+            _rewrite_csv_field(
+                data,
+                field="previous_source_inspection_ids",
+                raw_value=raw_value,
+            )
+        )
+
+
 def test_byte_binding_only_sources_cannot_enable_verified_directional_claim(tmp_path):
     project_root, files, _, context = _sandbox_fixture(tmp_path)
     _make_verified_evidence(project_root, files, context)
@@ -397,6 +413,40 @@ def test_atomic_write_failure_reports_temp_cleanup_failure_without_losing_cause(
 
     assert isinstance(captured.value.__cause__, OSError)
     assert "replace failed" in str(captured.value.__cause__)
+
+
+def test_clean_first_write_failure_does_not_leave_recovery_marker_and_can_retry(
+    tmp_path,
+    monkeypatch,
+):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    original_named_temporary_file = a1_artifacts.tempfile.NamedTemporaryFile
+
+    def fail_before_temp_creation(*args, **kwargs):
+        raise OSError("temporary create failed")
+
+    monkeypatch.setattr(
+        a1_artifacts.tempfile,
+        "NamedTemporaryFile",
+        fail_before_temp_creation,
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="atomically write") as captured:
+        ComparisonEvidenceAgent().run(context)
+
+    artifacts = project_root / "runs/run_001/artifacts"
+    assert isinstance(captured.value.__cause__, OSError)
+    assert not (artifacts / "comparison_evidence.csv").exists()
+    assert not (artifacts / "comparison_evidence_manifest.json").exists()
+    assert not (artifacts / ".a1_recovery_required.json").exists()
+
+    monkeypatch.setattr(
+        a1_artifacts.tempfile,
+        "NamedTemporaryFile",
+        original_named_temporary_file,
+    )
+    result = ComparisonEvidenceAgent().run(context)
+    assert (project_root / result["comparison_evidence_path"]).is_file()
 
 
 def test_manifest_failure_after_evidence_commit_leaves_recovery_marker(
@@ -474,6 +524,39 @@ def test_report_mirror_failure_leaves_staging_recovery_marker(
     staging = project_root / "runs/run_001/staging"
     assert (staging / "claim_audit_report.md").is_file()
     assert not (staging / "claim_decision.json").exists()
+    assert (staging / ".a1_recovery_required.json").is_file()
+
+
+def test_report_detects_authoritative_decision_change_after_mirror_write(
+    tmp_path,
+    monkeypatch,
+):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    _run_evidence_and_claim(context)
+    ClaimAuditReportAgent().run(context)
+    authoritative = project_root / "runs/run_001/artifacts/claim_decision.json"
+    original_write = a1_artifacts._atomic_write_idempotent
+
+    def mutate_authoritative_after_mirror(path, data, *, allowed_root):
+        committed = original_write(path, data, allowed_root=allowed_root)
+        if path.name == "claim_decision.json" and path.parent.name == "staging":
+            authoritative.write_bytes(authoritative.read_bytes() + b" ")
+        return committed
+
+    monkeypatch.setattr(
+        a1_artifacts,
+        "_atomic_write_idempotent",
+        mutate_authoritative_after_mirror,
+    )
+
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="not byte-identical.*recovery is required",
+    ):
+        ClaimAuditReportAgent().run(context)
+
+    staging = project_root / "runs/run_001/staging"
+    assert (staging / "claim_decision.json").is_file()
     assert (staging / ".a1_recovery_required.json").is_file()
 
 

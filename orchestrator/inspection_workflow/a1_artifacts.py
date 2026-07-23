@@ -257,7 +257,7 @@ def _atomic_write_idempotent(
     data: bytes,
     *,
     allowed_root: Path,
-) -> None:
+) -> bool:
     _assert_path_is_contained_and_plain(
         allowed_root,
         path,
@@ -284,9 +284,10 @@ def _atomic_write_idempotent(
         label=f"A1 artifact {path.name}",
     )
     if path.exists():
-        return
+        return False
 
     temporary_path: Path | None = None
+    replace_attempted = False
     try:
         with tempfile.NamedTemporaryFile(
             mode="wb",
@@ -305,6 +306,7 @@ def _atomic_write_idempotent(
             include_leaf=True,
             label=f"A1 artifact {path.name}",
         )
+        replace_attempted = True
         os.replace(temporary_path, path)
         temporary_path = None
     except (OSError, PhaseA1ArtifactError) as exc:
@@ -320,7 +322,14 @@ def _atomic_write_idempotent(
                 f"; temporary cleanup also failed: "
                 f"{type(cleanup_error).__name__}: {cleanup_error}"
             )
-        raise PhaseA1ArtifactError(message) from exc
+        error = PhaseA1ArtifactError(message)
+        error.write_state_uncertain = replace_attempted or cleanup_error is not None
+        raise error from exc
+    return True
+
+
+def _write_failure_requires_recovery(error: Exception) -> bool:
+    return bool(getattr(error, "write_state_uncertain", False))
 
 
 def initialize_phase_a1_sandbox(
@@ -402,8 +411,16 @@ def _parse_bool(value: str, *, field: str, row_number: int, optional: bool) -> b
 
 def _parse_csv_value(field: str, value: str, *, row_number: int) -> Any:
     if field in _LIST_FIELDS:
+        def reject_non_finite(token: str) -> None:
+            raise PhaseA1ArtifactError(
+                f"comparison_evidence.csv row {row_number} {field} "
+                f"must not contain non-finite JSON value: {token}"
+            )
+
         try:
-            parsed = json.loads(value)
+            parsed = json.loads(value, parse_constant=reject_non_finite)
+        except PhaseA1ArtifactError:
+            raise
         except json.JSONDecodeError as exc:
             raise PhaseA1ArtifactError(
                 f"comparison_evidence.csv row {row_number} {field} must be a JSON list"
@@ -412,12 +429,19 @@ def _parse_csv_value(field: str, value: str, *, row_number: int) -> Any:
             raise PhaseA1ArtifactError(
                 f"comparison_evidence.csv row {row_number} {field} must be a JSON list"
             )
-        if value != json.dumps(
-            parsed,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-        ):
+        try:
+            canonical_value = json.dumps(
+                parsed,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise PhaseA1ArtifactError(
+                f"comparison_evidence.csv row {row_number} {field} "
+                "must use finite canonical JSON"
+            ) from exc
+        if value != canonical_value:
             raise PhaseA1ArtifactError(
                 f"comparison_evidence.csv row {row_number} {field} must use canonical JSON"
             )
@@ -729,18 +753,18 @@ def write_comparison_evidence_bundle(
     _preflight_idempotent_target(manifest_path, manifest_bytes)
     committed_paths: list[str] = []
     try:
-        _atomic_write_idempotent(
+        if _atomic_write_idempotent(
             evidence_path,
             evidence_bytes,
             allowed_root=root,
-        )
-        committed_paths.append(evidence_relative)
-        _atomic_write_idempotent(
+        ):
+            committed_paths.append(evidence_relative)
+        if _atomic_write_idempotent(
             manifest_path,
             manifest_bytes,
             allowed_root=root,
-        )
-        committed_paths.append(manifest_relative)
+        ):
+            committed_paths.append(manifest_relative)
         committed = validate_comparison_evidence_bundle(
             root,
             run_id=run_id,
@@ -748,14 +772,16 @@ def write_comparison_evidence_bundle(
             plan_fingerprint=plan_fingerprint,
         )
     except Exception as exc:
-        _raise_recovery_required(
-            project_root=root,
-            run_id=run_id,
-            area="artifacts",
-            stage="comparison_evidence_bundle",
-            committed_paths=committed_paths,
-            primary_error=exc,
-        )
+        if committed_paths or _write_failure_requires_recovery(exc):
+            _raise_recovery_required(
+                project_root=root,
+                run_id=run_id,
+                area="artifacts",
+                stage="comparison_evidence_bundle",
+                committed_paths=committed_paths,
+                primary_error=exc,
+            )
+        raise
     return {
         "comparison_evidence_path": evidence_relative,
         "comparison_evidence_manifest_path": manifest_relative,
@@ -962,8 +988,10 @@ def write_claim_decision_artifact(
     root = Path(project_root).resolve()
     path = _resolve_fixed_path(root, relative_path)
     _preflight_idempotent_target(path, data)
+    committed_paths: list[str] = []
     try:
-        _atomic_write_idempotent(path, data, allowed_root=root)
+        if _atomic_write_idempotent(path, data, allowed_root=root):
+            committed_paths.append(relative_path)
         persisted = load_validated_claim_artifacts(
             project_root,
             run_id=run_id,
@@ -971,14 +999,16 @@ def write_claim_decision_artifact(
             plan_fingerprint=plan_fingerprint,
         )
     except Exception as exc:
-        _raise_recovery_required(
-            project_root=root,
-            run_id=run_id,
-            area="artifacts",
-            stage="claim_decision_commit",
-            committed_paths=[relative_path] if path.exists() else [],
-            primary_error=exc,
-        )
+        if committed_paths or _write_failure_requires_recovery(exc):
+            _raise_recovery_required(
+                project_root=root,
+                run_id=run_id,
+                area="artifacts",
+                stage="claim_decision_commit",
+                committed_paths=committed_paths,
+                primary_error=exc,
+            )
+        raise
     return {
         "claim_decision_path": relative_path,
         "claim_decision_sha256": _sha256_bytes(
@@ -1094,38 +1124,60 @@ def write_gated_claim_audit_report(
     report_path = _resolve_fixed_path(root, report_relative)
     mirror_relative = _staging_relative_path(run_id, "claim_decision.json")
     mirror_path = _resolve_fixed_path(root, mirror_relative)
+    authoritative_path = _resolve_fixed_path(
+        root,
+        artifacts["claim_decision_path"],
+    )
     _preflight_idempotent_target(report_path, report_data)
     _preflight_idempotent_target(mirror_path, artifacts["claim_decision_bytes"])
     committed_paths: list[str] = []
+    final_consistency_check_started = False
     try:
-        _atomic_write_idempotent(
+        if _atomic_write_idempotent(
             report_path,
             report_data,
             allowed_root=root,
-        )
-        committed_paths.append(report_relative)
-        _atomic_write_idempotent(
+        ):
+            committed_paths.append(report_relative)
+        if _atomic_write_idempotent(
             mirror_path,
             artifacts["claim_decision_bytes"],
             allowed_root=root,
-        )
-        committed_paths.append(mirror_relative)
-        if _read_file_bytes(
+        ):
+            committed_paths.append(mirror_relative)
+        final_consistency_check_started = True
+        mirror_bytes = _read_file_bytes(
             mirror_path,
             label="Staging ClaimDecision mirror",
-        ) != artifacts["claim_decision_bytes"]:
+        )
+        authoritative_bytes = _read_file_bytes(
+            authoritative_path,
+            label="authoritative ClaimDecision",
+        )
+        if not (
+            authoritative_bytes
+            == artifacts["claim_decision_bytes"]
+            == mirror_bytes
+        ):
             raise PhaseA1ArtifactError(
-                "Staging ClaimDecision mirror is not byte-identical"
+                "authoritative ClaimDecision, validated snapshot, and Staging "
+                "mirror are not byte-identical"
             )
     except Exception as exc:
-        _raise_recovery_required(
-            project_root=root,
-            run_id=run_id,
-            area="staging",
-            stage="claim_audit_report_commit",
-            committed_paths=committed_paths,
-            primary_error=exc,
-        )
+        if (
+            committed_paths
+            or _write_failure_requires_recovery(exc)
+            or final_consistency_check_started
+        ):
+            _raise_recovery_required(
+                project_root=root,
+                run_id=run_id,
+                area="staging",
+                stage="claim_audit_report_commit",
+                committed_paths=committed_paths,
+                primary_error=exc,
+            )
+        raise
     return {
         "claim_audit_report_path": report_relative,
         "claim_decision_mirror_path": mirror_relative,
