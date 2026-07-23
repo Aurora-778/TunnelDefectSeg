@@ -4,7 +4,12 @@
 
 This document freezes inputs and boundaries only. Phase A1 evidence/report agents, Phase A2 publication, and Phase A3 controller/state integration are not enabled.
 
-Implemented in the current Phase 0 slice: executable Claim Policy validation and strict Workflow Policy/TaskRequest validation. Still required before A1: executable `current_observation_id`/legacy fingerprint validation, Comparison Evidence and ClaimDecision artifact schemas, and their adversarial fixtures. Publication and State contracts remain design-only until A2/A3.
+Implemented in the current Phase 0 slices: executable Claim Policy and Workflow
+Policy/TaskRequest validation, neutral Prepared/Legacy observation identities,
+cross-table source references, history-only Memory Snapshot validation, Comparison
+Evidence, and deterministic ClaimDecision validation. These modules remain
+side-effect-free contracts; A1 evidence/report agents are still disabled.
+Publication and State implementations remain deferred to A2/A3.
 
 ## Entry Points
 

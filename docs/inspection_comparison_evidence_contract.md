@@ -58,3 +58,43 @@ comparison is not longitudinally comparable.
 This is a Phase 0 schema boundary, not A1 implementation. It does not create
 `comparison_evidence.csv`, its Manifest, ClaimDecision, Staging reports, or formal
 `data/outputs` files.
+
+## Executable History-only Memory Snapshot Contract
+
+`orchestrator/inspection_workflow/memory_snapshot.py` defines the side-effect-free
+`history_memory_snapshot_v1` contract. It validates the existing history-only
+Association manifest and caller-supplied in-memory `memory_before_query.csv` rows.
+The manifest must contain exactly one round per inspection: the first round is
+`baseline_only`, and each later round uses the complete ordered prefix of prior
+inspection IDs. Baseline has no candidate Memory snapshot.
+
+Every non-baseline `memory_before` path must be a canonical project-relative POSIX
+path ending in `memory_before_query.csv`. Its original CSV fieldname sequence must
+exactly match the frozen V1 Memory schema. Snapshot rows require unique `memory_id`,
+`memory_update_mode=batch_rebuild`, canonical source inspection IDs drawn only from
+that round's history prefix, consistent first/last inspection metadata, and a
+bounded non-negative `last_area_px` comparison value. Other legacy Growth/risk
+columns are carried through as audit metadata but are not recomputed or trusted by
+this contract. A current, future, unknown, duplicated, or out-of-order source
+inspection fails closed. `disease_id` remains an audit field and is never used to
+resolve a candidate; consumers index candidates only by the validated `memory_id`.
+All artifacts declared by a round must live in its matching `round_NNN` directory,
+so moving an entire artifact group to another round cannot silently relabel it.
+
+For non-verified snapshots, the internal trend label must remain neutral:
+`insufficient_history` uses `数据不足`, while
+`not_longitudinally_comparable` and `simulated_metadata_comparable` use
+`不可比较`. These labels remain internal snapshot metadata and do not grant a
+Claim capability. The existing V1 Memory CSV does not carry observation-source
+proof, so this contract rejects a row that self-declares `verified_comparable`.
+A1 must upgrade the snapshot schema and bind verified source evidence through the
+validated Manifest before that state can be accepted.
+
+The validator performs the in-memory structural and relational checks defined by
+this Memory Snapshot contract. It does not validate the contents of query,
+Association, or post-query Memory files. It reuses the existing process-lifetime
+Claim Policy snapshot for the comparability enum, but it does not open business
+Manifest/CSV artifacts, authenticate their origin, verify bytes against SHA-256,
+execute Association, or write Run/data/output artifacts. A1 must first verify the
+Run-local manifest and artifact hashes, then pass the verified rows and original
+fieldnames into this contract before building Comparison Evidence.

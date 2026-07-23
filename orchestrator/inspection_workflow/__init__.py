@@ -30,6 +30,12 @@ from .observation_identity import (
     project_legacy_observation_identities,
     project_prepared_observation_identities,
 )
+from .memory_snapshot import (
+    MEMORY_SNAPSHOT_CONTRACT_VERSION,
+    MEMORY_SNAPSHOT_RECORD_FIELDS,
+    MemorySnapshotContractError,
+    validate_history_memory_snapshots,
+)
 from .source_references import (
     SOURCE_REFERENCE_SCHEMA_VERSION,
     SourceReferenceContractError,
@@ -50,6 +56,9 @@ __all__ = [
     "ClaimDecisionContractError",
     "InspectionWorkflowContractError",
     "LEGACY_FINGERPRINT_FIELDS",
+    "MEMORY_SNAPSHOT_CONTRACT_VERSION",
+    "MEMORY_SNAPSHOT_RECORD_FIELDS",
+    "MemorySnapshotContractError",
     "ObservationIdentityError",
     "SOURCE_REFERENCE_SCHEMA_VERSION",
     "SourceReferenceContractError",
@@ -65,6 +74,7 @@ __all__ = [
     "validate_claim_decision_document",
     "validate_engineering_observation_references",
     "validate_frame_observation_references",
+    "validate_history_memory_snapshots",
     "validate_source_reference_contract",
     "validate_task_request",
     "validate_workflow_policy",
