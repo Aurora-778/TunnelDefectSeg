@@ -75,6 +75,11 @@ and are repeated immediately around writes to narrow check/use replacement windo
 They remain a best-effort, no-lock sandbox guard; A3 owns concurrency fencing and
 durable publication.
 
+The post-mirror three-way byte comparison is likewise a point-in-time, best-effort
+check of the authoritative Decision, its validated in-memory snapshot, and the
+Staging mirror. It does not lock any file or guarantee that those bytes remain
+unchanged after the final read; A3 must provide concurrent-writer fencing.
+
 ## Executable Phase 0 Record Contract
 
 `orchestrator/inspection_workflow/comparison_evidence.py` defines the side-effect-free

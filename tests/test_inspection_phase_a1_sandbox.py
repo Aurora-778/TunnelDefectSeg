@@ -449,6 +449,70 @@ def test_clean_first_write_failure_does_not_leave_recovery_marker_and_can_retry(
     assert (project_root / result["comparison_evidence_path"]).is_file()
 
 
+def test_first_replace_failure_with_no_commit_leaves_recovery_marker(
+    tmp_path,
+    monkeypatch,
+):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    original_replace = a1_artifacts.os.replace
+
+    def fail_evidence_replace(source, destination):
+        if Path(destination).name == "comparison_evidence.csv":
+            raise OSError("evidence replace state uncertain")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(a1_artifacts.os, "replace", fail_evidence_replace)
+
+    with pytest.raises(PhaseA1ArtifactError, match="recovery is required") as captured:
+        ComparisonEvidenceAgent().run(context)
+
+    artifacts = project_root / "runs/run_001/artifacts"
+    marker = json.loads(
+        (artifacts / ".a1_recovery_required.json").read_text(encoding="utf-8")
+    )
+    assert marker["committed_paths"] == []
+    assert not (artifacts / "comparison_evidence.csv").exists()
+    assert isinstance(captured.value.__cause__, OSError)
+    assert "replace state uncertain" in str(captured.value.__cause__)
+
+
+def test_temp_cleanup_failure_with_no_commit_leaves_recovery_marker_and_cause(
+    tmp_path,
+    monkeypatch,
+):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    original_replace = a1_artifacts.os.replace
+    original_unlink = Path.unlink
+
+    def fail_evidence_replace(source, destination):
+        if Path(destination).name == "comparison_evidence.csv":
+            raise OSError("evidence replace failed")
+        return original_replace(source, destination)
+
+    def fail_evidence_temp_cleanup(self, *args, **kwargs):
+        if self.name.startswith(".comparison_evidence.csv.") and self.suffix == ".tmp":
+            raise OSError("evidence temp cleanup failed")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(a1_artifacts.os, "replace", fail_evidence_replace)
+    monkeypatch.setattr(Path, "unlink", fail_evidence_temp_cleanup)
+
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="temporary cleanup also failed.*recovery is required",
+    ) as captured:
+        ComparisonEvidenceAgent().run(context)
+
+    artifacts = project_root / "runs/run_001/artifacts"
+    marker = json.loads(
+        (artifacts / ".a1_recovery_required.json").read_text(encoding="utf-8")
+    )
+    assert marker["committed_paths"] == []
+    assert isinstance(captured.value.__cause__, OSError)
+    assert "evidence replace failed" in str(captured.value.__cause__)
+    assert "evidence temp cleanup failed" in str(captured.value)
+
+
 def test_manifest_failure_after_evidence_commit_leaves_recovery_marker(
     tmp_path,
     monkeypatch,
@@ -472,7 +536,12 @@ def test_manifest_failure_after_evidence_commit_leaves_recovery_marker(
     artifacts = project_root / "runs/run_001/artifacts"
     assert (artifacts / "comparison_evidence.csv").is_file()
     assert not (artifacts / "comparison_evidence_manifest.json").exists()
-    assert (artifacts / ".a1_recovery_required.json").is_file()
+    marker = json.loads(
+        (artifacts / ".a1_recovery_required.json").read_text(encoding="utf-8")
+    )
+    assert marker["committed_paths"] == [
+        "runs/run_001/artifacts/comparison_evidence.csv"
+    ]
     assert isinstance(captured.value.__cause__, OSError)
 
     with pytest.raises(PhaseA1ArtifactError, match="recovery marker exists"):
@@ -500,7 +569,12 @@ def test_claim_post_write_validation_failure_leaves_recovery_marker(
 
     artifacts = project_root / "runs/run_001/artifacts"
     assert (artifacts / "claim_decision.json").is_file()
-    assert (artifacts / ".a1_recovery_required.json").is_file()
+    marker = json.loads(
+        (artifacts / ".a1_recovery_required.json").read_text(encoding="utf-8")
+    )
+    assert marker["committed_paths"] == [
+        "runs/run_001/artifacts/claim_decision.json"
+    ]
 
 
 def test_report_mirror_failure_leaves_staging_recovery_marker(
@@ -524,7 +598,12 @@ def test_report_mirror_failure_leaves_staging_recovery_marker(
     staging = project_root / "runs/run_001/staging"
     assert (staging / "claim_audit_report.md").is_file()
     assert not (staging / "claim_decision.json").exists()
-    assert (staging / ".a1_recovery_required.json").is_file()
+    marker = json.loads(
+        (staging / ".a1_recovery_required.json").read_text(encoding="utf-8")
+    )
+    assert marker["committed_paths"] == [
+        "runs/run_001/staging/claim_audit_report.md"
+    ]
 
 
 def test_report_detects_authoritative_decision_change_after_mirror_write(
@@ -557,7 +636,10 @@ def test_report_detects_authoritative_decision_change_after_mirror_write(
 
     staging = project_root / "runs/run_001/staging"
     assert (staging / "claim_decision.json").is_file()
-    assert (staging / ".a1_recovery_required.json").is_file()
+    marker = json.loads(
+        (staging / ".a1_recovery_required.json").read_text(encoding="utf-8")
+    )
+    assert marker["committed_paths"] == []
 
 
 def test_successful_bundle_leaves_no_temporary_artifacts(tmp_path):

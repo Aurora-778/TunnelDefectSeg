@@ -1145,6 +1145,7 @@ def write_gated_claim_audit_report(
             allowed_root=root,
         ):
             committed_paths.append(mirror_relative)
+        # Point-in-time best-effort check only; A3 owns concurrent-writer fencing.
         final_consistency_check_started = True
         mirror_bytes = _read_file_bytes(
             mirror_path,
