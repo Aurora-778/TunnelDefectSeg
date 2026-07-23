@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import pytest
 
+import orchestrator.inspection_workflow.claim_decision as claim_decision_module
 from orchestrator.inspection_workflow import (
     CLAIM_DECISION_RECORD_FIELDS,
     CLAIM_DECISION_SCHEMA_VERSION,
@@ -146,7 +147,7 @@ def matched_evidence(**overrides):
 
 def build_document(records=None):
     return build_claim_decision_document(
-        records or [baseline_evidence()],
+        records if records is not None else [baseline_evidence()],
         run_id="run_012",
         plan_fingerprint=SHA_A,
         source_comparison_evidence_sha256=SHA_E,
@@ -156,7 +157,7 @@ def build_document(records=None):
 def validate_document(document, records=None):
     return validate_claim_decision_document(
         document,
-        records or [baseline_evidence()],
+        records if records is not None else [baseline_evidence()],
         expected_run_id="run_012",
         expected_plan_fingerprint=SHA_A,
         expected_source_comparison_evidence_sha256=SHA_E,
@@ -216,6 +217,25 @@ def test_nonidentity_provenance_failure_is_blocked_without_rewriting_identity_st
     assert decision["reason_codes"][0] == "EVIDENCE_INVALID"
 
 
+def test_association_invalid_is_blocked_and_retains_identity_state():
+    evidence = baseline_evidence(
+        identity_evidence_state="association_invalid",
+        evidence_valid=False,
+        invalid_reason="association_artifact_missing",
+        source_association_artifact_sha256=None,
+        source_association_manifest_sha256=None,
+    )
+
+    document = build_document([evidence])
+    decision = document["record_decisions"][0]
+
+    assert decision["identity_evidence_state"] == "association_invalid"
+    assert decision["evidence_valid"] is False
+    assert decision["invalid_reason"] == "association_artifact_missing"
+    assert set(decision["capabilities"].values()) == {"blocked"}
+    assert decision["reason_codes"][0] == "INVALID_ASSOCIATION_EVIDENCE"
+
+
 def test_record_order_is_stable_and_input_is_not_mutated():
     source = [matched_evidence(), baseline_evidence()]
     original = deepcopy(source)
@@ -245,6 +265,24 @@ def test_record_order_is_stable_and_input_is_not_mutated():
             "record_decisions",
         ),
         (
+            lambda document: document["record_decisions"][0]["template_ids"].update(
+                {"static_descriptive_audit": "tampered_template"}
+            ),
+            "record_decisions",
+        ),
+        (
+            lambda document: document["record_decisions"][0][
+                "capability_reasons"
+            ].update({"static_descriptive_audit": "TAMPERED_REASON"}),
+            "record_decisions",
+        ),
+        (
+            lambda document: document["record_decisions"][0]["reason_codes"].append(
+                "TAMPERED_REASON"
+            ),
+            "record_decisions",
+        ),
+        (
             lambda document: document["record_decisions"][0].update(
                 {"source_current_record_fingerprint": SHA_E}
             ),
@@ -253,6 +291,26 @@ def test_record_order_is_stable_and_input_is_not_mutated():
         (
             lambda document: document["summary"].update({"static_audit_allowed": 0}),
             "summary",
+        ),
+        (
+            lambda document: document.update({"claim_policy_sha256": SHA_D}),
+            "claim_policy_sha256",
+        ),
+        (
+            lambda document: document.update({"claim_evaluator_sha256": SHA_D}),
+            "claim_evaluator_sha256",
+        ),
+        (
+            lambda document: document.update(
+                {"claim_evaluator_contract_version": "tampered_evaluator"}
+            ),
+            "claim_evaluator_contract_version",
+        ),
+        (
+            lambda document: document.update(
+                {"source_association_manifest_sha256": SHA_D}
+            ),
+            "source_association_manifest_sha256",
         ),
     ],
 )
@@ -315,6 +373,29 @@ def test_builder_exposes_evidence_failure_as_claim_decision_contract_error():
         build_document([malformed])
 
     assert captured.value.__cause__ is not None
+
+
+def test_empty_evidence_fails_closed_instead_of_substituting_baseline():
+    with pytest.raises(ClaimDecisionContractError, match="must not be empty"):
+        build_document([])
+
+
+def test_builder_rejects_evaluator_schema_drift(monkeypatch):
+    real_evaluator = claim_decision_module.evaluate_claim_evidence
+
+    def drifted_evaluator(evidence):
+        decision = real_evaluator(evidence)
+        decision["schema_version"] = "claim_decision_v999"
+        return decision
+
+    monkeypatch.setattr(
+        claim_decision_module,
+        "evaluate_claim_evidence",
+        drifted_evaluator,
+    )
+
+    with pytest.raises(ClaimDecisionContractError, match="schema_version"):
+        build_document()
 
 
 @pytest.mark.parametrize("run_id", ["../run_012", "run-012", "RUN_012", "run_12"])

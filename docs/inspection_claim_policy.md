@@ -20,7 +20,8 @@ Policy and evaluator provenance are process-lifetime snapshots. Their hashes ide
 `comparison_evidence_v1` validator, sorts records by their neutral observation key,
 and then delegates every capability decision to the existing Claim Policy evaluator.
 It does not duplicate Association scoring, comparability composition, capability
-rules, reason codes, templates, or qualifiers.
+rules, reason codes, templates, qualifiers, or the ClaimDecision schema-version
+constant. Every evaluator result must match that shared schema before projection.
 
 The document records the Run and plan fingerprints, Policy/Evaluator provenance,
 the expected Comparison Evidence artifact SHA-256, the single Association artifact

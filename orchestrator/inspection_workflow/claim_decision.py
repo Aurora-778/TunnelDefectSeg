@@ -7,7 +7,10 @@ from copy import deepcopy
 import re
 from typing import Any
 
-from orchestrator.claim_policy import evaluate_claim_evidence
+from orchestrator.claim_policy import (
+    CLAIM_DECISION_SCHEMA_VERSION,
+    evaluate_claim_evidence,
+)
 
 from .comparison_evidence import (
     ComparisonEvidenceContractError,
@@ -15,7 +18,6 @@ from .comparison_evidence import (
 )
 
 
-CLAIM_DECISION_SCHEMA_VERSION = "claim_decision_v4"
 CLAIM_GATE_VERSION = "1.0.0"
 
 CLAIM_DECISION_DOCUMENT_FIELDS = (
@@ -198,6 +200,15 @@ def build_claim_decision_document(
         )
     )
     evaluated = [evaluate_claim_evidence(record) for record in evidence]
+    for row_number, decision in enumerate(evaluated, start=1):
+        if (
+            not isinstance(decision, Mapping)
+            or decision.get("schema_version") != CLAIM_DECISION_SCHEMA_VERSION
+        ):
+            raise ClaimDecisionContractError(
+                "claim evaluator decision schema_version mismatch "
+                f"at evidence row {row_number}"
+            )
     record_decisions = [
         _decision_record(record, decision)
         for record, decision in zip(evidence, evaluated, strict=True)

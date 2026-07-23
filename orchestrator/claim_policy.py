@@ -19,6 +19,7 @@ from typing import Any, NoReturn
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "inspection_claim_policy.json"
 SUPPORTED_POLICY_SCHEMA_VERSION = "claim_policy_v5"
 SUPPORTED_EVALUATOR_CONTRACT_VERSION = "phase_a_claim_evaluator_v1"
+CLAIM_DECISION_SCHEMA_VERSION = "claim_decision_v4"
 
 POLICY_ROOT_FIELDS = {
     "schema_version",
@@ -322,7 +323,7 @@ def _evaluate_validated_claim_evidence(
         ]
     )
     return {
-        "schema_version": "claim_decision_v4",
+        "schema_version": CLAIM_DECISION_SCHEMA_VERSION,
         "profile": policy["profile"],
         "decision_id": f"CD-{normalized_id}" if normalized_id else "",
         "evidence_id": normalized_id,
@@ -607,7 +608,7 @@ def _blocked_decision(
     }
     reasons = _deduplicate([reason, *policy["fixed_blocked_capabilities"].values()])
     return {
-        "schema_version": "claim_decision_v4",
+        "schema_version": CLAIM_DECISION_SCHEMA_VERSION,
         "profile": policy["profile"],
         "decision_id": f"CD-{evidence_id}" if evidence_id else "",
         "evidence_id": evidence_id,
