@@ -136,8 +136,16 @@ def test_valid_history_memory_snapshots_build_memory_id_index():
     assert result["inspection_order"] == ["I001", "I002", "I003"]
     assert result["rounds"][0]["memory_before_path"] is None
     assert result["rounds"][0]["memory_by_id"] == {}
-    assert result["rounds"][1]["memory_by_id"]["MEM-001"]["last_area_px"] == "100"
-    assert result["rounds"][2]["memory_by_id"]["MEM-001"]["last_area_px"] == "120"
+    assert result["rounds"][1]["memory_by_id"]["MEM-001"] == {
+        "memory_id": "MEM-001",
+        "memory_version": "v1",
+        "last_seen_inspection": "I001",
+        "source_inspection_ids": ["I001"],
+        "source_record_count": 1,
+        "last_area_px": 100,
+        "comparability_status": "insufficient_history",
+    }
+    assert result["rounds"][2]["memory_by_id"]["MEM-001"]["last_area_px"] == 120
 
 
 def test_single_inspection_baseline_has_no_candidate_memory_snapshot():
@@ -174,6 +182,39 @@ def test_validator_returns_deep_copy_without_mutating_inputs():
 
     assert manifest == original_manifest
     assert records == original_records
+
+
+def test_untrusted_directional_and_report_fields_do_not_enter_candidate_projection():
+    records, fieldnames = valid_inputs()
+    source_row = records[MEMORY_3_PATH][0]
+    source_row.update(
+        {
+            "area_growth_rate": "not-a-number",
+            "risk_level_change": "2",
+            "memory_description": "病害明显增长，风险上升",
+        }
+    )
+
+    result = validate(records=records, fieldnames=fieldnames)
+    candidate = result["rounds"][2]["memory_by_id"]["MEM-001"]
+
+    assert set(candidate) == {
+        "memory_id",
+        "memory_version",
+        "last_seen_inspection",
+        "source_inspection_ids",
+        "source_record_count",
+        "last_area_px",
+        "comparability_status",
+    }
+    assert {
+        "disease_id",
+        "area_growth_rate",
+        "risk_level_change",
+        "growth_trend",
+        "memory_description",
+    }.isdisjoint(candidate)
+    assert source_row["memory_description"] == "病害明显增长，风险上升"
 
 
 @pytest.mark.parametrize(
@@ -349,6 +390,31 @@ def test_manifest_round_contract_fails_closed(mutate, message):
             {"source_record_count": "1"},
             "must cover every source inspection",
         ),
+        (
+            MEMORY_2_PATH,
+            {"total_seen_frames": "-1"},
+            "canonical non-negative integer",
+        ),
+        (
+            MEMORY_2_PATH,
+            {"total_seen_frames": "not-a-number"},
+            "canonical non-negative integer",
+        ),
+        (
+            MEMORY_2_PATH,
+            {"total_seen_frames": "0"},
+            "must be greater than zero",
+        ),
+        (
+            MEMORY_2_PATH,
+            {"total_seen_frames": str(1 << 63)},
+            "must not exceed",
+        ),
+        (
+            MEMORY_3_PATH,
+            {"total_seen_frames": "1"},
+            "at least source_record_count",
+        ),
     ],
 )
 def test_memory_snapshot_rows_reject_temporal_or_numeric_contradictions(
@@ -363,6 +429,15 @@ def test_memory_snapshot_rows_reject_temporal_or_numeric_contradictions(
         validate(records=records, fieldnames=fieldnames)
 
 
+def test_total_seen_frames_accepts_maximum_bounded_value():
+    records, fieldnames = valid_inputs()
+    records[MEMORY_2_PATH][0]["total_seen_frames"] = str((1 << 63) - 1)
+
+    result = validate(records=records, fieldnames=fieldnames)
+
+    assert result["rounds"][1]["memory_by_id"]["MEM-001"]["source_record_count"] == 1
+
+
 def test_duplicate_memory_id_is_rejected_but_disease_id_is_not_an_identity_key():
     records, fieldnames = valid_inputs()
     records[MEMORY_2_PATH].append(
@@ -370,6 +445,7 @@ def test_duplicate_memory_id_is_rejected_but_disease_id_is_not_an_identity_key()
     )
     result = validate(records=records, fieldnames=fieldnames)
     assert set(result["rounds"][1]["memory_by_id"]) == {"MEM-001", "MEM-002"}
+    assert "disease_id" not in result["rounds"][1]["memory_by_id"]["MEM-001"]
 
     records[MEMORY_2_PATH].append(memory_row(memory_id="MEM-002"))
     with pytest.raises(MemorySnapshotContractError, match="duplicate memory_id"):

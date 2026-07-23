@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from copy import deepcopy
 from pathlib import PurePosixPath
 import re
 from typing import Any
@@ -292,6 +291,16 @@ def _validate_memory_rows(
             raise MemorySnapshotContractError(
                 f"{label} source_record_count must cover every source inspection"
             )
+        total_seen_frames = _require_nonnegative_integer(
+            row["total_seen_frames"],
+            field="total_seen_frames",
+            label=label,
+            allow_zero=False,
+        )
+        if total_seen_frames < source_record_count:
+            raise MemorySnapshotContractError(
+                f"{label} total_seen_frames must be at least source_record_count"
+            )
 
         first_seen = _require_identifier(
             row["first_seen_inspection"],
@@ -308,7 +317,7 @@ def _validate_memory_rows(
                 f"{label} first/last seen inspections must match source_inspection_ids"
             )
 
-        _require_nonnegative_integer(
+        last_area_px = _require_nonnegative_integer(
             row["last_area_px"],
             field="last_area_px",
             label=label,
@@ -351,7 +360,15 @@ def _validate_memory_rows(
             raise MemorySnapshotContractError(
                 f"{label} non-verified comparison requires growth_trend=不可比较"
             )
-        memory_by_id[memory_id] = deepcopy(dict(row))
+        memory_by_id[memory_id] = {
+            "memory_id": memory_id,
+            "memory_version": row["memory_version"],
+            "last_seen_inspection": last_seen,
+            "source_inspection_ids": list(source_ids),
+            "source_record_count": source_record_count,
+            "last_area_px": last_area_px,
+            "comparability_status": comparability_status,
+        }
 
     return memory_by_id
 

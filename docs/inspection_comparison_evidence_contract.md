@@ -73,11 +73,20 @@ path ending in `memory_before_query.csv`. Its original CSV fieldname sequence mu
 exactly match the frozen V1 Memory schema. Snapshot rows require unique `memory_id`,
 `memory_update_mode=batch_rebuild`, canonical source inspection IDs drawn only from
 that round's history prefix, consistent first/last inspection metadata, and a
-bounded non-negative `last_area_px` comparison value. Other legacy Growth/risk
-columns are carried through as audit metadata but are not recomputed or trusted by
-this contract. A current, future, unknown, duplicated, or out-of-order source
-inspection fails closed. `disease_id` remains an audit field and is never used to
-resolve a candidate; consumers index candidates only by the validated `memory_id`.
+bounded non-negative `last_area_px` comparison value. `total_seen_frames` must be
+a bounded positive canonical integer and cannot be smaller than
+`source_record_count`, because each source Engineering aggregate contains at least
+one frame. A current, future, unknown, duplicated, or out-of-order source inspection
+fails closed.
+
+The trusted `memory_by_id` result is a normalized Comparison Evidence projection,
+not a copy of the source CSV row. Each candidate contains only `memory_id`,
+`memory_version`, `last_seen_inspection`, `source_inspection_ids` as a list,
+`source_record_count` as an integer, `last_area_px` as an integer, and
+`comparability_status`. Legacy `disease_id`, Growth/risk fields, report text, paths,
+and other audit columns are deliberately discarded from the trusted projection.
+The complete source row remains the caller's audit input; this validator does not
+mutate it. Consumers resolve candidates only by the validated `memory_id`.
 All artifacts declared by a round must live in its matching `round_NNN` directory,
 so moving an entire artifact group to another round cannot silently relabel it.
 
