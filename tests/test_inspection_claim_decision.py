@@ -398,6 +398,73 @@ def test_builder_rejects_evaluator_schema_drift(monkeypatch):
         build_document()
 
 
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda decision: decision.pop("decision_id"), "missing fields.*decision_id"),
+        (
+            lambda decision: decision["capabilities"].pop("prediction_claim"),
+            "capabilities.*keys",
+        ),
+        (
+            lambda decision: decision.update({"template_ids": []}),
+            "template_ids.*object",
+        ),
+        (
+            lambda decision: decision.update({"reason_codes": ["VALID", 1]}),
+            "reason_codes.*string list",
+        ),
+        (
+            lambda decision: decision.update(
+                {"required_language_qualifiers": "not-a-list"}
+            ),
+            "required_language_qualifiers.*string list",
+        ),
+        (
+            lambda decision: decision["capabilities"].update(
+                {"prediction_claim": []}
+            ),
+            "capabilities.*invalid status",
+        ),
+        (
+            lambda decision: decision.update({"evidence_id": "EVD-other"}),
+            "evidence_id",
+        ),
+        (
+            lambda decision: decision.update({"decision_id": "CD-EVD-other"}),
+            "decision_id",
+        ),
+    ],
+)
+def test_builder_rejects_malformed_evaluator_decision(monkeypatch, mutate, message):
+    real_evaluator = claim_decision_module.evaluate_claim_evidence
+
+    def malformed_evaluator(evidence):
+        decision = real_evaluator(evidence)
+        mutate(decision)
+        return decision
+
+    monkeypatch.setattr(
+        claim_decision_module,
+        "evaluate_claim_evidence",
+        malformed_evaluator,
+    )
+
+    with pytest.raises(ClaimDecisionContractError, match=message):
+        build_document()
+
+
+def test_builder_rejects_non_mapping_evaluator_decision(monkeypatch):
+    monkeypatch.setattr(
+        claim_decision_module,
+        "evaluate_claim_evidence",
+        lambda evidence: [],
+    )
+
+    with pytest.raises(ClaimDecisionContractError, match="must be an object"):
+        build_document()
+
+
 @pytest.mark.parametrize("run_id", ["../run_012", "run-012", "RUN_012", "run_12"])
 def test_builder_rejects_noncanonical_run_id(run_id):
     with pytest.raises(ClaimDecisionContractError, match="run_id"):

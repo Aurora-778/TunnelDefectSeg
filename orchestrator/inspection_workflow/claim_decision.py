@@ -10,6 +10,7 @@ from typing import Any
 from orchestrator.claim_policy import (
     CLAIM_DECISION_SCHEMA_VERSION,
     evaluate_claim_evidence,
+    load_claim_policy,
 )
 
 from .comparison_evidence import (
@@ -71,6 +72,21 @@ CLAIM_DECISION_SUMMARY_FIELDS = (
     "prediction_allowed",
 )
 
+_EVALUATOR_DECISION_FIELDS = (
+    "schema_version",
+    "profile",
+    "decision_id",
+    "evidence_id",
+    "claim_policy_sha256",
+    "claim_evaluator_contract_version",
+    "claim_evaluator_sha256",
+    "capabilities",
+    "capability_reasons",
+    "template_ids",
+    "required_language_qualifiers",
+    "reason_codes",
+)
+
 _RUN_ID_RE = re.compile(r"run_[0-9]{3,}\Z")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -111,6 +127,93 @@ def _single_source_hash(records: list[dict[str, Any]], field: str) -> str | None
             f"claim decision records must reference a single {label}"
         )
     return next(iter(values), None)
+
+
+def _require_string_list(value: Any, *, field: str, row_number: int) -> None:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item for item in value
+    ):
+        raise ClaimDecisionContractError(
+            f"claim evaluator {field} must be a string list at evidence row {row_number}"
+        )
+
+
+def _validate_evaluator_decision(
+    decision: Any,
+    evidence: Mapping[str, Any],
+    *,
+    capability_names: tuple[str, ...],
+    expected_profile: str,
+    row_number: int,
+) -> None:
+    label = f"claim evaluator decision at evidence row {row_number}"
+    if not isinstance(decision, Mapping):
+        raise ClaimDecisionContractError(f"{label} must be an object")
+    _require_exact_fields(decision, _EVALUATOR_DECISION_FIELDS, label=label)
+    if decision["schema_version"] != CLAIM_DECISION_SCHEMA_VERSION:
+        raise ClaimDecisionContractError(f"{label} schema_version mismatch")
+    if decision["profile"] != expected_profile:
+        raise ClaimDecisionContractError(f"{label} profile mismatch")
+
+    evidence_id = evidence["evidence_id"]
+    if decision["evidence_id"] != evidence_id:
+        raise ClaimDecisionContractError(f"{label} evidence_id mismatch")
+    if decision["decision_id"] != f"CD-{evidence_id}":
+        raise ClaimDecisionContractError(f"{label} decision_id mismatch")
+
+    _require_sha256(decision["claim_policy_sha256"], field=f"{label} claim_policy_sha256")
+    _require_sha256(
+        decision["claim_evaluator_sha256"],
+        field=f"{label} claim_evaluator_sha256",
+    )
+    if (
+        not isinstance(decision["claim_evaluator_contract_version"], str)
+        or not decision["claim_evaluator_contract_version"]
+    ):
+        raise ClaimDecisionContractError(
+            f"{label} claim_evaluator_contract_version must be a non-empty string"
+        )
+
+    for field in ("capabilities", "capability_reasons", "template_ids"):
+        value = decision[field]
+        if not isinstance(value, Mapping):
+            raise ClaimDecisionContractError(f"{label} {field} must be an object")
+        if set(value) != set(capability_names):
+            raise ClaimDecisionContractError(
+                f"{label} {field} keys must match the Claim Policy capabilities"
+            )
+
+    if any(
+        not isinstance(status, str)
+        or status not in {"allowed", "allowed_with_limits", "blocked"}
+        for status in decision["capabilities"].values()
+    ):
+        raise ClaimDecisionContractError(f"{label} capabilities contain an invalid status")
+    if any(
+        not isinstance(reason, str) or not reason
+        for reason in decision["capability_reasons"].values()
+    ):
+        raise ClaimDecisionContractError(
+            f"{label} capability_reasons must contain non-empty strings"
+        )
+    if any(
+        template_id is not None
+        and (not isinstance(template_id, str) or not template_id)
+        for template_id in decision["template_ids"].values()
+    ):
+        raise ClaimDecisionContractError(
+            f"{label} template_ids must contain strings or null"
+        )
+    _require_string_list(
+        decision["required_language_qualifiers"],
+        field="required_language_qualifiers",
+        row_number=row_number,
+    )
+    _require_string_list(
+        decision["reason_codes"],
+        field="reason_codes",
+        row_number=row_number,
+    )
 
 
 def _decision_record(evidence: Mapping[str, Any], decision: Mapping[str, Any]) -> dict[str, Any]:
@@ -199,16 +302,20 @@ def build_claim_decision_document(
             record["evidence_id"],
         )
     )
+    policy = load_claim_policy()
+    capability_names = tuple(policy["capability_order"])
     evaluated = [evaluate_claim_evidence(record) for record in evidence]
-    for row_number, decision in enumerate(evaluated, start=1):
-        if (
-            not isinstance(decision, Mapping)
-            or decision.get("schema_version") != CLAIM_DECISION_SCHEMA_VERSION
-        ):
-            raise ClaimDecisionContractError(
-                "claim evaluator decision schema_version mismatch "
-                f"at evidence row {row_number}"
-            )
+    for row_number, (record, decision) in enumerate(
+        zip(evidence, evaluated, strict=True),
+        start=1,
+    ):
+        _validate_evaluator_decision(
+            decision,
+            record,
+            capability_names=capability_names,
+            expected_profile=policy["profile"],
+            row_number=row_number,
+        )
     record_decisions = [
         _decision_record(record, decision)
         for record, decision in zip(evidence, evaluated, strict=True)
