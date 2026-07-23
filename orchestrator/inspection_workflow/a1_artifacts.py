@@ -25,9 +25,9 @@ from .comparison_evidence import (
 )
 
 
-COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION = "comparison_evidence_manifest_v2"
+COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION = "comparison_evidence_manifest_v3"
 PHASE_A1_EXECUTION_PROFILE = "phase_a1_sandbox"
-PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION = "phase_a1_sandbox_marker_v1"
+PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION = "phase_a1_sandbox_marker_v2"
 A1_RECOVERY_MARKER_SCHEMA_VERSION = "phase_a1_recovery_marker_v1"
 SOURCE_VALIDATION_SCOPE = "byte_binding_only"
 
@@ -39,7 +39,11 @@ _RECOVERY_MARKER_NAME = ".a1_recovery_required.json"
 _SOURCE_ARTIFACT_ROLES = {
     "association_artifact",
     "association_manifest",
+    "association_round_artifact",
     "engineering_artifact",
+    "frame_artifact",
+    "history_memory_context",
+    "history_round_context",
     "memory_snapshot",
     "registration_evidence",
     "scale_calibration",
@@ -79,6 +83,7 @@ _INTEGER_FIELDS = {
 }
 _MANIFEST_FIELDS = {
     "schema_version",
+    "source_bundle_kind",
     "run_id",
     "plan_fingerprint",
     "execution_profile",
@@ -90,8 +95,15 @@ _MANIFEST_FIELDS = {
     "source_validation_scope",
     "source_artifacts",
 }
+_SOURCE_BUNDLE_KINDS = {"normalized_records", "run_local_projection"}
 _SOURCE_REFERENCE_FIELDS = {"role", "path", "size_bytes", "sha256"}
-_SANDBOX_MARKER_FIELDS = {"schema_version", "run_id", "execution_profile"}
+_SANDBOX_MARKER_FIELDS = {
+    "schema_version",
+    "run_id",
+    "execution_profile",
+    "evidence_source_mode",
+}
+_MAX_JSON_BYTES = 1024 * 1024
 
 
 class PhaseA1ArtifactError(ValueError):
@@ -140,6 +152,20 @@ def validate_phase_a1_sandbox(
 
     _validate_run_identity(run_id=run_id, execution_profile=execution_profile)
     root = _controlled_temporary_root(project_root)
+    _load_phase_a1_sandbox_marker(
+        root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+    )
+    return root
+
+
+def _load_phase_a1_sandbox_marker(
+    root: Path,
+    *,
+    run_id: str,
+    execution_profile: str,
+) -> dict[str, Any]:
     marker_path = root / _SANDBOX_MARKER_NAME
     if (
         not marker_path.is_file()
@@ -155,9 +181,10 @@ def validate_phase_a1_sandbox(
         marker["schema_version"] != PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION
         or marker["run_id"] != run_id
         or marker["execution_profile"] != execution_profile
+        or marker["evidence_source_mode"] not in _SOURCE_BUNDLE_KINDS
     ):
         raise PhaseA1ArtifactError("Phase A1 sandbox marker identity does not match")
-    return root
+    return marker
 
 
 def _require_sha256(value: Any, *, field: str) -> str:
@@ -337,15 +364,19 @@ def initialize_phase_a1_sandbox(
     *,
     run_id: str,
     execution_profile: str = PHASE_A1_EXECUTION_PROFILE,
+    evidence_source_mode: str = "normalized_records",
 ) -> Path:
     """Initialize the explicit marker required by a temporary A1 sandbox."""
 
     _validate_run_identity(run_id=run_id, execution_profile=execution_profile)
+    if evidence_source_mode not in _SOURCE_BUNDLE_KINDS:
+        raise PhaseA1ArtifactError("evidence_source_mode is invalid")
     root = _controlled_temporary_root(project_root)
     marker = {
         "schema_version": PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION,
         "run_id": run_id,
         "execution_profile": execution_profile,
+        "evidence_source_mode": evidence_source_mode,
     }
     marker_path = root / _SANDBOX_MARKER_NAME
     _atomic_write_idempotent(
@@ -540,6 +571,107 @@ def _require_relative_run_work_path(project_root: Path, run_id: str, value: Any)
     return pure_path.as_posix(), resolved
 
 
+def snapshot_phase_a1_work_artifact(
+    project_root: Path,
+    *,
+    run_id: str,
+    execution_profile: str,
+    relative_path: str,
+) -> dict[str, Any]:
+    """Read one plain Run-local work artifact as a point-in-time byte snapshot."""
+
+    root = validate_phase_a1_sandbox(
+        project_root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+    )
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or "\\" in relative_path
+        or ":" in relative_path
+    ):
+        raise PhaseA1ArtifactError("A1 work artifact path must be a Run-local POSIX path")
+    pure_path = PurePosixPath(relative_path)
+    expected_prefix = PurePosixPath("runs") / run_id / "work"
+    try:
+        pure_path.relative_to(expected_prefix)
+    except ValueError as exc:
+        raise PhaseA1ArtifactError(
+            f"A1 work artifact must be inside runs/{run_id}/work"
+        ) from exc
+    if (
+        pure_path.is_absolute()
+        or relative_path != pure_path.as_posix()
+        or any(part in {"", ".", ".."} for part in pure_path.parts)
+    ):
+        raise PhaseA1ArtifactError("A1 work artifact path must be a Run-local POSIX path")
+    path_text = relative_path
+    path = _resolve_fixed_path(root, path_text)
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise PhaseA1ArtifactError(f"unable to read source artifact: {path_text}") from exc
+    return {
+        "path": path_text,
+        "data": data,
+        "size_bytes": len(data),
+        "sha256": _sha256_bytes(data),
+    }
+
+
+def write_phase_a1_work_artifact(
+    project_root: Path,
+    *,
+    run_id: str,
+    execution_profile: str,
+    relative_path: str,
+    data: bytes,
+) -> bool:
+    """Idempotently materialize a preparatory file inside one A1 Run work tree."""
+
+    root = validate_phase_a1_sandbox(
+        project_root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+    )
+    marker = _load_phase_a1_sandbox_marker(
+        root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+    )
+    if marker["evidence_source_mode"] != "run_local_projection":
+        raise PhaseA1ArtifactError(
+            "A1 projection work artifacts require run_local_projection sandbox mode"
+        )
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or "\\" in relative_path
+        or ":" in relative_path
+    ):
+        raise PhaseA1ArtifactError("A1 work artifact path must be a Run-local POSIX path")
+    pure_path = PurePosixPath(relative_path)
+    expected_prefix = PurePosixPath("runs") / run_id / "work"
+    try:
+        pure_path.relative_to(expected_prefix)
+    except ValueError as exc:
+        raise PhaseA1ArtifactError(
+            f"A1 work artifact must be inside runs/{run_id}/work"
+        ) from exc
+    if (
+        pure_path.is_absolute()
+        or relative_path != pure_path.as_posix()
+        or any(part in {"", ".", ".."} for part in pure_path.parts)
+    ):
+        raise PhaseA1ArtifactError("A1 work artifact path must be a Run-local POSIX path")
+    path_text = relative_path
+    path = _resolve_fixed_path(root, path_text)
+    if not isinstance(data, bytes):
+        raise PhaseA1ArtifactError(f"A1 work artifact data must be bytes: {path_text}")
+    return _atomic_write_idempotent(path, data, allowed_root=root)
+
+
 def _snapshot_source_artifacts(
     project_root: Path,
     run_id: str,
@@ -553,9 +685,14 @@ def _snapshot_source_artifacts(
     seen_paths: set[str] = set()
     role_counts: dict[str, int] = {}
     for index, reference in enumerate(source_artifacts, start=1):
-        if not isinstance(reference, Mapping) or set(reference) != {"role", "path"}:
+        allowed_fields = {"role", "path", "expected_sha256"}
+        if (
+            not isinstance(reference, Mapping)
+            or not {"role", "path"}.issubset(reference)
+            or not set(reference).issubset(allowed_fields)
+        ):
             raise PhaseA1ArtifactError(
-                f"source_artifacts item {index} must contain exactly role and path"
+                f"source_artifacts item {index} must contain role, path, and optional expected_sha256"
             )
         role = reference["role"]
         if not isinstance(role, str) or role not in _SOURCE_ARTIFACT_ROLES:
@@ -573,12 +710,23 @@ def _snapshot_source_artifacts(
             data = path.read_bytes()
         except OSError as exc:
             raise PhaseA1ArtifactError(f"unable to read source artifact: {path_text}") from exc
+        actual_sha256 = _sha256_bytes(data)
+        expected_sha256 = reference.get("expected_sha256")
+        if expected_sha256 is not None:
+            _require_sha256(
+                expected_sha256,
+                field=f"source_artifacts item {index} expected_sha256",
+            )
+            if expected_sha256 != actual_sha256:
+                raise PhaseA1ArtifactError(
+                    f"source artifact changed after projection: {path_text}"
+                )
         snapshots.append(
             {
                 "role": role,
                 "path": path_text,
                 "size_bytes": len(data),
-                "sha256": _sha256_bytes(data),
+                "sha256": actual_sha256,
             }
         )
     for role in _SINGLETON_SOURCE_ROLES:
@@ -624,6 +772,66 @@ def _bind_evidence_provenance(
             raise PhaseA1ArtifactError(
                 f"validated {role} source set must exactly match Evidence references"
             )
+
+
+def _validate_projection_source_set(
+    run_id: str,
+    declared_inputs: Iterable[Mapping[str, Any]],
+    association_manifest_bytes: bytes,
+) -> None:
+    actual = {(item["role"], item["path"]) for item in declared_inputs}
+    manifest_relative = f"runs/{run_id}/work/association_manifest.json"
+    expected = {
+        ("frame_artifact", f"runs/{run_id}/work/frame_records.csv"),
+        ("engineering_artifact", f"runs/{run_id}/work/engineering_records.csv"),
+        ("association_artifact", f"runs/{run_id}/work/association_records.csv"),
+        ("association_manifest", manifest_relative),
+    }
+    association_manifest = _parse_json_object_bytes(
+        association_manifest_bytes,
+        label="Run-local Association manifest",
+    )
+    rounds = association_manifest.get("rounds")
+    if not isinstance(rounds, list) or not rounds:
+        raise PhaseA1ArtifactError(
+            "Run-local Association manifest rounds are invalid"
+        )
+    for round_number, round_entry in enumerate(rounds, start=1):
+        if not isinstance(round_entry, Mapping):
+            raise PhaseA1ArtifactError(
+                f"Run-local Association manifest round {round_number} is invalid"
+            )
+        query_frames = round_entry.get("query_frames")
+        if not isinstance(query_frames, str):
+            raise PhaseA1ArtifactError(
+                f"Run-local Association manifest round {round_number} query_frames is invalid"
+            )
+        expected.add(("history_round_context", query_frames))
+        if round_entry.get("mode") != "history_only":
+            continue
+        for field, role in (
+            ("association_records", "association_round_artifact"),
+            ("memory_before", "history_memory_context"),
+            ("memory_after", "history_round_context"),
+        ):
+            path_text = round_entry.get(field)
+            if not isinstance(path_text, str):
+                raise PhaseA1ArtifactError(
+                    f"Run-local Association manifest round {round_number} {field} is invalid"
+                )
+            expected.add((role, path_text))
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        details = []
+        if missing:
+            details.append(f"missing={missing}")
+        if extra:
+            details.append(f"unexpected={extra}")
+        raise PhaseA1ArtifactError(
+            "run_local_projection source artifact set is incomplete"
+            + (f": {'; '.join(details)}" if details else "")
+        )
 
 
 def _enforce_byte_binding_only_evidence(records: Iterable[Mapping[str, Any]]) -> None:
@@ -704,7 +912,7 @@ def _raise_recovery_required(
     raise PhaseA1ArtifactError(message) from cause
 
 
-def write_comparison_evidence_bundle(
+def _write_comparison_evidence_bundle(
     project_root: Path,
     *,
     run_id: str,
@@ -712,6 +920,7 @@ def write_comparison_evidence_bundle(
     plan_fingerprint: str,
     records: Iterable[Mapping[str, Any]],
     source_artifacts: Any,
+    source_bundle_kind: str,
 ) -> dict[str, Any]:
     """Write validated Evidence CSV and a manifest-last Run-local bundle."""
 
@@ -720,7 +929,18 @@ def write_comparison_evidence_bundle(
         run_id=run_id,
         execution_profile=execution_profile,
     )
+    marker = _load_phase_a1_sandbox_marker(
+        root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+    )
     _require_sha256(plan_fingerprint, field="plan_fingerprint")
+    if source_bundle_kind not in _SOURCE_BUNDLE_KINDS:
+        raise PhaseA1ArtifactError("source_bundle_kind is invalid")
+    if marker["evidence_source_mode"] != source_bundle_kind:
+        raise PhaseA1ArtifactError(
+            "source bundle kind does not match the immutable sandbox evidence_source_mode"
+        )
     _reject_recovery_marker(root, run_id, "artifacts")
     evidence_bytes, validated = comparison_evidence_csv_bytes(records)
     sources = _snapshot_source_artifacts(root, run_id, source_artifacts)
@@ -736,6 +956,7 @@ def write_comparison_evidence_bundle(
     manifest_path = _resolve_fixed_path(root, manifest_relative)
     manifest = {
         "schema_version": COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION,
+        "source_bundle_kind": source_bundle_kind,
         "run_id": run_id,
         "plan_fingerprint": plan_fingerprint,
         "execution_profile": execution_profile,
@@ -790,6 +1011,63 @@ def write_comparison_evidence_bundle(
     }
 
 
+def write_comparison_evidence_bundle(
+    project_root: Path,
+    *,
+    run_id: str,
+    execution_profile: str,
+    plan_fingerprint: str,
+    records: Iterable[Mapping[str, Any]],
+    source_artifacts: Any,
+) -> dict[str, Any]:
+    """Write caller-normalized Evidence in a normalized-records sandbox."""
+
+    return _write_comparison_evidence_bundle(
+        project_root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+        plan_fingerprint=plan_fingerprint,
+        records=records,
+        source_artifacts=source_artifacts,
+        source_bundle_kind="normalized_records",
+    )
+
+
+def write_projected_comparison_evidence_bundle(
+    project_root: Path,
+    *,
+    run_id: str,
+    execution_profile: str,
+    plan_fingerprint: str,
+) -> dict[str, Any]:
+    """Project fixed Run-local sources and write their Evidence bundle."""
+
+    from .comparison_evidence_projection import (
+        ComparisonEvidenceProjectionError,
+        project_run_local_comparison_evidence,
+    )
+
+    try:
+        projected = project_run_local_comparison_evidence(
+            project_root,
+            run_id=run_id,
+            execution_profile=execution_profile,
+        )
+    except ComparisonEvidenceProjectionError as exc:
+        raise PhaseA1ArtifactError(
+            f"Comparison Evidence source projection failed: {exc}"
+        ) from exc
+    return _write_comparison_evidence_bundle(
+        project_root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+        plan_fingerprint=plan_fingerprint,
+        records=projected["records"],
+        source_artifacts=projected["source_artifacts"],
+        source_bundle_kind="run_local_projection",
+    )
+
+
 def _parse_json_object_bytes(data: bytes, *, label: str) -> dict[str, Any]:
     def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -799,12 +1077,19 @@ def _parse_json_object_bytes(data: bytes, *, label: str) -> dict[str, Any]:
             result[key] = value
         return result
 
+    if len(data) > _MAX_JSON_BYTES:
+        raise PhaseA1ArtifactError(f"{label} exceeds the JSON size limit")
     try:
         payload = json.loads(
             data.decode("utf-8"),
             object_pairs_hook=reject_duplicate_keys,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON constant: {value}")
+            ),
         )
-    except (UnicodeError, json.JSONDecodeError) as exc:
+    except PhaseA1ArtifactError:
+        raise
+    except (UnicodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
         raise PhaseA1ArtifactError(f"{label} must be valid UTF-8 JSON") from exc
     if not isinstance(payload, dict):
         raise PhaseA1ArtifactError(f"{label} root must be an object")
@@ -839,6 +1124,11 @@ def validate_comparison_evidence_bundle(
         run_id=run_id,
         execution_profile=execution_profile,
     )
+    marker = _load_phase_a1_sandbox_marker(
+        root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+    )
     _require_sha256(plan_fingerprint, field="plan_fingerprint")
     _reject_recovery_marker(root, run_id, "artifacts")
     manifest_relative = _artifact_relative_path(
@@ -855,6 +1145,12 @@ def validate_comparison_evidence_bundle(
         )
     if manifest["schema_version"] != COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION:
         raise PhaseA1ArtifactError("Comparison Evidence manifest schema_version is invalid")
+    if manifest["source_bundle_kind"] not in _SOURCE_BUNDLE_KINDS:
+        raise PhaseA1ArtifactError("Comparison Evidence manifest source_bundle_kind is invalid")
+    if manifest["source_bundle_kind"] != marker["evidence_source_mode"]:
+        raise PhaseA1ArtifactError(
+            "Comparison Evidence manifest source_bundle_kind does not match sandbox mode"
+        )
     if manifest["run_id"] != run_id:
         raise PhaseA1ArtifactError("Comparison Evidence manifest run_id does not match")
     if manifest["plan_fingerprint"] != plan_fingerprint:
@@ -899,6 +1195,7 @@ def validate_comparison_evidence_bundle(
     if not isinstance(references, list):
         raise PhaseA1ArtifactError("Comparison Evidence manifest source_artifacts must be a list")
     declared_inputs = []
+    source_bytes_by_path: dict[str, bytes] = {}
     for index, reference in enumerate(references, start=1):
         if not isinstance(reference, Mapping) or set(reference) != _SOURCE_REFERENCE_FIELDS:
             raise PhaseA1ArtifactError(
@@ -926,6 +1223,7 @@ def validate_comparison_evidence_bundle(
                 "sha256": reference["sha256"],
             }
         )
+        source_bytes_by_path[path_text] = data
     canonical_inputs = sorted(declared_inputs, key=lambda item: (item["role"], item["path"]))
     if declared_inputs != canonical_inputs:
         raise PhaseA1ArtifactError(
@@ -938,6 +1236,18 @@ def validate_comparison_evidence_bundle(
             raise PhaseA1ArtifactError(
                 f"Comparison Evidence manifest must contain exactly one {role}"
             )
+    if manifest["source_bundle_kind"] == "run_local_projection":
+        projection_manifest_path = f"runs/{run_id}/work/association_manifest.json"
+        association_manifest_bytes = source_bytes_by_path.get(projection_manifest_path)
+        if association_manifest_bytes is None:
+            raise PhaseA1ArtifactError(
+                "run_local_projection is missing the Association manifest snapshot"
+            )
+        _validate_projection_source_set(
+            run_id,
+            declared_inputs,
+            association_manifest_bytes,
+        )
     _bind_evidence_provenance(records, declared_inputs)
     _enforce_byte_binding_only_evidence(records)
     return {
@@ -1196,9 +1506,12 @@ __all__ = [
     "initialize_phase_a1_sandbox",
     "load_validated_claim_artifacts",
     "parse_comparison_evidence_csv",
+    "snapshot_phase_a1_work_artifact",
+    "write_phase_a1_work_artifact",
     "validate_comparison_evidence_bundle",
     "validate_phase_a1_sandbox",
     "write_claim_decision_artifact",
     "write_comparison_evidence_bundle",
+    "write_projected_comparison_evidence_bundle",
     "write_gated_claim_audit_report",
 ]

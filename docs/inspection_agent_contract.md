@@ -2,13 +2,17 @@
 
 ## Status
 
-This document freezes inputs and boundaries only. Phase A1 evidence/report agents, Phase A2 publication, and Phase A3 controller/state integration are not enabled.
+This document freezes inputs and boundaries. Phase A2 publication and Phase A3
+controller/state integration are not enabled.
 
 Implemented in the current Phase 0 slices: executable Claim Policy and Workflow
 Policy/TaskRequest validation, neutral Prepared/Legacy observation identities,
 cross-table source references, history-only Memory Snapshot validation, Comparison
-Evidence, and deterministic ClaimDecision validation. These modules remain
-side-effect-free contracts; A1 evidence/report agents are still disabled.
+Evidence, and deterministic ClaimDecision validation. The directly instantiated A1
+sandbox agents can now project fixed Run-local baseline/unmatched sources, apply the
+Claim Gate, and render the Run-local static audit report. They remain disabled in
+the default Registry/DAG/CLI and cannot write formal `data` or `outputs` artifacts.
+Matched source-proof projection remains blocked pending a Memory schema upgrade.
 Publication and State implementations remain deferred to A2/A3.
 
 ## Entry Points
@@ -31,6 +35,15 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
 - The current KICT path remains a static-mask plus simulated-metadata engineering prototype.
 - With-id remains an evaluation upper bound.
 - Phase 0 does not modify the Registry, DAGExecutor, `config/dag.yaml`, Web routes, model inference, or formal `data/simulated` and `outputs` artifacts.
+- The A1 sandbox source projection is available only by direct component invocation
+  with `projection_mode=run_local_sources` under an initialized temporary sandbox;
+  it is not a second production entry point.
+- Sandbox initialization fixes either normalized-record or Run-local projection
+  mode. A caller cannot later downgrade that mode through a Manifest field.
+- A minimal materializer composes the existing Prepared readiness gate and
+  history-only coordinator into neutral A1 source relations. It does not use
+  `label_disease_id` as a join key; ambiguous frame/image references and matched
+  claims without source-proof Memory remain Fail Closed.
 - Lock and publication policies are machine-marked disabled until their named phases.
 
 ## Fail-Closed Rules
