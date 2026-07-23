@@ -13,6 +13,15 @@ from .comparison_evidence import (
     ComparisonEvidenceContractError,
     validate_comparison_evidence_records,
 )
+from .claim_decision import (
+    CLAIM_DECISION_DOCUMENT_FIELDS,
+    CLAIM_DECISION_RECORD_FIELDS,
+    CLAIM_DECISION_SCHEMA_VERSION,
+    CLAIM_DECISION_SUMMARY_FIELDS,
+    ClaimDecisionContractError,
+    build_claim_decision_document,
+    validate_claim_decision_document,
+)
 from .observation_identity import (
     LEGACY_FINGERPRINT_FIELDS,
     ObservationIdentityError,
@@ -31,15 +40,21 @@ from .source_references import (
 )
 
 __all__ = [
+    "CLAIM_DECISION_DOCUMENT_FIELDS",
+    "CLAIM_DECISION_RECORD_FIELDS",
+    "CLAIM_DECISION_SCHEMA_VERSION",
+    "CLAIM_DECISION_SUMMARY_FIELDS",
     "COMPARISON_EVIDENCE_FIELDS",
     "COMPARISON_EVIDENCE_SCHEMA_VERSION",
     "ComparisonEvidenceContractError",
+    "ClaimDecisionContractError",
     "InspectionWorkflowContractError",
     "LEGACY_FINGERPRINT_FIELDS",
     "ObservationIdentityError",
     "SOURCE_REFERENCE_SCHEMA_VERSION",
     "SourceReferenceContractError",
     "canonical_legacy_source_record_bytes",
+    "build_claim_decision_document",
     "legacy_source_record_fingerprint",
     "load_task_request",
     "load_workflow_policy",
@@ -47,6 +62,7 @@ __all__ = [
     "project_prepared_observation_identities",
     "validate_association_observation_references",
     "validate_comparison_evidence_records",
+    "validate_claim_decision_document",
     "validate_engineering_observation_references",
     "validate_frame_observation_references",
     "validate_source_reference_contract",

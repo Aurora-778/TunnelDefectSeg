@@ -12,3 +12,38 @@ The executable Phase 0 claim policy is `config/inspection_claim_policy.json`, ev
 - Static-only output must carry the controlled qualifier that it is only a static audit and does not constitute a directional change conclusion.
 
 Policy and evaluator provenance are process-lifetime snapshots. Their hashes identify normalized source/config bytes, not a cryptographic proof of semantic correctness. Updating either requires a process restart.
+
+## Phase 0 ClaimDecision Document
+
+`orchestrator/inspection_workflow/claim_decision.py` provides the side-effect-free
+`claim_decision_v4` document contract. It first applies the complete in-memory
+`comparison_evidence_v1` validator, sorts records by their neutral observation key,
+and then delegates every capability decision to the existing Claim Policy evaluator.
+It does not duplicate Association scoring, comparability composition, capability
+rules, reason codes, templates, or qualifiers.
+
+The document records the Run and plan fingerprints, Policy/Evaluator provenance,
+the expected Comparison Evidence artifact SHA-256, the single Association artifact
+and Manifest provenance represented by the Evidence set, deterministic per-record
+decisions, and a recomputed summary. Per-record projections retain the neutral
+observation key, identity-evidence state, comparability state, Memory reference, and
+source fingerprints required to audit the decision. They also retain `evidence_valid`
+and its canonical `invalid_reason`, so a non-identity provenance failure remains
+distinguishable from an Association identity decision. Baseline records use their
+`current_observation_id` as `current_record_id`; query records use their concrete
+`association_id`.
+
+Validation requires the caller to supply the expected Run ID, trusted plan
+fingerprint, and trusted expected Comparison Evidence SHA-256. It recomputes the
+entire document from the validated Evidence and checked-in Policy snapshot. A
+document must also represent one consistent Association artifact/Manifest provenance
+value across every record; mixing null and non-null provenance is rejected.
+Capability, template, qualifier, reason, provenance projection, or summary drift
+therefore fails closed. This verifies internal consistency only. Phase
+0 does not authenticate a supplied digest against artifact bytes and does not write
+`runs/<run_id>/artifacts/claim_decision.json` or `outputs/claim_decision.json`.
+
+A1 must obtain the expected digest from its validated Run-local artifact/Manifest,
+atomically write the authoritative ClaimDecision under the current Run, and keep all
+rendering and staging outputs inside the explicit sandbox profile. Publication and
+the compatibility mirror remain A2/A3 responsibilities.
