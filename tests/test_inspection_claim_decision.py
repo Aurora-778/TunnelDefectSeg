@@ -434,6 +434,22 @@ def test_builder_rejects_evaluator_schema_drift(monkeypatch):
             lambda decision: decision.update({"decision_id": "CD-EVD-other"}),
             "decision_id",
         ),
+        (
+            lambda decision: decision.update({"claim_policy_sha256": "0" * 64}),
+            "claim_policy_sha256 mismatch",
+        ),
+        (
+            lambda decision: decision.update(
+                {"claim_evaluator_sha256": "1" * 64}
+            ),
+            "claim_evaluator_sha256 mismatch",
+        ),
+        (
+            lambda decision: decision.update(
+                {"claim_evaluator_contract_version": "forged-contract-v999"}
+            ),
+            "claim_evaluator_contract_version mismatch",
+        ),
     ],
 )
 def test_builder_rejects_malformed_evaluator_decision(monkeypatch, mutate, message):

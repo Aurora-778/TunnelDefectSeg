@@ -10,6 +10,7 @@ import orchestrator.claim_policy as claim_policy_module
 from orchestrator.claim_policy import (
     ClaimPolicyError,
     evaluate_claim_evidence,
+    get_claim_policy_provenance,
     load_claim_policy,
 )
 
@@ -52,6 +53,21 @@ def test_default_policy_loads_with_expected_fixed_capabilities():
         "multi_timepoint_pattern_claim": "PHASE_A_NO_THREE_TIMEPOINT_EVIDENCE",
         "prediction_claim": "PHASE_A_NO_VALIDATED_PREDICTION_MODEL",
     }
+
+
+def test_claim_policy_provenance_is_authoritative_and_read_only():
+    decision = evaluate_claim_evidence(valid_evidence())
+    provenance = get_claim_policy_provenance()
+
+    assert dict(provenance) == {
+        "claim_policy_sha256": decision["claim_policy_sha256"],
+        "claim_evaluator_contract_version": decision[
+            "claim_evaluator_contract_version"
+        ],
+        "claim_evaluator_sha256": decision["claim_evaluator_sha256"],
+    }
+    with pytest.raises(TypeError):
+        provenance["claim_policy_sha256"] = "0" * 64
 
 
 def test_verified_supported_evidence_allows_limited_difference_and_direction():

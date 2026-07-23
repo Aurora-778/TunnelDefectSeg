@@ -10,6 +10,7 @@ from typing import Any
 from orchestrator.claim_policy import (
     CLAIM_DECISION_SCHEMA_VERSION,
     evaluate_claim_evidence,
+    get_claim_policy_provenance,
     load_claim_policy,
 )
 
@@ -143,6 +144,7 @@ def _validate_evaluator_decision(
     evidence: Mapping[str, Any],
     *,
     capability_names: tuple[str, ...],
+    expected_provenance: Mapping[str, str],
     expected_profile: str,
     row_number: int,
 ) -> None:
@@ -173,6 +175,9 @@ def _validate_evaluator_decision(
         raise ClaimDecisionContractError(
             f"{label} claim_evaluator_contract_version must be a non-empty string"
         )
+    for field, expected_value in expected_provenance.items():
+        if decision[field] != expected_value:
+            raise ClaimDecisionContractError(f"{label} {field} mismatch")
 
     for field in ("capabilities", "capability_reasons", "template_ids"):
         value = decision[field]
@@ -304,6 +309,7 @@ def build_claim_decision_document(
     )
     policy = load_claim_policy()
     capability_names = tuple(policy["capability_order"])
+    expected_provenance = get_claim_policy_provenance()
     evaluated = [evaluate_claim_evidence(record) for record in evidence]
     for row_number, (record, decision) in enumerate(
         zip(evidence, evaluated, strict=True),
@@ -313,6 +319,7 @@ def build_claim_decision_document(
             decision,
             record,
             capability_names=capability_names,
+            expected_provenance=expected_provenance,
             expected_profile=policy["profile"],
             row_number=row_number,
         )

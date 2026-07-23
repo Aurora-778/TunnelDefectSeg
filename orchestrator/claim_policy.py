@@ -13,6 +13,7 @@ import hashlib
 import json
 from pathlib import Path
 from threading import Condition
+from types import MappingProxyType
 from typing import Any, NoReturn
 
 
@@ -81,6 +82,19 @@ def load_claim_policy(path: Path | None = None) -> dict[str, Any]:
     policy = _read_policy_file(policy_path)
     _require_canonical_policy(policy, _default_policy_copy())
     return policy
+
+
+def get_claim_policy_provenance() -> Mapping[str, str]:
+    """Return the authoritative read-only provenance for the process snapshot."""
+
+    policy = load_claim_policy()
+    return MappingProxyType(
+        {
+            "claim_policy_sha256": _policy_sha256(policy),
+            "claim_evaluator_contract_version": policy["evaluator_contract_version"],
+            "claim_evaluator_sha256": _evaluator_source_sha256(),
+        }
+    )
 
 
 def _canonical_default_policy_json() -> str:
