@@ -472,21 +472,30 @@ def test_first_replace_failure_with_no_commit_leaves_recovery_marker(
     )
     assert marker["committed_paths"] == []
     assert not (artifacts / "comparison_evidence.csv").exists()
+    assert not list(artifacts.glob(".comparison_evidence.csv.*.tmp"))
     assert isinstance(captured.value.__cause__, OSError)
     assert "replace state uncertain" in str(captured.value.__cause__)
 
 
-def test_temp_cleanup_failure_with_no_commit_leaves_recovery_marker_and_cause(
+def test_pre_replace_fsync_and_cleanup_failure_requires_recovery(
     tmp_path,
     monkeypatch,
 ):
     project_root, _, _, context = _sandbox_fixture(tmp_path)
+    original_fsync = a1_artifacts.os.fsync
     original_replace = a1_artifacts.os.replace
     original_unlink = Path.unlink
+    fsync_calls = {"count": 0}
+    replace_destinations: list[str] = []
 
-    def fail_evidence_replace(source, destination):
-        if Path(destination).name == "comparison_evidence.csv":
-            raise OSError("evidence replace failed")
+    def fail_first_fsync(file_descriptor):
+        fsync_calls["count"] += 1
+        if fsync_calls["count"] == 1:
+            raise OSError("evidence fsync failed before replace")
+        return original_fsync(file_descriptor)
+
+    def track_replace(source, destination):
+        replace_destinations.append(Path(destination).name)
         return original_replace(source, destination)
 
     def fail_evidence_temp_cleanup(self, *args, **kwargs):
@@ -494,7 +503,8 @@ def test_temp_cleanup_failure_with_no_commit_leaves_recovery_marker_and_cause(
             raise OSError("evidence temp cleanup failed")
         return original_unlink(self, *args, **kwargs)
 
-    monkeypatch.setattr(a1_artifacts.os, "replace", fail_evidence_replace)
+    monkeypatch.setattr(a1_artifacts.os, "fsync", fail_first_fsync)
+    monkeypatch.setattr(a1_artifacts.os, "replace", track_replace)
     monkeypatch.setattr(Path, "unlink", fail_evidence_temp_cleanup)
 
     with pytest.raises(
@@ -508,8 +518,16 @@ def test_temp_cleanup_failure_with_no_commit_leaves_recovery_marker_and_cause(
         (artifacts / ".a1_recovery_required.json").read_text(encoding="utf-8")
     )
     assert marker["committed_paths"] == []
+    assert "comparison_evidence.csv" not in replace_destinations
+    assert ".a1_recovery_required.json" in replace_destinations
+    assert not (artifacts / "comparison_evidence.csv").exists()
+    failed_temporary_files = list(
+        artifacts.glob(".comparison_evidence.csv.*.tmp")
+    )
+    assert len(failed_temporary_files) == 1
+    assert failed_temporary_files[0].is_file()
     assert isinstance(captured.value.__cause__, OSError)
-    assert "evidence replace failed" in str(captured.value.__cause__)
+    assert "evidence fsync failed before replace" in str(captured.value.__cause__)
     assert "evidence temp cleanup failed" in str(captured.value)
 
 
