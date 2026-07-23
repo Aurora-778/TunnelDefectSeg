@@ -51,10 +51,24 @@ the formal `outputs/claim_decision.json` compatibility mirror remain A2/A3
 responsibilities.
 
 The first A1 sandbox Claim Gate now performs that narrow artifact closure. It
-revalidates the Evidence CSV, its manifest, and every declared source artifact
-before building `runs/<run_id>/artifacts/claim_decision.json`. A minimal controlled
-renderer then revalidates both authoritative artifacts and may write only
+revalidates the canonical Evidence CSV, its manifest, and the size/SHA-256 of every
+declared source byte sequence before building
+`runs/<run_id>/artifacts/claim_decision.json`. This is explicitly
+`source_validation_scope=byte_binding_only`, not semantic validation of Association,
+Engineering, Memory, or history-only source contents. Therefore the current wrapper
+fails closed on `verified_comparable` Evidence and any enabled directional Claim;
+a future schema must bind a trusted semantic-validation receipt before either can be
+allowed. A minimal controlled renderer then revalidates both authoritative artifacts
+and may write only
 `runs/<run_id>/staging/claim_audit_report.md` and a byte-identical Staging decision
 mirror. It never reads legacy Growth text as a claim source. Default CLI/DAG/Registry
 integration, full report replacement, Publication, State, and Lock behavior remain
 disabled for later A1/A2/A3 work.
+
+Direct A1 use additionally requires a project root inside the process temporary
+directory and the fixed `.phase_a1_sandbox.json` marker created by
+`initialize_phase_a1_sandbox()`. Multi-file stage failures leave a fixed
+`.a1_recovery_required.json` marker and partial Run-local evidence for manual
+inspection; readers refuse the marked stage. These checks are process-level,
+best-effort sandbox controls, not A2 publication durability or A3 concurrent-writer
+fencing.

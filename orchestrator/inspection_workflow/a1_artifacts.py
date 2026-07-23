@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import tempfile
 from typing import Any
 
@@ -24,11 +25,17 @@ from .comparison_evidence import (
 )
 
 
-COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION = "comparison_evidence_manifest_v1"
+COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION = "comparison_evidence_manifest_v2"
 PHASE_A1_EXECUTION_PROFILE = "phase_a1_sandbox"
+PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION = "phase_a1_sandbox_marker_v1"
+A1_RECOVERY_MARKER_SCHEMA_VERSION = "phase_a1_recovery_marker_v1"
+SOURCE_VALIDATION_SCOPE = "byte_binding_only"
 
 _RUN_ID_RE = re.compile(r"run_[0-9]{3,}\Z")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_CANONICAL_INTEGER_RE = re.compile(r"(?:0|-?[1-9][0-9]*)\Z")
+_SANDBOX_MARKER_NAME = ".phase_a1_sandbox.json"
+_RECOVERY_MARKER_NAME = ".a1_recovery_required.json"
 _SOURCE_ARTIFACT_ROLES = {
     "association_artifact",
     "association_manifest",
@@ -80,13 +87,47 @@ _MANIFEST_FIELDS = {
     "comparison_evidence_size_bytes",
     "comparison_evidence_sha256",
     "record_count",
+    "source_validation_scope",
     "source_artifacts",
 }
 _SOURCE_REFERENCE_FIELDS = {"role", "path", "size_bytes", "sha256"}
+_SANDBOX_MARKER_FIELDS = {"schema_version", "run_id", "execution_profile"}
 
 
 class PhaseA1ArtifactError(ValueError):
     """Raised when a Run-local A1 artifact set is unsafe or inconsistent."""
+
+
+def _validate_run_identity(*, run_id: str, execution_profile: str) -> None:
+    if execution_profile != PHASE_A1_EXECUTION_PROFILE:
+        raise PhaseA1ArtifactError(
+            f"execution_profile must be {PHASE_A1_EXECUTION_PROFILE}"
+        )
+    if not isinstance(run_id, str) or _RUN_ID_RE.fullmatch(run_id) is None:
+        raise PhaseA1ArtifactError("run_id must use canonical run_NNN format")
+
+
+def _controlled_temporary_root(project_root: Path) -> Path:
+    root = Path(project_root).resolve()
+    if not root.is_dir():
+        raise PhaseA1ArtifactError("Phase A1 project_root must be an existing directory")
+    repository_root = Path(__file__).resolve().parents[2]
+    if root == repository_root or repository_root in root.parents:
+        raise PhaseA1ArtifactError(
+            "Phase A1 sandbox must use a temporary project root outside the live repository"
+        )
+    temporary_root = Path(tempfile.gettempdir()).resolve()
+    try:
+        relative = root.relative_to(temporary_root)
+    except ValueError as exc:
+        raise PhaseA1ArtifactError(
+            "Phase A1 sandbox must be inside the process temporary directory"
+        ) from exc
+    if not relative.parts:
+        raise PhaseA1ArtifactError(
+            "Phase A1 sandbox must not use the temporary directory root itself"
+        )
+    return root
 
 
 def validate_phase_a1_sandbox(
@@ -97,20 +138,25 @@ def validate_phase_a1_sandbox(
 ) -> Path:
     """Return the sandbox root after enforcing the A1 activation boundary."""
 
-    if execution_profile != PHASE_A1_EXECUTION_PROFILE:
+    _validate_run_identity(run_id=run_id, execution_profile=execution_profile)
+    root = _controlled_temporary_root(project_root)
+    marker_path = root / _SANDBOX_MARKER_NAME
+    if (
+        not marker_path.is_file()
+        or _path_is_reparse_point(marker_path)
+    ):
         raise PhaseA1ArtifactError(
-            f"execution_profile must be {PHASE_A1_EXECUTION_PROFILE}"
+            "Phase A1 sandbox marker is missing or unsafe; initialize the sandbox first"
         )
-    if not isinstance(run_id, str) or _RUN_ID_RE.fullmatch(run_id) is None:
-        raise PhaseA1ArtifactError("run_id must use canonical run_NNN format")
-    root = Path(project_root).resolve()
-    if not root.is_dir():
-        raise PhaseA1ArtifactError("Phase A1 project_root must be an existing directory")
-    repository_root = Path(__file__).resolve().parents[2]
-    if root == repository_root or repository_root in root.parents:
-        raise PhaseA1ArtifactError(
-            "Phase A1 sandbox must use a temporary project root outside the live repository"
-        )
+    marker = _load_json_object(marker_path, label="Phase A1 sandbox marker")
+    if set(marker) != _SANDBOX_MARKER_FIELDS:
+        raise PhaseA1ArtifactError("Phase A1 sandbox marker fields are invalid")
+    if (
+        marker["schema_version"] != PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION
+        or marker["run_id"] != run_id
+        or marker["execution_profile"] != execution_profile
+    ):
+        raise PhaseA1ArtifactError("Phase A1 sandbox marker identity does not match")
     return root
 
 
@@ -128,20 +174,51 @@ def _staging_relative_path(run_id: str, filename: str) -> str:
     return f"runs/{run_id}/staging/{filename}"
 
 
+def _path_is_reparse_point(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    if os.name != "nt" or not path.exists():
+        return False
+    try:
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    except OSError as exc:
+        raise PhaseA1ArtifactError(f"unable to inspect path safety: {path.name}") from exc
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400))
+
+
+def _assert_path_is_contained_and_plain(
+    project_root: Path,
+    path: Path,
+    *,
+    include_leaf: bool,
+    label: str,
+) -> None:
+    root = project_root.resolve()
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise PhaseA1ArtifactError(f"{label} is outside the controlled sandbox") from exc
+    cursor = root
+    parts = relative.parts if include_leaf else relative.parent.parts
+    for part in parts:
+        cursor /= part
+        if cursor.exists() and _path_is_reparse_point(cursor):
+            raise PhaseA1ArtifactError(f"{label} must not use a symlink or reparse point")
+    resolved_target = path.resolve() if path.exists() else path.parent.resolve() / path.name
+    try:
+        resolved_target.relative_to(root)
+    except ValueError as exc:
+        raise PhaseA1ArtifactError(f"{label} resolves outside the controlled sandbox") from exc
+
+
 def _resolve_fixed_path(project_root: Path, relative_path: str) -> Path:
     path = project_root.joinpath(*PurePosixPath(relative_path).parts)
-    resolved_parent = path.parent.resolve()
-    try:
-        resolved_parent.relative_to(project_root.resolve())
-    except ValueError as exc:
-        raise PhaseA1ArtifactError(f"artifact parent resolves outside its fixed Run path: {relative_path}")
-    lexical_parent = project_root
-    for part in PurePosixPath(relative_path).parent.parts:
-        lexical_parent /= part
-        if lexical_parent.exists() and lexical_parent.is_symlink():
-            raise PhaseA1ArtifactError(
-                f"artifact parent must not use symbolic links: {relative_path}"
-            )
+    _assert_path_is_contained_and_plain(
+        project_root,
+        path,
+        include_leaf=True,
+        label=f"artifact path {relative_path}",
+    )
     return path
 
 
@@ -175,14 +252,37 @@ def _preflight_idempotent_target(path: Path, data: bytes) -> None:
         raise PhaseA1ArtifactError(f"refusing to overwrite changed A1 artifact: {path.name}")
 
 
-def _atomic_write_idempotent(path: Path, data: bytes) -> None:
+def _atomic_write_idempotent(
+    path: Path,
+    data: bytes,
+    *,
+    allowed_root: Path,
+) -> None:
+    _assert_path_is_contained_and_plain(
+        allowed_root,
+        path,
+        include_leaf=True,
+        label=f"A1 artifact {path.name}",
+    )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise PhaseA1ArtifactError(
             f"unable to create A1 artifact directory for: {path.name}"
         ) from exc
+    _assert_path_is_contained_and_plain(
+        allowed_root,
+        path,
+        include_leaf=True,
+        label=f"A1 artifact {path.name}",
+    )
     _preflight_idempotent_target(path, data)
+    _assert_path_is_contained_and_plain(
+        allowed_root,
+        path,
+        include_leaf=True,
+        label=f"A1 artifact {path.name}",
+    )
     if path.exists():
         return
 
@@ -199,9 +299,15 @@ def _atomic_write_idempotent(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+        _assert_path_is_contained_and_plain(
+            allowed_root,
+            path,
+            include_leaf=True,
+            label=f"A1 artifact {path.name}",
+        )
         os.replace(temporary_path, path)
         temporary_path = None
-    except OSError as exc:
+    except (OSError, PhaseA1ArtifactError) as exc:
         cleanup_error: OSError | None = None
         if temporary_path is not None:
             try:
@@ -215,6 +321,30 @@ def _atomic_write_idempotent(path: Path, data: bytes) -> None:
                 f"{type(cleanup_error).__name__}: {cleanup_error}"
             )
         raise PhaseA1ArtifactError(message) from exc
+
+
+def initialize_phase_a1_sandbox(
+    project_root: Path,
+    *,
+    run_id: str,
+    execution_profile: str = PHASE_A1_EXECUTION_PROFILE,
+) -> Path:
+    """Initialize the explicit marker required by a temporary A1 sandbox."""
+
+    _validate_run_identity(run_id=run_id, execution_profile=execution_profile)
+    root = _controlled_temporary_root(project_root)
+    marker = {
+        "schema_version": PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION,
+        "run_id": run_id,
+        "execution_profile": execution_profile,
+    }
+    marker_path = root / _SANDBOX_MARKER_NAME
+    _atomic_write_idempotent(
+        marker_path,
+        _canonical_json_bytes(marker),
+        allowed_root=root,
+    )
+    return marker_path
 
 
 def _serialize_csv_value(field: str, value: Any) -> str:
@@ -282,6 +412,15 @@ def _parse_csv_value(field: str, value: str, *, row_number: int) -> Any:
             raise PhaseA1ArtifactError(
                 f"comparison_evidence.csv row {row_number} {field} must be a JSON list"
             )
+        if value != json.dumps(
+            parsed,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ):
+            raise PhaseA1ArtifactError(
+                f"comparison_evidence.csv row {row_number} {field} must use canonical JSON"
+            )
         return parsed
     if field in _BOOLEAN_FIELDS:
         return _parse_bool(value, field=field, row_number=row_number, optional=False)
@@ -290,6 +429,10 @@ def _parse_csv_value(field: str, value: str, *, row_number: int) -> Any:
     if field in _INTEGER_FIELDS:
         if value == "":
             return None
+        if _CANONICAL_INTEGER_RE.fullmatch(value) is None:
+            raise PhaseA1ArtifactError(
+                f"comparison_evidence.csv row {row_number} {field} must use canonical integer encoding"
+            )
         try:
             return int(value)
         except ValueError as exc:
@@ -327,9 +470,15 @@ def parse_comparison_evidence_csv(data: bytes) -> list[dict[str, Any]]:
             }
         )
     try:
-        return validate_comparison_evidence_records(rows)
+        validated = validate_comparison_evidence_records(rows)
     except ValueError as exc:
         raise PhaseA1ArtifactError(f"comparison_evidence.csv is invalid: {exc}") from exc
+    canonical_bytes, canonical_records = comparison_evidence_csv_bytes(validated)
+    if data != canonical_bytes:
+        raise PhaseA1ArtifactError(
+            "comparison_evidence.csv must use canonical row order and byte encoding"
+        )
+    return canonical_records
 
 
 def _require_relative_run_work_path(project_root: Path, run_id: str, value: Any) -> tuple[str, Path]:
@@ -350,14 +499,13 @@ def _require_relative_run_work_path(project_root: Path, run_id: str, value: Any)
             f"source artifact must be inside runs/{run_id}/work"
         ) from exc
     path = project_root.joinpath(*pure_path.parts)
-    cursor = project_root
-    for part in pure_path.parts:
-        cursor /= part
-        if cursor.exists() and cursor.is_symlink():
-            raise PhaseA1ArtifactError(
-                f"source artifact path must not use symbolic links: {value}"
-            )
-    if path.is_symlink() or not path.is_file():
+    _assert_path_is_contained_and_plain(
+        project_root,
+        path,
+        include_leaf=True,
+        label=f"source artifact {value}",
+    )
+    if not path.is_file():
         raise PhaseA1ArtifactError(f"source artifact must be an existing regular file: {value}")
     resolved = path.resolve()
     work_root = project_root.joinpath("runs", run_id, "work").resolve()
@@ -454,6 +602,84 @@ def _bind_evidence_provenance(
             )
 
 
+def _enforce_byte_binding_only_evidence(records: Iterable[Mapping[str, Any]]) -> None:
+    for row_number, record in enumerate(records, start=1):
+        if record["comparison_comparability_status"] == "verified_comparable":
+            raise PhaseA1ArtifactError(
+                "comparison evidence row "
+                f"{row_number} cannot use verified_comparable while source_validation_scope "
+                f"is {SOURCE_VALIDATION_SCOPE}; a trusted semantic validation receipt is required"
+            )
+
+
+def _enforce_byte_binding_only_decision(document: Mapping[str, Any]) -> None:
+    for row_number, decision in enumerate(document["record_decisions"], start=1):
+        if decision["capabilities"]["directional_change_claim"] != "blocked":
+            raise PhaseA1ArtifactError(
+                "ClaimDecision row "
+                f"{row_number} cannot enable directional_change_claim while "
+                f"source_validation_scope is {SOURCE_VALIDATION_SCOPE}"
+            )
+
+
+def _recovery_marker_path(project_root: Path, run_id: str, area: str) -> Path:
+    relative = (
+        _artifact_relative_path(run_id, _RECOVERY_MARKER_NAME)
+        if area == "artifacts"
+        else _staging_relative_path(run_id, _RECOVERY_MARKER_NAME)
+    )
+    return _resolve_fixed_path(project_root, relative)
+
+
+def _reject_recovery_marker(project_root: Path, run_id: str, area: str) -> None:
+    marker_path = _recovery_marker_path(project_root, run_id, area)
+    if marker_path.exists():
+        raise PhaseA1ArtifactError(
+            f"A1 {area} recovery marker exists; inspect the partial Run-local artifacts "
+            "and remove the marker only after manual recovery"
+        )
+
+
+def _raise_recovery_required(
+    *,
+    project_root: Path,
+    run_id: str,
+    area: str,
+    stage: str,
+    committed_paths: Iterable[str],
+    primary_error: Exception,
+) -> None:
+    marker = {
+        "schema_version": A1_RECOVERY_MARKER_SCHEMA_VERSION,
+        "run_id": run_id,
+        "area": area,
+        "stage": stage,
+        "committed_paths": sorted(set(committed_paths)),
+        "primary_error_type": type(primary_error).__name__,
+        "primary_error": str(primary_error),
+    }
+    marker_error: Exception | None = None
+    try:
+        marker_path = _recovery_marker_path(project_root, run_id, area)
+        _atomic_write_idempotent(
+            marker_path,
+            _canonical_json_bytes(marker),
+            allowed_root=project_root,
+        )
+    except Exception as exc:  # marker diagnostics must not replace the primary failure
+        marker_error = exc
+    message = (
+        f"{primary_error}; A1 {area} recovery is required after {stage}"
+    )
+    if marker_error is not None:
+        message += (
+            "; recovery marker write also failed: "
+            f"{type(marker_error).__name__}: {marker_error}"
+        )
+    cause = primary_error.__cause__ or primary_error
+    raise PhaseA1ArtifactError(message) from cause
+
+
 def write_comparison_evidence_bundle(
     project_root: Path,
     *,
@@ -471,9 +697,11 @@ def write_comparison_evidence_bundle(
         execution_profile=execution_profile,
     )
     _require_sha256(plan_fingerprint, field="plan_fingerprint")
+    _reject_recovery_marker(root, run_id, "artifacts")
     evidence_bytes, validated = comparison_evidence_csv_bytes(records)
     sources = _snapshot_source_artifacts(root, run_id, source_artifacts)
     _bind_evidence_provenance(validated, sources)
+    _enforce_byte_binding_only_evidence(validated)
 
     evidence_relative = _artifact_relative_path(run_id, "comparison_evidence.csv")
     evidence_path = _resolve_fixed_path(root, evidence_relative)
@@ -492,20 +720,42 @@ def write_comparison_evidence_bundle(
         "comparison_evidence_size_bytes": len(evidence_bytes),
         "comparison_evidence_sha256": _sha256_bytes(evidence_bytes),
         "record_count": len(validated),
+        "source_validation_scope": SOURCE_VALIDATION_SCOPE,
         "source_artifacts": sources,
     }
     manifest_bytes = _canonical_json_bytes(manifest)
 
     _preflight_idempotent_target(evidence_path, evidence_bytes)
     _preflight_idempotent_target(manifest_path, manifest_bytes)
-    _atomic_write_idempotent(evidence_path, evidence_bytes)
-    _atomic_write_idempotent(manifest_path, manifest_bytes)
-    committed = validate_comparison_evidence_bundle(
-        root,
-        run_id=run_id,
-        execution_profile=execution_profile,
-        plan_fingerprint=plan_fingerprint,
-    )
+    committed_paths: list[str] = []
+    try:
+        _atomic_write_idempotent(
+            evidence_path,
+            evidence_bytes,
+            allowed_root=root,
+        )
+        committed_paths.append(evidence_relative)
+        _atomic_write_idempotent(
+            manifest_path,
+            manifest_bytes,
+            allowed_root=root,
+        )
+        committed_paths.append(manifest_relative)
+        committed = validate_comparison_evidence_bundle(
+            root,
+            run_id=run_id,
+            execution_profile=execution_profile,
+            plan_fingerprint=plan_fingerprint,
+        )
+    except Exception as exc:
+        _raise_recovery_required(
+            project_root=root,
+            run_id=run_id,
+            area="artifacts",
+            stage="comparison_evidence_bundle",
+            committed_paths=committed_paths,
+            primary_error=exc,
+        )
     return {
         "comparison_evidence_path": evidence_relative,
         "comparison_evidence_manifest_path": manifest_relative,
@@ -564,6 +814,7 @@ def validate_comparison_evidence_bundle(
         execution_profile=execution_profile,
     )
     _require_sha256(plan_fingerprint, field="plan_fingerprint")
+    _reject_recovery_marker(root, run_id, "artifacts")
     manifest_relative = _artifact_relative_path(
         run_id,
         "comparison_evidence_manifest.json",
@@ -591,6 +842,10 @@ def validate_comparison_evidence_bundle(
     if manifest["comparison_evidence_schema_version"] != COMPARISON_EVIDENCE_SCHEMA_VERSION:
         raise PhaseA1ArtifactError(
             "Comparison Evidence manifest evidence schema_version is invalid"
+        )
+    if manifest["source_validation_scope"] != SOURCE_VALIDATION_SCOPE:
+        raise PhaseA1ArtifactError(
+            "Comparison Evidence manifest source_validation_scope is invalid"
         )
 
     expected_evidence_relative = _artifact_relative_path(run_id, "comparison_evidence.csv")
@@ -658,6 +913,7 @@ def validate_comparison_evidence_bundle(
                 f"Comparison Evidence manifest must contain exactly one {role}"
             )
     _bind_evidence_provenance(records, declared_inputs)
+    _enforce_byte_binding_only_evidence(records)
     return {
         "manifest": manifest,
         "records": records,
@@ -700,16 +956,29 @@ def write_claim_decision_artifact(
         )
     except ValueError as exc:
         raise PhaseA1ArtifactError(f"unable to build valid ClaimDecision: {exc}") from exc
+    _enforce_byte_binding_only_decision(document)
     data = _canonical_json_bytes(document)
     relative_path = _artifact_relative_path(run_id, "claim_decision.json")
-    path = _resolve_fixed_path(Path(project_root).resolve(), relative_path)
-    _atomic_write_idempotent(path, data)
-    persisted = load_validated_claim_artifacts(
-        project_root,
-        run_id=run_id,
-        execution_profile=execution_profile,
-        plan_fingerprint=plan_fingerprint,
-    )
+    root = Path(project_root).resolve()
+    path = _resolve_fixed_path(root, relative_path)
+    _preflight_idempotent_target(path, data)
+    try:
+        _atomic_write_idempotent(path, data, allowed_root=root)
+        persisted = load_validated_claim_artifacts(
+            project_root,
+            run_id=run_id,
+            execution_profile=execution_profile,
+            plan_fingerprint=plan_fingerprint,
+        )
+    except Exception as exc:
+        _raise_recovery_required(
+            project_root=root,
+            run_id=run_id,
+            area="artifacts",
+            stage="claim_decision_commit",
+            committed_paths=[relative_path] if path.exists() else [],
+            primary_error=exc,
+        )
     return {
         "claim_decision_path": relative_path,
         "claim_decision_sha256": _sha256_bytes(
@@ -752,6 +1021,7 @@ def load_validated_claim_artifacts(
         )
     except ValueError as exc:
         raise PhaseA1ArtifactError(f"claim_decision.json is invalid: {exc}") from exc
+    _enforce_byte_binding_only_decision(decision)
     return {
         **bundle,
         "claim_decision": decision,
@@ -775,13 +1045,16 @@ def write_gated_claim_audit_report(
         execution_profile=execution_profile,
         plan_fingerprint=plan_fingerprint,
     )
+    root = Path(project_root).resolve()
+    _reject_recovery_marker(root, run_id, "staging")
     evidence_by_id = {
         record["evidence_id"]: record for record in artifacts["records"]
     }
     lines = [
         "# Phase A1 Claim Audit",
         "",
-        "本报告仅来自当前 Run 的已验证 Comparison Evidence 与 ClaimDecision。",
+        "本报告仅来自当前 Run 中经过合同校验的 Comparison Evidence 与 ClaimDecision。",
+        "Manifest 仅绑定声明来源字节；当前未验证来源文件的业务语义。",
         "它不是正式发布物，不构成真实身份确认、物理量变化、长期模式或预测结论。",
         "",
     ]
@@ -817,17 +1090,42 @@ def write_gated_claim_audit_report(
         lines.append("")
 
     report_data = ("\n".join(lines).rstrip() + "\n").encode("utf-8")
-    root = Path(project_root).resolve()
     report_relative = _staging_relative_path(run_id, "claim_audit_report.md")
     report_path = _resolve_fixed_path(root, report_relative)
     mirror_relative = _staging_relative_path(run_id, "claim_decision.json")
     mirror_path = _resolve_fixed_path(root, mirror_relative)
     _preflight_idempotent_target(report_path, report_data)
     _preflight_idempotent_target(mirror_path, artifacts["claim_decision_bytes"])
-    _atomic_write_idempotent(report_path, report_data)
-    _atomic_write_idempotent(mirror_path, artifacts["claim_decision_bytes"])
-    if mirror_path.read_bytes() != artifacts["claim_decision_bytes"]:
-        raise PhaseA1ArtifactError("Staging ClaimDecision mirror is not byte-identical")
+    committed_paths: list[str] = []
+    try:
+        _atomic_write_idempotent(
+            report_path,
+            report_data,
+            allowed_root=root,
+        )
+        committed_paths.append(report_relative)
+        _atomic_write_idempotent(
+            mirror_path,
+            artifacts["claim_decision_bytes"],
+            allowed_root=root,
+        )
+        committed_paths.append(mirror_relative)
+        if _read_file_bytes(
+            mirror_path,
+            label="Staging ClaimDecision mirror",
+        ) != artifacts["claim_decision_bytes"]:
+            raise PhaseA1ArtifactError(
+                "Staging ClaimDecision mirror is not byte-identical"
+            )
+    except Exception as exc:
+        _raise_recovery_required(
+            project_root=root,
+            run_id=run_id,
+            area="staging",
+            stage="claim_audit_report_commit",
+            committed_paths=committed_paths,
+            primary_error=exc,
+        )
     return {
         "claim_audit_report_path": report_relative,
         "claim_decision_mirror_path": mirror_relative,
@@ -838,8 +1136,11 @@ def write_gated_claim_audit_report(
 __all__ = [
     "COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION",
     "PHASE_A1_EXECUTION_PROFILE",
+    "PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION",
+    "SOURCE_VALIDATION_SCOPE",
     "PhaseA1ArtifactError",
     "comparison_evidence_csv_bytes",
+    "initialize_phase_a1_sandbox",
     "load_validated_claim_artifacts",
     "parse_comparison_evidence_csv",
     "validate_comparison_evidence_bundle",

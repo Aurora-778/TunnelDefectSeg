@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 from copy import deepcopy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -18,6 +20,7 @@ from orchestrator.inspection_workflow import (
     COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION,
     COMPARISON_EVIDENCE_SCHEMA_VERSION,
     PhaseA1ArtifactError,
+    initialize_phase_a1_sandbox,
     load_validated_claim_artifacts,
     parse_comparison_evidence_csv,
 )
@@ -128,6 +131,7 @@ def _sandbox_fixture(tmp_path: Path):
     }
     for role, path in files.items():
         path.write_bytes(contents[role])
+    initialize_phase_a1_sandbox(project_root, run_id=RUN_ID)
     hashes = {role: _sha256(contents[role]) for role in files}
     source_artifacts = [
         {
@@ -161,6 +165,89 @@ def _run_evidence_and_claim(context):
     return evidence_result, claim_result
 
 
+def _rewrite_csv_field(data: bytes, *, field: str, raw_value: str) -> bytes:
+    reader = csv.DictReader(io.StringIO(data.decode("utf-8"), newline=""))
+    rows = list(reader)
+    rows[0][field] = raw_value
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=list(COMPARISON_EVIDENCE_FIELDS),
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue().encode("utf-8")
+
+
+def _make_verified_evidence(project_root, files, context):
+    work = project_root / "runs" / RUN_ID / "work"
+    memory = work / "memory.csv"
+    registration = work / "registration.json"
+    memory.write_bytes(b"memory_id,last_area_px\nMEM-001,100\n")
+    registration.write_bytes(b'{"registration_status":"registered"}\n')
+    memory_hash = _sha256(memory.read_bytes())
+    registration_hash = _sha256(registration.read_bytes())
+    context["inputs"]["comparison_evidence"]["source_artifacts"].extend(
+        [
+            {
+                "role": "memory_snapshot",
+                "path": memory.relative_to(project_root).as_posix(),
+            },
+            {
+                "role": "registration_evidence",
+                "path": registration.relative_to(project_root).as_posix(),
+            },
+        ]
+    )
+    context["inputs"]["comparison_evidence"]["records"][0].update(
+        {
+            "evidence_id": "EVD-I002-obs-01-area",
+            "current_inspection_id": "I002",
+            "current_image_id": "I002_000040",
+            "current_observation_id": "I002::obs_01",
+            "current_timestamp": "2026-07-02T10:00:00.000000Z",
+            "current_comparability_status": "verified_comparable",
+            "previous_entity_type": "memory_snapshot",
+            "previous_memory_id": "MEM-001",
+            "previous_memory_version": "2",
+            "previous_last_seen_inspection": "I001",
+            "previous_last_seen_timestamp": "2026-07-01T10:00:00.000000Z",
+            "previous_source_inspection_ids": ["I001"],
+            "previous_source_record_count": 1,
+            "previous_observation_sources": ["real_inspection_mask_input"],
+            "previous_comparability_status": "verified_comparable",
+            "comparison_group_id": "MEM-001::inspection_level_max_mask_area_px",
+            "previous_memory_snapshot_value": 100,
+            "absolute_difference": 20,
+            "relative_difference": "0.2",
+            "association_id": "ASSOC-I002-obs-01",
+            "association_status": "matched",
+            "association_mode": "no_id",
+            "use_disease_id_score": False,
+            "association_score": "0.82",
+            "match_type": "soft",
+            "candidate_count": 2,
+            "score_margin": "0.18",
+            "association_supported_pair": True,
+            "identity_evidence_state": "association_supported",
+            "valid_timepoint_count": 2,
+            "temporal_order_valid": True,
+            "difference_valid": True,
+            "relative_difference_valid": True,
+            "comparison_comparability_status": "verified_comparable",
+            "comparability_reason": "dual_verified_sources",
+            "registration_status": "registered",
+            "registration_evidence_source": "fixture_registration",
+            "registration_evidence_sha256": registration_hash,
+            "source_memory_snapshot_sha256": memory_hash,
+            "source_association_artifact_sha256": _sha256(
+                files["association_artifact"].read_bytes()
+            ),
+        }
+    )
+
+
 def test_phase_a1_agents_create_only_fixed_run_local_artifacts(tmp_path):
     before = artifact_snapshot()
     project_root, _, _, context = _sandbox_fixture(tmp_path)
@@ -192,6 +279,7 @@ def test_manifest_is_last_and_binds_exact_source_bytes(tmp_path):
 
     assert manifest["schema_version"] == COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION
     assert manifest["record_count"] == 1
+    assert manifest["source_validation_scope"] == "byte_binding_only"
     assert manifest["source_artifacts"] == sorted(
         manifest["source_artifacts"],
         key=lambda item: (item["role"], item["path"]),
@@ -214,6 +302,46 @@ def test_evidence_csv_round_trip_preserves_canonical_types(tmp_path):
     assert records[0]["use_disease_id_score"] is None
     assert records[0]["evidence_valid"] is True
     assert records[0]["current_value"] == 120
+
+
+@pytest.mark.parametrize("raw_value", ["+120", "0120", " 120", "-0"])
+def test_evidence_csv_rejects_noncanonical_integer_encoding(tmp_path, raw_value):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    result = ComparisonEvidenceAgent().run(context)
+    data = (project_root / result["comparison_evidence_path"]).read_bytes()
+
+    with pytest.raises(PhaseA1ArtifactError, match="canonical integer"):
+        parse_comparison_evidence_csv(
+            _rewrite_csv_field(data, field="current_value", raw_value=raw_value)
+        )
+
+
+def test_evidence_csv_rejects_noncanonical_list_json(tmp_path):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    result = ComparisonEvidenceAgent().run(context)
+    data = (project_root / result["comparison_evidence_path"]).read_bytes()
+
+    with pytest.raises(PhaseA1ArtifactError, match="canonical JSON"):
+        parse_comparison_evidence_csv(
+            _rewrite_csv_field(
+                data,
+                field="previous_source_inspection_ids",
+                raw_value="[ ]",
+            )
+        )
+
+
+def test_byte_binding_only_sources_cannot_enable_verified_directional_claim(tmp_path):
+    project_root, files, _, context = _sandbox_fixture(tmp_path)
+    _make_verified_evidence(project_root, files, context)
+
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="verified_comparable.*trusted semantic validation receipt",
+    ):
+        ComparisonEvidenceAgent().run(context)
+
+    assert not (project_root / "runs/run_001/artifacts").exists()
 
 
 def test_identical_rerun_is_idempotent_but_changed_evidence_is_rejected(tmp_path):
@@ -261,10 +389,92 @@ def test_atomic_write_failure_reports_temp_cleanup_failure_without_losing_cause(
         PhaseA1ArtifactError,
         match="temporary cleanup also failed.*cleanup failed",
     ) as captured:
-        a1_artifacts._atomic_write_idempotent(target, b"{}\n")
+        a1_artifacts._atomic_write_idempotent(
+            target,
+            b"{}\n",
+            allowed_root=tmp_path,
+        )
 
     assert isinstance(captured.value.__cause__, OSError)
     assert "replace failed" in str(captured.value.__cause__)
+
+
+def test_manifest_failure_after_evidence_commit_leaves_recovery_marker(
+    tmp_path,
+    monkeypatch,
+):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    original_write = a1_artifacts._atomic_write_idempotent
+
+    def fail_manifest(path, data, *, allowed_root):
+        if path.name == "comparison_evidence_manifest.json":
+            try:
+                raise OSError("manifest replace failed")
+            except OSError as exc:
+                raise PhaseA1ArtifactError("manifest write failed") from exc
+        return original_write(path, data, allowed_root=allowed_root)
+
+    monkeypatch.setattr(a1_artifacts, "_atomic_write_idempotent", fail_manifest)
+
+    with pytest.raises(PhaseA1ArtifactError, match="recovery is required") as captured:
+        ComparisonEvidenceAgent().run(context)
+
+    artifacts = project_root / "runs/run_001/artifacts"
+    assert (artifacts / "comparison_evidence.csv").is_file()
+    assert not (artifacts / "comparison_evidence_manifest.json").exists()
+    assert (artifacts / ".a1_recovery_required.json").is_file()
+    assert isinstance(captured.value.__cause__, OSError)
+
+    with pytest.raises(PhaseA1ArtifactError, match="recovery marker exists"):
+        ComparisonEvidenceAgent().run(context)
+
+
+def test_claim_post_write_validation_failure_leaves_recovery_marker(
+    tmp_path,
+    monkeypatch,
+):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    ComparisonEvidenceAgent().run(context)
+
+    def fail_validation(*args, **kwargs):
+        raise PhaseA1ArtifactError("post-write validation failed")
+
+    monkeypatch.setattr(
+        a1_artifacts,
+        "load_validated_claim_artifacts",
+        fail_validation,
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="recovery is required"):
+        ClaimGateAgent().run(context)
+
+    artifacts = project_root / "runs/run_001/artifacts"
+    assert (artifacts / "claim_decision.json").is_file()
+    assert (artifacts / ".a1_recovery_required.json").is_file()
+
+
+def test_report_mirror_failure_leaves_staging_recovery_marker(
+    tmp_path,
+    monkeypatch,
+):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    _run_evidence_and_claim(context)
+    original_write = a1_artifacts._atomic_write_idempotent
+
+    def fail_mirror(path, data, *, allowed_root):
+        if path.name == "claim_decision.json" and path.parent.name == "staging":
+            raise PhaseA1ArtifactError("mirror write failed")
+        return original_write(path, data, allowed_root=allowed_root)
+
+    monkeypatch.setattr(a1_artifacts, "_atomic_write_idempotent", fail_mirror)
+
+    with pytest.raises(PhaseA1ArtifactError, match="recovery is required"):
+        ClaimAuditReportAgent().run(context)
+
+    staging = project_root / "runs/run_001/staging"
+    assert (staging / "claim_audit_report.md").is_file()
+    assert not (staging / "claim_decision.json").exists()
+    assert (staging / ".a1_recovery_required.json").is_file()
 
 
 def test_successful_bundle_leaves_no_temporary_artifacts(tmp_path):
@@ -361,8 +571,8 @@ def test_duplicate_manifest_json_key_is_rejected(tmp_path):
     result = ComparisonEvidenceAgent().run(context)
     manifest_path = project_root / result["comparison_evidence_manifest_path"]
     manifest_path.write_text(
-        '{"schema_version":"comparison_evidence_manifest_v1",'
-        '"schema_version":"comparison_evidence_manifest_v1"}',
+        f'{{"schema_version":"{COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION}",'
+        f'"schema_version":"{COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION}"}}',
         encoding="utf-8",
     )
 
@@ -396,6 +606,8 @@ def test_static_only_report_uses_claim_gate_qualifier_and_no_formal_publish(tmp_
     assert "方向性变化结论：未授权" in report
     assert "不构成方向性变化结论" in report
     assert "不是正式发布物" in report
+    assert "仅绑定声明来源字节" in report
+    assert "未验证来源文件的业务语义" in report
     authoritative = project_root / "runs/run_001/artifacts/claim_decision.json"
     mirror = project_root / result["claim_decision_mirror_path"]
     assert mirror.read_bytes() == authoritative.read_bytes()
@@ -418,6 +630,31 @@ def test_activation_contract_fails_closed(tmp_path, shared_override, message):
         ComparisonEvidenceAgent().run(context)
 
     assert not (project_root / "runs/run_001/artifacts").exists()
+
+
+def test_phase_a1_requires_explicit_sandbox_marker(tmp_path):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    (project_root / ".phase_a1_sandbox.json").unlink()
+
+    with pytest.raises(PhaseA1ArtifactError, match="sandbox marker is missing"):
+        ComparisonEvidenceAgent().run(context)
+
+
+def test_phase_a1_rejects_existing_directory_outside_configured_temp_root(
+    tmp_path,
+    monkeypatch,
+):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    configured_temp = tmp_path / "different-controlled-temp"
+    configured_temp.mkdir()
+    monkeypatch.setattr(
+        a1_artifacts.tempfile,
+        "gettempdir",
+        lambda: str(configured_temp),
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="inside the process temporary directory"):
+        ComparisonEvidenceAgent().run(context)
 
 
 def test_live_repository_root_is_rejected():
@@ -461,12 +698,108 @@ def test_fixed_output_parent_symlink_cannot_escape_sandbox(tmp_path):
     try:
         with pytest.raises(
             PhaseA1ArtifactError,
-            match="outside its fixed Run path|symbolic",
+            match="outside|symlink|reparse point",
         ):
             ComparisonEvidenceAgent().run(context)
         assert not (external / "comparison_evidence.csv").exists()
     finally:
         artifacts.rmdir()
+
+
+def test_source_in_tree_junction_or_symlink_is_rejected(tmp_path):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    run_root = project_root / "runs" / RUN_ID
+    work = run_root / "work"
+    real_work = run_root / "work-real"
+    work.rename(real_work)
+    try:
+        work.symlink_to(real_work, target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            pytest.skip("directory symlinks are unavailable on this platform")
+        completed = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(work), str(real_work)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            pytest.skip("directory junctions are unavailable on this filesystem")
+    try:
+        with pytest.raises(PhaseA1ArtifactError, match="symlink|reparse point"):
+            ComparisonEvidenceAgent().run(context)
+    finally:
+        work.rmdir()
+
+
+def test_atomic_write_rechecks_path_after_preflight(tmp_path, monkeypatch):
+    allowed_root = tmp_path / "controlled"
+    parent = allowed_root / "runs/run_001/artifacts"
+    parent.mkdir(parents=True)
+    target = parent / "comparison_evidence.csv"
+    original_preflight = a1_artifacts._preflight_idempotent_target
+    state = {"preflight_complete": False}
+
+    def mark_preflight_complete(path, data):
+        original_preflight(path, data)
+        state["preflight_complete"] = True
+
+    def become_reparse_point(path):
+        return state["preflight_complete"] and path == parent
+
+    monkeypatch.setattr(
+        a1_artifacts,
+        "_preflight_idempotent_target",
+        mark_preflight_complete,
+    )
+    monkeypatch.setattr(
+        a1_artifacts,
+        "_path_is_reparse_point",
+        become_reparse_point,
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="reparse point"):
+        a1_artifacts._atomic_write_idempotent(
+            target,
+            b"header\n",
+            allowed_root=allowed_root,
+        )
+
+    assert not target.exists()
+
+
+def test_atomic_write_cleans_temp_when_final_path_recheck_fails(
+    tmp_path,
+    monkeypatch,
+):
+    allowed_root = tmp_path / "controlled"
+    parent = allowed_root / "runs/run_001/artifacts"
+    parent.mkdir(parents=True)
+    target = parent / "comparison_evidence.csv"
+    original_assert = a1_artifacts._assert_path_is_contained_and_plain
+    calls = {"count": 0}
+
+    def fail_after_temp_write(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 4:
+            raise PhaseA1ArtifactError("path became a reparse point")
+        return original_assert(*args, **kwargs)
+
+    monkeypatch.setattr(
+        a1_artifacts,
+        "_assert_path_is_contained_and_plain",
+        fail_after_temp_write,
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="atomically write"):
+        a1_artifacts._atomic_write_idempotent(
+            target,
+            b"header\n",
+            allowed_root=allowed_root,
+        )
+
+    assert not target.exists()
+    assert not list(parent.glob("*.tmp"))
 
 
 def test_agents_reject_arbitrary_output_overrides(tmp_path):

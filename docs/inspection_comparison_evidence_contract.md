@@ -41,15 +41,39 @@ boundary is implemented by `orchestrator/inspection_workflow/a1_artifacts.py` an
 the directly instantiated `ComparisonEvidenceAgent`. It accepts only already
 normalized records that pass this complete validator, writes deterministic UTF-8
 CSV to `runs/<run_id>/artifacts/comparison_evidence.csv`, and commits
-`comparison_evidence_manifest.json` last. The manifest binds the exact Run-local
+`comparison_evidence_manifest.json` last. The V2 manifest binds the exact Run-local
 Association, Association Manifest, Engineering, and any declared Memory,
-registration, or scale source bytes by size and SHA-256.
+registration, or scale source bytes by size and SHA-256. Its
+`source_validation_scope=byte_binding_only` is intentionally narrower than semantic
+source validation: it proves which bytes were declared, but it does not prove that
+those bytes satisfy the Association, Engineering, Memory, or history-only contracts.
+Until a later schema introduces a trusted semantic-validation receipt, this A1
+wrapper rejects `verified_comparable` Evidence and any directional Claim capability.
 
 This is not yet source-to-Evidence projection or default workflow integration.
 The A1 component is available only with `execution_profile=phase_a1_sandbox` in a
-temporary project root outside the live repository. It has no Registry, DAG, CLI,
-Web, or formal publication entry point and cannot accept caller-selected output
+project root below the process temporary directory, outside the live repository.
+The root must first be initialized with `initialize_phase_a1_sandbox()`, which writes
+the fixed `.phase_a1_sandbox.json` identity marker. Merely selecting another existing
+directory as `project_root` is insufficient. The component has no Registry, DAG,
+CLI, Web, or formal publication entry point and cannot accept caller-selected output
 paths. Identical reruns are idempotent; a changed existing A1 artifact fails closed.
+CSV readers require the writer's exact canonical field order, row order, LF bytes,
+compact JSON lists, lowercase booleans, and canonical integer spelling.
+
+Evidence/Manifest, authoritative Decision/post-write validation, and Staging
+report/Decision mirror are multi-file process-level stages rather than A2 publication
+transactions. If a later step fails after an earlier file may have been committed,
+the stage writes `.a1_recovery_required.json` under that Run's `artifacts` or
+`staging` directory. Readers fail closed while the marker exists. The marker and
+partial files are retained for explicit manual inspection; this A1 layer does not
+silently delete or roll back them. Manifest-last here is a process-level ordering
+rule, not a power-loss durability or concurrent-writer guarantee.
+
+Path checks reject symlinks and Windows reparse points, including in-tree aliases,
+and are repeated immediately around writes to narrow check/use replacement windows.
+They remain a best-effort, no-lock sandbox guard; A3 owns concurrency fencing and
+durable publication.
 
 ## Executable Phase 0 Record Contract
 
