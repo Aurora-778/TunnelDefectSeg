@@ -1020,11 +1020,18 @@ def _recovery_marker_path(project_root: Path, run_id: str, area: str) -> Path:
 
 def _reject_recovery_marker(project_root: Path, run_id: str, area: str) -> None:
     marker_path = _recovery_marker_path(project_root, run_id, area)
-    if os.path.lexists(marker_path):
+    try:
+        marker_path.lstat()
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as exc:
         raise PhaseA1ArtifactError(
-            f"A1 {area} recovery marker exists; inspect the partial Run-local artifacts "
-            "and remove the marker only after manual recovery"
-        )
+            f"unable to inspect A1 {area} recovery marker"
+        ) from exc
+    raise PhaseA1ArtifactError(
+        f"A1 {area} recovery marker exists; inspect the partial Run-local artifacts "
+        "and remove the marker only after manual recovery"
+    )
 
 
 def _raise_recovery_required(

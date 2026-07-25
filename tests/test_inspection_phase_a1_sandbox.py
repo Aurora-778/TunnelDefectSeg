@@ -583,9 +583,18 @@ def test_recovery_marker_directory_entry_blocks_rerun(tmp_path):
         ComparisonEvidenceAgent().run(context)
 
 
-def test_recovery_marker_uses_directory_entry_semantics_without_link_privilege(
+@pytest.mark.parametrize(
+    "inspection_error",
+    [
+        PermissionError("marker permission denied"),
+        OSError("marker lstat failed"),
+        ValueError("marker path is invalid"),
+    ],
+)
+def test_recovery_marker_inspection_failure_fails_closed(
     tmp_path,
     monkeypatch,
+    inspection_error,
 ):
     project_root, _, _, _ = _sandbox_fixture(tmp_path)
     marker = (
@@ -595,19 +604,25 @@ def test_recovery_marker_uses_directory_entry_semantics_without_link_privilege(
         / "artifacts"
         / ".a1_recovery_required.json"
     )
-    real_lexists = os.path.lexists
+    real_lstat = Path.lstat
 
-    def report_broken_marker(path):
-        return Path(path) == marker or real_lexists(path)
+    def fail_marker_inspection(path, *args, **kwargs):
+        if path == marker:
+            raise inspection_error
+        return real_lstat(path, *args, **kwargs)
 
-    monkeypatch.setattr(a1_artifacts.os.path, "lexists", report_broken_marker)
+    monkeypatch.setattr(Path, "lstat", fail_marker_inspection)
 
-    with pytest.raises(PhaseA1ArtifactError, match="recovery marker exists"):
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="unable to inspect A1 artifacts recovery marker",
+    ) as captured:
         a1_artifacts._reject_recovery_marker(
             project_root,
             RUN_ID,
             "artifacts",
         )
+    assert captured.value.__cause__ is inspection_error
 
 
 def test_broken_recovery_marker_symlink_blocks_when_supported(tmp_path):

@@ -512,7 +512,19 @@ def _run_and_load(root: Path, context):
     return result, result["records"]
 
 
-def _prepared_history_agent_fixture(tmp_path: Path, *, include_query: bool):
+def _prepared_history_agent_fixture(
+    tmp_path: Path,
+    *,
+    include_query: bool,
+    inspection_count: int | None = None,
+):
+    if inspection_count is None:
+        inspection_count = 2 if include_query else 1
+    if inspection_count < 1 or include_query != (inspection_count > 1):
+        raise AssertionError(
+            "fixture inspection_count/include_query contract is invalid"
+        )
+
     root = tmp_path / "prepared-history-projection"
     work = root / "runs" / RUN_ID / "work"
     dataset = root / "dataset"
@@ -558,6 +570,45 @@ def _prepared_history_agent_fixture(tmp_path: Path, *, include_query: bool):
                 "image_file": "images/frame_late.jpg",
                 "mask_file": "masks/mask_late.png",
                 "local_observation_id": "obs_02",
+                "disease_type": "crack",
+            }
+        )
+    for inspection_index in range(3, inspection_count + 1):
+        image_name = f"frame_{inspection_index:03d}.jpg"
+        mask_name = f"mask_{inspection_index:03d}.png"
+        mask_area = [1, 50, 2000, 10000, 100][
+            (inspection_index - 1) % 5
+        ]
+        Image.new(
+            "RGB",
+            (100, 100),
+            color=(
+                inspection_index % 255,
+                (inspection_index * 2) % 255,
+                (inspection_index * 3) % 255,
+            ),
+        ).save(dataset / "images" / image_name)
+        inspection_mask = Image.new("L", (100, 100), color=0)
+        inspection_mask.putdata(
+            ([255] * mask_area) + ([0] * (10000 - mask_area))
+        )
+        inspection_mask.save(dataset / "masks" / mask_name)
+        metadata_rows.append(
+            {
+                "sequence_id": "S01",
+                "source_inspection_id": f"visit_{inspection_index}",
+                "frame_id": str(inspection_index),
+                "timestamp": (
+                    f"2026-07-{inspection_index:02d}T10:00:00Z"
+                ),
+                "mileage_m": str(inspection_index * 10000),
+                "ring_id": str(inspection_index * 9000),
+                "clock_direction": (
+                    f"{((inspection_index - 1) % 12) + 1}点"
+                ),
+                "image_file": f"images/{image_name}",
+                "mask_file": f"masks/{mask_name}",
+                "local_observation_id": f"obs_{inspection_index:02d}",
                 "disease_type": "crack",
             }
         )
@@ -1313,6 +1364,31 @@ def test_existing_prepared_and_history_producers_materialize_static_evidence(
         match="snapshot does not match its validated manifest",
     ):
         ComparisonEvidenceAgent().run(context)
+
+
+def test_prepared_history_agent_materializes_maximum_round_budget(tmp_path):
+    root, work, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+        inspection_count=PHASE_A1_MAX_INSPECTION_ROUNDS,
+    )
+
+    result = ComparisonEvidenceAgent().run(context)
+    bundle = validate_comparison_evidence_bundle(
+        root,
+        run_id=RUN_ID,
+        execution_profile="phase_a1_sandbox",
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+
+    assert result["record_count"] == PHASE_A1_MAX_INSPECTION_ROUNDS
+    assert (work / "projection_receipt.json").is_file()
+    assert bundle["manifest"]["source_bundle_kind"] == "run_local_projection"
+    assert len(bundle["manifest"]["source_artifacts"]) == 252
+    assert (
+        len(bundle["manifest"]["source_artifacts"])
+        == _projection_source_reference_count(PHASE_A1_MAX_INSPECTION_ROUNDS)
+    )
 
 
 def test_prepared_history_agent_rejects_manifest_over_pilot_round_limit(tmp_path):

@@ -142,10 +142,11 @@ directory. The marker records only paths actually committed by that invocation;
 a clean failure before the first replace remains retryable without a marker.
 Readers and reruns fail closed whenever the marker path has any directory entry,
 including a regular file, directory, broken symbolic link, or Windows reparse
-entry. The marker and partial files are retained for explicit manual inspection;
-this A1 layer does not silently delete or roll back them. Manifest-last here is a
-process-level ordering rule, not a power-loss durability or concurrent-writer
-guarantee.
+entry. Marker inspection uses `lstat`: only `FileNotFoundError` means absent,
+while permission and other inspection failures also Fail Closed. The marker and
+partial files are retained for explicit manual inspection; this A1 layer does not
+silently delete or roll back them. Manifest-last here is a process-level ordering
+rule, not a power-loss durability or concurrent-writer guarantee.
 
 Path checks reject symlinks and Windows reparse points, including in-tree aliases,
 and are repeated immediately around writes to narrow check/use replacement windows.
