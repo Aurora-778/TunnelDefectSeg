@@ -55,8 +55,11 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
   claims without source-proof Memory remain Fail Closed.
 - Projection work is a process-level multi-file stage. Partial or
   write-state-uncertain failures create a Run-local work recovery marker that
-  blocks readers and reruns until explicit inspection.
-- The current single-sequence A1 pilot accepts at most 31 inspection rounds.
+  blocks readers and reruns until explicit inspection; any directory entry at
+  the marker path is treated as a blocking sentinel.
+- The current single-sequence A1 pilot accepts at most 31 inspection rounds
+  (252 complete V4 references); round 32 would require 260 and is rejected
+  before work materialization.
 - Lock and publication policies are machine-marked disabled until their named phases.
 
 ## Fail-Closed Rules

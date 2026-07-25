@@ -568,6 +568,68 @@ def test_manifest_failure_after_evidence_commit_leaves_recovery_marker(
         ComparisonEvidenceAgent().run(context)
 
 
+def test_recovery_marker_directory_entry_blocks_rerun(tmp_path):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    marker = (
+        project_root
+        / "runs"
+        / RUN_ID
+        / "artifacts"
+        / ".a1_recovery_required.json"
+    )
+    marker.mkdir(parents=True)
+
+    with pytest.raises(PhaseA1ArtifactError, match="recovery marker exists"):
+        ComparisonEvidenceAgent().run(context)
+
+
+def test_recovery_marker_uses_directory_entry_semantics_without_link_privilege(
+    tmp_path,
+    monkeypatch,
+):
+    project_root, _, _, _ = _sandbox_fixture(tmp_path)
+    marker = (
+        project_root
+        / "runs"
+        / RUN_ID
+        / "artifacts"
+        / ".a1_recovery_required.json"
+    )
+    real_lexists = os.path.lexists
+
+    def report_broken_marker(path):
+        return Path(path) == marker or real_lexists(path)
+
+    monkeypatch.setattr(a1_artifacts.os.path, "lexists", report_broken_marker)
+
+    with pytest.raises(PhaseA1ArtifactError, match="recovery marker exists"):
+        a1_artifacts._reject_recovery_marker(
+            project_root,
+            RUN_ID,
+            "artifacts",
+        )
+
+
+def test_broken_recovery_marker_symlink_blocks_when_supported(tmp_path):
+    project_root, _, _, context = _sandbox_fixture(tmp_path)
+    marker = (
+        project_root
+        / "runs"
+        / RUN_ID
+        / "artifacts"
+        / ".a1_recovery_required.json"
+    )
+    try:
+        marker.symlink_to(marker.with_name("missing-recovery-marker-target.json"))
+    except (NotImplementedError, OSError):
+        pytest.skip("filesystem does not permit creating a test symlink")
+
+    assert marker.is_symlink()
+    assert not marker.exists()
+    with pytest.raises(PhaseA1ArtifactError, match="recovery marker exists"):
+        ComparisonEvidenceAgent().run(context)
+
+
 def test_claim_post_write_validation_failure_leaves_recovery_marker(
     tmp_path,
     monkeypatch,

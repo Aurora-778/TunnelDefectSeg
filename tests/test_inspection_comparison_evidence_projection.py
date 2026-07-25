@@ -27,7 +27,10 @@ from orchestrator.inspection_workflow import (
 )
 from orchestrator.inspection_workflow.a1_artifacts import (
     PHASE_A1_MAX_INSPECTION_ROUNDS,
+    PHASE_A1_SOURCE_ARTIFACT_LIMIT,
+    _projection_source_reference_count,
     _require_projection_pilot_round_count,
+    _validate_projection_source_set,
     snapshot_phase_a1_work_artifact,
 )
 from orchestrator.inspection_workflow.comparison_evidence_projection import (
@@ -231,6 +234,166 @@ def _artifact_reference(root: Path, path: Path, *, kind: str):
         "size_bytes": len(data),
         "sha256": hashlib.sha256(data).hexdigest(),
     }
+
+
+def _complete_v4_source_set(round_count: int):
+    work_prefix = f"runs/{RUN_ID}/work"
+    projected_roles = {
+        f"{work_prefix}/frame_records.csv": "frame_artifact",
+        f"{work_prefix}/engineering_records.csv": "engineering_artifact",
+        f"{work_prefix}/association_records.csv": "association_artifact",
+        f"{work_prefix}/association_manifest.json": "association_manifest",
+    }
+    source_specs = [
+        ("prepared_manifest", f"{work_prefix}/producer/prepared_manifest.json"),
+        (
+            "prepared_observation_records",
+            f"{work_prefix}/producer/observation_records.csv",
+        ),
+        ("prepared_frame_records", f"{work_prefix}/producer/frame_records.csv"),
+        (
+            "history_association_records",
+            f"{work_prefix}/producer/association_records.csv",
+        ),
+        ("history_manifest", f"{work_prefix}/producer/association_manifest.json"),
+    ]
+    rounds = []
+    for round_index in range(1, round_count + 1):
+        round_base = f"{work_prefix}/main_progressive/round_{round_index:03d}"
+        query_path = f"{round_base}/query_frames.csv"
+        projected_roles[query_path] = "history_round_context"
+        source_specs.append(
+            (
+                "history_query_frames",
+                f"{work_prefix}/producer/round_{round_index:03d}/query_frames.csv",
+            )
+        )
+        round_entry = {
+            "round_index": round_index,
+            "query_inspection": f"I{round_index:03d}",
+            "query_frames": query_path,
+            "mode": "baseline" if round_index == 1 else "history_only",
+        }
+        if round_index > 1:
+            association_path = f"{round_base}/association_records.csv"
+            memory_before_path = f"{round_base}/memory_before_query.csv"
+            memory_after_path = f"{round_base}/memory_after_query.csv"
+            round_entry.update(
+                {
+                    "association_records": association_path,
+                    "memory_before": memory_before_path,
+                    "memory_after": memory_after_path,
+                }
+            )
+            projected_roles[association_path] = "association_round_artifact"
+            projected_roles[memory_before_path] = "history_memory_context"
+            projected_roles[memory_after_path] = "history_round_context"
+            producer_round = f"{work_prefix}/producer/round_{round_index:03d}"
+            source_specs.extend(
+                [
+                    (
+                        "history_round_association",
+                        f"{producer_round}/association_records.csv",
+                    ),
+                    (
+                        "history_memory_before",
+                        f"{producer_round}/memory_before_query.csv",
+                    ),
+                    (
+                        "history_memory_after",
+                        f"{producer_round}/memory_after_query.csv",
+                    ),
+                ]
+            )
+        rounds.append(round_entry)
+
+    manifest_path = f"{work_prefix}/association_manifest.json"
+    source_bytes_by_path = {
+        path: f"{kind}:{path}\n".encode("utf-8") for kind, path in source_specs
+    }
+    source_bytes_by_path.update(
+        {
+            path: f"projected:{path}\n".encode("utf-8")
+            for path in projected_roles
+        }
+    )
+    source_bytes_by_path[manifest_path] = (
+        json.dumps(
+            {"mode": "history_only", "rounds": rounds},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+    def reference(path: str, *, kind: str):
+        data = source_bytes_by_path[path]
+        return {
+            "kind": kind,
+            "path": path,
+            "size_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+
+    receipt_sources = sorted(
+        (reference(path, kind=kind) for kind, path in source_specs),
+        key=lambda item: (item["kind"], item["path"]),
+    )
+    receipt_projected = sorted(
+        (
+            reference(path, kind="projected_work_artifact")
+            for path in projected_roles
+        ),
+        key=lambda item: (item["kind"], item["path"]),
+    )
+    receipt_path = f"{work_prefix}/projection_receipt.json"
+    source_bytes_by_path[receipt_path] = (
+        json.dumps(
+            {
+                "schema_version": PROJECTION_RECEIPT_SCHEMA_VERSION,
+                "run_id": RUN_ID,
+                "execution_profile": "phase_a1_sandbox",
+                "validation_scope": "prepared_readiness_and_history_contract",
+                "source_artifacts": receipt_sources,
+                "projected_artifacts": receipt_projected,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+    declared = []
+    for path, role in projected_roles.items():
+        data = source_bytes_by_path[path]
+        declared.append(
+            {
+                "role": role,
+                "path": path,
+                "size_bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+    receipt_data = source_bytes_by_path[receipt_path]
+    declared.append(
+        {
+            "role": "projection_receipt",
+            "path": receipt_path,
+            "size_bytes": len(receipt_data),
+            "sha256": hashlib.sha256(receipt_data).hexdigest(),
+        }
+    )
+    for item in receipt_sources:
+        declared.append(
+            {
+                "role": "projection_input",
+                "path": item["path"],
+                "size_bytes": item["size_bytes"],
+                "sha256": item["sha256"],
+            }
+        )
+    declared.sort(key=lambda item: (item["role"], item["path"]))
+    return declared, source_bytes_by_path
 
 
 def _refresh_test_projection_receipt(root: Path, context) -> None:
@@ -779,9 +942,29 @@ def test_phase_a1_projection_round_limit_accepts_maximum():
         _require_projection_pilot_round_count(PHASE_A1_MAX_INSPECTION_ROUNDS)
         == PHASE_A1_MAX_INSPECTION_ROUNDS
     )
+    assert (
+        _projection_source_reference_count(PHASE_A1_MAX_INSPECTION_ROUNDS)
+        == 252
+    )
+    assert (
+        _projection_source_reference_count(PHASE_A1_MAX_INSPECTION_ROUNDS)
+        <= PHASE_A1_SOURCE_ARTIFACT_LIMIT
+    )
 
 
 def test_phase_a1_projection_round_limit_rejects_next_round():
+    assert (
+        _projection_source_reference_count(
+            PHASE_A1_MAX_INSPECTION_ROUNDS + 1
+        )
+        == 260
+    )
+    assert (
+        _projection_source_reference_count(
+            PHASE_A1_MAX_INSPECTION_ROUNDS + 1
+        )
+        > PHASE_A1_SOURCE_ARTIFACT_LIMIT
+    )
     with pytest.raises(
         PhaseA1ArtifactError,
         match="supports at most 31 inspection rounds",
@@ -789,6 +972,20 @@ def test_phase_a1_projection_round_limit_rejects_next_round():
         _require_projection_pilot_round_count(
             PHASE_A1_MAX_INSPECTION_ROUNDS + 1
         )
+
+
+def test_complete_v4_source_set_fits_maximum_round_budget():
+    declared, source_bytes_by_path = _complete_v4_source_set(
+        PHASE_A1_MAX_INSPECTION_ROUNDS
+    )
+
+    assert len(declared) == 252
+    assert len(declared) <= PHASE_A1_SOURCE_ARTIFACT_LIMIT
+    _validate_projection_source_set(
+        RUN_ID,
+        declared,
+        source_bytes_by_path,
+    )
 
 
 def test_source_headers_cannot_smuggle_label_fields(tmp_path):
@@ -1119,7 +1316,7 @@ def test_existing_prepared_and_history_producers_materialize_static_evidence(
 
 
 def test_prepared_history_agent_rejects_manifest_over_pilot_round_limit(tmp_path):
-    _, _, _, context = _prepared_history_agent_fixture(
+    _, work, _, context = _prepared_history_agent_fixture(
         tmp_path,
         include_query=True,
     )
@@ -1143,6 +1340,8 @@ def test_prepared_history_agent_rejects_manifest_over_pilot_round_limit(tmp_path
         match="supports at most 31 inspection rounds",
     ):
         ComparisonEvidenceAgent().run(context)
+    assert not (work / "projection_receipt.json").exists()
+    assert not (work / "frame_records.csv").exists()
 
 
 def test_projection_work_partial_commit_records_only_actual_paths(

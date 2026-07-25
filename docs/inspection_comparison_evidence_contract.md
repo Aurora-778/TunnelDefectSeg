@@ -123,9 +123,11 @@ compact JSON lists, lowercase booleans, and canonical integer spelling. JSON inp
 are size-bounded; excessive nesting and non-finite constants fail closed. A1 V1
 Run-local source snapshots are limited to 8 MiB each and a bundle to 256 source
 references. The `run_local_projection` A1 pilot additionally supports at most
-31 inspection rounds; round 32 fails with an explicit pilot-scale error before
-work materialization. This exposes the domain limit instead of relying on the
-internal reference count to fail first. Producer decimal text is
+31 inspection rounds. The complete V4 producer/receipt/projected topology uses
+252 references at 31 rounds and 260 at round 32, so round 32 fails with an
+explicit pilot-scale error before work materialization. This exposes the domain
+limit instead of relying on the generic reference-count check to fail later.
+Producer decimal text is
 bounded before fixed-point formatting, so extreme exponents fail closed instead of
 expanding into unbounded strings. These bounds target the single-sequence pilot and
 must be versioned before larger datasets are accepted.
@@ -138,10 +140,12 @@ cleanup leaves write state uncertain, the stage writes
 `.a1_recovery_required.json` under that Run's `work`, `artifacts`, or `staging`
 directory. The marker records only paths actually committed by that invocation;
 a clean failure before the first replace remains retryable without a marker.
-Readers and reruns fail closed while the marker exists. The marker and partial
-files are retained for explicit manual inspection; this A1 layer does not silently
-delete or roll back them. Manifest-last here is a process-level ordering rule, not
-a power-loss durability or concurrent-writer guarantee.
+Readers and reruns fail closed whenever the marker path has any directory entry,
+including a regular file, directory, broken symbolic link, or Windows reparse
+entry. The marker and partial files are retained for explicit manual inspection;
+this A1 layer does not silently delete or roll back them. Manifest-last here is a
+process-level ordering rule, not a power-loss durability or concurrent-writer
+guarantee.
 
 Path checks reject symlinks and Windows reparse points, including in-tree aliases,
 and are repeated immediately around writes to narrow check/use replacement windows.

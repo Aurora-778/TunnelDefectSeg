@@ -115,12 +115,25 @@ class PhaseA1ArtifactError(ValueError):
     """Raised when a Run-local A1 artifact set is unsafe or inconsistent."""
 
 
+def _projection_source_reference_count(round_count: int) -> int:
+    """Return the complete V4 reference budget for a valid inspection prefix."""
+
+    history_round_count = max(round_count - 1, 0)
+    producer_references = 5 + round_count + (3 * history_round_count)
+    projected_references = 5 + round_count + (3 * history_round_count)
+    return producer_references + projected_references
+
+
 def _require_projection_pilot_round_count(round_count: Any) -> int:
     if type(round_count) is not int or round_count <= 0:
         raise PhaseA1ArtifactError(
             "A1 prepared-history inspection round count must be a positive integer"
         )
-    if round_count > PHASE_A1_MAX_INSPECTION_ROUNDS:
+    if (
+        round_count > PHASE_A1_MAX_INSPECTION_ROUNDS
+        or _projection_source_reference_count(round_count)
+        > PHASE_A1_SOURCE_ARTIFACT_LIMIT
+    ):
         raise PhaseA1ArtifactError(
             "A1 prepared-history pilot supports at most "
             f"{PHASE_A1_MAX_INSPECTION_ROUNDS} inspection rounds"
@@ -1007,7 +1020,7 @@ def _recovery_marker_path(project_root: Path, run_id: str, area: str) -> Path:
 
 def _reject_recovery_marker(project_root: Path, run_id: str, area: str) -> None:
     marker_path = _recovery_marker_path(project_root, run_id, area)
-    if marker_path.exists():
+    if os.path.lexists(marker_path):
         raise PhaseA1ArtifactError(
             f"A1 {area} recovery marker exists; inspect the partial Run-local artifacts "
             "and remove the marker only after manual recovery"
