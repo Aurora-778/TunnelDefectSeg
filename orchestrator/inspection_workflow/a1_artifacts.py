@@ -25,7 +25,7 @@ from .comparison_evidence import (
 )
 
 
-COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION = "comparison_evidence_manifest_v3"
+COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION = "comparison_evidence_manifest_v4"
 PHASE_A1_EXECUTION_PROFILE = "phase_a1_sandbox"
 PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION = "phase_a1_sandbox_marker_v2"
 A1_RECOVERY_MARKER_SCHEMA_VERSION = "phase_a1_recovery_marker_v1"
@@ -45,6 +45,8 @@ _SOURCE_ARTIFACT_ROLES = {
     "history_memory_context",
     "history_round_context",
     "memory_snapshot",
+    "projection_input",
+    "projection_receipt",
     "registration_evidence",
     "scale_calibration",
 }
@@ -104,6 +106,8 @@ _SANDBOX_MARKER_FIELDS = {
     "evidence_source_mode",
 }
 _MAX_JSON_BYTES = 1024 * 1024
+_MAX_A1_WORK_ARTIFACT_BYTES = 8 * 1024 * 1024
+PHASE_A1_SOURCE_ARTIFACT_LIMIT = 256
 
 
 class PhaseA1ArtifactError(ValueError):
@@ -577,6 +581,7 @@ def snapshot_phase_a1_work_artifact(
     run_id: str,
     execution_profile: str,
     relative_path: str,
+    max_size_bytes: int = _MAX_A1_WORK_ARTIFACT_BYTES,
 ) -> dict[str, Any]:
     """Read one plain Run-local work artifact as a point-in-time byte snapshot."""
 
@@ -608,10 +613,24 @@ def snapshot_phase_a1_work_artifact(
         raise PhaseA1ArtifactError("A1 work artifact path must be a Run-local POSIX path")
     path_text = relative_path
     path = _resolve_fixed_path(root, path_text)
+    if (
+        type(max_size_bytes) is not int
+        or max_size_bytes <= 0
+    ):
+        raise PhaseA1ArtifactError("A1 work artifact size limit must be a positive integer")
     try:
+        size_bytes = path.stat().st_size
+        if size_bytes > max_size_bytes:
+            raise PhaseA1ArtifactError(
+                f"source artifact exceeds the A1 pilot size limit: {path_text}"
+            )
         data = path.read_bytes()
     except OSError as exc:
         raise PhaseA1ArtifactError(f"unable to read source artifact: {path_text}") from exc
+    if len(data) > max_size_bytes:
+        raise PhaseA1ArtifactError(
+            f"source artifact exceeds the A1 pilot size limit: {path_text}"
+        )
     return {
         "path": path_text,
         "data": data,
@@ -685,6 +704,10 @@ def _snapshot_source_artifacts(
     seen_paths: set[str] = set()
     role_counts: dict[str, int] = {}
     for index, reference in enumerate(source_artifacts, start=1):
+        if index > PHASE_A1_SOURCE_ARTIFACT_LIMIT:
+            raise PhaseA1ArtifactError(
+                "source_artifacts exceeds the A1 pilot reference limit"
+            )
         allowed_fields = {"role", "path", "expected_sha256"}
         if (
             not isinstance(reference, Mapping)
@@ -707,9 +730,17 @@ def _snapshot_source_artifacts(
         seen_paths.add(path_text)
         role_counts[role] = role_counts.get(role, 0) + 1
         try:
+            if path.stat().st_size > _MAX_A1_WORK_ARTIFACT_BYTES:
+                raise PhaseA1ArtifactError(
+                    f"source artifact exceeds the A1 pilot size limit: {path_text}"
+                )
             data = path.read_bytes()
         except OSError as exc:
             raise PhaseA1ArtifactError(f"unable to read source artifact: {path_text}") from exc
+        if len(data) > _MAX_A1_WORK_ARTIFACT_BYTES:
+            raise PhaseA1ArtifactError(
+                f"source artifact exceeds the A1 pilot size limit: {path_text}"
+            )
         actual_sha256 = _sha256_bytes(data)
         expected_sha256 = reference.get("expected_sha256")
         if expected_sha256 is not None:
@@ -777,16 +808,25 @@ def _bind_evidence_provenance(
 def _validate_projection_source_set(
     run_id: str,
     declared_inputs: Iterable[Mapping[str, Any]],
-    association_manifest_bytes: bytes,
+    source_bytes_by_path: Mapping[str, bytes],
 ) -> None:
-    actual = {(item["role"], item["path"]) for item in declared_inputs}
+    declared = list(declared_inputs)
+    actual = {(item["role"], item["path"]) for item in declared}
+    actual_by_path = {item["path"]: item for item in declared}
     manifest_relative = f"runs/{run_id}/work/association_manifest.json"
+    receipt_relative = f"runs/{run_id}/work/projection_receipt.json"
     expected = {
         ("frame_artifact", f"runs/{run_id}/work/frame_records.csv"),
         ("engineering_artifact", f"runs/{run_id}/work/engineering_records.csv"),
         ("association_artifact", f"runs/{run_id}/work/association_records.csv"),
         ("association_manifest", manifest_relative),
+        ("projection_receipt", receipt_relative),
     }
+    association_manifest_bytes = source_bytes_by_path.get(manifest_relative)
+    if association_manifest_bytes is None:
+        raise PhaseA1ArtifactError(
+            "run_local_projection is missing the Association manifest snapshot"
+        )
     association_manifest = _parse_json_object_bytes(
         association_manifest_bytes,
         label="Run-local Association manifest",
@@ -820,6 +860,65 @@ def _validate_projection_source_set(
                     f"Run-local Association manifest round {round_number} {field} is invalid"
                 )
             expected.add((role, path_text))
+
+    receipt_bytes = source_bytes_by_path.get(receipt_relative)
+    if receipt_bytes is None:
+        raise PhaseA1ArtifactError(
+            "run_local_projection is missing projection_receipt.json"
+        )
+    from .comparison_evidence_projection import (
+        ComparisonEvidenceProjectionError,
+        parse_projection_receipt,
+    )
+
+    try:
+        receipt = parse_projection_receipt(
+            receipt_bytes,
+            run_id=run_id,
+            execution_profile=PHASE_A1_EXECUTION_PROFILE,
+        )
+    except ComparisonEvidenceProjectionError as exc:
+        raise PhaseA1ArtifactError(f"projection receipt is invalid: {exc}") from exc
+    receipt_source_counts: dict[str, int] = {}
+    for reference in receipt["source_artifacts"]:
+        kind = reference["kind"]
+        receipt_source_counts[kind] = receipt_source_counts.get(kind, 0) + 1
+    history_round_count = sum(
+        round_entry.get("mode") == "history_only"
+        for round_entry in rounds
+        if isinstance(round_entry, Mapping)
+    )
+    expected_source_counts = {
+        "prepared_manifest": 1,
+        "prepared_observation_records": 1,
+        "prepared_frame_records": 1,
+        "history_association_records": 1,
+        "history_manifest": 1,
+        "history_query_frames": len(rounds),
+        "history_round_association": history_round_count,
+        "history_memory_before": history_round_count,
+        "history_memory_after": history_round_count,
+    }
+    expected_source_counts = {
+        kind: count for kind, count in expected_source_counts.items() if count
+    }
+    if receipt_source_counts != expected_source_counts:
+        raise PhaseA1ArtifactError(
+            "projection receipt producer source set is incomplete"
+        )
+    for reference in receipt["source_artifacts"]:
+        expected.add(("projection_input", reference["path"]))
+        declared_reference = actual_by_path.get(reference["path"])
+        if (
+            declared_reference is None
+            or declared_reference["role"] != "projection_input"
+            or declared_reference["size_bytes"] != reference["size_bytes"]
+            or declared_reference["sha256"] != reference["sha256"]
+        ):
+            raise PhaseA1ArtifactError(
+                f"projection input does not match receipt: {reference['path']}"
+            )
+
     if actual != expected:
         missing = sorted(expected - actual)
         extra = sorted(actual - expected)
@@ -832,6 +931,29 @@ def _validate_projection_source_set(
             "run_local_projection source artifact set is incomplete"
             + (f": {'; '.join(details)}" if details else "")
         )
+
+    expected_projected_paths = {
+        path
+        for role, path in expected
+        if role not in {"projection_input", "projection_receipt"}
+    }
+    receipt_projected_paths = {
+        reference["path"] for reference in receipt["projected_artifacts"]
+    }
+    if receipt_projected_paths != expected_projected_paths:
+        raise PhaseA1ArtifactError(
+            "projection receipt projected artifact set is incomplete"
+        )
+    for reference in receipt["projected_artifacts"]:
+        declared_reference = actual_by_path.get(reference["path"])
+        if (
+            declared_reference is None
+            or declared_reference["size_bytes"] != reference["size_bytes"]
+            or declared_reference["sha256"] != reference["sha256"]
+        ):
+            raise PhaseA1ArtifactError(
+                f"projected artifact does not match receipt: {reference['path']}"
+            )
 
 
 def _enforce_byte_binding_only_evidence(records: Iterable[Mapping[str, Any]]) -> None:
@@ -1192,8 +1314,15 @@ def validate_comparison_evidence_bundle(
         raise PhaseA1ArtifactError("comparison_evidence.csv row count does not match manifest")
 
     references = manifest["source_artifacts"]
-    if not isinstance(references, list):
-        raise PhaseA1ArtifactError("Comparison Evidence manifest source_artifacts must be a list")
+    if (
+        not isinstance(references, list)
+        or not references
+        or len(references) > PHASE_A1_SOURCE_ARTIFACT_LIMIT
+    ):
+        raise PhaseA1ArtifactError(
+            "Comparison Evidence manifest source_artifacts must be a non-empty "
+            "A1 pilot-sized list"
+        )
     declared_inputs = []
     source_bytes_by_path: dict[str, bytes] = {}
     for index, reference in enumerate(references, start=1):
@@ -1208,9 +1337,17 @@ def validate_comparison_evidence_bundle(
             )
         path_text, path = _require_relative_run_work_path(root, run_id, reference["path"])
         try:
+            if path.stat().st_size > _MAX_A1_WORK_ARTIFACT_BYTES:
+                raise PhaseA1ArtifactError(
+                    f"source artifact exceeds the A1 pilot size limit: {path_text}"
+                )
             data = path.read_bytes()
         except OSError as exc:
             raise PhaseA1ArtifactError(f"unable to read source artifact: {path_text}") from exc
+        if len(data) > _MAX_A1_WORK_ARTIFACT_BYTES:
+            raise PhaseA1ArtifactError(
+                f"source artifact exceeds the A1 pilot size limit: {path_text}"
+            )
         if type(reference["size_bytes"]) is not int or reference["size_bytes"] != len(data):
             raise PhaseA1ArtifactError(f"source artifact size does not match: {path_text}")
         if reference["sha256"] != _sha256_bytes(data):
@@ -1237,16 +1374,10 @@ def validate_comparison_evidence_bundle(
                 f"Comparison Evidence manifest must contain exactly one {role}"
             )
     if manifest["source_bundle_kind"] == "run_local_projection":
-        projection_manifest_path = f"runs/{run_id}/work/association_manifest.json"
-        association_manifest_bytes = source_bytes_by_path.get(projection_manifest_path)
-        if association_manifest_bytes is None:
-            raise PhaseA1ArtifactError(
-                "run_local_projection is missing the Association manifest snapshot"
-            )
         _validate_projection_source_set(
             run_id,
             declared_inputs,
-            association_manifest_bytes,
+            source_bytes_by_path,
         )
     _bind_evidence_provenance(records, declared_inputs)
     _enforce_byte_binding_only_evidence(records)
@@ -1506,12 +1637,9 @@ __all__ = [
     "initialize_phase_a1_sandbox",
     "load_validated_claim_artifacts",
     "parse_comparison_evidence_csv",
-    "snapshot_phase_a1_work_artifact",
-    "write_phase_a1_work_artifact",
     "validate_comparison_evidence_bundle",
     "validate_phase_a1_sandbox",
     "write_claim_decision_artifact",
     "write_comparison_evidence_bundle",
-    "write_projected_comparison_evidence_bundle",
     "write_gated_claim_audit_report",
 ]

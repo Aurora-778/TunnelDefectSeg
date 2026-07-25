@@ -18,8 +18,6 @@ from .comparison_evidence_projection import (
     ENGINEERING_PROJECTION_FIELDS,
     FRAME_PROJECTION_FIELDS,
     ComparisonEvidenceProjectionError,
-    materialize_prepared_history_projection_sources,
-    project_run_local_comparison_evidence,
 )
 from .a1_artifacts import (
     COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION,
@@ -30,14 +28,11 @@ from .a1_artifacts import (
     initialize_phase_a1_sandbox,
     load_validated_claim_artifacts,
     parse_comparison_evidence_csv,
-    snapshot_phase_a1_work_artifact,
     validate_comparison_evidence_bundle,
     validate_phase_a1_sandbox,
     write_claim_decision_artifact,
     write_comparison_evidence_bundle,
     write_gated_claim_audit_report,
-    write_phase_a1_work_artifact,
-    write_projected_comparison_evidence_bundle,
 )
 from .claim_decision import (
     CLAIM_DECISION_DOCUMENT_FIELDS,
@@ -101,16 +96,12 @@ __all__ = [
     "build_claim_decision_document",
     "legacy_source_record_fingerprint",
     "initialize_phase_a1_sandbox",
-    "materialize_prepared_history_projection_sources",
     "load_validated_claim_artifacts",
     "load_task_request",
     "load_workflow_policy",
     "project_legacy_observation_identities",
     "project_prepared_observation_identities",
     "parse_comparison_evidence_csv",
-    "project_run_local_comparison_evidence",
-    "snapshot_phase_a1_work_artifact",
-    "write_phase_a1_work_artifact",
     "validate_association_observation_references",
     "validate_comparison_evidence_records",
     "validate_comparison_evidence_bundle",
@@ -124,6 +115,5 @@ __all__ = [
     "validate_workflow_policy",
     "write_claim_decision_artifact",
     "write_comparison_evidence_bundle",
-    "write_projected_comparison_evidence_bundle",
     "write_gated_claim_audit_report",
 ]

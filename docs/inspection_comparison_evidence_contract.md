@@ -40,14 +40,20 @@ This Phase 0 document freezes the record contract. The first A1 sandbox artifact
 boundary is implemented by `orchestrator/inspection_workflow/a1_artifacts.py` and
 the directly instantiated `ComparisonEvidenceAgent`. It retains the normalized
 record compatibility path and adds explicit
-`projection_mode=run_local_sources`. That mode reads only fixed files below
-`runs/<run_id>/work`, validates Frame/Engineering/Association observation
-relations, exact round query subsets, main/round Association equality, ordered
-history prefixes, and Memory-before schemas, then writes deterministic UTF-8 CSV
-to `runs/<run_id>/artifacts/comparison_evidence.csv` and commits
+`projection_mode=prepared_history_sources`. The production Agent requires the
+Prepared `preparation_manifest.json`, history-only main Association CSV, and its
+round Manifest. It runs the existing Prepared Path readiness gate, captures the
+post-gate Prepared bytes, reuses the existing Prepared artifact validator on
+those captured CSV bytes, and then materializes the fixed normalized relations
+below `runs/<run_id>/work`. Hand-authored normalized relation files are only a
+test seam and are not an accepted Agent input. The projector validates
+Frame/Engineering/Association observation relations, exact round query subsets,
+main/round Association equality, ordered history prefixes, and both
+Memory-before and Memory-after schemas, then writes deterministic UTF-8 CSV to
+`runs/<run_id>/artifacts/comparison_evidence.csv` and commits
 `comparison_evidence_manifest.json` last.
 
-The V3 manifest records `source_bundle_kind`. Sandbox marker V2 fixes one
+The V4 manifest records `source_bundle_kind`. Sandbox marker V2 fixes one
 `evidence_source_mode` at initialization; the generic normalized writer cannot run
 inside a projection sandbox, and changing a projection Manifest to
 `normalized_records` is rejected. A `run_local_projection` bundle must
@@ -56,12 +62,18 @@ removing Frame, query-round, Association-round, Memory-before, or Memory-after
 context makes the bundle invalid. The compatibility `normalized_records` bundle
 retains its narrower caller-supplied source set.
 
-The V3 manifest binds the exact Run-local Frame, Association, round context,
-Association Manifest, Engineering, and any declared Memory, registration, or scale
-source bytes by size and SHA-256. Automatically projected source references carry
-their expected snapshot SHA into the writer, so a source changed between projection
-and manifest construction is rejected. Bundle validation reuses the Association
-Manifest bytes from that verified source snapshot rather than reopening the file.
+The V4 manifest binds the exact Run-local Frame, Association, round context,
+Association Manifest, Engineering, projection receipt, and every Prepared/history
+producer byte named by that receipt using size and SHA-256. The receipt is written
+after all normalized work artifacts and contains stable, exhaustive source and
+projected-artifact references. Validation requires exactly one Prepared Manifest,
+Prepared observation CSV, Prepared frame CSV, history main Association CSV, and
+history Manifest, plus one query source per round and one Association/Memory-before/
+Memory-after source per history round. Source and projected paths must be disjoint.
+A source changed between capture, projection, and
+manifest construction is rejected. Bundle validation reuses the Association
+Manifest and receipt bytes from verified source snapshots rather than reopening
+them.
 `source_validation_scope=byte_binding_only`
 still describes source authentication truthfully: the projector executes current
 in-memory relation and history contracts, but the Manifest only proves which bytes
@@ -76,9 +88,9 @@ directional Evidence can be projected. The wrapper continues to reject
 yet default workflow integration.
 
 The automatic projection slice accepts Prepared observation identity only. The
-minimal `materialize_prepared_history_projection_sources()` bridge consumes an
-existing `prepare_real_inspection_pilot` artifact set only after its Path readiness
-gate succeeds, and consumes the existing history-only coordinator outputs. It
+internal materializer consumes an existing `prepare_real_inspection_pilot` artifact
+set only after its Path readiness gate succeeds, revalidates the exact captured CSV
+snapshots, and consumes the existing history-only coordinator outputs. It
 ignores legacy `label_disease_id`, resolves a production Association row only when
 inspection/frame/image identifies exactly one neutral observation, and normalizes
 legacy Memory IDs to deterministic portable audit keys. Ambiguous production rows
@@ -104,7 +116,12 @@ CLI, Web, or formal publication entry point and cannot accept caller-selected ou
 paths. Identical reruns are idempotent; a changed existing A1 artifact fails closed.
 CSV readers require the writer's exact canonical field order, row order, LF bytes,
 compact JSON lists, lowercase booleans, and canonical integer spelling. JSON inputs
-are size-bounded; excessive nesting and non-finite constants fail closed.
+are size-bounded; excessive nesting and non-finite constants fail closed. A1 V1
+Run-local source snapshots are limited to 8 MiB each and a bundle to 256 source
+references. Producer decimal text is
+bounded before fixed-point formatting, so extreme exponents fail closed instead of
+expanding into unbounded strings. These bounds target the single-sequence pilot and
+must be versioned before larger datasets are accepted.
 
 Evidence/Manifest, authoritative Decision/post-write validation, and Staging
 report/Decision mirror are multi-file process-level stages rather than A2 publication

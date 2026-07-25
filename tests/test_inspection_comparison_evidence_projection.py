@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -20,11 +21,18 @@ from orchestrator.inspection_workflow import (
     MEMORY_SNAPSHOT_RECORD_FIELDS,
     PhaseA1ArtifactError,
     initialize_phase_a1_sandbox,
-    materialize_prepared_history_projection_sources,
     parse_comparison_evidence_csv,
-    project_run_local_comparison_evidence,
     validate_comparison_evidence_bundle,
     write_comparison_evidence_bundle,
+)
+from orchestrator.inspection_workflow.a1_artifacts import (
+    snapshot_phase_a1_work_artifact,
+    write_projected_comparison_evidence_bundle,
+)
+from orchestrator.inspection_workflow.comparison_evidence_projection import (
+    ComparisonEvidenceProjectionError,
+    PROJECTION_RECEIPT_SCHEMA_VERSION,
+    _canonical_decimal_from_producer,
 )
 from scripts import prepare_real_inspection_pilot as preparation
 
@@ -206,15 +214,134 @@ def _projection_fixture(tmp_path: Path, *, include_query: bool):
         },
         "inputs": {
             "comparison_evidence": {
-                "projection_mode": "run_local_sources",
+                "projection_mode": "test_normalized_relations",
             }
         },
     }
     return root, work, context
 
 
+def _artifact_reference(root: Path, path: Path, *, kind: str):
+    data = path.read_bytes()
+    return {
+        "kind": kind,
+        "path": path.relative_to(root).as_posix(),
+        "size_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def _refresh_test_projection_receipt(root: Path, context) -> None:
+    """Bind hand-authored relation fixtures without exposing a production bypass."""
+
+    work = root / "runs" / RUN_ID / "work"
+    origins = work / "test_projection_origins"
+    origins.mkdir(exist_ok=True)
+
+    projected_paths = [
+        work / "frame_records.csv",
+        work / "engineering_records.csv",
+        work / "association_records.csv",
+        work / "association_manifest.json",
+        *sorted((work / "main_progressive").glob("round_*/*.csv")),
+    ]
+    source_specs = [
+        ("prepared_manifest", "prepared_manifest.json"),
+        ("prepared_observation_records", "prepared_observation_records.csv"),
+        ("prepared_frame_records", "prepared_frame_records.csv"),
+        ("history_association_records", "history_association_records.csv"),
+        ("history_manifest", "history_manifest.json"),
+    ]
+    for index, path in enumerate(projected_paths, start=1):
+        if path.name == "query_frames.csv":
+            source_specs.append(
+                ("history_query_frames", f"history_query_frames_{index:03d}.csv")
+            )
+        elif path.name == "association_records.csv" and path.parent.name.startswith(
+            "round_"
+        ):
+            source_specs.append(
+                ("history_round_association", f"history_round_association_{index:03d}.csv")
+            )
+        elif path.name == "memory_before_query.csv":
+            source_specs.append(
+                ("history_memory_before", f"history_memory_before_{index:03d}.csv")
+            )
+        elif path.name == "memory_after_query.csv":
+            source_specs.append(
+                ("history_memory_after", f"history_memory_after_{index:03d}.csv")
+            )
+    source_paths = []
+    for kind, filename in source_specs:
+        path = origins / filename
+        path.write_text(
+            json.dumps(
+                {"fixture_kind": kind, "fixture_path": filename},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        source_paths.append((kind, path))
+    source_artifacts = sorted(
+        (
+            _artifact_reference(
+                root,
+                path,
+                kind=kind,
+            )
+            for kind, path in source_paths
+        ),
+        key=lambda item: (item["kind"], item["path"]),
+    )
+    projected_artifacts = sorted(
+        (
+            _artifact_reference(
+                root,
+                path,
+                kind="projected_work_artifact",
+            )
+            for path in projected_paths
+        ),
+        key=lambda item: (item["kind"], item["path"]),
+    )
+    receipt = {
+        "schema_version": PROJECTION_RECEIPT_SCHEMA_VERSION,
+        "run_id": RUN_ID,
+        "execution_profile": context["shared"]["execution_profile"],
+        "validation_scope": "prepared_readiness_and_history_contract",
+        "source_artifacts": source_artifacts,
+        "projected_artifacts": projected_artifacts,
+    }
+    (work / "projection_receipt.json").write_text(
+        json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _run_projection(context):
+    root = Path(context["shared"]["project_root"])
+    _refresh_test_projection_receipt(root, context)
+    shared = context["shared"]
+    return write_projected_comparison_evidence_bundle(
+        root,
+        run_id=shared["run_id"],
+        execution_profile=shared["execution_profile"],
+        plan_fingerprint=shared["plan_fingerprint"],
+    )
+
+
 def _run_and_load(root: Path, context):
-    result = ComparisonEvidenceAgent().run(context)
+    result = _run_projection(context)
     evidence_path = root / result["comparison_evidence_path"]
     return result, parse_comparison_evidence_csv(evidence_path.read_bytes())
 
@@ -240,8 +367,23 @@ def test_baseline_sources_project_to_static_audit_bundle(tmp_path):
         "engineering_artifact",
         "association_artifact",
         "association_manifest",
+        "projection_input",
+        "projection_receipt",
     }
     assert manifest["source_bundle_kind"] == "run_local_projection"
+
+
+def test_agent_rejects_hand_authored_run_local_projection_mode(tmp_path):
+    _, _, context = _projection_fixture(tmp_path, include_query=False)
+    context["inputs"]["comparison_evidence"] = {
+        "projection_mode": "run_local_sources",
+    }
+
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="prepared_history_sources projection fields",
+    ):
+        ComparisonEvidenceAgent().run(context)
 
 
 def test_unmatched_query_projects_to_rejected_static_audit(tmp_path):
@@ -264,7 +406,7 @@ def test_projected_sources_flow_through_claim_gate_and_static_report(tmp_path):
     context["inputs"]["claim_gate"] = {}
     context["inputs"]["claim_audit_report"] = {}
 
-    ComparisonEvidenceAgent().run(context)
+    _run_projection(context)
     claim_result = ClaimGateAgent().run(context)
     report_result = ClaimAuditReportAgent().run(context)
 
@@ -331,7 +473,7 @@ def test_prepared_identity_is_recomputed_instead_of_trusting_current_id(tmp_path
     )
 
     with pytest.raises(PhaseA1ArtifactError, match="conflicting current_observation_id"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_engineering_area_must_equal_source_frame_maximum(tmp_path):
@@ -341,7 +483,7 @@ def test_engineering_area_must_equal_source_frame_maximum(tmp_path):
     )
 
     with pytest.raises(PhaseA1ArtifactError, match="maximum source Frame mask_area_px"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_mixed_engineering_sources_are_derived_as_static_only(tmp_path):
@@ -407,7 +549,7 @@ def test_matched_query_fails_closed_until_memory_source_proof_upgrade(tmp_path):
         PhaseA1ArtifactError,
         match="matched Association projection requires a source-proof Memory schema upgrade",
     ):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_nonbaseline_association_disconnect_fails_closed(tmp_path):
@@ -417,7 +559,7 @@ def test_nonbaseline_association_disconnect_fails_closed(tmp_path):
     (work / "main_progressive" / "round_002" / "association_records.csv").write_bytes(empty)
 
     with pytest.raises(PhaseA1ArtifactError, match="missing Association query"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_round_and_main_association_bytes_must_agree(tmp_path):
@@ -431,7 +573,7 @@ def test_round_and_main_association_bytes_must_agree(tmp_path):
         PhaseA1ArtifactError,
         match="round Association records must exactly match",
     ):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_round_association_cannot_be_reassigned_to_another_inspection(tmp_path):
@@ -445,7 +587,7 @@ def test_round_association_cannot_be_reassigned_to_another_inspection(tmp_path):
     )
 
     with pytest.raises(PhaseA1ArtifactError, match="another round"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_round_query_frames_must_match_main_frame_relation(tmp_path):
@@ -457,7 +599,17 @@ def test_round_query_frames_must_match_main_frame_relation(tmp_path):
     )
 
     with pytest.raises(PhaseA1ArtifactError, match="must exactly match"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
+
+
+def test_memory_after_requires_exact_memory_snapshot_schema(tmp_path):
+    _, work, context = _projection_fixture(tmp_path, include_query=True)
+    (work / "main_progressive" / "round_002" / "memory_after_query.csv").write_bytes(
+        b"unexpected\nvalue\n"
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="fieldnames must exactly match"):
+        _run_projection(context)
 
 
 @pytest.mark.parametrize("target", ["engineering", "association"])
@@ -476,7 +628,33 @@ def test_oversized_integers_fail_with_projection_error(tmp_path, target):
         (work / "main_progressive" / "round_002" / "association_records.csv").write_bytes(data)
 
     with pytest.raises(PhaseA1ArtifactError, match="must not exceed"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
+
+
+def test_producer_decimal_rejects_extreme_exponent_before_formatting():
+    with pytest.raises(
+        ComparisonEvidenceProjectionError,
+        match="producer decimal magnitude limit",
+    ):
+        _canonical_decimal_from_producer(
+            "1e1000000000",
+            label="association_records.csv row 2",
+            field="association_score",
+        )
+
+
+def test_a1_work_snapshot_rejects_oversized_pilot_source(tmp_path):
+    root, work, _ = _projection_fixture(tmp_path, include_query=False)
+    oversized = work / "oversized.csv"
+    oversized.write_bytes(b"x" * ((8 * 1024 * 1024) + 1))
+
+    with pytest.raises(PhaseA1ArtifactError, match="pilot size limit"):
+        snapshot_phase_a1_work_artifact(
+            root,
+            run_id=RUN_ID,
+            execution_profile="phase_a1_sandbox",
+            relative_path=f"runs/{RUN_ID}/work/oversized.csv",
+        )
 
 
 def test_source_headers_cannot_smuggle_label_fields(tmp_path):
@@ -488,7 +666,7 @@ def test_source_headers_cannot_smuggle_label_fields(tmp_path):
     )
 
     with pytest.raises(PhaseA1ArtifactError, match="fieldnames must exactly match"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_manifest_baseline_and_frame_inspections_must_agree(tmp_path):
@@ -505,7 +683,7 @@ def test_manifest_baseline_and_frame_inspections_must_agree(tmp_path):
         PhaseA1ArtifactError,
         match="query inspection|inspections must exactly match",
     ):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_manifest_history_order_must_be_earlier_than_query_timestamps(tmp_path):
@@ -520,7 +698,7 @@ def test_manifest_history_order_must_be_earlier_than_query_timestamps(tmp_path):
     )
 
     with pytest.raises(PhaseA1ArtifactError, match="order is not chronological"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_projection_source_change_is_rejected_before_manifest_commit(tmp_path, monkeypatch):
@@ -538,13 +716,13 @@ def test_projection_source_change_is_rejected_before_manifest_commit(tmp_path, m
     monkeypatch.setattr(artifacts, "_snapshot_source_artifacts", mutate_then_snapshot)
 
     with pytest.raises(PhaseA1ArtifactError, match="changed after projection"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
     assert not (root / "runs" / RUN_ID / "artifacts" / "comparison_evidence_manifest.json").exists()
 
 
 def test_projection_manifest_requires_complete_source_set(tmp_path):
     root, _, context = _projection_fixture(tmp_path, include_query=False)
-    result = ComparisonEvidenceAgent().run(context)
+    result = _run_projection(context)
     manifest_path = root / result["comparison_evidence_manifest_path"]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["source_artifacts"] = [
@@ -565,9 +743,60 @@ def test_projection_manifest_requires_complete_source_set(tmp_path):
         )
 
 
+def test_projection_receipt_requires_complete_producer_source_set(tmp_path):
+    root, work, context = _projection_fixture(tmp_path, include_query=False)
+    result = _run_projection(context)
+    receipt_path = work / "projection_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    removed = next(
+        item
+        for item in receipt["source_artifacts"]
+        if item["kind"] == "prepared_frame_records"
+    )
+    receipt["source_artifacts"].remove(removed)
+    receipt_path.write_text(
+        json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    receipt_bytes = receipt_path.read_bytes()
+
+    manifest_path = root / result["comparison_evidence_manifest_path"]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["source_artifacts"] = [
+        item
+        for item in manifest["source_artifacts"]
+        if item["path"] != removed["path"]
+    ]
+    receipt_reference = next(
+        item
+        for item in manifest["source_artifacts"]
+        if item["role"] == "projection_receipt"
+    )
+    receipt_reference["size_bytes"] = len(receipt_bytes)
+    receipt_reference["sha256"] = hashlib.sha256(receipt_bytes).hexdigest()
+    manifest["source_artifacts"].sort(key=lambda item: (item["role"], item["path"]))
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="producer source set is incomplete",
+    ):
+        validate_comparison_evidence_bundle(
+            root,
+            run_id=RUN_ID,
+            execution_profile="phase_a1_sandbox",
+            plan_fingerprint=PLAN_FINGERPRINT,
+        )
+
+
 def test_projection_bundle_kind_cannot_be_downgraded_in_manifest(tmp_path):
     root, _, context = _projection_fixture(tmp_path, include_query=False)
-    result = ComparisonEvidenceAgent().run(context)
+    result = _run_projection(context)
     manifest_path = root / result["comparison_evidence_manifest_path"]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["source_bundle_kind"] = "normalized_records"
@@ -624,7 +853,7 @@ def test_frame_source_values_cannot_be_laundered_by_aggregation(
         PhaseA1ArtifactError,
         match="observation_source is invalid|cannot declare verified_comparable",
     ):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_deep_engineering_list_json_fails_closed(tmp_path):
@@ -636,7 +865,7 @@ def test_deep_engineering_list_json_fails_closed(tmp_path):
     )
 
     with pytest.raises(PhaseA1ArtifactError, match="canonical JSON"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_deep_association_manifest_json_fails_closed(tmp_path):
@@ -647,7 +876,7 @@ def test_deep_association_manifest_json_fails_closed(tmp_path):
     )
 
     with pytest.raises(PhaseA1ArtifactError, match="valid JSON"):
-        ComparisonEvidenceAgent().run(context)
+        _run_projection(context)
 
 
 def test_bundle_validation_reuses_verified_association_manifest_bytes(
@@ -655,7 +884,7 @@ def test_bundle_validation_reuses_verified_association_manifest_bytes(
     monkeypatch,
 ):
     root, _, context = _projection_fixture(tmp_path, include_query=False)
-    result = ComparisonEvidenceAgent().run(context)
+    result = _run_projection(context)
     import orchestrator.inspection_workflow.a1_artifacts as artifacts
 
     original = artifacts._load_json_object
@@ -680,7 +909,10 @@ def test_bundle_validation_reuses_verified_association_manifest_bytes(
     assert result["record_count"] == 1
 
 
-def test_existing_prepared_and_history_producers_materialize_static_evidence(tmp_path):
+def test_existing_prepared_and_history_producers_materialize_static_evidence(
+    tmp_path,
+    monkeypatch,
+):
     root = tmp_path / "producer-integration"
     work = root / "runs" / RUN_ID / "work"
     dataset = root / "dataset"
@@ -768,20 +1000,6 @@ def test_existing_prepared_and_history_producers_materialize_static_evidence(tmp
         }
     )
 
-    materialize_prepared_history_projection_sources(
-        root,
-        run_id=RUN_ID,
-        execution_profile="phase_a1_sandbox",
-        prepared_manifest_path=(
-            f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json"
-        ),
-        history_association_path=(
-            f"runs/{RUN_ID}/work/raw_history/association_records.csv"
-        ),
-        history_manifest_path=(
-            f"runs/{RUN_ID}/work/raw_history/association_manifest.json"
-        ),
-    )
     context = {
         "shared": {
             "project_root": str(root),
@@ -789,9 +1007,25 @@ def test_existing_prepared_and_history_producers_materialize_static_evidence(tmp
             "execution_profile": "phase_a1_sandbox",
             "plan_fingerprint": PLAN_FINGERPRINT,
         },
-        "inputs": {"comparison_evidence": {"projection_mode": "run_local_sources"}},
+        "inputs": {
+            "comparison_evidence": {
+                "projection_mode": "prepared_history_sources",
+                "prepared_manifest_path": (
+                    f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json"
+                ),
+                "history_association_path": (
+                    f"runs/{RUN_ID}/work/raw_history/association_records.csv"
+                ),
+                "history_manifest_path": (
+                    f"runs/{RUN_ID}/work/raw_history/association_manifest.json"
+                ),
+            }
+        },
     }
-    _, records = _run_and_load(root, context)
+    agent_result = ComparisonEvidenceAgent().run(context)
+    records = parse_comparison_evidence_csv(
+        (root / agent_result["comparison_evidence_path"]).read_bytes()
+    )
 
     assert len(records) == 2
     assert records[0]["identity_evidence_state"] == "association_not_applicable"
@@ -800,3 +1034,41 @@ def test_existing_prepared_and_history_producers_materialize_static_evidence(tmp
     assert records[1]["identity_evidence_state"] == "association_rejected"
     assert records[1]["current_observation_id"] == "I0002::obs_02"
     assert records[1]["current_value"] == 16
+    manifest = json.loads(
+        (root / agent_result["comparison_evidence_manifest_path"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    projection_inputs = {
+        item["path"]
+        for item in manifest["source_artifacts"]
+        if item["role"] == "projection_input"
+    }
+    assert {
+        f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json",
+        f"runs/{RUN_ID}/work/raw_prepared/observation_records.csv",
+        f"runs/{RUN_ID}/work/raw_prepared/frame_records.csv",
+        f"runs/{RUN_ID}/work/raw_history/association_records.csv",
+        f"runs/{RUN_ID}/work/raw_history/association_manifest.json",
+    } <= projection_inputs
+
+    original_gate = preparation.require_inference_ready
+
+    def mutate_prepared_frame_after_path_gate(value):
+        result = original_gate(value)
+        if isinstance(value, Path):
+            (prepared_dir / "frame_records.csv").write_bytes(
+                (prepared_dir / "frame_records.csv").read_bytes() + b"\n"
+            )
+        return result
+
+    monkeypatch.setattr(
+        preparation,
+        "require_inference_ready",
+        mutate_prepared_frame_after_path_gate,
+    )
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="snapshot does not match its validated manifest",
+    ):
+        ComparisonEvidenceAgent().run(context)

@@ -10,12 +10,14 @@ import io
 import json
 from pathlib import Path
 import re
+import tempfile
 from typing import Any
 
 from orchestrator.claim_policy import ClaimPolicyError, load_claim_policy
 
 from .a1_artifacts import (
     PHASE_A1_EXECUTION_PROFILE,
+    PHASE_A1_SOURCE_ARTIFACT_LIMIT,
     PhaseA1ArtifactError,
     snapshot_phase_a1_work_artifact,
     write_phase_a1_work_artifact,
@@ -80,6 +82,36 @@ _MAX_MASK_AREA_PX = (1 << 63) - 1
 _MAX_MASK_AREA_TEXT = str(_MAX_MASK_AREA_PX)
 _MAX_JSON_TEXT_BYTES = 64 * 1024
 _MAX_MANIFEST_JSON_BYTES = 1024 * 1024
+_MAX_PRODUCER_DECIMAL_CHARACTERS = 128
+_MAX_PRODUCER_DECIMAL_ADJUSTED = 64
+PROJECTION_RECEIPT_SCHEMA_VERSION = "phase_a1_projection_receipt_v1"
+PROJECTION_RECEIPT_PATH_TEMPLATE = "runs/{run_id}/work/projection_receipt.json"
+_PROJECTION_RECEIPT_FIELDS = {
+    "schema_version",
+    "run_id",
+    "execution_profile",
+    "validation_scope",
+    "source_artifacts",
+    "projected_artifacts",
+}
+_PROJECTION_RECEIPT_REFERENCE_FIELDS = {
+    "kind",
+    "path",
+    "size_bytes",
+    "sha256",
+}
+_PROJECTION_SOURCE_KINDS = {
+    "prepared_manifest",
+    "prepared_observation_records",
+    "prepared_frame_records",
+    "history_association_records",
+    "history_manifest",
+    "history_query_frames",
+    "history_round_association",
+    "history_memory_before",
+    "history_memory_after",
+}
+_PROJECTION_VALIDATION_SCOPE = "prepared_readiness_and_history_contract"
 _PREPARED_FINGERPRINT_FIELDS = (
     "association_inspection_id",
     "local_observation_id",
@@ -94,6 +126,32 @@ _PREPARED_FINGERPRINT_FIELDS = (
 
 class ComparisonEvidenceProjectionError(ValueError):
     """Raised when Run-local sources cannot form credible A1 Evidence."""
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _receipt_reference(
+    *,
+    kind: str,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "path": snapshot["path"],
+        "size_bytes": snapshot["size_bytes"],
+        "sha256": snapshot["sha256"],
+    }
+
+
+def _projected_reference(path: str, data: bytes) -> dict[str, Any]:
+    return {
+        "kind": "projected_work_artifact",
+        "path": path,
+        "size_bytes": len(data),
+        "sha256": _sha256_bytes(data),
+    }
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -131,6 +189,119 @@ def _parse_json_object(data: bytes, *, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ComparisonEvidenceProjectionError(f"{label} must contain a JSON object")
     return value
+
+
+def _validate_receipt_references(
+    value: Any,
+    *,
+    label: str,
+    allowed_kinds: set[str],
+) -> list[dict[str, Any]]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > PHASE_A1_SOURCE_ARTIFACT_LIMIT
+    ):
+        raise ComparisonEvidenceProjectionError(
+            f"{label} must be a non-empty A1 pilot-sized list"
+        )
+    normalized: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for index, reference in enumerate(value, start=1):
+        item_label = f"{label} item {index}"
+        if (
+            not isinstance(reference, Mapping)
+            or set(reference) != _PROJECTION_RECEIPT_REFERENCE_FIELDS
+        ):
+            raise ComparisonEvidenceProjectionError(
+                f"{item_label} fields are invalid"
+            )
+        kind = reference["kind"]
+        path = reference["path"]
+        size_bytes = reference["size_bytes"]
+        sha256 = reference["sha256"]
+        if not isinstance(kind, str) or kind not in allowed_kinds:
+            raise ComparisonEvidenceProjectionError(f"{item_label} kind is invalid")
+        if (
+            not isinstance(path, str)
+            or not path
+            or "\\" in path
+            or ":" in path
+            or path != Path(path).as_posix()
+        ):
+            raise ComparisonEvidenceProjectionError(f"{item_label} path is invalid")
+        if path in seen_paths:
+            raise ComparisonEvidenceProjectionError(
+                f"{label} contains duplicate path: {path}"
+            )
+        seen_paths.add(path)
+        if type(size_bytes) is not int or size_bytes < 0:
+            raise ComparisonEvidenceProjectionError(
+                f"{item_label} size_bytes is invalid"
+            )
+        if (
+            not isinstance(sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+        ):
+            raise ComparisonEvidenceProjectionError(f"{item_label} sha256 is invalid")
+        normalized.append(
+            {
+                "kind": kind,
+                "path": path,
+                "size_bytes": size_bytes,
+                "sha256": sha256,
+            }
+        )
+    if normalized != sorted(normalized, key=lambda item: (item["kind"], item["path"])):
+        raise ComparisonEvidenceProjectionError(
+            f"{label} must use stable kind/path order"
+        )
+    return normalized
+
+
+def parse_projection_receipt(
+    data: bytes,
+    *,
+    run_id: str,
+    execution_profile: str,
+) -> dict[str, Any]:
+    """Validate the deterministic receipt that binds producer and projected bytes."""
+
+    receipt = _parse_json_object(data, label="projection_receipt.json")
+    if set(receipt) != _PROJECTION_RECEIPT_FIELDS:
+        raise ComparisonEvidenceProjectionError(
+            "projection_receipt.json fields are invalid"
+        )
+    if (
+        receipt["schema_version"] != PROJECTION_RECEIPT_SCHEMA_VERSION
+        or receipt["run_id"] != run_id
+        or receipt["execution_profile"] != execution_profile
+        or receipt["validation_scope"] != _PROJECTION_VALIDATION_SCOPE
+    ):
+        raise ComparisonEvidenceProjectionError(
+            "projection_receipt.json identity or validation scope is invalid"
+        )
+    source_artifacts = _validate_receipt_references(
+        receipt["source_artifacts"],
+        label="projection receipt source_artifacts",
+        allowed_kinds=_PROJECTION_SOURCE_KINDS,
+    )
+    projected_artifacts = _validate_receipt_references(
+        receipt["projected_artifacts"],
+        label="projection receipt projected_artifacts",
+        allowed_kinds={"projected_work_artifact"},
+    )
+    source_paths = {item["path"] for item in source_artifacts}
+    projected_paths = {item["path"] for item in projected_artifacts}
+    if source_paths & projected_paths:
+        raise ComparisonEvidenceProjectionError(
+            "projection receipt source and projected paths must be disjoint"
+        )
+    return {
+        **receipt,
+        "source_artifacts": source_artifacts,
+        "projected_artifacts": projected_artifacts,
+    }
 
 
 def _parse_csv_rows(
@@ -340,6 +511,85 @@ def _snapshot(
         )
     except PhaseA1ArtifactError as exc:
         raise ComparisonEvidenceProjectionError(str(exc)) from exc
+
+
+def _require_prepared_snapshot_fingerprint(
+    manifest: Mapping[str, Any],
+    *,
+    output_name: str,
+    snapshot: Mapping[str, Any],
+) -> None:
+    outputs = manifest.get("outputs")
+    if not isinstance(outputs, Mapping):
+        raise ComparisonEvidenceProjectionError(
+            "Prepared manifest outputs must be an object"
+        )
+    reference = outputs.get(output_name)
+    expected_path = f"{output_name}.csv"
+    if (
+        not isinstance(reference, Mapping)
+        or reference.get("path") != expected_path
+        or reference.get("size_bytes") != snapshot["size_bytes"]
+        or reference.get("sha256") != snapshot["sha256"]
+    ):
+        raise ComparisonEvidenceProjectionError(
+            f"Prepared {expected_path} snapshot does not match its validated manifest"
+        )
+
+
+def _validate_prepared_snapshot_bytes(
+    manifest: Mapping[str, Any],
+    *,
+    observation_snapshot: Mapping[str, Any],
+    frame_snapshot: Mapping[str, Any],
+    validator: Any,
+) -> None:
+    row_counts = manifest.get("row_counts")
+    if not isinstance(row_counts, Mapping):
+        raise ComparisonEvidenceProjectionError(
+            "Prepared manifest row_counts must be an object"
+        )
+    observation_count = row_counts.get("observation_records")
+    frame_count = row_counts.get("frame_records")
+    if (
+        type(observation_count) is not int
+        or observation_count < 0
+        or type(frame_count) is not int
+        or frame_count < 0
+    ):
+        raise ComparisonEvidenceProjectionError(
+            "Prepared manifest row_counts are invalid"
+        )
+    try:
+        with tempfile.TemporaryDirectory(prefix="phase-a1-prepared-snapshot-") as temp_dir:
+            snapshot_dir = Path(temp_dir)
+            observation_path = snapshot_dir / "observation_records.csv"
+            frame_path = snapshot_dir / "frame_records.csv"
+            observation_path.write_bytes(observation_snapshot["data"])
+            frame_path.write_bytes(frame_snapshot["data"])
+            validator(
+                observation_path,
+                frame_path,
+                expected_observation_count=observation_count,
+                expected_frame_count=frame_count,
+            )
+    except (OSError, ValueError) as exc:
+        raise ComparisonEvidenceProjectionError(
+            f"Prepared captured CSV snapshots are invalid: {exc}"
+        ) from exc
+
+
+def _canonical_receipt_bytes(receipt: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
 
 
 def _normalize_frame_rows(rows: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]:
@@ -847,6 +1097,13 @@ def _canonical_decimal_from_producer(
 ) -> str:
     if value == "":
         return ""
+    if (
+        not isinstance(value, str)
+        or len(value) > _MAX_PRODUCER_DECIMAL_CHARACTERS
+    ):
+        raise ComparisonEvidenceProjectionError(
+            f"{label} {field} exceeds the producer decimal limit"
+        )
     try:
         from decimal import Decimal, InvalidOperation
 
@@ -861,6 +1118,10 @@ def _canonical_decimal_from_producer(
         )
     if parsed == 0:
         return "0"
+    if abs(parsed.adjusted()) > _MAX_PRODUCER_DECIMAL_ADJUSTED:
+        raise ComparisonEvidenceProjectionError(
+            f"{label} {field} exceeds the producer decimal magnitude limit"
+        )
     canonical = format(parsed, "f").rstrip("0").rstrip(".")
     if _DECIMAL_RE.fullmatch(canonical) is None:
         raise ComparisonEvidenceProjectionError(
@@ -892,7 +1153,9 @@ def materialize_prepared_history_projection_sources(
         )
     root = Path(project_root)
     try:
-        prepared_manifest_snapshot = snapshot_phase_a1_work_artifact(
+        # Validate containment before passing a filesystem path to the existing
+        # readiness gate. The bytes used below are captured again after that gate.
+        snapshot_phase_a1_work_artifact(
             project_root,
             run_id=run_id,
             execution_profile=execution_profile,
@@ -918,6 +1181,7 @@ def materialize_prepared_history_projection_sources(
         from scripts.prepare_real_inspection_pilot import (
             FRAME_FIELDNAMES as PREPARED_FRAME_FIELDNAMES,
             require_inference_ready,
+            validate_prepared_artifacts,
         )
 
         require_inference_ready(prepared_manifest_file)
@@ -926,17 +1190,82 @@ def materialize_prepared_history_projection_sources(
             f"Prepared input is not inference-ready: {exc}"
         ) from exc
 
-    prepared_frame_path = (
-        prepared_manifest_file.parent / "frame_records.csv"
+    prepared_frame_path = prepared_manifest_file.parent / "frame_records.csv"
+    prepared_observation_path = prepared_manifest_file.parent / "observation_records.csv"
+    try:
+        prepared_frame_relative = prepared_frame_path.resolve().relative_to(
+            root.resolve()
+        ).as_posix()
+        prepared_observation_relative = prepared_observation_path.resolve().relative_to(
+            root.resolve()
+        ).as_posix()
+    except ValueError as exc:
+        raise ComparisonEvidenceProjectionError(
+            "Prepared artifact paths must remain inside the A1 sandbox"
+        ) from exc
+    prepared_manifest_snapshot = _snapshot(
+        project_root,
+        run_id=run_id,
+        relative_path=prepared_manifest_path,
     )
-    prepared_frame_relative = prepared_frame_path.resolve().relative_to(
-        root.resolve()
-    ).as_posix()
     prepared_frame_snapshot = _snapshot(
         project_root,
         run_id=run_id,
         relative_path=prepared_frame_relative,
     )
+    prepared_observation_snapshot = _snapshot(
+        project_root,
+        run_id=run_id,
+        relative_path=prepared_observation_relative,
+    )
+    prepared_manifest = _parse_json_object(
+        prepared_manifest_snapshot["data"],
+        label="Prepared preparation_manifest.json",
+    )
+    try:
+        require_inference_ready(prepared_manifest)
+    except ValueError as exc:
+        raise ComparisonEvidenceProjectionError(
+            f"Prepared manifest snapshot is not logically inference-ready: {exc}"
+        ) from exc
+    _require_prepared_snapshot_fingerprint(
+        prepared_manifest,
+        output_name="observation_records",
+        snapshot=prepared_observation_snapshot,
+    )
+    _require_prepared_snapshot_fingerprint(
+        prepared_manifest,
+        output_name="frame_records",
+        snapshot=prepared_frame_snapshot,
+    )
+    _validate_prepared_snapshot_bytes(
+        prepared_manifest,
+        observation_snapshot=prepared_observation_snapshot,
+        frame_snapshot=prepared_frame_snapshot,
+        validator=validate_prepared_artifacts,
+    )
+    receipt_sources = [
+        _receipt_reference(
+            kind="prepared_manifest",
+            snapshot=prepared_manifest_snapshot,
+        ),
+        _receipt_reference(
+            kind="prepared_observation_records",
+            snapshot=prepared_observation_snapshot,
+        ),
+        _receipt_reference(
+            kind="prepared_frame_records",
+            snapshot=prepared_frame_snapshot,
+        ),
+        _receipt_reference(
+            kind="history_association_records",
+            snapshot=history_association_snapshot,
+        ),
+        _receipt_reference(
+            kind="history_manifest",
+            snapshot=history_manifest_snapshot,
+        ),
+    ]
     prepared_rows = _parse_producer_csv_rows(
         prepared_frame_snapshot["data"],
         expected_fieldnames=PREPARED_FRAME_FIELDNAMES,
@@ -984,6 +1313,12 @@ def materialize_prepared_history_projection_sources(
             run_id=run_id,
             relative_path=query_path,
         )
+        receipt_sources.append(
+            _receipt_reference(
+                kind="history_query_frames",
+                snapshot=query_snapshot,
+            )
+        )
         query_rows = _project_prepared_frame_rows(
             _parse_producer_csv_rows(
                 query_snapshot["data"],
@@ -1008,6 +1343,16 @@ def materialize_prepared_history_projection_sources(
                     run_id=run_id,
                     relative_path=path_value,
                 )
+                receipt_sources.append(
+                    _receipt_reference(
+                        kind=(
+                            "history_memory_before"
+                            if field == "memory_before"
+                            else "history_memory_after"
+                        ),
+                        snapshot=memory_snapshot,
+                    )
+                )
                 memory_rows = _project_memory_rows(
                     _parse_producer_csv_rows(
                         memory_snapshot["data"],
@@ -1029,6 +1374,12 @@ def materialize_prepared_history_projection_sources(
                 project_root,
                 run_id=run_id,
                 relative_path=round_association_path,
+            )
+            receipt_sources.append(
+                _receipt_reference(
+                    kind="history_round_association",
+                    snapshot=round_association_snapshot,
+                )
             )
             round_source["association_rows"] = _project_producer_association_rows(
                 _parse_producer_csv_rows(
@@ -1138,6 +1489,31 @@ def materialize_prepared_history_projection_sources(
             + "\n"
         ).encode("utf-8"),
     })
+    canonical_receipt_sources = sorted(
+        receipt_sources,
+        key=lambda item: (item["kind"], item["path"]),
+    )
+    receipt = {
+        "schema_version": PROJECTION_RECEIPT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "execution_profile": execution_profile,
+        "validation_scope": _PROJECTION_VALIDATION_SCOPE,
+        "source_artifacts": canonical_receipt_sources,
+        "projected_artifacts": sorted(
+            (
+                _projected_reference(relative_path, data)
+                for relative_path, data in outputs.items()
+            ),
+            key=lambda item: (item["kind"], item["path"]),
+        ),
+    }
+    receipt_path = PROJECTION_RECEIPT_PATH_TEMPLATE.format(run_id=run_id)
+    receipt_bytes = _canonical_receipt_bytes(receipt)
+    parse_projection_receipt(
+        receipt_bytes,
+        run_id=run_id,
+        execution_profile=execution_profile,
+    )
     try:
         for relative_path, data in outputs.items():
             write_phase_a1_work_artifact(
@@ -1147,6 +1523,13 @@ def materialize_prepared_history_projection_sources(
                 relative_path=relative_path,
                 data=data,
             )
+        write_phase_a1_work_artifact(
+            project_root,
+            run_id=run_id,
+            execution_profile=execution_profile,
+            relative_path=receipt_path,
+            data=receipt_bytes,
+        )
     except PhaseA1ArtifactError as exc:
         raise ComparisonEvidenceProjectionError(
             f"unable to materialize A1 projection sources: {exc}"
@@ -1160,7 +1543,48 @@ def materialize_prepared_history_projection_sources(
             run_id,
             "association_manifest.json",
         ),
+        "projection_receipt_path": receipt_path,
     }
+
+
+def _load_projection_receipt_snapshots(
+    project_root: Any,
+    *,
+    run_id: str,
+    execution_profile: str,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    receipt_path = PROJECTION_RECEIPT_PATH_TEMPLATE.format(run_id=run_id)
+    receipt_snapshot = _snapshot(
+        project_root,
+        run_id=run_id,
+        relative_path=receipt_path,
+    )
+    receipt = parse_projection_receipt(
+        receipt_snapshot["data"],
+        run_id=run_id,
+        execution_profile=execution_profile,
+    )
+    source_snapshots: dict[str, dict[str, Any]] = {}
+    projected_snapshots: dict[str, dict[str, Any]] = {}
+    for references, destination in (
+        (receipt["source_artifacts"], source_snapshots),
+        (receipt["projected_artifacts"], projected_snapshots),
+    ):
+        for reference in references:
+            snapshot = _snapshot(
+                project_root,
+                run_id=run_id,
+                relative_path=reference["path"],
+            )
+            if (
+                snapshot["size_bytes"] != reference["size_bytes"]
+                or snapshot["sha256"] != reference["sha256"]
+            ):
+                raise ComparisonEvidenceProjectionError(
+                    f"projection receipt artifact changed: {reference['path']}"
+                )
+            destination[reference["path"]] = snapshot
+    return receipt_snapshot, source_snapshots, projected_snapshots
 
 
 def project_run_local_comparison_evidence(
@@ -1176,25 +1600,33 @@ def project_run_local_comparison_evidence(
             f"execution_profile must be {PHASE_A1_EXECUTION_PROFILE}"
         )
 
-    frame_snapshot = _snapshot(
+    (
+        receipt_snapshot,
+        receipt_source_snapshots,
+        receipt_projected_snapshots,
+    ) = _load_projection_receipt_snapshots(
         project_root,
         run_id=run_id,
-        relative_path=_fixed_work_path(run_id, "frame_records.csv"),
+        execution_profile=execution_profile,
     )
-    engineering_snapshot = _snapshot(
-        project_root,
-        run_id=run_id,
-        relative_path=_fixed_work_path(run_id, "engineering_records.csv"),
+
+    def projected_snapshot(relative_path: str) -> dict[str, Any]:
+        snapshot = receipt_projected_snapshots.get(relative_path)
+        if snapshot is None:
+            raise ComparisonEvidenceProjectionError(
+                f"projection receipt is missing projected artifact: {relative_path}"
+            )
+        return snapshot
+
+    frame_snapshot = projected_snapshot(_fixed_work_path(run_id, "frame_records.csv"))
+    engineering_snapshot = projected_snapshot(
+        _fixed_work_path(run_id, "engineering_records.csv")
     )
-    association_snapshot = _snapshot(
-        project_root,
-        run_id=run_id,
-        relative_path=_fixed_work_path(run_id, "association_records.csv"),
+    association_snapshot = projected_snapshot(
+        _fixed_work_path(run_id, "association_records.csv")
     )
-    manifest_snapshot = _snapshot(
-        project_root,
-        run_id=run_id,
-        relative_path=_fixed_work_path(run_id, "association_manifest.json"),
+    manifest_snapshot = projected_snapshot(
+        _fixed_work_path(run_id, "association_manifest.json")
     )
 
     frame_rows = _normalize_frame_rows(
@@ -1232,6 +1664,11 @@ def project_run_local_comparison_evidence(
         _source_reference(role="engineering_artifact", snapshot=engineering_snapshot),
         _source_reference(role="association_artifact", snapshot=association_snapshot),
         _source_reference(role="association_manifest", snapshot=manifest_snapshot),
+        _source_reference(role="projection_receipt", snapshot=receipt_snapshot),
+        *(
+            _source_reference(role="projection_input", snapshot=snapshot)
+            for snapshot in receipt_source_snapshots.values()
+        ),
     ]
     snapshot_records_by_path: dict[str, list[dict[str, str]]] = {}
     snapshot_fieldnames_by_path: dict[str, Sequence[str]] = {}
@@ -1247,11 +1684,7 @@ def project_run_local_comparison_evidence(
             )
         query_path = round_entry.get("query_frames")
         if isinstance(query_path, str):
-            query_snapshot = _snapshot(
-                project_root,
-                run_id=run_id,
-                relative_path=query_path,
-            )
+            query_snapshot = projected_snapshot(query_path)
             source_artifacts.append(
                 _source_reference(role="history_round_context", snapshot=query_snapshot)
             )
@@ -1284,11 +1717,7 @@ def project_run_local_comparison_evidence(
                 raise ComparisonEvidenceProjectionError(
                     f"Association manifest round {round_number} {field} must be a path"
                 )
-            artifact_snapshot = _snapshot(
-                project_root,
-                run_id=run_id,
-                relative_path=path_value,
-            )
+            artifact_snapshot = projected_snapshot(path_value)
             source_artifacts.append(
                 _source_reference(role=role, snapshot=artifact_snapshot)
             )
@@ -1310,17 +1739,20 @@ def project_run_local_comparison_evidence(
                         f"{path_value} contains an Association query for another round"
                     )
                 round_association_rows.extend(normalized_round_rows)
+            else:
+                _parse_csv_rows(
+                    artifact_snapshot["data"],
+                    expected_fieldnames=MEMORY_SNAPSHOT_RECORD_FIELDS,
+                    label=path_value,
+                    allow_empty=True,
+                )
 
         memory_path = round_entry.get("memory_before")
         if not isinstance(memory_path, str):
             raise ComparisonEvidenceProjectionError(
                 f"Association manifest round {round_number} memory_before must be a path"
             )
-        memory_snapshot = _snapshot(
-            project_root,
-            run_id=run_id,
-            relative_path=memory_path,
-        )
+        memory_snapshot = projected_snapshot(memory_path)
         source_artifacts.append(
             _source_reference(role="history_memory_context", snapshot=memory_snapshot)
         )
@@ -1444,6 +1876,4 @@ __all__ = [
     "ENGINEERING_PROJECTION_FIELDS",
     "FRAME_PROJECTION_FIELDS",
     "ComparisonEvidenceProjectionError",
-    "materialize_prepared_history_projection_sources",
-    "project_run_local_comparison_evidence",
 ]

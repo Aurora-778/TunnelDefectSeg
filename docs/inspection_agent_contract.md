@@ -36,12 +36,17 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
 - With-id remains an evaluation upper bound.
 - Phase 0 does not modify the Registry, DAGExecutor, `config/dag.yaml`, Web routes, model inference, or formal `data/simulated` and `outputs` artifacts.
 - The A1 sandbox source projection is available only by direct component invocation
-  with `projection_mode=run_local_sources` under an initialized temporary sandbox;
-  it is not a second production entry point.
+  with `projection_mode=prepared_history_sources` and explicit Prepared/history-only
+  producer paths under an initialized temporary sandbox; it is not a second
+  production entry point. Hand-authored normalized Run-local relations remain a
+  test-only seam and are not accepted by the production Agent.
 - Sandbox initialization fixes either normalized-record or Run-local projection
   mode. A caller cannot later downgrade that mode through a Manifest field.
 - A minimal materializer composes the existing Prepared readiness gate and
-  history-only coordinator into neutral A1 source relations. It does not use
+  history-only coordinator into neutral A1 source relations. Its projection receipt
+  binds the exact captured Prepared/history bytes and normalized outputs into the A1
+  Manifest. This is byte binding and in-memory contract validation, not external
+  origin authentication. It does not use
   `label_disease_id` as a join key; ambiguous frame/image references and matched
   claims without source-proof Memory remain Fail Closed.
 - Lock and publication policies are machine-marked disabled until their named phases.
