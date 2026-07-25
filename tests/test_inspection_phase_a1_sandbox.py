@@ -278,8 +278,10 @@ def test_manifest_is_last_and_binds_exact_source_bytes(tmp_path):
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     assert manifest["schema_version"] == COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION
+    assert manifest["source_bundle_kind"] == "normalized_records"
     assert manifest["record_count"] == 1
     assert manifest["source_validation_scope"] == "byte_binding_only"
+    assert "prepared_readiness_and_history_contract" not in json.dumps(manifest)
     assert manifest["source_artifacts"] == sorted(
         manifest["source_artifacts"],
         key=lambda item: (item["role"], item["path"]),

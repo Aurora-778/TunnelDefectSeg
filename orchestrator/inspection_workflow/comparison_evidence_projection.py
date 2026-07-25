@@ -19,6 +19,10 @@ from .a1_artifacts import (
     PHASE_A1_EXECUTION_PROFILE,
     PHASE_A1_SOURCE_ARTIFACT_LIMIT,
     PhaseA1ArtifactError,
+    _raise_recovery_required,
+    _reject_recovery_marker,
+    _require_projection_pilot_round_count,
+    _write_failure_requires_recovery,
     snapshot_phase_a1_work_artifact,
     write_phase_a1_work_artifact,
 )
@@ -1153,6 +1157,10 @@ def materialize_prepared_history_projection_sources(
         )
     root = Path(project_root)
     try:
+        _reject_recovery_marker(root, run_id, "work")
+    except PhaseA1ArtifactError as exc:
+        raise ComparisonEvidenceProjectionError(str(exc)) from exc
+    try:
         # Validate containment before passing a filesystem path to the existing
         # readiness gate. The bytes used below are captured again after that gate.
         snapshot_phase_a1_work_artifact(
@@ -1292,11 +1300,20 @@ def materialize_prepared_history_projection_sources(
         history_manifest_snapshot["data"],
         label="history-only association_manifest.json",
     )
+    raw_rounds = raw_history_manifest.get("rounds")
+    if not isinstance(raw_rounds, list) or not raw_rounds:
+        raise ComparisonEvidenceProjectionError(
+            "history-only association_manifest.json rounds must be a non-empty list"
+        )
+    try:
+        _require_projection_pilot_round_count(len(raw_rounds))
+    except PhaseA1ArtifactError as exc:
+        raise ComparisonEvidenceProjectionError(str(exc)) from exc
     raw_snapshot_records: dict[str, list[dict[str, str]]] = {}
     raw_snapshot_fieldnames: dict[str, Sequence[str]] = {}
     raw_round_sources: list[dict[str, Any]] = []
     for round_number, round_entry in enumerate(
-        raw_history_manifest.get("rounds", []),
+        raw_rounds,
         start=1,
     ):
         if not isinstance(round_entry, Mapping):
@@ -1514,23 +1531,40 @@ def materialize_prepared_history_projection_sources(
         run_id=run_id,
         execution_profile=execution_profile,
     )
+    committed_paths: list[str] = []
     try:
         for relative_path, data in outputs.items():
-            write_phase_a1_work_artifact(
+            if write_phase_a1_work_artifact(
                 project_root,
                 run_id=run_id,
                 execution_profile=execution_profile,
                 relative_path=relative_path,
                 data=data,
-            )
-        write_phase_a1_work_artifact(
+            ):
+                committed_paths.append(relative_path)
+        if write_phase_a1_work_artifact(
             project_root,
             run_id=run_id,
             execution_profile=execution_profile,
             relative_path=receipt_path,
             data=receipt_bytes,
-        )
+        ):
+            committed_paths.append(receipt_path)
     except PhaseA1ArtifactError as exc:
+        if committed_paths or _write_failure_requires_recovery(exc):
+            try:
+                _raise_recovery_required(
+                    project_root=root,
+                    run_id=run_id,
+                    area="work",
+                    stage="prepared_history_projection_materialization",
+                    committed_paths=committed_paths,
+                    primary_error=exc,
+                )
+            except PhaseA1ArtifactError as recovery_exc:
+                raise ComparisonEvidenceProjectionError(str(recovery_exc)) from (
+                    recovery_exc.__cause__ or recovery_exc
+                )
         raise ComparisonEvidenceProjectionError(
             f"unable to materialize A1 projection sources: {exc}"
         ) from exc

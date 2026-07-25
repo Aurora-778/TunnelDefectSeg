@@ -38,8 +38,12 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
 - The A1 sandbox source projection is available only by direct component invocation
   with `projection_mode=prepared_history_sources` and explicit Prepared/history-only
   producer paths under an initialized temporary sandbox; it is not a second
-  production entry point. Hand-authored normalized Run-local relations remain a
-  test-only seam and are not accepted by the production Agent.
+  production entry point. One high-level invocation performs materialization,
+  projection, and V4 bundle commit. Hand-authored normalized Run-local relations
+  remain a pure validation seam and cannot commit a producer-bound V4 bundle.
+- The retained `records`/`source_artifacts` compatibility entry writes only
+  `normalized_records` with `source_validation_scope=byte_binding_only`; it cannot
+  claim Prepared readiness or history-only producer execution.
 - Sandbox initialization fixes either normalized-record or Run-local projection
   mode. A caller cannot later downgrade that mode through a Manifest field.
 - A minimal materializer composes the existing Prepared readiness gate and
@@ -49,6 +53,10 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
   origin authentication. It does not use
   `label_disease_id` as a join key; ambiguous frame/image references and matched
   claims without source-proof Memory remain Fail Closed.
+- Projection work is a process-level multi-file stage. Partial or
+  write-state-uncertain failures create a Run-local work recovery marker that
+  blocks readers and reruns until explicit inspection.
+- The current single-sequence A1 pilot accepts at most 31 inspection rounds.
 - Lock and publication policies are machine-marked disabled until their named phases.
 
 ## Fail-Closed Rules

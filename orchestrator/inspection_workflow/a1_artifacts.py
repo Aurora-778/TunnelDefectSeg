@@ -108,10 +108,24 @@ _SANDBOX_MARKER_FIELDS = {
 _MAX_JSON_BYTES = 1024 * 1024
 _MAX_A1_WORK_ARTIFACT_BYTES = 8 * 1024 * 1024
 PHASE_A1_SOURCE_ARTIFACT_LIMIT = 256
+PHASE_A1_MAX_INSPECTION_ROUNDS = 31
 
 
 class PhaseA1ArtifactError(ValueError):
     """Raised when a Run-local A1 artifact set is unsafe or inconsistent."""
+
+
+def _require_projection_pilot_round_count(round_count: Any) -> int:
+    if type(round_count) is not int or round_count <= 0:
+        raise PhaseA1ArtifactError(
+            "A1 prepared-history inspection round count must be a positive integer"
+        )
+    if round_count > PHASE_A1_MAX_INSPECTION_ROUNDS:
+        raise PhaseA1ArtifactError(
+            "A1 prepared-history pilot supports at most "
+            f"{PHASE_A1_MAX_INSPECTION_ROUNDS} inspection rounds"
+        )
+    return round_count
 
 
 def _validate_run_identity(*, run_id: str, execution_profile: str) -> None:
@@ -590,6 +604,7 @@ def snapshot_phase_a1_work_artifact(
         run_id=run_id,
         execution_profile=execution_profile,
     )
+    _reject_recovery_marker(root, run_id, "work")
     if (
         not isinstance(relative_path, str)
         or not relative_path
@@ -654,6 +669,7 @@ def write_phase_a1_work_artifact(
         run_id=run_id,
         execution_profile=execution_profile,
     )
+    _reject_recovery_marker(root, run_id, "work")
     marker = _load_phase_a1_sandbox_marker(
         root,
         run_id=run_id,
@@ -836,6 +852,7 @@ def _validate_projection_source_set(
         raise PhaseA1ArtifactError(
             "Run-local Association manifest rounds are invalid"
         )
+    _require_projection_pilot_round_count(len(rounds))
     for round_number, round_entry in enumerate(rounds, start=1):
         if not isinstance(round_entry, Mapping):
             raise PhaseA1ArtifactError(
@@ -977,11 +994,14 @@ def _enforce_byte_binding_only_decision(document: Mapping[str, Any]) -> None:
 
 
 def _recovery_marker_path(project_root: Path, run_id: str, area: str) -> Path:
-    relative = (
-        _artifact_relative_path(run_id, _RECOVERY_MARKER_NAME)
-        if area == "artifacts"
-        else _staging_relative_path(run_id, _RECOVERY_MARKER_NAME)
-    )
+    if area == "artifacts":
+        relative = _artifact_relative_path(run_id, _RECOVERY_MARKER_NAME)
+    elif area == "staging":
+        relative = _staging_relative_path(run_id, _RECOVERY_MARKER_NAME)
+    elif area == "work":
+        relative = f"runs/{run_id}/work/{_RECOVERY_MARKER_NAME}"
+    else:
+        raise PhaseA1ArtifactError(f"unsupported A1 recovery area: {area}")
     return _resolve_fixed_path(project_root, relative)
 
 
@@ -1155,21 +1175,33 @@ def write_comparison_evidence_bundle(
     )
 
 
-def write_projected_comparison_evidence_bundle(
+def write_prepared_history_comparison_evidence_bundle(
     project_root: Path,
     *,
     run_id: str,
     execution_profile: str,
     plan_fingerprint: str,
+    prepared_manifest_path: str,
+    history_association_path: str,
+    history_manifest_path: str,
 ) -> dict[str, Any]:
-    """Project fixed Run-local sources and write their Evidence bundle."""
+    """Materialize validated producer inputs and commit one V4 Evidence bundle."""
 
     from .comparison_evidence_projection import (
         ComparisonEvidenceProjectionError,
+        materialize_prepared_history_projection_sources,
         project_run_local_comparison_evidence,
     )
 
     try:
+        materialize_prepared_history_projection_sources(
+            project_root,
+            run_id=run_id,
+            execution_profile=execution_profile,
+            prepared_manifest_path=prepared_manifest_path,
+            history_association_path=history_association_path,
+            history_manifest_path=history_manifest_path,
+        )
         projected = project_run_local_comparison_evidence(
             project_root,
             run_id=run_id,
@@ -1177,7 +1209,7 @@ def write_projected_comparison_evidence_bundle(
         )
     except ComparisonEvidenceProjectionError as exc:
         raise PhaseA1ArtifactError(
-            f"Comparison Evidence source projection failed: {exc}"
+            f"Comparison Evidence prepared-history projection failed: {exc}"
         ) from exc
     return _write_comparison_evidence_bundle(
         project_root,

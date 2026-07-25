@@ -45,8 +45,11 @@ Prepared `preparation_manifest.json`, history-only main Association CSV, and its
 round Manifest. It runs the existing Prepared Path readiness gate, captures the
 post-gate Prepared bytes, reuses the existing Prepared artifact validator on
 those captured CSV bytes, and then materializes the fixed normalized relations
-below `runs/<run_id>/work`. Hand-authored normalized relation files are only a
-test seam and are not an accepted Agent input. The projector validates
+below `runs/<run_id>/work`. One high-level call performs materialization,
+projection, and V4 Evidence/Manifest commit; there is no public writer that can
+commit an already-present hand-authored receipt as `run_local_projection`.
+Hand-authored normalized relation files are only a pure relation-validation test
+seam and cannot commit a V4 producer-bound bundle. The projector validates
 Frame/Engineering/Association observation relations, exact round query subsets,
 main/round Association equality, ordered history prefixes, and both
 Memory-before and Memory-after schemas, then writes deterministic UTF-8 CSV to
@@ -60,7 +63,8 @@ inside a projection sandbox, and changing a projection Manifest to
 contain the exact role/path set reconstructed from its bound Association Manifest;
 removing Frame, query-round, Association-round, Memory-before, or Memory-after
 context makes the bundle invalid. The compatibility `normalized_records` bundle
-retains its narrower caller-supplied source set.
+retains its narrower caller-supplied source set and does not claim that Prepared
+readiness or the history-only producer ran.
 
 The V4 manifest binds the exact Run-local Frame, Association, round context,
 Association Manifest, Engineering, projection receipt, and every Prepared/history
@@ -118,19 +122,26 @@ CSV readers require the writer's exact canonical field order, row order, LF byte
 compact JSON lists, lowercase booleans, and canonical integer spelling. JSON inputs
 are size-bounded; excessive nesting and non-finite constants fail closed. A1 V1
 Run-local source snapshots are limited to 8 MiB each and a bundle to 256 source
-references. Producer decimal text is
+references. The `run_local_projection` A1 pilot additionally supports at most
+31 inspection rounds; round 32 fails with an explicit pilot-scale error before
+work materialization. This exposes the domain limit instead of relying on the
+internal reference count to fail first. Producer decimal text is
 bounded before fixed-point formatting, so extreme exponents fail closed instead of
 expanding into unbounded strings. These bounds target the single-sequence pilot and
 must be versioned before larger datasets are accepted.
 
-Evidence/Manifest, authoritative Decision/post-write validation, and Staging
-report/Decision mirror are multi-file process-level stages rather than A2 publication
-transactions. If a later step fails after an earlier file may have been committed,
-the stage writes `.a1_recovery_required.json` under that Run's `artifacts` or
-`staging` directory. Readers fail closed while the marker exists. The marker and
-partial files are retained for explicit manual inspection; this A1 layer does not
-silently delete or roll back them. Manifest-last here is a process-level ordering
-rule, not a power-loss durability or concurrent-writer guarantee.
+Projection work materialization, Evidence/Manifest, authoritative
+Decision/post-write validation, and Staging report/Decision mirror are multi-file
+process-level stages rather than A2 publication transactions. If a later step
+fails after an earlier file may have been committed, or an atomic replace/temporary
+cleanup leaves write state uncertain, the stage writes
+`.a1_recovery_required.json` under that Run's `work`, `artifacts`, or `staging`
+directory. The marker records only paths actually committed by that invocation;
+a clean failure before the first replace remains retryable without a marker.
+Readers and reruns fail closed while the marker exists. The marker and partial
+files are retained for explicit manual inspection; this A1 layer does not silently
+delete or roll back them. Manifest-last here is a process-level ordering rule, not
+a power-loss durability or concurrent-writer guarantee.
 
 Path checks reject symlinks and Windows reparse points, including in-tree aliases,
 and are repeated immediately around writes to narrow check/use replacement windows.

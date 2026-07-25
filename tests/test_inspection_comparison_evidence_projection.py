@@ -26,13 +26,15 @@ from orchestrator.inspection_workflow import (
     write_comparison_evidence_bundle,
 )
 from orchestrator.inspection_workflow.a1_artifacts import (
+    PHASE_A1_MAX_INSPECTION_ROUNDS,
+    _require_projection_pilot_round_count,
     snapshot_phase_a1_work_artifact,
-    write_projected_comparison_evidence_bundle,
 )
 from orchestrator.inspection_workflow.comparison_evidence_projection import (
     ComparisonEvidenceProjectionError,
     PROJECTION_RECEIPT_SCHEMA_VERSION,
     _canonical_decimal_from_producer,
+    project_run_local_comparison_evidence,
 )
 from scripts import prepare_real_inspection_pilot as preparation
 
@@ -332,24 +334,141 @@ def _run_projection(context):
     root = Path(context["shared"]["project_root"])
     _refresh_test_projection_receipt(root, context)
     shared = context["shared"]
-    return write_projected_comparison_evidence_bundle(
-        root,
-        run_id=shared["run_id"],
-        execution_profile=shared["execution_profile"],
-        plan_fingerprint=shared["plan_fingerprint"],
-    )
+    try:
+        return project_run_local_comparison_evidence(
+            root,
+            run_id=shared["run_id"],
+            execution_profile=shared["execution_profile"],
+        )
+    except ComparisonEvidenceProjectionError as exc:
+        raise PhaseA1ArtifactError(str(exc)) from exc
 
 
 def _run_and_load(root: Path, context):
     result = _run_projection(context)
-    evidence_path = root / result["comparison_evidence_path"]
-    return result, parse_comparison_evidence_csv(evidence_path.read_bytes())
+    return result, result["records"]
+
+
+def _prepared_history_agent_fixture(tmp_path: Path, *, include_query: bool):
+    root = tmp_path / "prepared-history-projection"
+    work = root / "runs" / RUN_ID / "work"
+    dataset = root / "dataset"
+    (dataset / "images").mkdir(parents=True)
+    (dataset / "masks").mkdir()
+    Image.new("RGB", (4, 4), color=(90, 100, 110)).save(
+        dataset / "images" / "frame.jpg"
+    )
+    mask = Image.new("L", (4, 4), color=0)
+    mask.putpixel((1, 2), 255)
+    mask.save(dataset / "masks" / "mask.png")
+    metadata_rows = [
+        {
+            "sequence_id": "S01",
+            "source_inspection_id": "visit_1",
+            "frame_id": "1",
+            "timestamp": "2026-07-01T10:00:00Z",
+            "mileage_m": "12.0",
+            "ring_id": "1",
+            "clock_direction": "12点",
+            "image_file": "images/frame.jpg",
+            "mask_file": "masks/mask.png",
+            "local_observation_id": "obs_01",
+            "disease_type": "crack",
+        }
+    ]
+    if include_query:
+        Image.new("RGB", (4, 4), color=(40, 50, 60)).save(
+            dataset / "images" / "frame_late.jpg"
+        )
+        Image.new("L", (4, 4), color=255).save(
+            dataset / "masks" / "mask_late.png"
+        )
+        metadata_rows.append(
+            {
+                "sequence_id": "S01",
+                "source_inspection_id": "visit_2",
+                "frame_id": "2",
+                "timestamp": "2026-07-02T10:00:00Z",
+                "mileage_m": "10000.0",
+                "ring_id": "9000",
+                "clock_direction": "6点",
+                "image_file": "images/frame_late.jpg",
+                "mask_file": "masks/mask_late.png",
+                "local_observation_id": "obs_02",
+                "disease_type": "crack",
+            }
+        )
+    with (dataset / "metadata.csv").open(
+        "w",
+        encoding="utf-8-sig",
+        newline="",
+    ) as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=preparation.REQUIRED_METADATA_COLUMNS,
+        )
+        writer.writeheader()
+        writer.writerows(metadata_rows)
+
+    initialize_phase_a1_sandbox(
+        root,
+        run_id=RUN_ID,
+        evidence_source_mode="run_local_projection",
+    )
+    prepared_dir = work / "raw_prepared"
+    result = preparation.prepare_real_inspection_pilot(dataset, prepared_dir)
+    assert result["published"] is True
+    preparation.require_inference_ready(prepared_dir / "preparation_manifest.json")
+
+    history_dir = work / "raw_history"
+    association_path = history_dir / "association_records.csv"
+    history_manifest_path = history_dir / "association_manifest.json"
+    AssociationAgent().run(
+        {
+            "inputs": {
+                "association": {
+                    "history_only": "true",
+                    "frame_records": str(prepared_dir / "frame_records.csv"),
+                    "output_path": str(association_path),
+                    "history_output_dir": str(history_dir / "main_progressive"),
+                    "manifest_path": str(history_manifest_path),
+                    "use_disease_id_score": "false",
+                    "association_mode": "no_id",
+                }
+            },
+            "outputs": {},
+            "shared": {"project_root": str(root)},
+        }
+    )
+    context = {
+        "shared": {
+            "project_root": str(root),
+            "run_id": RUN_ID,
+            "execution_profile": "phase_a1_sandbox",
+            "plan_fingerprint": PLAN_FINGERPRINT,
+        },
+        "inputs": {
+            "comparison_evidence": {
+                "projection_mode": "prepared_history_sources",
+                "prepared_manifest_path": (
+                    f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json"
+                ),
+                "history_association_path": (
+                    f"runs/{RUN_ID}/work/raw_history/association_records.csv"
+                ),
+                "history_manifest_path": (
+                    f"runs/{RUN_ID}/work/raw_history/association_manifest.json"
+                ),
+            }
+        },
+    }
+    return root, work, prepared_dir, context
 
 
 def test_baseline_sources_project_to_static_audit_bundle(tmp_path):
     root, _, context = _projection_fixture(tmp_path, include_query=False)
 
-    result, records = _run_and_load(root, context)
+    _, records = _run_and_load(root, context)
 
     assert len(records) == 1
     assert set(records[0]) == set(COMPARISON_EVIDENCE_FIELDS)
@@ -359,18 +478,7 @@ def test_baseline_sources_project_to_static_audit_bundle(tmp_path):
     assert records[0]["source_current_record_fingerprint"] == (
         "5fcf13e1da1d402755a1e276793d72f08e1a079c97d38d191257d1fcff75fa81"
     )
-    manifest = json.loads(
-        (root / result["comparison_evidence_manifest_path"]).read_text(encoding="utf-8")
-    )
-    assert {item["role"] for item in manifest["source_artifacts"]} >= {
-        "frame_artifact",
-        "engineering_artifact",
-        "association_artifact",
-        "association_manifest",
-        "projection_input",
-        "projection_receipt",
-    }
-    assert manifest["source_bundle_kind"] == "run_local_projection"
+    assert not (root / "runs" / RUN_ID / "artifacts").exists()
 
 
 def test_agent_rejects_hand_authored_run_local_projection_mode(tmp_path):
@@ -384,6 +492,12 @@ def test_agent_rejects_hand_authored_run_local_projection_mode(tmp_path):
         match="prepared_history_sources projection fields",
     ):
         ComparisonEvidenceAgent().run(context)
+
+
+def test_v4_projection_writer_is_not_a_public_test_seam():
+    import orchestrator.inspection_workflow.a1_artifacts as artifacts
+
+    assert not hasattr(artifacts, "write_projected_comparison_evidence_bundle")
 
 
 def test_unmatched_query_projects_to_rejected_static_audit(tmp_path):
@@ -402,11 +516,14 @@ def test_unmatched_query_projects_to_rejected_static_audit(tmp_path):
 
 
 def test_projected_sources_flow_through_claim_gate_and_static_report(tmp_path):
-    root, _, context = _projection_fixture(tmp_path, include_query=True)
+    root, _, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
     context["inputs"]["claim_gate"] = {}
     context["inputs"]["claim_audit_report"] = {}
 
-    _run_projection(context)
+    ComparisonEvidenceAgent().run(context)
     claim_result = ClaimGateAgent().run(context)
     report_result = ClaimAuditReportAgent().run(context)
 
@@ -657,6 +774,23 @@ def test_a1_work_snapshot_rejects_oversized_pilot_source(tmp_path):
         )
 
 
+def test_phase_a1_projection_round_limit_accepts_maximum():
+    assert (
+        _require_projection_pilot_round_count(PHASE_A1_MAX_INSPECTION_ROUNDS)
+        == PHASE_A1_MAX_INSPECTION_ROUNDS
+    )
+
+
+def test_phase_a1_projection_round_limit_rejects_next_round():
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="supports at most 31 inspection rounds",
+    ):
+        _require_projection_pilot_round_count(
+            PHASE_A1_MAX_INSPECTION_ROUNDS + 1
+        )
+
+
 def test_source_headers_cannot_smuggle_label_fields(tmp_path):
     _, work, context = _projection_fixture(tmp_path, include_query=False)
     data = (work / "frame_records.csv").read_text(encoding="utf-8")
@@ -702,7 +836,10 @@ def test_manifest_history_order_must_be_earlier_than_query_timestamps(tmp_path):
 
 
 def test_projection_source_change_is_rejected_before_manifest_commit(tmp_path, monkeypatch):
-    root, work, context = _projection_fixture(tmp_path, include_query=False)
+    root, work, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
     import orchestrator.inspection_workflow.a1_artifacts as artifacts
 
     original = artifacts._snapshot_source_artifacts
@@ -716,13 +853,16 @@ def test_projection_source_change_is_rejected_before_manifest_commit(tmp_path, m
     monkeypatch.setattr(artifacts, "_snapshot_source_artifacts", mutate_then_snapshot)
 
     with pytest.raises(PhaseA1ArtifactError, match="changed after projection"):
-        _run_projection(context)
+        ComparisonEvidenceAgent().run(context)
     assert not (root / "runs" / RUN_ID / "artifacts" / "comparison_evidence_manifest.json").exists()
 
 
 def test_projection_manifest_requires_complete_source_set(tmp_path):
-    root, _, context = _projection_fixture(tmp_path, include_query=False)
-    result = _run_projection(context)
+    root, _, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
+    result = ComparisonEvidenceAgent().run(context)
     manifest_path = root / result["comparison_evidence_manifest_path"]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["source_artifacts"] = [
@@ -744,8 +884,11 @@ def test_projection_manifest_requires_complete_source_set(tmp_path):
 
 
 def test_projection_receipt_requires_complete_producer_source_set(tmp_path):
-    root, work, context = _projection_fixture(tmp_path, include_query=False)
-    result = _run_projection(context)
+    root, work, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
+    result = ComparisonEvidenceAgent().run(context)
     receipt_path = work / "projection_receipt.json"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     removed = next(
@@ -795,8 +938,11 @@ def test_projection_receipt_requires_complete_producer_source_set(tmp_path):
 
 
 def test_projection_bundle_kind_cannot_be_downgraded_in_manifest(tmp_path):
-    root, _, context = _projection_fixture(tmp_path, include_query=False)
-    result = _run_projection(context)
+    root, _, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
+    result = ComparisonEvidenceAgent().run(context)
     manifest_path = root / result["comparison_evidence_manifest_path"]
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["source_bundle_kind"] = "normalized_records"
@@ -883,8 +1029,11 @@ def test_bundle_validation_reuses_verified_association_manifest_bytes(
     tmp_path,
     monkeypatch,
 ):
-    root, _, context = _projection_fixture(tmp_path, include_query=False)
-    result = _run_projection(context)
+    root, _, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
+    result = ComparisonEvidenceAgent().run(context)
     import orchestrator.inspection_workflow.a1_artifacts as artifacts
 
     original = artifacts._load_json_object
@@ -906,122 +1055,17 @@ def test_bundle_validation_reuses_verified_association_manifest_bytes(
         execution_profile="phase_a1_sandbox",
         plan_fingerprint=PLAN_FINGERPRINT,
     )
-    assert result["record_count"] == 1
+    assert result["record_count"] == 2
 
 
 def test_existing_prepared_and_history_producers_materialize_static_evidence(
     tmp_path,
     monkeypatch,
 ):
-    root = tmp_path / "producer-integration"
-    work = root / "runs" / RUN_ID / "work"
-    dataset = root / "dataset"
-    (dataset / "images").mkdir(parents=True)
-    (dataset / "masks").mkdir()
-    Image.new("RGB", (4, 4), color=(90, 100, 110)).save(
-        dataset / "images" / "frame.jpg"
+    root, _, prepared_dir, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
     )
-    Image.new("RGB", (4, 4), color=(40, 50, 60)).save(
-        dataset / "images" / "frame_late.jpg"
-    )
-    mask = Image.new("L", (4, 4), color=0)
-    mask.putpixel((1, 2), 255)
-    mask.save(dataset / "masks" / "mask.png")
-    Image.new("L", (4, 4), color=255).save(dataset / "masks" / "mask_late.png")
-    with (dataset / "metadata.csv").open(
-        "w",
-        encoding="utf-8-sig",
-        newline="",
-    ) as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=preparation.REQUIRED_METADATA_COLUMNS,
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "sequence_id": "S01",
-                "source_inspection_id": "visit_1",
-                "frame_id": "1",
-                "timestamp": "2026-07-01T10:00:00Z",
-                "mileage_m": "12.0",
-                "ring_id": "1",
-                "clock_direction": "12点",
-                "image_file": "images/frame.jpg",
-                "mask_file": "masks/mask.png",
-                "local_observation_id": "obs_01",
-                "disease_type": "crack",
-            }
-        )
-        writer.writerow(
-            {
-                "sequence_id": "S01",
-                "source_inspection_id": "visit_2",
-                "frame_id": "2",
-                "timestamp": "2026-07-02T10:00:00Z",
-                "mileage_m": "10000.0",
-                "ring_id": "9000",
-                "clock_direction": "6点",
-                "image_file": "images/frame_late.jpg",
-                "mask_file": "masks/mask_late.png",
-                "local_observation_id": "obs_02",
-                "disease_type": "crack",
-            }
-        )
-
-    initialize_phase_a1_sandbox(
-        root,
-        run_id=RUN_ID,
-        evidence_source_mode="run_local_projection",
-    )
-    prepared_dir = work / "raw_prepared"
-    result = preparation.prepare_real_inspection_pilot(dataset, prepared_dir)
-    assert result["published"] is True
-    preparation.require_inference_ready(prepared_dir / "preparation_manifest.json")
-
-    history_dir = work / "raw_history"
-    association_path = history_dir / "association_records.csv"
-    history_manifest_path = history_dir / "association_manifest.json"
-    AssociationAgent().run(
-        {
-            "inputs": {
-                "association": {
-                    "history_only": "true",
-                    "frame_records": str(prepared_dir / "frame_records.csv"),
-                    "output_path": str(association_path),
-                    "history_output_dir": str(history_dir / "main_progressive"),
-                    "manifest_path": str(history_manifest_path),
-                    "use_disease_id_score": "false",
-                    "association_mode": "no_id",
-                }
-            },
-            "outputs": {},
-            "shared": {"project_root": str(root)},
-        }
-    )
-
-    context = {
-        "shared": {
-            "project_root": str(root),
-            "run_id": RUN_ID,
-            "execution_profile": "phase_a1_sandbox",
-            "plan_fingerprint": PLAN_FINGERPRINT,
-        },
-        "inputs": {
-            "comparison_evidence": {
-                "projection_mode": "prepared_history_sources",
-                "prepared_manifest_path": (
-                    f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json"
-                ),
-                "history_association_path": (
-                    f"runs/{RUN_ID}/work/raw_history/association_records.csv"
-                ),
-                "history_manifest_path": (
-                    f"runs/{RUN_ID}/work/raw_history/association_manifest.json"
-                ),
-            }
-        },
-    }
     agent_result = ComparisonEvidenceAgent().run(context)
     records = parse_comparison_evidence_csv(
         (root / agent_result["comparison_evidence_path"]).read_bytes()
@@ -1072,3 +1116,138 @@ def test_existing_prepared_and_history_producers_materialize_static_evidence(
         match="snapshot does not match its validated manifest",
     ):
         ComparisonEvidenceAgent().run(context)
+
+
+def test_prepared_history_agent_rejects_manifest_over_pilot_round_limit(tmp_path):
+    _, _, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
+    manifest_path = (
+        Path(context["shared"]["project_root"])
+        / context["inputs"]["comparison_evidence"]["history_manifest_path"]
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["rounds"] = [
+        dict(manifest["rounds"][0])
+        for _ in range(PHASE_A1_MAX_INSPECTION_ROUNDS + 1)
+    ]
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="supports at most 31 inspection rounds",
+    ):
+        ComparisonEvidenceAgent().run(context)
+
+
+def test_projection_work_partial_commit_records_only_actual_paths(
+    tmp_path,
+    monkeypatch,
+):
+    root, work, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
+    import orchestrator.inspection_workflow.comparison_evidence_projection as projection
+
+    original = projection.write_phase_a1_work_artifact
+    attempted_paths = []
+
+    def fail_second_write(project_root, **kwargs):
+        attempted_paths.append(kwargs["relative_path"])
+        if len(attempted_paths) == 2:
+            raise PhaseA1ArtifactError("injected second projection write failure")
+        return original(project_root, **kwargs)
+
+    monkeypatch.setattr(
+        projection,
+        "write_phase_a1_work_artifact",
+        fail_second_write,
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="work recovery is required"):
+        ComparisonEvidenceAgent().run(context)
+
+    marker = json.loads(
+        (work / ".a1_recovery_required.json").read_text(encoding="utf-8")
+    )
+    assert marker["area"] == "work"
+    assert marker["stage"] == "prepared_history_projection_materialization"
+    assert marker["committed_paths"] == [attempted_paths[0]]
+    assert (root / attempted_paths[0]).is_file()
+    assert not (root / attempted_paths[1]).exists()
+
+    with pytest.raises(PhaseA1ArtifactError, match="work recovery marker exists"):
+        ComparisonEvidenceAgent().run(context)
+
+
+def test_projection_work_uncertain_first_replace_requires_recovery(
+    tmp_path,
+    monkeypatch,
+):
+    _, work, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
+    import orchestrator.inspection_workflow.comparison_evidence_projection as projection
+
+    def uncertain_first_write(project_root, **kwargs):
+        error = PhaseA1ArtifactError("injected uncertain projection write")
+        error.write_state_uncertain = True
+        raise error
+
+    monkeypatch.setattr(
+        projection,
+        "write_phase_a1_work_artifact",
+        uncertain_first_write,
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="work recovery is required"):
+        ComparisonEvidenceAgent().run(context)
+
+    marker = json.loads(
+        (work / ".a1_recovery_required.json").read_text(encoding="utf-8")
+    )
+    assert marker["committed_paths"] == []
+
+
+def test_projection_work_clean_zero_commit_failure_can_retry(
+    tmp_path,
+    monkeypatch,
+):
+    _, work, _, context = _prepared_history_agent_fixture(
+        tmp_path,
+        include_query=True,
+    )
+    import orchestrator.inspection_workflow.comparison_evidence_projection as projection
+
+    original = projection.write_phase_a1_work_artifact
+    failed_once = False
+
+    def fail_cleanly_once(project_root, **kwargs):
+        nonlocal failed_once
+        if not failed_once:
+            failed_once = True
+            raise PhaseA1ArtifactError("injected clean projection write failure")
+        return original(project_root, **kwargs)
+
+    monkeypatch.setattr(
+        projection,
+        "write_phase_a1_work_artifact",
+        fail_cleanly_once,
+    )
+
+    with pytest.raises(
+        PhaseA1ArtifactError,
+        match="unable to materialize A1 projection sources",
+    ):
+        ComparisonEvidenceAgent().run(context)
+    assert not (work / ".a1_recovery_required.json").exists()
+
+    result = ComparisonEvidenceAgent().run(context)
+    assert result["record_count"] == 2
