@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 import csv
+import hashlib
+import io
 import json
 from pathlib import Path
 
@@ -139,6 +141,124 @@ def _fixture(tmp_path: Path, *, include_query: bool = False, legacy_memory_text:
 
 def _text(root: Path, relative: str) -> str:
     return (root / relative).read_text(encoding="utf-8")
+
+
+def _canonical_json_bytes(value) -> bytes:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _refresh_projected_source_binding(root: Path, relative_path: str) -> None:
+    source_path = root / relative_path
+    source_bytes = source_path.read_bytes()
+    source_size = len(source_bytes)
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    receipt_relative = f"runs/{RUN_ID}/work/projection_receipt.json"
+    receipt_path = root / receipt_relative
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    projected_reference = next(
+        item for item in receipt["projected_artifacts"] if item["path"] == relative_path
+    )
+    projected_reference["size_bytes"] = source_size
+    projected_reference["sha256"] = source_sha256
+    receipt_bytes = _canonical_json_bytes(receipt)
+    receipt_path.write_bytes(receipt_bytes)
+
+    manifest_path = root / f"runs/{RUN_ID}/artifacts/comparison_evidence_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    source_reference = next(
+        item for item in manifest["source_artifacts"] if item["path"] == relative_path
+    )
+    source_reference["size_bytes"] = source_size
+    source_reference["sha256"] = source_sha256
+    receipt_reference = next(
+        item for item in manifest["source_artifacts"] if item["path"] == receipt_relative
+    )
+    receipt_reference["size_bytes"] = len(receipt_bytes)
+    receipt_reference["sha256"] = hashlib.sha256(receipt_bytes).hexdigest()
+    manifest_path.write_bytes(_canonical_json_bytes(manifest))
+
+
+def _refresh_association_manifest_provenance(root: Path) -> None:
+    association_path = root / f"runs/{RUN_ID}/work/association_manifest.json"
+    association_sha256 = hashlib.sha256(association_path.read_bytes()).hexdigest()
+    evidence_path = root / f"runs/{RUN_ID}/artifacts/comparison_evidence.csv"
+    records = a1_artifacts.parse_comparison_evidence_csv(evidence_path.read_bytes())
+    for record in records:
+        if record["source_association_manifest_sha256"] is not None:
+            record["source_association_manifest_sha256"] = association_sha256
+    evidence_bytes, _ = a1_artifacts.comparison_evidence_csv_bytes(records)
+    evidence_path.write_bytes(evidence_bytes)
+
+    manifest_path = root / f"runs/{RUN_ID}/artifacts/comparison_evidence_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["comparison_evidence_size_bytes"] = len(evidence_bytes)
+    manifest["comparison_evidence_sha256"] = hashlib.sha256(evidence_bytes).hexdigest()
+    manifest_path.write_bytes(_canonical_json_bytes(manifest))
+
+    (root / f"runs/{RUN_ID}/artifacts/claim_decision.json").unlink()
+    a1_artifacts.write_claim_decision_artifact(
+        root,
+        run_id=RUN_ID,
+        execution_profile="phase_a1_sandbox",
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+
+
+def _rewrite_memory_csv(path: Path, mutate) -> None:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    mutate(rows)
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    path.write_bytes(buffer.getvalue().encode("utf-8"))
+
+
+def _corrupt_bound_memory_source(root: Path, corruption: str) -> None:
+    manifest_path = root / f"runs/{RUN_ID}/work/association_manifest.json"
+    association_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    history_round = association_manifest["rounds"][1]
+    memory_relative = history_round["memory_before"]
+    memory_path = root / memory_relative
+
+    if corruption == "duplicate_memory_id":
+        _rewrite_memory_csv(memory_path, lambda rows: rows.append(dict(rows[0])))
+        _refresh_projected_source_binding(root, memory_relative)
+        return
+    if corruption == "future_source_inspection":
+        _rewrite_memory_csv(
+            memory_path,
+            lambda rows: rows[0].update(
+                {"source_inspection_ids": history_round["query_inspection"]}
+            ),
+        )
+        _refresh_projected_source_binding(root, memory_relative)
+        return
+    if corruption == "history_prefix_mismatch":
+        history_round["history_inspection_ids"] = []
+        manifest_path.write_bytes(_canonical_json_bytes(association_manifest))
+        _refresh_projected_source_binding(
+            root,
+            f"runs/{RUN_ID}/work/association_manifest.json",
+        )
+        _refresh_association_manifest_provenance(root)
+        return
+    if corruption == "missing_memory_snapshot":
+        memory_path.unlink()
+        return
+    raise AssertionError(f"unsupported test corruption: {corruption}")
 
 
 def test_baseline_generates_static_growth_and_empty_memory_reports(tmp_path):
@@ -304,6 +424,34 @@ def test_source_tampering_is_rejected_before_report_write(tmp_path):
     assert not (root / f"runs/{RUN_ID}/staging").exists()
 
 
+@pytest.mark.parametrize("agent_class", [GrowthReportAgent, MemoryReportAgent])
+@pytest.mark.parametrize(
+    ("corruption", "error_pattern"),
+    [
+        ("duplicate_memory_id", "duplicate memory_id"),
+        ("future_source_inspection", "current, future, or unknown inspection"),
+        (
+            "history_prefix_mismatch",
+            "history_inspection_ids must equal the prior inspection prefix",
+        ),
+        ("missing_memory_snapshot", "source artifact must be an existing regular file"),
+    ],
+)
+def test_report_agents_reject_memory_snapshot_contract_breaks_before_staging(
+    tmp_path,
+    agent_class,
+    corruption,
+    error_pattern,
+):
+    root, context = _fixture(tmp_path, include_query=True)
+    _corrupt_bound_memory_source(root, corruption)
+
+    with pytest.raises(PhaseA1ArtifactError, match=error_pattern):
+        agent_class().run(context)
+
+    assert not (root / f"runs/{RUN_ID}/staging").exists()
+
+
 def test_missing_required_qualifier_is_rejected_before_report_write(tmp_path):
     root, context = _fixture(tmp_path, include_query=True)
     decision_path = root / f"runs/{RUN_ID}/artifacts/claim_decision.json"
@@ -361,6 +509,31 @@ def test_partial_growth_report_commit_records_only_real_commit(tmp_path, monkeyp
     assert marker["committed_paths"] == [
         f"runs/{RUN_ID}/staging/disease_growth_analysis_report.md"
     ]
+
+
+def test_partial_memory_report_commit_records_only_real_commit(tmp_path, monkeypatch):
+    root, context = _fixture(tmp_path, include_query=True)
+    original = a1_artifacts._atomic_write_idempotent
+
+    def fail_second(path, data, *, allowed_root):
+        if path.name == "disease_memory_bank_summary.md":
+            raise PhaseA1ArtifactError("memory summary write failed")
+        return original(path, data, allowed_root=allowed_root)
+
+    monkeypatch.setattr(a1_artifacts, "_atomic_write_idempotent", fail_second)
+    with pytest.raises(PhaseA1ArtifactError, match="recovery is required"):
+        MemoryReportAgent().run(context)
+
+    marker = json.loads(
+        (root / f"runs/{RUN_ID}/staging/.a1_recovery_required.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert marker["stage"] == "memory_report_commit"
+    assert marker["committed_paths"] == [
+        f"runs/{RUN_ID}/staging/memory_agent_report.md"
+    ]
+    assert not (root / f"runs/{RUN_ID}/staging/disease_memory_bank_summary.md").exists()
 
 
 def test_source_change_after_report_writes_marks_both_commits(tmp_path, monkeypatch):
