@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import csv
-import importlib.util
+from copy import deepcopy
 import io
 import json
 from pathlib import Path
 
+from PIL import Image
 import pytest
 
+from orchestrator.agents.association_agent import AssociationAgent
+from orchestrator.agents.claim_gate_agent import ClaimGateAgent
+from orchestrator.agents.comparison_evidence_agent import ComparisonEvidenceAgent
 from orchestrator.agents.claim_visualization_agent import ClaimVisualizationAgent
 from orchestrator.agents.engineering_claim_report_agent import EngineeringClaimReportAgent
 from orchestrator.claim_policy import load_claim_policy
@@ -18,26 +22,164 @@ from orchestrator.inspection_workflow import (
     a1_artifacts,
     a1_reports,
     a1_visualization,
+    initialize_phase_a1_sandbox,
 )
+from scripts import prepare_real_inspection_pilot as preparation
 
 
-_REPORT_FIXTURES = Path(__file__).with_name("test_inspection_phase_a1_reports.py")
+RUN_ID = "run_202"
+PLAN_FINGERPRINT = "a" * 64
 
 
-def _report_fixture_module():
-    spec = importlib.util.spec_from_file_location("a1_report_test_helpers", _REPORT_FIXTURES)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _fixture(
+    tmp_path: Path,
+    *,
+    include_query: bool = True,
+):
+    root = tmp_path / "a1-visualization-sandbox"
+    dataset = root / "dataset"
+    work = root / "runs" / RUN_ID / "work"
+    (dataset / "images").mkdir(parents=True)
+    (dataset / "masks").mkdir()
+    Image.new("RGB", (8, 8), color=(90, 100, 110)).save(dataset / "images/a.jpg")
+    mask = Image.new("L", (8, 8), color=0)
+    mask.putpixel((1, 2), 255)
+    mask.save(dataset / "masks/a.png")
+    rows = [
+        {
+            "sequence_id": "S01",
+            "source_inspection_id": "visit_1",
+            "frame_id": "1",
+            "timestamp": "2026-07-01T10:00:00Z",
+            "mileage_m": "12.0",
+            "ring_id": "1",
+            "clock_direction": "12点",
+            "image_file": "images/a.jpg",
+            "mask_file": "masks/a.png",
+            "local_observation_id": "obs_01",
+            "disease_type": "crack",
+        }
+    ]
+    if include_query:
+        Image.new("RGB", (8, 8), color=(40, 50, 60)).save(dataset / "images/b.jpg")
+        Image.new("L", (8, 8), color=255).save(dataset / "masks/b.png")
+        rows.append(
+            {
+                "sequence_id": "S01",
+                "source_inspection_id": "visit_2",
+                "frame_id": "2",
+                "timestamp": "2026-07-02T10:00:00Z",
+                "mileage_m": "10000.0",
+                "ring_id": "9000",
+                "clock_direction": "6点",
+                "image_file": "images/b.jpg",
+                "mask_file": "masks/b.png",
+                "local_observation_id": "obs_02",
+                "disease_type": "crack",
+            }
+        )
+    with (dataset / "metadata.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=preparation.REQUIRED_METADATA_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
 
-
-def _fixture(tmp_path: Path, *, include_query: bool = True):
-    return _report_fixture_module()._fixture(tmp_path, include_query=include_query)
+    initialize_phase_a1_sandbox(
+        root,
+        run_id=RUN_ID,
+        evidence_source_mode="run_local_projection",
+    )
+    prepared = work / "raw_prepared"
+    preparation.prepare_real_inspection_pilot(dataset, prepared)
+    preparation.require_inference_ready(prepared / "preparation_manifest.json")
+    history = work / "raw_history"
+    AssociationAgent().run(
+        {
+            "inputs": {
+                "association": {
+                    "history_only": "true",
+                    "frame_records": str(prepared / "frame_records.csv"),
+                    "output_path": str(history / "association_records.csv"),
+                    "history_output_dir": str(history / "main_progressive"),
+                    "manifest_path": str(history / "association_manifest.json"),
+                    "use_disease_id_score": "false",
+                    "association_mode": "no_id",
+                }
+            },
+            "outputs": {},
+            "shared": {"project_root": str(root)},
+        }
+    )
+    context = {
+        "shared": {
+            "project_root": str(root),
+            "run_id": RUN_ID,
+            "execution_profile": "phase_a1_sandbox",
+            "plan_fingerprint": PLAN_FINGERPRINT,
+        },
+        "inputs": {
+            "comparison_evidence": {
+                "projection_mode": "prepared_history_sources",
+                "prepared_manifest_path": (
+                    f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json"
+                ),
+                "history_association_path": (
+                    f"runs/{RUN_ID}/work/raw_history/association_records.csv"
+                ),
+                "history_manifest_path": (
+                    f"runs/{RUN_ID}/work/raw_history/association_manifest.json"
+                ),
+            }
+        },
+    }
+    ComparisonEvidenceAgent().run(context)
+    ClaimGateAgent().run(context)
+    return root, {"shared": deepcopy(context["shared"]), "inputs": {}}
 
 
 def _text(root: Path, relative: str) -> str:
     return (root / relative).read_text(encoding="utf-8")
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _rewrite_evidence_and_rebuild_decision(root: Path, mutate) -> None:
+    evidence_path = root / f"runs/{RUN_ID}/artifacts/comparison_evidence.csv"
+    records = a1_artifacts.parse_comparison_evidence_csv(evidence_path.read_bytes())
+    mutate(records)
+    evidence_bytes, _ = a1_artifacts.comparison_evidence_csv_bytes(records)
+    evidence_path.write_bytes(evidence_bytes)
+
+    manifest_path = root / f"runs/{RUN_ID}/artifacts/comparison_evidence_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["comparison_evidence_size_bytes"] = len(evidence_bytes)
+    manifest["comparison_evidence_sha256"] = a1_artifacts._sha256_bytes(evidence_bytes)
+    manifest_path.write_bytes(_canonical_json_bytes(manifest))
+
+    decision_path = root / f"runs/{RUN_ID}/artifacts/claim_decision.json"
+    decision_path.unlink()
+    a1_artifacts.write_claim_decision_artifact(
+        root,
+        run_id=RUN_ID,
+        execution_profile="phase_a1_sandbox",
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+
+
+def _mutate_canonical_json(path: Path, mutate) -> None:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    mutate(document)
+    path.write_bytes(_canonical_json_bytes(document))
 
 
 def _synthetic_row(
@@ -118,7 +260,7 @@ def test_engineering_and_visualization_agents_generate_only_claim_gated_staging(
     assert set(engineering["report_paths"]) == expected_engineering
     expected_visualization = {
         "runs/run_202/staging/priority_recheck_list.csv",
-        "runs/run_202/staging/visualizations/claim_status_distribution.png",
+        "runs/run_202/staging/visualizations/static_audit_status_distribution.png",
         "runs/run_202/staging/visualizations/comparability_status_distribution.png",
         "runs/run_202/staging/visualizations/static_area_audit.png",
         "runs/run_202/staging/visualization_report.md",
@@ -126,7 +268,7 @@ def test_engineering_and_visualization_agents_generate_only_claim_gated_staging(
         "runs/run_202/staging/recheck_list_report.md",
     }
     assert set(visualization["report_paths"]) == expected_visualization
-    assert (root / "runs/run_202/staging/visualizations/claim_status_distribution.png").read_bytes().startswith(b"\x89PNG")
+    assert (root / "runs/run_202/staging/visualizations/static_audit_status_distribution.png").read_bytes().startswith(b"\x89PNG")
     assert not (root / "outputs").exists()
     assert not (root / "data/simulated").exists()
 
@@ -189,6 +331,85 @@ def test_unmatched_query_is_priority_recheck_without_directional_sorting(tmp_pat
     assert "area_growth_rate" not in rows[0]
     assert "risk_level_change" not in rows[0]
     assert "增长" not in _text(root, "runs/run_202/staging/recheck_list_report.md")
+
+
+def test_real_agents_render_pending_review_through_controlled_input_seam(
+    tmp_path,
+    monkeypatch,
+):
+    root, context = _fixture(tmp_path)
+    report_inputs = a1_reports._load_report_inputs(
+        root,
+        run_id=RUN_ID,
+        execution_profile="phase_a1_sandbox",
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+    pending = _synthetic_row(
+        "PENDING-ENTRY",
+        state="association_pending_review",
+        evidence_valid=True,
+        manual_review=True,
+        static_status="allowed_with_limits",
+        area=10,
+    )
+    pending[1]["required_language_qualifiers"].append(
+        load_claim_policy()["required_language_qualifiers"]["pending_review"]
+    )
+    # V4 currently blocks matched source projection, so pending-review rendering
+    # is exercised through the existing report input seam, not presented as a
+    # producer-reachable artifact case.
+    report_inputs["records"] = [pending[0]]
+    report_inputs["claim_decision"]["record_decisions"] = [pending[1]]
+    report_inputs["claim_decision"]["summary"]["total_records"] = 1
+    report_inputs["claim_decision"]["summary"]["static_audit_allowed"] = 1
+    monkeypatch.setattr(
+        a1_reports,
+        "_load_report_inputs",
+        lambda *args, **kwargs: deepcopy(report_inputs),
+    )
+
+    EngineeringClaimReportAgent().run(context)
+    ClaimVisualizationAgent().run(context)
+
+    report = _text(root, f"runs/{RUN_ID}/staging/disease_engineering_report.md")
+    assert "association_pending_review" in report
+    assert "人工复核" in report
+    rows = list(
+        csv.DictReader(
+            (root / f"runs/{RUN_ID}/staging/priority_recheck_list.csv").open(
+                encoding="utf-8", newline=""
+            )
+        )
+    )
+    assert any(row["identity_evidence_state"] == "association_pending_review" for row in rows)
+
+
+def test_real_agents_render_association_invalid_as_fully_blocked(tmp_path):
+    root, context = _fixture(tmp_path)
+
+    def make_invalid(records):
+        row = next(item for item in records if item["current_inspection_id"] == "I0002")
+        row["identity_evidence_state"] = "association_invalid"
+        row["evidence_valid"] = False
+        row["invalid_reason"] = "source_engineering_artifact_missing"
+        row["source_engineering_artifact_sha256"] = None
+
+    _rewrite_evidence_and_rebuild_decision(root, make_invalid)
+    EngineeringClaimReportAgent().run(context)
+    ClaimVisualizationAgent().run(context)
+
+    report = _text(root, f"runs/{RUN_ID}/staging/disease_engineering_report.md")
+    assert "association_invalid" in report
+    assert "current_value_px：Claim Gate blocked" in report
+    rows = list(
+        csv.DictReader(
+            (root / f"runs/{RUN_ID}/staging/priority_recheck_list.csv").open(
+                encoding="utf-8", newline=""
+            )
+        )
+    )
+    invalid = next(row for row in rows if row["identity_evidence_state"] == "association_invalid")
+    assert invalid["current_value"] == ""
 
 
 def test_pending_invalid_and_legacy_direction_fields_render_only_controlled_audit():
@@ -288,12 +509,56 @@ def test_a13_agents_reject_path_and_source_overrides(tmp_path, agent):
 def test_a13_agents_reject_missing_qualifier_before_staging(tmp_path):
     root, context = _fixture(tmp_path)
     decision_path = root / "runs/run_202/artifacts/claim_decision.json"
-    document = json.loads(decision_path.read_text(encoding="utf-8"))
-    document["record_decisions"][0]["required_language_qualifiers"] = []
-    decision_path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    _mutate_canonical_json(
+        decision_path,
+        lambda document: document["record_decisions"][0][
+            "required_language_qualifiers"
+        ].clear(),
+    )
 
     with pytest.raises(PhaseA1ArtifactError):
         EngineeringClaimReportAgent().run(context)
+    assert not (root / "runs/run_202/staging").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("claim_policy_sha256", "0" * 64),
+        ("claim_evaluator_sha256", "1" * 64),
+        ("claim_evaluator_contract_version", "phase_a_claim_evaluator_v0"),
+    ],
+)
+def test_canonical_claim_decision_provenance_tampering_fails_before_staging(
+    tmp_path,
+    field,
+    value,
+):
+    root, context = _fixture(tmp_path)
+    decision_path = root / "runs/run_202/artifacts/claim_decision.json"
+    _mutate_canonical_json(decision_path, lambda document: document.__setitem__(field, value))
+
+    with pytest.raises(PhaseA1ArtifactError, match="claim_decision"):
+        ClaimVisualizationAgent().run(context)
+    assert not (root / "runs/run_202/staging").exists()
+
+
+def test_canonical_evidence_tampering_is_rejected_by_claim_decision(tmp_path):
+    root, context = _fixture(tmp_path)
+    evidence_path = root / "runs/run_202/artifacts/comparison_evidence.csv"
+    records = a1_artifacts.parse_comparison_evidence_csv(evidence_path.read_bytes())
+    records[0]["current_value"] += 1
+    evidence_bytes, _ = a1_artifacts.comparison_evidence_csv_bytes(records)
+    evidence_path.write_bytes(evidence_bytes)
+
+    manifest_path = root / "runs/run_202/artifacts/comparison_evidence_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["comparison_evidence_size_bytes"] = len(evidence_bytes)
+    manifest["comparison_evidence_sha256"] = a1_artifacts._sha256_bytes(evidence_bytes)
+    manifest_path.write_bytes(_canonical_json_bytes(manifest))
+
+    with pytest.raises(PhaseA1ArtifactError, match="claim_decision"):
+        ClaimVisualizationAgent().run(context)
     assert not (root / "runs/run_202/staging").exists()
 
 
@@ -354,9 +619,9 @@ def test_partial_visualization_commit_records_only_real_paths(tmp_path, monkeypa
     assert marker["stage"] == "visualization_recheck_commit"
     assert marker["committed_paths"] == [
         "runs/run_202/staging/priority_recheck_list.csv",
-        "runs/run_202/staging/visualizations/claim_status_distribution.png",
         "runs/run_202/staging/visualizations/comparability_status_distribution.png",
         "runs/run_202/staging/visualizations/static_area_audit.png",
+        "runs/run_202/staging/visualizations/static_audit_status_distribution.png",
     ]
     assert not (root / "runs/run_202/staging/visualization_report.md").exists()
 
@@ -432,7 +697,7 @@ def test_empty_renderer_state_is_neutral_and_does_not_invent_counts():
     rendered = a1_visualization._render_visualization_outputs(
         {"records": [], "claim_decision": {"record_decisions": []}}
     )
-    assert rendered["visualizations/claim_status_distribution.png"].startswith(b"\x89PNG")
+    assert rendered["visualizations/static_audit_status_distribution.png"].startswith(b"\x89PNG")
     assert rendered["visualizations/comparability_status_distribution.png"].startswith(b"\x89PNG")
     assert rendered["visualizations/static_area_audit.png"].startswith(b"\x89PNG")
     assert list(

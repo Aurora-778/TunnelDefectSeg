@@ -78,7 +78,10 @@ def _validated_rows(inputs: Mapping[str, Any]) -> list[tuple[Mapping[str, Any], 
         qualifiers = decision.get("required_language_qualifiers")
         if not isinstance(qualifiers, list) or any(not isinstance(item, str) for item in qualifiers):
             raise PhaseA1ArtifactError("ClaimDecision language qualifiers are invalid")
-        if evidence["comparison_comparability_status"] != "verified_comparable":
+        if (
+            evidence["comparison_comparability_status"] != "verified_comparable"
+            and _static_audit_allowed(decision)
+        ):
             static_only = load_claim_policy()["required_language_qualifiers"]["static_only"]
             if static_only not in qualifiers:
                 raise PhaseA1ArtifactError(
@@ -256,7 +259,9 @@ def _static_area_png(areas: Mapping[str, int]) -> bytes:
 def _render_visualization_outputs(inputs: Mapping[str, Any]) -> dict[str, bytes]:
     rows = _validated_rows(inputs)
     recheck_rows = _priority_rows(inputs)
-    claim_counts = Counter(decision["capabilities"]["static_descriptive_audit"] for _, decision in rows)
+    static_audit_counts = Counter(
+        decision["capabilities"]["static_descriptive_audit"] for _, decision in rows
+    )
     comparability_counts = Counter(evidence["comparison_comparability_status"] for evidence, _ in rows)
     area_rows = sorted(
         (
@@ -278,7 +283,7 @@ def _render_visualization_outputs(inputs: Mapping[str, Any]) -> dict[str, bytes]
         "不读取旧 Growth/Visualization 报告，不生成方向性变化结论。",
         "",
         f"- recheck_count：{len(recheck_rows)}",
-        f"- claim_status_distribution：{dict(sorted(claim_counts.items()))}",
+        f"- static_audit_status_distribution：{dict(sorted(static_audit_counts.items()))}",
         f"- comparability_status_distribution：{dict(sorted(comparability_counts.items()))}",
         "- source_validation_scope：byte_binding_only",
         "",
@@ -291,7 +296,7 @@ def _render_visualization_outputs(inputs: Mapping[str, Any]) -> dict[str, bytes]
         f"- records：{len(rows)}",
         f"- priority_recheck_records：{len(recheck_rows)}",
         "- static_area_chart_scope：按当前静态面积排序，最多展示 20 条；不用于方向判断。",
-        "- chart_files：claim_status_distribution.png|comparability_status_distribution.png|static_area_audit.png",
+        "- chart_files：static_audit_status_distribution.png|comparability_status_distribution.png|static_area_audit.png",
         "",
     ]
     recheck_report = [
@@ -312,8 +317,8 @@ def _render_visualization_outputs(inputs: Mapping[str, Any]) -> dict[str, bytes]
         )
     return {
         "priority_recheck_list.csv": buffer.getvalue().encode("utf-8"),
-        "visualizations/claim_status_distribution.png": _bar_png(
-            "Claim status distribution (audit only)", claim_counts
+        "visualizations/static_audit_status_distribution.png": _bar_png(
+            "Static audit status distribution (audit only)", static_audit_counts
         ),
         "visualizations/comparability_status_distribution.png": _bar_png(
             "Comparability status distribution (audit only)", comparability_counts

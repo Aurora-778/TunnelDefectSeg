@@ -107,9 +107,12 @@ Memory, Visualization, or formal output files. Recheck ordering uses manual-revi
 state, Claim blocking state, current static area, and stable observation IDs; it
 never uses area growth rate, risk-level change, or legacy trend text.
 
-The generated PNG files are descriptive audit views of Claim status,
+The generated PNG files are descriptive audit views of static-audit status,
 comparability status, and current static area. They are not model detections,
 directional change conclusions, source authentication, or Publication output.
+`static_audit_status_distribution.png` is intentionally limited to the
+`static_descriptive_audit` capability; it is not labeled or interpreted as a
+complete distribution of every ClaimDecision capability.
 Non-comparable rows must retain the controlled static-only qualifier and cannot
 be rendered as growth, reduction, stability, deterioration, or improvement.
 The output bundle uses the existing A1 idempotent atomic writer and recovery

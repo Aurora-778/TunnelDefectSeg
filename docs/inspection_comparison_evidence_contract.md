@@ -192,6 +192,9 @@ limited to review state, blocking state, current static area, and stable
 observation identity. Legacy directional Growth and risk-change fields are not
 part of this projection. PNGs and Markdown are descriptive audit views only;
 they do not add a second Evidence authority or enable any directional Claim.
+The status PNG is named `static_audit_status_distribution.png` because it
+counts only the `static_descriptive_audit` capability, not every capability in
+the ClaimDecision document.
 
 ## Executable History-only Memory Snapshot Contract
 
