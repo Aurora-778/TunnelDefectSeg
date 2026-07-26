@@ -1324,7 +1324,14 @@ def validate_comparison_evidence_bundle(
     manifest_path = _resolve_fixed_path(root, manifest_relative)
     if not manifest_path.is_file() or manifest_path.is_symlink():
         raise PhaseA1ArtifactError("comparison_evidence_manifest.json is missing")
-    manifest = _load_json_object(manifest_path, label="Comparison Evidence manifest")
+    manifest_bytes = _read_file_bytes(
+        manifest_path,
+        label="Comparison Evidence manifest",
+    )
+    manifest = _parse_json_object_bytes(
+        manifest_bytes,
+        label="Comparison Evidence manifest",
+    )
     if set(manifest) != _MANIFEST_FIELDS:
         raise PhaseA1ArtifactError(
             "Comparison Evidence manifest fields do not match its schema"
@@ -1452,6 +1459,7 @@ def validate_comparison_evidence_bundle(
         "comparison_evidence_sha256": manifest["comparison_evidence_sha256"],
         "comparison_evidence_path": expected_evidence_relative,
         "comparison_evidence_manifest_path": manifest_relative,
+        "comparison_evidence_manifest_bytes": manifest_bytes,
         "source_artifacts": declared_inputs,
     }
 
@@ -1546,6 +1554,10 @@ def load_validated_claim_artifacts(
         raise PhaseA1ArtifactError("claim_decision.json is missing")
     decision_bytes = _read_file_bytes(decision_path, label="ClaimDecision")
     decision = _parse_json_object_bytes(decision_bytes, label="ClaimDecision")
+    if _canonical_json_bytes(decision) != decision_bytes:
+        raise PhaseA1ArtifactError(
+            "claim_decision.json is invalid: canonical JSON encoding is required"
+        )
     try:
         validate_claim_decision_document(
             decision,

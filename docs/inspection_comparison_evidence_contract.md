@@ -185,6 +185,14 @@ ClaimDecision mirror. These wrappers do not create formal `data/outputs` files a
 do not claim that matched source-proof projection, A2 publication, or A3 workflow
 integration is complete.
 
+The A1.3 Engineering and Visualization renderers consume the same validated
+Run-local bundle. Their machine-readable recheck output preserves capability,
+reason, template, qualifier, and Claim status fields, while its ordering is
+limited to review state, blocking state, current static area, and stable
+observation identity. Legacy directional Growth and risk-change fields are not
+part of this projection. PNGs and Markdown are descriptive audit views only;
+they do not add a second Evidence authority or enable any directional Claim.
+
 ## Executable History-only Memory Snapshot Contract
 
 `orchestrator/inspection_workflow/memory_snapshot.py` defines the side-effect-free

@@ -375,6 +375,8 @@ def _write_report_bundle(
         )
         if (
             refreshed["comparison_evidence_bytes"] != inputs["comparison_evidence_bytes"]
+            or refreshed["comparison_evidence_manifest_bytes"]
+            != inputs["comparison_evidence_manifest_bytes"]
             or refreshed["claim_decision_bytes"] != inputs["claim_decision_bytes"]
             or refreshed["source_artifacts"] != inputs["source_artifacts"]
         ):

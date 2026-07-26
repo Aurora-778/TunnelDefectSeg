@@ -88,3 +88,30 @@ template, reason, and qualifier fields. The Memory report uses only the narrow
 risk, trend, and Memory description fields cannot enter either report. These files
 remain Run-local, non-published audit material. A2 Publication and A3 concurrent
 writer fencing remain unimplemented.
+
+## Phase A1.3 Engineering and Visualization Reports
+
+`EngineeringClaimReportAgent` and `ClaimVisualizationAgent` are disabled from the
+legacy DAG and Registry. They can be called only from the explicit
+`phase_a1_sandbox` profile after the same V4 Evidence/ClaimDecision validation
+used by the A1.2 reports. They accept no input, output, or source override and
+write only the fixed Run-local Staging paths defined by the Phase A plan.
+Those paths are the two Engineering Markdown files, the priority recheck CSV,
+three PNG audit views, and the Visualization/summary/recheck Markdown files.
+They do not create `final_project_report.md`, `system_summary.md`,
+`key_insights.md`, or `final_summary.md`; final aggregation remains A1.4.
+
+The Engineering report, recheck CSV, and visualization reports use the validated
+Evidence and ClaimDecision projections only. They do not read legacy Growth,
+Memory, Visualization, or formal output files. Recheck ordering uses manual-review
+state, Claim blocking state, current static area, and stable observation IDs; it
+never uses area growth rate, risk-level change, or legacy trend text.
+
+The generated PNG files are descriptive audit views of Claim status,
+comparability status, and current static area. They are not model detections,
+directional change conclusions, source authentication, or Publication output.
+Non-comparable rows must retain the controlled static-only qualifier and cannot
+be rendered as growth, reduction, stability, deterioration, or improvement.
+The output bundle uses the existing A1 idempotent atomic writer and recovery
+marker. Its final comparison remains an unlocked, point-in-time best-effort
+check; concurrent-writer fencing is reserved for A3.
