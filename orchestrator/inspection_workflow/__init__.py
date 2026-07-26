@@ -43,6 +43,7 @@ from .claim_decision import (
     build_claim_decision_document,
     validate_claim_decision_document,
 )
+from .a1_reports import write_gated_growth_reports, write_gated_memory_reports
 from .observation_identity import (
     LEGACY_FINGERPRINT_FIELDS,
     ObservationIdentityError,
@@ -116,4 +117,6 @@ __all__ = [
     "write_claim_decision_artifact",
     "write_comparison_evidence_bundle",
     "write_gated_claim_audit_report",
+    "write_gated_growth_reports",
+    "write_gated_memory_reports",
 ]

@@ -233,14 +233,17 @@ def _staging_relative_path(run_id: str, filename: str) -> str:
 
 
 def _path_is_reparse_point(path: Path) -> bool:
-    if path.is_symlink():
-        return True
-    if os.name != "nt" or not path.exists():
-        return False
     try:
-        attributes = getattr(path.lstat(), "st_file_attributes", 0)
-    except OSError as exc:
+        entry = path.lstat()
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as exc:
         raise PhaseA1ArtifactError(f"unable to inspect path safety: {path.name}") from exc
+    if stat.S_ISLNK(entry.st_mode):
+        return True
+    if os.name != "nt":
+        return False
+    attributes = getattr(entry, "st_file_attributes", 0)
     return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400))
 
 
@@ -260,7 +263,7 @@ def _assert_path_is_contained_and_plain(
     parts = relative.parts if include_leaf else relative.parent.parts
     for part in parts:
         cursor /= part
-        if cursor.exists() and _path_is_reparse_point(cursor):
+        if _path_is_reparse_point(cursor):
             raise PhaseA1ArtifactError(f"{label} must not use a symlink or reparse point")
     resolved_target = path.resolve() if path.exists() else path.parent.resolve() / path.name
     try:
@@ -1015,7 +1018,16 @@ def _recovery_marker_path(project_root: Path, run_id: str, area: str) -> Path:
         relative = f"runs/{run_id}/work/{_RECOVERY_MARKER_NAME}"
     else:
         raise PhaseA1ArtifactError(f"unsupported A1 recovery area: {area}")
-    return _resolve_fixed_path(project_root, relative)
+    path = project_root.joinpath(*PurePosixPath(relative).parts)
+    # The marker leaf is inspected by _reject_recovery_marker so lstat errors
+    # retain the recovery-specific diagnostic context.
+    _assert_path_is_contained_and_plain(
+        project_root,
+        path,
+        include_leaf=False,
+        label=f"artifact path {relative}",
+    )
+    return path
 
 
 def _reject_recovery_marker(project_root: Path, run_id: str, area: str) -> None:
@@ -1436,9 +1448,11 @@ def validate_comparison_evidence_bundle(
     return {
         "manifest": manifest,
         "records": records,
+        "comparison_evidence_bytes": evidence_bytes,
         "comparison_evidence_sha256": manifest["comparison_evidence_sha256"],
         "comparison_evidence_path": expected_evidence_relative,
         "comparison_evidence_manifest_path": manifest_relative,
+        "source_artifacts": declared_inputs,
     }
 
 

@@ -233,3 +233,16 @@ Manifest/CSV artifacts, authenticate their origin, verify bytes against SHA-256,
 execute Association, or write Run/data/output artifacts. A1 must first verify the
 Run-local manifest and artifact hashes, then pass the verified rows and original
 fieldnames into this contract before building Comparison Evidence.
+
+Phase A1.2 applies the same order before rendering Growth and Memory audit reports:
+it first validates the V4 Evidence/Claim bundle and all declared source bytes, then
+parses the bound Association Manifest and `memory_before_query.csv` byte snapshots,
+and finally reruns `validate_history_memory_snapshots()`. Reports use only the
+returned narrow candidate projection. Old `growth_trend`, `area_growth_rate`,
+`risk_level_change`, `memory_description`, and audit-only `disease_id` values are not
+trusted report inputs.
+
+The four A1.2 reports use fixed Run-local Staging paths and the existing A1 atomic
+write/recovery marker behavior. Their final source/report byte comparison is an
+unlocked point-in-time best-effort check. It is not source authentication, a
+Publication Manifest, a durable transaction, or A3 concurrency fencing.

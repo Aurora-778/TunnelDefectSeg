@@ -72,3 +72,19 @@ directory and the fixed `.phase_a1_sandbox.json` marker created by
 inspection; readers refuse the marked stage. These checks are process-level,
 best-effort sandbox controls, not A2 publication durability or A3 concurrent-writer
 fencing.
+
+## Phase A1.2 Run-local Reports
+
+`GrowthReportAgent` and `MemoryReportAgent` remain disabled from the legacy DAG and
+Registry. In an explicit `phase_a1_sandbox`, they revalidate the V4
+`run_local_projection` Evidence Manifest, source byte bindings, ClaimDecision, and
+history-only Memory Snapshot contract before writing four fixed Markdown files under
+`runs/<run_id>/staging/`. They reject arbitrary input/output paths and never read
+legacy formal reports as claim evidence.
+
+The Growth report uses only validated Evidence values and ClaimDecision capability,
+template, reason, and qualifier fields. The Memory report uses only the narrow
+`memory_by_id` projection returned by the Memory Snapshot Validator. Legacy Growth,
+risk, trend, and Memory description fields cannot enter either report. These files
+remain Run-local, non-published audit material. A2 Publication and A3 concurrent
+writer fencing remain unimplemented.
