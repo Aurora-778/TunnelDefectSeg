@@ -70,6 +70,18 @@ from .publication import (
     recover_publication,
     validate_publication,
 )
+from .locking import (
+    ACTIVE_RUN_LOCK_PATH,
+    ACTIVE_RUN_LOCK_SCHEMA_VERSION,
+    ACTIVE_RUN_PHASES,
+    ActiveRunLockError,
+    acquire_active_run_lock,
+    mark_active_run_running,
+    read_active_run_lock,
+    release_active_run_lock,
+    reserve_active_run_id,
+    validate_active_run_lock,
+)
 from .source_references import (
     SOURCE_REFERENCE_SCHEMA_VERSION,
     SourceReferenceContractError,
@@ -80,6 +92,16 @@ from .source_references import (
 )
 
 __all__ = [
+    "ACTIVE_RUN_LOCK_PATH",
+    "ACTIVE_RUN_LOCK_SCHEMA_VERSION",
+    "ACTIVE_RUN_PHASES",
+    "ActiveRunLockError",
+    "acquire_active_run_lock",
+    "mark_active_run_running",
+    "read_active_run_lock",
+    "release_active_run_lock",
+    "reserve_active_run_id",
+    "validate_active_run_lock",
     "CLAIM_DECISION_DOCUMENT_FIELDS",
     "CLAIM_DECISION_RECORD_FIELDS",
     "CLAIM_DECISION_SCHEMA_VERSION",

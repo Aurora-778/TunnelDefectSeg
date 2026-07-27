@@ -3,9 +3,10 @@
 ## Status
 
 This document freezes inputs and boundaries. Phase A2 publication is implemented
-only as a directly invoked temporary-sandbox transaction. Phase A3
-controller/state integration is not enabled, and neither the legacy CLI nor the
-Phase 0 workflow policy invokes A2.
+only as a directly invoked temporary-sandbox transaction. Phase A3.1 now provides
+an opt-in Active Run Lock and canonical StateStore foundation, but Controller and
+executor integration is not enabled. Neither the legacy CLI nor the Phase 0
+workflow policy invokes A2 or A3.1.
 
 Implemented in the current Phase 0 slices: executable Claim Policy and Workflow
 Policy/TaskRequest validation, neutral Prepared/Legacy observation identities,
@@ -15,8 +16,10 @@ sandbox agents can now project fixed Run-local baseline/unmatched sources, apply
 Claim Gate, and render the Run-local static audit report. They remain disabled in
 the default Registry/DAG/CLI and cannot write formal `data` or `outputs` artifacts.
 Matched source-proof projection remains blocked pending a Memory schema upgrade.
-The A2 sandbox publication transaction is available for isolated verification;
-State, lock, WAL, DAG, CLI, and Web integration remain deferred to A3 or later.
+The A2 sandbox publication transaction is available for isolated verification.
+The A3.1 lock, State, CAS, Journal, and tail-anchor modules are likewise available
+only through direct component calls; Controller, DAG, Registry, CLI, and Web
+integration remain deferred to A3.2/A3.3.
 
 ## Entry Points
 
