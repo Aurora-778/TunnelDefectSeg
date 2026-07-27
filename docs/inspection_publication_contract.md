@@ -79,6 +79,12 @@ process can itself stop after advancing the transaction but before refreshing
 the marker. The next recovery accepts only that one-way lag when every newly
 durable path was already named as uncertain by the older marker, rewrites the
 marker to the exact durable set, and otherwise fails closed.
+When the transaction state write immediately after a successful formal replace
+has an uncertain outcome, the marker may attest the durable transaction's
+unique active target only when that same path is also present in the caller's
+in-memory list of replace calls that returned successfully. The transaction
+JSON path itself is never treated as a formal uncertain publication target,
+and an unrelated active intent cannot gain ownership through this rule.
 
 Identical reruns reuse a completed deterministic transaction. A zero-commit,
 known-clean failure removes its transaction scratch state and may retry. Partial
@@ -95,6 +101,12 @@ inspection. Invalidated summaries are outside staging and cannot be re-ingested
 by a later publication attempt. Repeated recovery verifies the invalidated
 summary against the transaction Hash and reuses only byte-identical audit
 evidence; conflicting bytes fail closed.
+
+The first isolation reads the formal summary before moving it, atomically moves
+it to the transaction-scoped path, rereads the moved bytes, and checks whether
+the formal path reappeared. The original snapshot, moved bytes, and transaction
+Hash must agree. A concurrent replacement at the formal path is retained while
+recovery fails closed and keeps its transaction evidence.
 
 When that transaction-scoped invalidated summary already exists, a newly
 published duplicate is never removed by hashing and then unlinking its formal

@@ -1022,6 +1022,7 @@ def _write_bound_recovery_marker(
     transaction_id: str,
     stage: str,
     uncertain_paths: Iterable[str] = (),
+    completed_replace_paths: Iterable[str] = (),
     primary_error: Exception,
     cleanup_error: Exception | None = None,
     invalidated_final_summary_path: str | None = None,
@@ -1044,12 +1045,20 @@ def _write_bound_recovery_marker(
     fixed_targets = {item["path"] for item in durable["target_records"]}
     durable_committed = set(durable["committed_paths"])
     requested_uncertain = set(uncertain_paths)
+    completed_replaces = set(completed_replace_paths)
+    if any(path not in fixed_targets for path in completed_replaces):
+        raise PublicationTransactionError(
+            f"{primary_error}; completed replace evidence references an "
+            "unknown publication target"
+        ) from (primary_error.__cause__ or primary_error)
+    active_target = durable["active_target_path"]
+    if active_target is not None and active_target in completed_replaces:
+        requested_uncertain.add(active_target)
     if any(path not in fixed_targets for path in requested_uncertain):
         raise PublicationTransactionError(
             f"{primary_error}; recovery marker uncertainty references an "
             "unknown publication target"
         ) from (primary_error.__cause__ or primary_error)
-    active_target = durable["active_target_path"]
     invalid_uncertain = sorted(
         path
         for path in requested_uncertain
@@ -1300,6 +1309,11 @@ def _isolate_final_summary(
         return destination_relative
     if not source_exists:
         return None
+    source_snapshot = _read_file(source, label="published final_summary")
+    if _sha256(source_snapshot) != expected_sha256:
+        raise PublicationTransactionError(
+            "published final_summary hash does not match transaction before isolation"
+        )
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         _path(
@@ -1324,7 +1338,15 @@ def _isolate_final_summary(
                     destination,
                     label="invalidated final_summary after isolation",
                 )
-                if _sha256(data) == expected_sha256:
+                if data == source_snapshot and _sha256(data) == expected_sha256:
+                    _sync_directory(
+                        destination.parent,
+                        label="publication recovery audit directory",
+                    )
+                    _sync_directory(
+                        source.parent,
+                        label="published final_summary parent",
+                    )
                     return destination_relative
         except PublicationTransactionError:
             pass
@@ -1332,12 +1354,22 @@ def _isolate_final_summary(
             "unable to isolate failed final_summary"
         ) from exc
     isolated = _read_file(destination, label="invalidated final_summary")
-    if _sha256(isolated) != expected_sha256:
-        raise PublicationTransactionError(
-            "invalidated final_summary hash does not match transaction"
-        )
+    source_reappeared = _lstat_sentinel(
+        source,
+        label="published final_summary after isolation",
+    )
     _sync_directory(destination.parent, label="publication recovery audit directory")
     _sync_directory(source.parent, label="published final_summary parent")
+    if source_reappeared:
+        raise PublicationTransactionError(
+            "concurrent published final_summary appeared during isolation; "
+            f"retained with {destination_relative}"
+        )
+    if isolated != source_snapshot or _sha256(isolated) != expected_sha256:
+        raise PublicationTransactionError(
+            "published final_summary changed during isolation; retained at "
+            f"{destination_relative}"
+        )
     return destination_relative
 
 
@@ -2421,6 +2453,7 @@ def publish_run_local_artifacts(
                 transaction_id=transaction_id,
                 stage="publication_write_uncertain",
                 uncertain_paths=uncertain_paths,
+                completed_replace_paths=committed_paths,
                 primary_error=exc,
                 cleanup_error=getattr(exc, "cleanup_error", None),
             )

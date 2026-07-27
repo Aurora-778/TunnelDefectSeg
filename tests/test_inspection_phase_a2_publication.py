@@ -1492,6 +1492,70 @@ def test_post_target_state_write_failure_marker_uses_durable_transaction(
     assert recovered["rolled_back"] is True
 
 
+def test_post_target_uncertain_transaction_write_attests_durable_active_target(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_write = publication._write_transaction
+    target_relative = "outputs/final_project_report.md"
+    failed = {"value": False}
+
+    def fail_uncertain_post_target_write(project_root, relative, document):
+        if (
+            not failed["value"]
+            and document["phase"] == "publishing"
+            and document["active_target_path"] is None
+            and document["committed_paths"] == [target_relative]
+        ):
+            failed["value"] = True
+            error = publication.PublicationTransactionError(
+                "post-target transaction write outcome uncertain"
+            )
+            error.write_state_uncertain = True
+            raise error
+        return original_write(project_root, relative, document)
+
+    monkeypatch.setattr(
+        publication,
+        "_write_transaction",
+        fail_uncertain_post_target_write,
+    )
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="post-target transaction write outcome uncertain",
+    ):
+        _publish(root)
+
+    transaction = json.loads(
+        (root / f"runs/{RUN_ID}/publication_transaction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    marker = _marker(root)
+    assert transaction["committed_paths"] == []
+    assert transaction["active_target_path"] == target_relative
+    assert marker["committed_paths"] == []
+    assert marker["uncertain_paths"] == [target_relative]
+    assert marker["stage"] == "publication_write_uncertain"
+
+    monkeypatch.setattr(publication, "_write_transaction", original_write)
+    recovered = publication.recover_publication(
+        root,
+        run_id=RUN_ID,
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+    assert recovered["rolled_back"] is True
+    assert not (root / target_relative).exists()
+    quarantine = (
+        root
+        / f"runs/{RUN_ID}/publication_recovery/"
+        f"rollback_quarantine.{recovered['transaction_id']}/"
+        "final_project_report.md"
+    )
+    assert quarantine.is_file()
+
+
 def test_post_manifest_state_write_failure_marker_uses_durable_transaction(
     tmp_path,
     monkeypatch,
@@ -1715,6 +1779,74 @@ def test_repeated_final_summary_isolation_preserves_concurrent_replacement(
         (root / f"runs/{RUN_ID}/publication_recovery").rglob("*.md")
     )
     assert len(recovery_files) >= 2
+
+
+def test_initial_final_summary_isolation_preserves_concurrent_replacement(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_atomic = publication._atomic_replace
+
+    def fail_manifest(path, data, *, root, label):
+        if path.name == "current_publication_manifest.json":
+            raise publication.PublicationTransactionError("Manifest failure")
+        return original_atomic(path, data, root=root, label=label)
+
+    monkeypatch.setattr(publication, "_atomic_replace", fail_manifest)
+    with pytest.raises(publication.PublicationTransactionError):
+        _publish(root)
+    monkeypatch.setattr(publication, "_atomic_replace", original_atomic)
+
+    final_summary = root / f"runs/{RUN_ID}/final_summary.md"
+    expected_transaction_bytes = final_summary.read_bytes()
+    transaction_path = (
+        root / f"runs/{RUN_ID}/publication_transaction.json"
+    )
+    marker_path = (
+        root / f"runs/{RUN_ID}/.publication_recovery_required.json"
+    )
+    original_replace = publication.os.replace
+
+    def replace_then_recreate_source(source, destination):
+        result = original_replace(source, destination)
+        if (
+            Path(source) == final_summary
+            and "invalidated_final_summary." in Path(destination).name
+        ):
+            final_summary.write_text(
+                "concurrent external summary\n",
+                encoding="utf-8",
+            )
+        return result
+
+    monkeypatch.setattr(
+        publication.os,
+        "replace",
+        replace_then_recreate_source,
+    )
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="concurrent",
+    ):
+        publication.recover_publication(
+            root,
+            run_id=RUN_ID,
+            plan_fingerprint=PLAN_FINGERPRINT,
+        )
+
+    assert final_summary.read_text(encoding="utf-8") == (
+        "concurrent external summary\n"
+    )
+    invalidated = list(
+        (root / f"runs/{RUN_ID}/publication_recovery").glob(
+            "invalidated_final_summary.*.md"
+        )
+    )
+    assert len(invalidated) == 1
+    assert invalidated[0].read_bytes() == expected_transaction_bytes
+    assert transaction_path.is_file()
+    assert marker_path.is_file()
 
 
 def test_quarantine_has_no_fixed_retry_capacity(tmp_path):
