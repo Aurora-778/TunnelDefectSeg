@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
 import shutil
 import stat
 import tempfile
@@ -985,11 +986,97 @@ def _write_recovery_marker(
     }
     marker_path = _recovery_marker_path(root, run_id)
     try:
-        _atomic_replace(marker_path, _canonical_json_bytes(marker), root=root, label="publication recovery marker")
+        _persist_recovery_marker(root, marker_path, marker)
     except Exception as marker_error:
         raise PublicationTransactionError(
             f"{primary_error}; recovery marker write also failed: {marker_error}"
         ) from (primary_error.__cause__ or primary_error)
+
+
+def _persist_recovery_marker(
+    root: Path,
+    marker_path: Path,
+    marker: Mapping[str, Any],
+) -> None:
+    _atomic_replace(
+        marker_path,
+        _canonical_json_bytes(marker),
+        root=root,
+        label="publication recovery marker",
+    )
+    try:
+        _sync_directory(
+            marker_path.parent,
+            label="publication recovery marker parent",
+        )
+    except PublicationTransactionError as exc:
+        exc.write_state_uncertain = True
+        raise
+
+
+def _write_bound_recovery_marker(
+    root: Path,
+    run_id: str,
+    *,
+    transaction_relative: str,
+    transaction_id: str,
+    stage: str,
+    uncertain_paths: Iterable[str] = (),
+    primary_error: Exception,
+    cleanup_error: Exception | None = None,
+    invalidated_final_summary_path: str | None = None,
+) -> None:
+    """Persist recovery evidence derived from the authoritative disk transaction."""
+
+    try:
+        durable = _load_transaction(root, transaction_relative)
+    except Exception as transaction_error:
+        raise PublicationTransactionError(
+            f"{primary_error}; unable to reload the durable publication "
+            f"transaction before writing recovery marker: {transaction_error}"
+        ) from (primary_error.__cause__ or primary_error)
+    if durable.get("transaction_id") != transaction_id:
+        raise PublicationTransactionError(
+            f"{primary_error}; durable publication transaction identity changed "
+            "before writing recovery marker"
+        ) from (primary_error.__cause__ or primary_error)
+
+    fixed_targets = {item["path"] for item in durable["target_records"]}
+    durable_committed = set(durable["committed_paths"])
+    requested_uncertain = set(uncertain_paths)
+    if any(path not in fixed_targets for path in requested_uncertain):
+        raise PublicationTransactionError(
+            f"{primary_error}; recovery marker uncertainty references an "
+            "unknown publication target"
+        ) from (primary_error.__cause__ or primary_error)
+    active_target = durable["active_target_path"]
+    invalid_uncertain = sorted(
+        path
+        for path in requested_uncertain
+        if path not in durable_committed and path != active_target
+    )
+    if invalid_uncertain:
+        raise PublicationTransactionError(
+            f"{primary_error}; recovery marker uncertainty is not backed by "
+            "a durable commit or the unique active target: "
+            + ", ".join(invalid_uncertain)
+        ) from (primary_error.__cause__ or primary_error)
+
+    # A path already committed by the transaction needs no extra marker
+    # authority. Keeping only the active replace window makes the marker
+    # canonical while recovery still accepts older durable-overlap markers.
+    canonical_uncertain = sorted(requested_uncertain - durable_committed)
+    _write_recovery_marker(
+        root,
+        run_id,
+        transaction_id=transaction_id,
+        stage=stage,
+        committed_paths=durable["committed_paths"],
+        uncertain_paths=canonical_uncertain,
+        primary_error=primary_error,
+        cleanup_error=cleanup_error,
+        invalidated_final_summary_path=invalidated_final_summary_path,
+    )
 
 
 def _load_recovery_marker(root: Path, run_id: str) -> dict[str, Any]:
@@ -1066,13 +1153,77 @@ def _load_recovery_marker(root: Path, run_id: str) -> dict[str, Any]:
 
 
 def _remove_path(path: Path, *, label: str) -> None:
+    removed = False
     try:
         if path.is_dir() and not path.is_symlink():
             shutil.rmtree(path)
+            removed = True
         elif path.exists() or path.is_symlink():
             path.unlink()
+            removed = True
     except OSError as exc:
-            raise PublicationTransactionError(f"unable to clean {label}") from exc
+        raise PublicationTransactionError(f"unable to clean {label}") from exc
+    if removed:
+        _sync_directory(path.parent, label=f"{label} parent")
+
+
+def _reserve_recovery_slot(
+    root: Path,
+    *,
+    parent_relative: str,
+    slot_prefix: str,
+    filename: str,
+    label: str,
+) -> tuple[str, Path]:
+    """Reserve a no-overwrite recovery directory without a fixed retry cap."""
+
+    parent = _path(
+        root,
+        parent_relative,
+        label=f"{label} parent",
+        include_leaf=False,
+    )
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise PublicationTransactionError(
+            f"unable to create {label} parent"
+        ) from exc
+    _path(
+        root,
+        parent_relative,
+        label=f"{label} parent",
+        include_leaf=False,
+    )
+    while True:
+        slot_name = f"{slot_prefix}.{secrets.token_hex(12)}"
+        slot_relative = f"{parent_relative}/{slot_name}"
+        slot = _path(
+            root,
+            slot_relative,
+            label=f"{label} slot",
+            include_leaf=False,
+        )
+        try:
+            slot.mkdir(exist_ok=False)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise PublicationTransactionError(
+                f"unable to reserve {label} slot"
+            ) from exc
+        _path(
+            root,
+            slot_relative,
+            label=f"{label} slot",
+            include_leaf=False,
+        )
+        _sync_directory(parent, label=f"{label} parent")
+        destination_relative = f"{slot_relative}/{filename}"
+        return (
+            destination_relative,
+            _path(root, destination_relative, label=label),
+        )
 
 
 def _isolate_final_summary(
@@ -1104,12 +1255,48 @@ def _isolate_final_summary(
                 "transaction-scoped invalidated final_summary has conflicting bytes"
             )
         if source_exists:
-            source_data = _read_file(source, label="published final_summary")
-            if _sha256(source_data) != expected_sha256:
+            duplicate_relative, duplicate = _reserve_recovery_slot(
+                root,
+                parent_relative=f"runs/{run_id}/publication_recovery",
+                slot_prefix=(
+                    "invalidated_final_summary_duplicate."
+                    f"{transaction_id}"
+                ),
+                filename="final_summary.md",
+                label="duplicate invalidated final_summary",
+            )
+            try:
+                os.replace(source, duplicate)
+            except OSError as exc:
                 raise PublicationTransactionError(
-                    "published final_summary changed before idempotent isolation"
+                    "unable to isolate duplicate published final_summary"
+                ) from exc
+            duplicate_data = _read_file(
+                duplicate,
+                label="duplicate invalidated final_summary",
+            )
+            source_reappeared = _lstat_sentinel(
+                source,
+                label="published final_summary after duplicate isolation",
+            )
+            _sync_directory(
+                duplicate.parent,
+                label="duplicate invalidated final_summary directory",
+            )
+            _sync_directory(
+                source.parent,
+                label="published final_summary parent",
+            )
+            if source_reappeared:
+                raise PublicationTransactionError(
+                    "concurrent published final_summary appeared during "
+                    f"idempotent isolation; retained with {duplicate_relative}"
                 )
-            _remove_path(source, label="duplicate published final_summary")
+            if _sha256(duplicate_data) != expected_sha256:
+                raise PublicationTransactionError(
+                    "published final_summary changed during idempotent "
+                    f"isolation; retained at {duplicate_relative}"
+                )
         return destination_relative
     if not source_exists:
         return None
@@ -1480,29 +1667,15 @@ def _quarantine_rollback_target(
         if not _lstat_sentinel(target, label=f"rollback target {path_text}"):
             return quarantine_relative
         # A deterministic transaction may be retried after a prior rollback.
-        # Retain that audited copy and reserve a new, bounded quarantine slot
-        # for the new formal target rather than overwriting either byte stream.
-        for attempt in range(1, 33):
-            candidate_relative = (
-                f"{quarantine_directory_relative}/"
-                f"{PurePosixPath(path_text).name}.retry_{attempt:03d}"
-            )
-            candidate = _path(
-                root,
-                candidate_relative,
-                label=f"rollback quarantine retry {path_text}",
-            )
-            if not _lstat_sentinel(
-                candidate,
-                label=f"rollback quarantine retry {path_text}",
-            ):
-                quarantine_relative = candidate_relative
-                quarantine = candidate
-                break
-        else:
-            raise PublicationTransactionError(
-                "rollback quarantine retry budget exhausted: " + path_text
-            )
+        # Reserve a unique directory so no old audit file can be overwritten,
+        # without imposing an arbitrary retry-count ceiling.
+        quarantine_relative, quarantine = _reserve_recovery_slot(
+            root,
+            parent_relative=quarantine_directory_relative,
+            slot_prefix="retry",
+            filename=PurePosixPath(path_text).name,
+            label=f"rollback quarantine retry {path_text}",
+        )
 
     try:
         quarantine_parent.mkdir(parents=True, exist_ok=True)
@@ -1656,16 +1829,39 @@ def recover_publication(
                     f"publication recovery marker {field} references an unknown target"
                 )
         durable_owned = set(transaction["committed_paths"])
-        if any(path not in durable_owned for path in marker_document["committed_paths"]):
-            raise PublicationTransactionError(
-                "publication recovery marker cannot expand transaction target ownership"
-            )
+        marker_committed = set(marker_document["committed_paths"])
+        if marker_committed != durable_owned:
+            # A recovery process can crash after advancing the authoritative
+            # transaction but before refreshing or deleting its marker. Accept
+            # only that one-way lag when every newly durable path was already
+            # named as uncertain by the older marker, then canonicalize it.
+            newly_durable = durable_owned - marker_committed
+            marker_uncertain = set(marker_document["uncertain_paths"])
+            if (
+                marker_committed - durable_owned
+                or not newly_durable
+                or not newly_durable.issubset(marker_uncertain)
+            ):
+                raise PublicationTransactionError(
+                    "publication recovery marker committed_paths do not "
+                    "exactly match the durable transaction"
+                )
+            marker_document = {
+                **marker_document,
+                "committed_paths": sorted(durable_owned),
+                "uncertain_paths": sorted(marker_uncertain - durable_owned),
+            }
+            _persist_recovery_marker(root, marker, marker_document)
         active_target = transaction["active_target_path"]
         may_attest_uncertain = marker_document["stage"] in {
             "publication_write_uncertain",
             "manifest_commit_recovery",
+            "publication_active_target_clear_failed",
+            "publication_partial_commit",
         }
-        allowed_uncertain = {active_target} if may_attest_uncertain and active_target else set()
+        allowed_uncertain = set(durable_owned)
+        if may_attest_uncertain and active_target:
+            allowed_uncertain.add(active_target)
         if any(path not in allowed_uncertain for path in marker_document["uncertain_paths"]):
             raise PublicationTransactionError(
                 "publication recovery marker cannot expand transaction target ownership "
@@ -1747,6 +1943,17 @@ def recover_publication(
                 "active_target_path": None,
             }
             _write_transaction(root, tx_relative, transaction)
+            if marker_document is not None:
+                marker_document = {
+                    **marker_document,
+                    "committed_paths": sorted(transaction["committed_paths"]),
+                    "uncertain_paths": [
+                        path
+                        for path in marker_document["uncertain_paths"]
+                        if path not in set(transaction["committed_paths"])
+                    ],
+                }
+                _persist_recovery_marker(root, marker, marker_document)
         try:
             _cleanup_transaction(root, transaction)
         except Exception as exc:
@@ -2137,12 +2344,12 @@ def publish_run_local_artifacts(
                 _write_transaction(root, tx_relative, transaction)
             except Exception as transaction_error:
                 state_write_error = transaction_error
-            _write_recovery_marker(
+            _write_bound_recovery_marker(
                 root,
                 run_id,
+                transaction_relative=tx_relative,
                 transaction_id=transaction_id,
                 stage="publication_cleanup",
-                committed_paths=transaction["committed_paths"],
                 primary_error=cleanup_exc,
                 cleanup_error=state_write_error,
             )
@@ -2166,19 +2373,12 @@ def publish_run_local_artifacts(
         if recovery_marked:
             raise
         if manifest_committed:
-            _write_recovery_marker(
+            _write_bound_recovery_marker(
                 root,
                 run_id,
+                transaction_relative=tx_relative,
                 transaction_id=transaction_id,
                 stage="manifest_commit_recovery",
-                # The disk transaction is still the earlier commit-intent
-                # record if the phase update failed.  The just-written
-                # Manifest is attested only as the active uncertain target.
-                committed_paths=[
-                    path
-                    for path in transaction["committed_paths"]
-                    if path != PUBLICATION_MANIFEST_PATH
-                ],
                 uncertain_paths=[PUBLICATION_MANIFEST_PATH],
                 primary_error=exc,
             )
@@ -2195,12 +2395,12 @@ def publish_run_local_artifacts(
             try:
                 _write_transaction(root, tx_relative, transaction)
             except Exception as state_error:
-                _write_recovery_marker(
+                _write_bound_recovery_marker(
                     root,
                     run_id,
+                    transaction_relative=tx_relative,
                     transaction_id=transaction_id,
                     stage="publication_active_target_clear_failed",
-                    committed_paths=committed_paths,
                     primary_error=exc,
                     cleanup_error=state_error,
                 )
@@ -2214,12 +2414,12 @@ def publish_run_local_artifacts(
             else []
         )
         if getattr(exc, "write_state_uncertain", False):
-            _write_recovery_marker(
+            _write_bound_recovery_marker(
                 root,
                 run_id,
+                transaction_relative=tx_relative,
                 transaction_id=transaction_id,
                 stage="publication_write_uncertain",
-                committed_paths=committed_paths,
                 uncertain_paths=uncertain_paths,
                 primary_error=exc,
                 cleanup_error=getattr(exc, "cleanup_error", None),
@@ -2228,22 +2428,23 @@ def publish_run_local_artifacts(
         if committed_paths:
             # Do not eagerly delete.  Recovery revalidates controlled source
             # bytes and classifies every fixed target by old/new Hash first.
-            _write_recovery_marker(
+            _write_bound_recovery_marker(
                 root,
                 run_id,
+                transaction_relative=tx_relative,
                 transaction_id=transaction_id,
                 stage="publication_partial_commit",
-                committed_paths=committed_paths,
+                uncertain_paths=committed_paths,
                 primary_error=exc,
             )
             raise
         if getattr(exc, "cleanup_error", None) is not None:
-            _write_recovery_marker(
+            _write_bound_recovery_marker(
                 root,
                 run_id,
+                transaction_relative=tx_relative,
                 transaction_id=transaction_id,
                 stage="publication_zero_commit_uncertain",
-                committed_paths=[],
                 primary_error=exc,
                 cleanup_error=getattr(exc, "cleanup_error", None),
             )

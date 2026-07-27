@@ -1069,7 +1069,7 @@ def test_markerless_crash_after_durable_target_commit_can_recover(
     assert quarantine.is_file()
 
 
-def test_markerless_manifest_replace_crash_catches_up_commit(
+def test_markerless_crash_after_durable_manifest_commit_catches_up_cleanup(
     tmp_path,
     monkeypatch,
 ):
@@ -1101,6 +1101,47 @@ def test_markerless_manifest_replace_crash_catches_up_commit(
     )
     assert recovered["recovered"] is True
     assert recovered["transaction"]["phase"] == "cleanup_complete"
+
+
+def test_markerless_manifest_replace_before_phase_write_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original = publication._atomic_replace
+    manifest = root / publication.PUBLICATION_MANIFEST_PATH
+
+    def replace_manifest_then_exit(path, data, *, root, label):
+        result = original(path, data, root=root, label=label)
+        if path == manifest:
+            raise KeyboardInterrupt(
+                "simulated process exit after Manifest replace before phase write"
+            )
+        return result
+
+    monkeypatch.setattr(
+        publication,
+        "_atomic_replace",
+        replace_manifest_then_exit,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        _publish(root)
+    assert manifest.is_file()
+    assert not (
+        root / f"runs/{RUN_ID}/.publication_recovery_required.json"
+    ).exists()
+
+    monkeypatch.setattr(publication, "_atomic_replace", original)
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="lack transaction ownership",
+    ):
+        publication.recover_publication(
+            root,
+            run_id=RUN_ID,
+            plan_fingerprint=PLAN_FINGERPRINT,
+        )
+    assert manifest.is_file()
 
 
 def test_transaction_initialization_failure_preserves_unowned_transaction(
@@ -1154,7 +1195,7 @@ def test_manifest_sync_failure_keeps_intent_and_recovers(tmp_path, monkeypatch):
         )
     )
     assert marker["stage"] == "manifest_commit_recovery"
-    assert marker["committed_paths"] == transaction["committed_paths"]
+    assert marker["committed_paths"] == sorted(transaction["committed_paths"])
     assert marker["uncertain_paths"] == [publication.PUBLICATION_MANIFEST_PATH]
     assert transaction["phase"] == "manifest_commit_intent"
     assert transaction["active_target_path"] == publication.PUBLICATION_MANIFEST_PATH
@@ -1396,3 +1437,459 @@ def test_failed_active_target_clear_does_not_grant_target_ownership(
             plan_fingerprint=PLAN_FINGERPRINT,
         )
     assert target.read_bytes() == expected
+
+
+def test_post_target_state_write_failure_marker_uses_durable_transaction(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_write = publication._write_transaction
+    target_relative = "outputs/final_project_report.md"
+    failed = {"value": False}
+
+    def fail_after_target_replace(project_root, relative, document):
+        if (
+            not failed["value"]
+            and document["phase"] == "publishing"
+            and document["active_target_path"] is None
+            and document["committed_paths"] == [target_relative]
+        ):
+            failed["value"] = True
+            raise publication.PublicationTransactionError(
+                "post-target state write failed"
+            )
+        return original_write(project_root, relative, document)
+
+    monkeypatch.setattr(
+        publication,
+        "_write_transaction",
+        fail_after_target_replace,
+    )
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="post-target state write failed",
+    ):
+        _publish(root)
+
+    transaction = json.loads(
+        (root / f"runs/{RUN_ID}/publication_transaction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    marker = _marker(root)
+    assert transaction["committed_paths"] == []
+    assert transaction["active_target_path"] == target_relative
+    assert marker["committed_paths"] == sorted(transaction["committed_paths"])
+    assert marker["uncertain_paths"] == [target_relative]
+
+    monkeypatch.setattr(publication, "_write_transaction", original_write)
+    recovered = publication.recover_publication(
+        root,
+        run_id=RUN_ID,
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+    assert recovered["rolled_back"] is True
+
+
+def test_post_manifest_state_write_failure_marker_uses_durable_transaction(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_write = publication._write_transaction
+    failed = {"value": False}
+
+    def persist_manifest_state_then_fail(project_root, relative, document):
+        result = original_write(project_root, relative, document)
+        if (
+            not failed["value"]
+            and document["phase"] == "manifest_committed"
+        ):
+            failed["value"] = True
+            raise publication.PublicationTransactionError(
+                "post-Manifest state write failed"
+            )
+        return result
+
+    monkeypatch.setattr(
+        publication,
+        "_write_transaction",
+        persist_manifest_state_then_fail,
+    )
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="post-Manifest state write failed",
+    ):
+        _publish(root)
+
+    transaction = json.loads(
+        (root / f"runs/{RUN_ID}/publication_transaction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    marker = _marker(root)
+    assert transaction["phase"] == "manifest_committed"
+    assert marker["committed_paths"] == sorted(transaction["committed_paths"])
+    assert publication.PUBLICATION_MANIFEST_PATH in marker["committed_paths"]
+
+    monkeypatch.setattr(publication, "_write_transaction", original_write)
+    recovered = publication.recover_publication(
+        root,
+        run_id=RUN_ID,
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+    assert recovered["recovered"] is True
+    assert recovered["transaction"]["phase"] == "cleanup_complete"
+
+
+def test_cleanup_complete_state_write_failure_uses_durable_marker(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_write = publication._write_transaction
+    failed = {"value": False}
+
+    def fail_cleanup_complete(project_root, relative, document):
+        if (
+            not failed["value"]
+            and document["phase"] == "cleanup_complete"
+        ):
+            failed["value"] = True
+            raise publication.PublicationTransactionError(
+                "cleanup_complete state write failed"
+            )
+        return original_write(project_root, relative, document)
+
+    monkeypatch.setattr(
+        publication,
+        "_write_transaction",
+        fail_cleanup_complete,
+    )
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="cleanup_complete state write failed",
+    ):
+        _publish(root)
+
+    transaction = json.loads(
+        (root / f"runs/{RUN_ID}/publication_transaction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    marker = _marker(root)
+    assert transaction["phase"] == "manifest_committed"
+    assert marker["committed_paths"] == sorted(transaction["committed_paths"])
+
+    monkeypatch.setattr(publication, "_write_transaction", original_write)
+    recovered = publication.recover_publication(
+        root,
+        run_id=RUN_ID,
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+    assert recovered["recovered"] is True
+    assert recovered["transaction"]["phase"] == "cleanup_complete"
+
+
+def test_committed_recovery_marker_unlink_failure_can_retry(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_cleanup = publication._cleanup_transaction
+    cleanup_failed = {"value": False}
+
+    def fail_cleanup_once(project_root, transaction):
+        if not cleanup_failed["value"]:
+            cleanup_failed["value"] = True
+            raise publication.PublicationTransactionError("cleanup failed")
+        return original_cleanup(project_root, transaction)
+
+    monkeypatch.setattr(publication, "_cleanup_transaction", fail_cleanup_once)
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="cleanup requires recovery",
+    ):
+        _publish(root)
+    monkeypatch.setattr(publication, "_cleanup_transaction", original_cleanup)
+
+    marker_path = (
+        root / f"runs/{RUN_ID}/.publication_recovery_required.json"
+    )
+    original_unlink = Path.unlink
+    unlink_failed = {"value": False}
+
+    def fail_marker_unlink(self, *args, **kwargs):
+        if self == marker_path and not unlink_failed["value"]:
+            unlink_failed["value"] = True
+            raise OSError("marker unlink blocked")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_marker_unlink)
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="marker cleanup failed",
+    ):
+        publication.recover_publication(
+            root,
+            run_id=RUN_ID,
+            plan_fingerprint=PLAN_FINGERPRINT,
+        )
+    transaction = json.loads(
+        (root / f"runs/{RUN_ID}/publication_transaction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    marker = _marker(root)
+    assert transaction["phase"] == "cleanup_complete"
+    assert marker["committed_paths"] == sorted(transaction["committed_paths"])
+
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+    recovered = publication.recover_publication(
+        root,
+        run_id=RUN_ID,
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+    assert recovered["recovered"] is True
+    assert not marker_path.exists()
+
+
+def test_repeated_final_summary_isolation_preserves_concurrent_replacement(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_atomic = publication._atomic_replace
+
+    def fail_manifest(path, data, *, root, label):
+        if path.name == "current_publication_manifest.json":
+            raise publication.PublicationTransactionError("Manifest failure")
+        return original_atomic(path, data, root=root, label=label)
+
+    monkeypatch.setattr(publication, "_atomic_replace", fail_manifest)
+    with pytest.raises(publication.PublicationTransactionError):
+        _publish(root)
+    monkeypatch.setattr(publication, "_atomic_replace", original_atomic)
+    publication.recover_publication(
+        root,
+        run_id=RUN_ID,
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+
+    monkeypatch.setattr(publication, "_atomic_replace", fail_manifest)
+    with pytest.raises(publication.PublicationTransactionError):
+        _publish(root)
+    monkeypatch.setattr(publication, "_atomic_replace", original_atomic)
+
+    final_summary = root / f"runs/{RUN_ID}/final_summary.md"
+    original_replace = publication.os.replace
+
+    def replace_then_recreate_source(source, destination):
+        result = original_replace(source, destination)
+        if Path(source) == final_summary:
+            final_summary.write_text(
+                "concurrent external summary\n",
+                encoding="utf-8",
+            )
+        return result
+
+    monkeypatch.setattr(
+        publication.os,
+        "replace",
+        replace_then_recreate_source,
+    )
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="concurrent",
+    ):
+        publication.recover_publication(
+            root,
+            run_id=RUN_ID,
+            plan_fingerprint=PLAN_FINGERPRINT,
+        )
+    assert final_summary.read_text(encoding="utf-8") == (
+        "concurrent external summary\n"
+    )
+    recovery_files = list(
+        (root / f"runs/{RUN_ID}/publication_recovery").rglob("*.md")
+    )
+    assert len(recovery_files) >= 2
+
+
+def test_quarantine_has_no_fixed_retry_capacity(tmp_path):
+    root, _ = _fixture(tmp_path)
+    data = b"controlled publication bytes\n"
+    target_relative = "outputs/final_project_report.md"
+    target = root / target_relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    transaction = {
+        "run_id": RUN_ID,
+        "transaction_id": "pub_" + "a" * 24,
+    }
+    record = {
+        "path": target_relative,
+        "new_sha256": publication._sha256(data),
+    }
+    quarantined_paths = []
+
+    for _ in range(40):
+        target.write_bytes(data)
+        quarantined_paths.append(
+            publication._quarantine_rollback_target(
+                root,
+                transaction,
+                record,
+            )
+        )
+
+    assert len(set(quarantined_paths)) == 40
+    assert all((root / path).read_bytes() == data for path in quarantined_paths)
+
+
+def test_recovery_marker_committed_paths_must_match_durable_transaction(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_atomic = publication._atomic_replace
+
+    def fail_system_summary(path, data, *, root, label):
+        if label == "publication target outputs/system_summary.md":
+            raise publication.PublicationTransactionError("partial failure")
+        return original_atomic(path, data, root=root, label=label)
+
+    monkeypatch.setattr(publication, "_atomic_replace", fail_system_summary)
+    with pytest.raises(publication.PublicationTransactionError):
+        _publish(root)
+    marker_path = (
+        root / f"runs/{RUN_ID}/.publication_recovery_required.json"
+    )
+    marker = _marker(root)
+    marker["committed_paths"] = []
+    marker_path.write_bytes(publication._canonical_json_bytes(marker))
+
+    monkeypatch.setattr(publication, "_atomic_replace", original_atomic)
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="exactly match",
+    ):
+        publication.recover_publication(
+            root,
+            run_id=RUN_ID,
+            plan_fingerprint=PLAN_FINGERPRINT,
+        )
+
+
+def test_recovery_accepts_uncertain_path_already_durably_committed(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_cleanup = publication._cleanup_transaction
+    failed = {"value": False}
+
+    def fail_cleanup_once(project_root, transaction):
+        if not failed["value"]:
+            failed["value"] = True
+            raise publication.PublicationTransactionError("cleanup failed")
+        return original_cleanup(project_root, transaction)
+
+    monkeypatch.setattr(publication, "_cleanup_transaction", fail_cleanup_once)
+    with pytest.raises(publication.PublicationTransactionError):
+        _publish(root)
+    marker_path = (
+        root / f"runs/{RUN_ID}/.publication_recovery_required.json"
+    )
+    marker = _marker(root)
+    marker["uncertain_paths"] = [publication.PUBLICATION_MANIFEST_PATH]
+    marker_path.write_bytes(publication._canonical_json_bytes(marker))
+
+    monkeypatch.setattr(publication, "_cleanup_transaction", original_cleanup)
+    recovered = publication.recover_publication(
+        root,
+        run_id=RUN_ID,
+        plan_fingerprint=PLAN_FINGERPRINT,
+    )
+    assert recovered["recovered"] is True
+    assert recovered["transaction"]["phase"] == "cleanup_complete"
+
+
+def test_recovery_marker_parent_sync_failure_preserves_marker_and_transaction(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_atomic = publication._atomic_replace
+    original_sync = publication._sync_directory
+
+    def fail_system_summary(path, data, *, root, label):
+        if label == "publication target outputs/system_summary.md":
+            raise publication.PublicationTransactionError("partial failure")
+        return original_atomic(path, data, root=root, label=label)
+
+    def fail_marker_parent_sync(path, *, label):
+        if label == "publication recovery marker parent":
+            raise publication.PublicationTransactionError(
+                "marker parent sync failed"
+            )
+        return original_sync(path, label=label)
+
+    monkeypatch.setattr(publication, "_atomic_replace", fail_system_summary)
+    monkeypatch.setattr(publication, "_sync_directory", fail_marker_parent_sync)
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="recovery marker write also failed",
+    ) as caught:
+        _publish(root)
+
+    assert "marker parent sync failed" in str(caught.value)
+    assert (
+        root / f"runs/{RUN_ID}/.publication_recovery_required.json"
+    ).is_file()
+    assert (
+        root / f"runs/{RUN_ID}/publication_transaction.json"
+    ).is_file()
+
+
+def test_workspace_parent_sync_failure_keeps_recovery_authority(
+    tmp_path,
+    monkeypatch,
+):
+    root, _ = _fixture(tmp_path)
+    original_sync = publication._sync_directory
+    backup_parent_syncs = {"count": 0}
+
+    def fail_backup_parent_after_removal(path, *, label):
+        if (
+            label == "publication backup parent"
+            and path.name == "publication_backup"
+        ):
+            backup_parent_syncs["count"] += 1
+            if backup_parent_syncs["count"] == 2:
+                raise publication.PublicationTransactionError(
+                    "backup parent sync failed"
+                )
+        return original_sync(path, label=label)
+
+    monkeypatch.setattr(
+        publication,
+        "_sync_directory",
+        fail_backup_parent_after_removal,
+    )
+    with pytest.raises(
+        publication.PublicationTransactionError,
+        match="cleanup requires recovery",
+    ):
+        _publish(root)
+
+    marker = _marker(root)
+    transaction_path = (
+        root / f"runs/{RUN_ID}/publication_transaction.json"
+    )
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    assert marker["stage"] == "publication_cleanup"
+    assert marker["committed_paths"] == sorted(
+        transaction["committed_paths"]
+    )
+    assert transaction_path.is_file()
