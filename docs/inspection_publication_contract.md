@@ -25,24 +25,50 @@ A2 does not write the live repository's formal outputs. The Manifest source set
 contains all V4 work references, Comparison Evidence, its Manifest,
 ClaimDecision, every staging file, every visualization file, and final summary.
 Each reference uses a project-relative POSIX path, byte size, and SHA-256.
+Every `publication_files` entry also records the transaction's
+`existed_before` value; validation requires it to match the authoritative
+target record.
 
 The transaction records `existed_before` per target. The A2 sandbox refuses to
 replace a changed target that predates its authoritative transaction; an exactly
 matching pre-existing final file is retained and recorded as `existed_before=true`.
 An existing Manifest without its matching transaction is still Fail Closed.
-Before Manifest commit, a partial transaction removes only paths proven by its
-recovery marker to have been committed by that transaction. A committed Manifest is not rolled back
-merely because the transaction phase or cleanup lags; recovery validates the full
-publication set and advances only the missing durable phase. Conflicting identity,
-hashes, a second transaction, uncertain target ownership, or incomplete recovery
-evidence fails closed.
+Before every formal replace, the transaction durably records the fixed
+`active_target_path`; after a successful replace it appends that path to
+`committed_paths` and clears the active intent. Before Manifest commit, recovery
+rebuilds the controlled expected bytes from the current A1 sources and classifies
+every fixed target as old, new, or absent. `active_target_path` is replace intent
+only: it never establishes ownership by itself. Recovery may act only on a path
+already persisted in `committed_paths`, or on the one active path explicitly
+attested as replace-uncertain by a marker bound to the same transaction. A same-Hash
+file without that ownership evidence is preserved and recovery fails closed. If
+`os.replace` returned an uncertain result, no eager rollback is attempted. Recovery
+inspects the actual target Hashes first. A complete matching Manifest advances commit
+and cleanup; an absent Manifest permits rollback of provable owned files. Rollback
+atomically quarantines a target under `runs/<run_id>/publication_recovery/` and
+rechecks its Hash after the move; a changed file remains quarantined for manual
+inspection rather than being deleted. Conflicting identity, hashes, a second
+transaction, uncertain target ownership, or incomplete recovery evidence fails
+closed.
 
 `runs/<run_id>/publication_transaction.json` is the sole A2 transaction record.
 `final_summary.md` is a required source artifact. The transaction phase is limited
-to `backup_ready`, `publishing`, `manifest_commit_intent`,
-`manifest_committed`, `cleanup_pending`, and `cleanup_complete`. A Run-level
+to `backup_ready`, `publishing`, `files_replaced`, `final_summary_ready`,
+`manifest_commit_intent`, `manifest_committed`, `cleanup_pending`, and
+`cleanup_complete`. A Run-level
 `.publication_recovery_required.json` entry is inspected with `lstat`; any entry
 type or inspection failure blocks normal publication.
+
+The transaction is the authoritative crash-recovery record. A process exit may
+occur before a recovery marker can be written, so explicit recovery also accepts
+a fixed, valid transaction without a marker when its committed paths are already
+durable. A markerless active-only state is intentionally not recovered: the replace
+result is ambiguous and remains for manual inspection. A marker is bound to the
+same `transaction_id`, its stage and path evidence are validated against the fixed
+target set, and it cannot expand ownership beyond a durable commit or one active
+replace-uncertain path. A marker without any transaction is classified as a
+pretransaction failure and requires manual recovery; it is never treated as
+authority to modify formal targets.
 
 Identical reruns reuse a completed deterministic transaction. A zero-commit,
 known-clean failure removes its transaction scratch state and may retry. Partial
@@ -51,18 +77,41 @@ failure requires explicit recovery. `committed_paths` records only formal paths
 whose replace call returned successfully.
 
 If `final_summary.md` was already promoted before Manifest commit failed, it is
-moved to `runs/<run_id>/staging/invalidated_final_summary.<transaction_id>.md`.
+moved to
+`runs/<run_id>/publication_recovery/invalidated_final_summary.<transaction_id>.md`.
 The transaction-scoped name is never overwritten. A failed isolation move leaves
 the original error, cleanup diagnostics, and the recovery marker for manual
-inspection.
+inspection. Invalidated summaries are outside staging and cannot be re-ingested
+by a later publication attempt. Repeated recovery verifies the invalidated
+summary against the transaction Hash and reuses only byte-identical audit
+evidence; conflicting bytes fail closed.
 
 The implementation revalidates the V4 Evidence/receipt/Memory Snapshot, all A1
 staging bytes, and the generated final bytes both before and after formal target
-replacement. This is still `byte_binding_only`; it is not source authentication.
-The checks are lock-free point-in-time checks. On POSIX, file and directory fsync
-are used. CPython does not expose a working Windows directory fsync primitive, so
-Windows A2 relies on same-volume atomic file replacement and file fsync; A3 must
-provide concurrent-writer fencing before any formal publication is enabled.
+replacement. Staging must be byte-identical to the existing controlled A1 Growth,
+Memory, Engineering, Visualization, and Recheck renderers evaluated from the
+validated ClaimDecision. Extra staging files are rejected. Final documents,
+including `final_summary.md`, are first materialized and reread in the
+transaction-local temporary staging directory. Every final Markdown includes the
+static-audit boundary qualifier. This is still `byte_binding_only`; it is not
+source authentication. The checks are lock-free point-in-time checks. On POSIX,
+file and directory fsync are used. CPython exposes no equivalent portable
+directory fsync on Windows. The A2 adapter therefore fsyncs a short-lived
+sentinel and uses an in-directory `MoveFileExW(..., MOVEFILE_WRITE_THROUGH)` as a
+best-effort ordering barrier. This does not prove that an unrelated earlier
+rename is crash-durable; inability to complete or clean the barrier still fails
+closed. A3 must provide concurrent-writer fencing and a platform-qualified
+durability policy before formal publication is enabled.
+
+The transaction-local backup and temporary directory names are unowned until the
+authoritative transaction record exists. Before both new and idempotent
+publication, A2 scans the Run's A2 backup parent and all
+`.publication_<transaction>.tmp` entries. Any residue is never reused or deleted;
+it blocks publication and requires recovery. Recovery accepts only the four fixed
+final targets plus the fixed Manifest target, and requires backup/temporary paths
+to be derived from the validated `run_id` and `transaction_id`.
+Cleanup removes only workspace paths whose `mkdir` returned successfully in the
+current call; a path appearing after the residue scan is preserved as unowned.
 
 A2 does not create StateStore records, Active Locks, WAL/CAS entries, Controller
 state, DAG nodes, Web routes, or live formal artifacts. Publication completion in
