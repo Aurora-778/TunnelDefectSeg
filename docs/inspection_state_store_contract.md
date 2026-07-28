@@ -1,6 +1,9 @@
 # Inspection State Store Contract
 
-Phase A3.1 provides an opt-in Active Run Lock and canonical StateStore foundation. It is not connected to `DAGExecutor`, `Registry`, `run.py`, the Web application, or the legacy full pipeline. Controller ownership, automatic takeover, and workflow integration remain deferred to A3.2/A3.3.
+Phase A3.2 provides an opt-in Active Run Lock, canonical StateStore, and explicit
+single-host stale-owner recovery primitive. It is not connected to
+`DAGExecutor`, `Registry`, `run.py`, the Web application, or the legacy full
+pipeline. Controller ownership and workflow integration remain deferred to A3.3.
 
 ## Active Run Lock
 
@@ -14,7 +17,11 @@ The local lock authority is `runs/.active_run.lock` with schema `active_run_lock
 - Release atomically moves the lock to a token-scoped tombstone, verifies its bytes, and then removes it.
 - If the final removal barrier is uncertain, blocking tombstone evidence is restored. If that restoration cannot be established, the existing Active Run recovery sentinel is persisted when possible; either entry blocks a new acquisition and requires explicit A3.2 recovery.
 - Unknown owners, malformed entries, symlinks, junctions, reparse points, recovery locks, and release tombstones fail closed.
-- PID, timestamp, or file age never authorizes automatic takeover. Takeover and manual recovery commands are deferred.
+- PID, timestamp, or file age never authorizes ordinary acquisition. The explicit
+  `recover_stale_active_run()` primitive may take over only when the owner lock
+  names the current hostname and `os.kill(pid, 0)` conclusively reports that PID
+  absent. Live, cross-host, permission-denied, or unknown-PID evidence fails
+  closed; it is never a background or legacy-pipeline operation.
 
 The lock is a single-host, local-filesystem exclusion boundary. POSIX uses directory `fsync`; Windows uses a same-directory write-through rename barrier. Path, symlink, and ownership checks are point-in-time local guards, not hostile concurrent filesystem tamper authentication. This does not claim distributed locking or cross-host durability.
 
@@ -58,7 +65,11 @@ check.
 
 Journal rows use schema `state_journal_v1` and phases `pending`, `committed`, or `aborted`. Fields are closed and canonical JSON uses UTF-8 without BOM, sorted keys, compact separators, `allow_nan=false`, and SHA-256. `record_index` is contiguous, `previous_record_checksum` links the chain, and `record_checksum` covers the canonical record excluding itself.
 
-In A3.1, `append_actor_lock_token` must exactly equal `operation_owner_lock_token`; a different recovery actor is an A3.2-only protocol and is rejected here.
+Ordinary rows require `append_actor_lock_token == operation_owner_lock_token`
+and a canonical-null `recovery_audit_ref`. A3.2 permits a different append
+actor only on a terminal row for an existing pending operation. That row keeps
+the immutable original owner token and carries a `{path, sha256}` reference to
+the matching immutable recovery intent; all State reads revalidate this binding.
 
 The tail anchor stores the confirmed record index, checksum, and journal byte length. A record is confirmed only after journal append/fsync, anchor atomic replacement, parent-directory synchronization, and anchor reread. The only tolerated crash window is one complete, checksum-valid direct successor beyond the anchor. Two unanchored records, inserted/reordered rows, malformed checksums, middle corruption, or a journal shorter than the anchor fail closed.
 
@@ -70,13 +81,41 @@ The chain and anchor provide local self-consistency checks. Coordinated replacem
 
 `load()` never repairs unresolved work. It rejects unresolved `pending` operations and structural inconsistencies.
 
-`recover_state_journal()` is the only A3.1 recovery entry point. Under the same State lock and current Active Run Lock token it may:
+`recover_state_journal()` remains the ordinary-owner recovery entry point. Under
+the same State lock and current Active Run Lock token it may:
 
 - anchor one complete direct-successor record;
 - append `committed` when canonical State already equals the pending result;
 - append `aborted` when canonical State still equals the pending predecessor.
 
-Recovery reuses the persisted mutation timestamp and does not read a new time for `state.updated_at`. Recovery requiring lock takeover or a recovering-owner audit is explicitly deferred to A3.2.
+Recovery reuses the persisted mutation timestamp and does not read a new time for
+`state.updated_at`. A3.2 additionally exposes `recover_stale_active_run()`:
+
+- it is opt-in and only accepts the existing marker-validated temporary
+  `phase_a1_sandbox`; it is not a recovery mechanism for a live repository;
+- it exclusively creates `runs/.active_run.recovery.lock`, re-reads and hashes
+  the target Active Lock, validates the State/Journal pair and any existing A2
+  Publication through its authority. A2 recovery markers block takeover before
+  an intent is written;
+- it persists an immutable, Windows-safe UTC recovery intent in
+  `runs/<run_id>/lock_recovery_audit/` before replacing the Active Lock with a
+  `recovering` lock carrying a new token and exact intent path/SHA-256;
+- automatic and explicit manual callers share the same closed audit schema.
+  Automatic recovery records canonical-null actor fields; a manual caller must
+  provide bounded non-empty `operator_identity` and `reason`. Neither form is a
+  Web/API endpoint, and an incomplete prior intent remains a blocking sentinel;
+- `recover_taken_over_state_journal()` may then append only the terminal row of
+  the old pending operation, retaining its owner token while recording the new
+  append actor and intent reference;
+- it persists a checksum-bound outcome that freezes State, Journal anchor,
+  A2 Publication/Manifest presence and hashes, the recovering lock, and the
+  single exact successor. The first call performs that successor; later calls
+  revalidate every frozen condition before reporting the outcome.
+
+Any missing/mismatched audit, recovery mutex residue, lock replacement, sync, or
+outcome failure leaves the available evidence in place and fails closed. This is
+still an unlocked point-in-time local filesystem protocol, not cross-host
+takeover or hostile-tamper authentication.
 
 `load()`, recovery, and every new mutation apply the same committed-state binding check. When committed Journal evidence exists, `state.json` must match its latest committed resulting version, status, last-operation metadata, payload hash, and complete State SHA-256. A modified State cannot be wrapped into a later operation.
 

@@ -26,8 +26,10 @@ from orchestrator.inspection_workflow import publication
 from orchestrator.inspection_workflow.locking import (
     acquire_active_run_lock,
     mark_active_run_running,
+    recover_stale_active_run,
     reserve_active_run_id,
 )
+from orchestrator.inspection_workflow import locking
 from orchestrator.state import store as state_module
 from orchestrator.state.store import (
     COMPLETION_EVIDENCE_SCHEMA_VERSION,
@@ -691,6 +693,117 @@ def test_pending_state_write_failure_requires_recovery_and_aborts_operation(
     assert [row["phase"] for row in rows] == ["pending", "aborted"]
     with pytest.raises(StateConflictError, match="aborted operation_id"):
         _transition(store, lock_token, version=0, current="CREATED", next_status="PLANNED", second=1)
+
+
+def test_takeover_terminal_row_preserves_owner_and_binds_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, old_lock_token = _initialized(tmp_path)
+    original = store._atomic_replace
+
+    def fail_state(path: Path, data: bytes, *, label: str) -> None:
+        if label == "canonical state" and path.exists():
+            raise StateStoreError("injected stale owner state failure")
+        original(path, data, label=label)
+
+    monkeypatch.setattr(store, "_atomic_replace", fail_state)
+    with pytest.raises(StateStoreError, match="stale owner state failure"):
+        _transition(store, old_lock_token, version=0, current="CREATED", next_status="PLANNED", second=1)
+    monkeypatch.setattr(store, "_atomic_replace", original)
+    initialize_phase_a1_sandbox(tmp_path, run_id="run_001")
+    new_lock_token = str(uuid.uuid4())
+    recovery_token = str(uuid.uuid4())
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+
+    result = recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=recovery_token,
+        new_lock_token=new_lock_token,
+    )
+
+    assert result["successor_phase"] == "running"
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "runs" / "run_001" / "state_journal.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert [row["phase"] for row in rows] == ["pending", "aborted"]
+    assert rows[1]["operation_owner_lock_token"] == old_lock_token
+    assert rows[1]["append_actor_lock_token"] == new_lock_token
+    assert rows[1]["recovery_audit_ref"] is not None
+    with pytest.raises(StateConflictError, match="fencing"):
+        _transition(store, old_lock_token, version=0, current="CREATED", next_status="PLANNED", second=2)
+
+
+def test_recovery_terminal_requires_immutable_matching_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, old_lock_token = _initialized(tmp_path)
+    original = store._atomic_replace
+
+    def fail_state(path: Path, data: bytes, *, label: str) -> None:
+        if label == "canonical state" and path.exists():
+            raise StateStoreError("injected stale owner state failure")
+        original(path, data, label=label)
+
+    monkeypatch.setattr(store, "_atomic_replace", fail_state)
+    with pytest.raises(StateStoreError, match="stale owner state failure"):
+        _transition(store, old_lock_token, version=0, current="CREATED", next_status="PLANNED", second=1)
+    monkeypatch.setattr(store, "_atomic_replace", original)
+    initialize_phase_a1_sandbox(tmp_path, run_id="run_001")
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=str(uuid.uuid4()),
+        new_lock_token=str(uuid.uuid4()),
+    )
+    assert store.load(run_id="run_001")["state_version"] == 0
+    journal_row = json.loads(
+        (tmp_path / "runs" / "run_001" / "state_journal.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()[-1]
+    )
+    intent_path = tmp_path / Path(*journal_row["recovery_audit_ref"]["path"].split("/"))
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    intent["old_lock_token"] = str(uuid.uuid4())
+    intent["intent_checksum"] = locking._sha256(
+        locking._canonical_json_bytes(
+            {key: value for key, value in intent.items() if key != "intent_checksum"}
+        )
+    )
+    intent_path.write_bytes(locking._canonical_json_bytes(intent))
+
+    with pytest.raises(StateConflictError, match="recovery_audit_ref SHA-256 does not match"):
+        store.load(run_id="run_001")
+
+
+def test_terminal_state_takeover_freezes_and_releases_the_active_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, old_lock_token = _initialized(tmp_path)
+    _transition(store, old_lock_token, version=0, current="CREATED", next_status="FAILED", second=1)
+    initialize_phase_a1_sandbox(tmp_path, run_id="run_001")
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+
+    result = recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=str(uuid.uuid4()),
+        new_lock_token=str(uuid.uuid4()),
+    )
+
+    assert result == {"replayed": False, "successor_phase": "released"}
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+    outcome_path = next(
+        (tmp_path / "runs" / "run_001" / "lock_recovery_audit").glob("*.outcome.1.json")
+    )
+    assert json.loads(outcome_path.read_text(encoding="utf-8"))["successor_phase"] == "released"
 
 
 def test_committed_append_before_anchor_is_recovered_without_new_time(

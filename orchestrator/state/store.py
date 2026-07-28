@@ -379,6 +379,27 @@ def _validate_sha(value: Any, *, label: str, nullable: bool = False) -> str | No
     return value
 
 
+def _validate_recovery_audit_ref(value: Any, *, run_id: str) -> dict[str, str]:
+    if not isinstance(value, Mapping) or set(value) != {"path", "sha256"}:
+        raise StateConflictError("state journal recovery_audit_ref is invalid")
+    path = value["path"]
+    if (
+        not isinstance(path, str)
+        or "\\" in path
+        or not re.fullmatch(
+            rf"runs/{re.escape(run_id)}/lock_recovery_audit/[^/]+\.intent\.json",
+            path,
+        )
+    ):
+        raise StateConflictError("state journal recovery_audit_ref path is invalid")
+    try:
+        sha256 = _validate_sha(value["sha256"], label="state journal recovery audit SHA-256")
+    except StateStoreError as exc:
+        raise StateConflictError(str(exc)) from exc
+    assert sha256 is not None
+    return {"path": path, "sha256": sha256}
+
+
 def _validate_operation_id(value: Any) -> str:
     if not isinstance(value, str) or not _OPERATION_RE.fullmatch(value):
         raise StateStoreError("operation_id is invalid")
@@ -861,20 +882,29 @@ class StateStore:
             _validate_timestamp(record["journal_timestamp"], label="journal timestamp")
         except ActiveRunLockError as exc:
             raise StateConflictError(str(exc)) from exc
-        if record["append_actor_lock_token"] != record["operation_owner_lock_token"]:
-            raise StateConflictError(
-                "A3.1 state journal append actor must match the operation owner"
-            )
-        if record["recovery_audit_ref"] is not None:
-            raise StateRecoveryDeferredError(
-                "recovery audit references require A3.2 takeover validation"
-            )
         if not isinstance(record["phase"], str) or record["phase"] not in {
             "pending",
             "committed",
             "aborted",
         }:
             raise StateConflictError("state journal phase is invalid")
+        if record["append_actor_lock_token"] == record["operation_owner_lock_token"]:
+            if record["recovery_audit_ref"] is not None:
+                raise StateConflictError(
+                    "owner-authored state journal records must not carry recovery audit evidence"
+                )
+        else:
+            if record["recovery_audit_ref"] is None:
+                raise StateConflictError(
+                    "state journal append actor must match the operation owner without recovery audit evidence"
+                )
+            if record["phase"] not in {"committed", "aborted"}:
+                raise StateConflictError(
+                    "recovery actor may append only a terminal state journal record"
+                )
+            record["recovery_audit_ref"] = _validate_recovery_audit_ref(
+                record["recovery_audit_ref"], run_id=run_id
+            )
         if (
             not isinstance(record["mutation_kind"], str)
             or record["mutation_kind"] not in {"context_checkpoint", "status_transition"}
@@ -985,6 +1015,35 @@ class StateStore:
         for row in records:
             index.setdefault((row["mutation_kind"], row["operation_id"]), []).append(row)
         return index
+
+    def _validate_recovery_audit_bindings(
+        self, state: Mapping[str, Any], records: list[dict[str, Any]]
+    ) -> None:
+        """Bind every recovery-authored terminal row to its immutable intent."""
+
+        if not any(
+            row["append_actor_lock_token"] != row["operation_owner_lock_token"]
+            for row in records
+        ):
+            return
+        try:
+            from orchestrator.inspection_workflow.locking import (
+                validate_recovery_audit_reference,
+            )
+
+            for row in records:
+                if row["append_actor_lock_token"] == row["operation_owner_lock_token"]:
+                    continue
+                validate_recovery_audit_reference(
+                    self.project_root,
+                    run_id=state["run_id"],
+                    allocation_token=state["allocation_token"],
+                    operation_owner_lock_token=row["operation_owner_lock_token"],
+                    append_actor_lock_token=row["append_actor_lock_token"],
+                    recovery_audit_ref=row["recovery_audit_ref"],
+                )
+        except ActiveRunLockError as exc:
+            raise StateConflictError(str(exc)) from exc
 
     def _validate_committed_state_binding(
         self, state: Mapping[str, Any], records: list[dict[str, Any]]
@@ -1349,11 +1408,32 @@ class StateStore:
                 raise StateConflictError("Run initialization bytes do not match expected state")
             return _state_snapshot(persisted)
 
+    def validate_takeover_preflight(
+        self, *, run_id: str, allocation_token: str
+    ) -> StateSnapshot:
+        """Read canonical State and its anchored Journal before lock replacement."""
+
+        with self._state_lock(run_id):
+            state, _ = self._read_state(run_id)
+            if state["allocation_token"] != allocation_token:
+                raise StateConflictError("stale takeover allocation_token does not match state")
+            records, _, _ = self._journal_state(
+                run_id, allocation_token, repair_unanchored=False
+            )
+            self._validate_recovery_audit_bindings(state, records)
+            unresolved = [rows for rows in self._operation_index(records).values() if len(rows) == 1]
+            if len(unresolved) > 1:
+                raise StateConflictError("more than one unresolved state operation exists")
+            if not unresolved:
+                self._validate_committed_state_binding(state, records)
+            return _state_snapshot(state)
+
     def _recover_unfinished_operations_locked(
         self,
         *,
         run_id: str,
         expected_lock_token: str,
+        recovery_audit_ref: Mapping[str, Any] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         state, _ = self._read_state(run_id)
         try:
@@ -1371,6 +1451,36 @@ class StateStore:
             state["allocation_token"],
             repair_unanchored=True,
         )
+        self._validate_recovery_audit_bindings(state, records)
+        normalized_recovery_ref: dict[str, str] | None = None
+        if recovery_audit_ref is not None:
+            normalized_recovery_ref = _validate_recovery_audit_ref(
+                recovery_audit_ref, run_id=run_id
+            )
+            if (
+                lock["phase"] != "recovering"
+                or lock["recovery_of_lock_token"] is None
+                or lock["recovery_intent_path"] != normalized_recovery_ref["path"]
+                or lock["recovery_intent_sha256"] != normalized_recovery_ref["sha256"]
+            ):
+                raise StateConflictError(
+                    "recovering Active Run Lock does not bind the recovery audit"
+                )
+            try:
+                from orchestrator.inspection_workflow.locking import (
+                    validate_recovery_audit_reference,
+                )
+
+                validate_recovery_audit_reference(
+                    self.project_root,
+                    run_id=run_id,
+                    allocation_token=state["allocation_token"],
+                    operation_owner_lock_token=lock["recovery_of_lock_token"],
+                    append_actor_lock_token=expected_lock_token,
+                    recovery_audit_ref=normalized_recovery_ref,
+                )
+            except ActiveRunLockError as exc:
+                raise StateConflictError(str(exc)) from exc
         operation_index = self._operation_index(records)
         pending = [
             rows[0]
@@ -1383,14 +1493,21 @@ class StateStore:
             self._validate_committed_state_binding(state, records)
             return state, records
         row = pending[0]
-        if row["operation_owner_lock_token"] != expected_lock_token:
-            raise StateRecoveryDeferredError(
-                "pending operation belongs to an older lock token; takeover recovery is deferred to A3.2"
-            )
-        if lock["phase"] == "recovering":
-            raise StateRecoveryDeferredError(
-                "recovering lock terminal records require A3.2 recovery audit evidence"
-            )
+        if recovery_audit_ref is None:
+            if row["operation_owner_lock_token"] != expected_lock_token:
+                raise StateRecoveryDeferredError(
+                    "pending operation belongs to an older lock token; takeover recovery is required"
+                )
+            if lock["phase"] == "recovering":
+                raise StateRecoveryDeferredError(
+                    "recovering lock terminal records require recovery audit evidence"
+                )
+        else:
+            assert normalized_recovery_ref is not None
+            if lock["recovery_of_lock_token"] != row["operation_owner_lock_token"]:
+                raise StateConflictError(
+                    "recovering Active Run Lock does not bind the pending operation audit"
+                )
         state_bytes = _canonical_json_bytes(state)
         applied = (
             state["state_version"] == row["resulting_state_version"]
@@ -1419,7 +1536,7 @@ class StateStore:
                 "record_checksum": None,
                 "journal_timestamp": row["mutation_timestamp"],
                 "append_actor_lock_token": expected_lock_token,
-                "recovery_audit_ref": None,
+                "recovery_audit_ref": normalized_recovery_ref,
             }
         )
         records = self._append_record(
@@ -1437,6 +1554,23 @@ class StateStore:
             )
             return _state_snapshot(state)
 
+    def recover_taken_over_state_journal(
+        self,
+        *,
+        run_id: str,
+        expected_lock_token: str,
+        recovery_audit_ref: Mapping[str, Any],
+    ) -> StateSnapshot:
+        """Append one audited terminal row under an already recovered lock."""
+
+        with self._state_lock(run_id):
+            state, _ = self._recover_unfinished_operations_locked(
+                run_id=run_id,
+                expected_lock_token=expected_lock_token,
+                recovery_audit_ref=recovery_audit_ref,
+            )
+            return _state_snapshot(state)
+
     def recover(self, *, run_id: str, expected_lock_token: str) -> StateSnapshot:
         return self.recover_state_journal(
             run_id=run_id, expected_lock_token=expected_lock_token
@@ -1447,6 +1581,7 @@ class StateStore:
         records, _, _ = self._journal_state(
             run_id, state["allocation_token"], repair_unanchored=False
         )
+        self._validate_recovery_audit_bindings(state, records)
         operation_index = self._operation_index(records)
         if any(len(rows) == 1 for rows in operation_index.values()):
             raise StateRecoveryRequiredError(

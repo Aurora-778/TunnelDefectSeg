@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,11 +14,13 @@ import uuid
 import pytest
 
 from orchestrator.inspection_workflow import locking
+from orchestrator.inspection_workflow import a1_artifacts
 from orchestrator.inspection_workflow.locking import (
     ActiveRunLockError,
     acquire_active_run_lock,
     mark_active_run_running,
     read_active_run_lock,
+    recover_stale_active_run,
     release_active_run_lock,
     reserve_active_run_id,
     validate_active_run_lock,
@@ -73,6 +76,10 @@ def _running(root: Path) -> tuple[str, str]:
         expected_lock_token=lock_token,
     )
     return allocation_token, lock_token
+
+
+def _recovery_sandbox(root: Path) -> None:
+    a1_artifacts.initialize_phase_a1_sandbox(root, run_id="run_001")
 
 
 def test_active_lock_uses_exclusive_creation_and_canonical_bytes(tmp_path: Path) -> None:
@@ -320,6 +327,255 @@ def test_recovery_lock_blocks_acquisition_without_takeover(tmp_path: Path) -> No
     (runs / ".active_run.recovery.lock").write_text("blocked", encoding="utf-8")
     with pytest.raises(ActiveRunLockError, match="A3.2 recovery"):
         _acquire(tmp_path)
+
+
+def test_same_host_dead_owner_takeover_writes_audited_exact_successor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allocation_token, old_lock_token = _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    new_lock_token = str(uuid.uuid4())
+    recovery_token = str(uuid.uuid4())
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+
+    result = recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=recovery_token,
+        new_lock_token=new_lock_token,
+    )
+
+    assert result["replayed"] is False
+    assert result["successor_phase"] == "running"
+    lock = read_active_run_lock(tmp_path)
+    assert lock["phase"] == "running"
+    assert lock["lock_token"] == new_lock_token
+    assert lock["recovery_of_lock_token"] is None
+    audit_dir = tmp_path / "runs" / "run_001" / "lock_recovery_audit"
+    intent_paths = list(audit_dir.glob("*.intent.json"))
+    outcome_paths = list(audit_dir.glob("*.outcome.1.json"))
+    assert len(intent_paths) == len(outcome_paths) == 1
+    intent = json.loads(intent_paths[0].read_text(encoding="utf-8"))
+    outcome = json.loads(outcome_paths[0].read_text(encoding="utf-8"))
+    assert intent["old_lock_token"] == old_lock_token
+    assert intent["new_lock_token"] == new_lock_token
+    assert outcome["intent_sha256"] == hashlib.sha256(intent_paths[0].read_bytes()).hexdigest()
+    assert not (tmp_path / "runs" / ".active_run.recovery.lock").exists()
+    with pytest.raises(ActiveRunLockError, match="fencing"):
+        validate_active_run_lock(
+            tmp_path,
+            run_id="run_001",
+            allocation_token=allocation_token,
+            expected_lock_token=old_lock_token,
+            allowed_phases={"running"},
+        )
+    monkeypatch.setattr(
+        locking,
+        "_atomic_update_lock",
+        lambda *_args, **_kwargs: pytest.fail("completed recovery replay must not update the lock"),
+    )
+    replay = recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=recovery_token,
+        new_lock_token=new_lock_token,
+    )
+    assert replay == {"replayed": True, "successor_phase": "running"}
+
+
+def test_completed_outcome_replay_revalidates_frozen_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    recovery_token = str(uuid.uuid4())
+    new_lock_token = str(uuid.uuid4())
+    recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=recovery_token,
+        new_lock_token=new_lock_token,
+    )
+    state_path = tmp_path / "runs" / "run_001" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["context"] = {"external_change": True}
+    state_path.write_bytes(state_module._canonical_json_bytes(state))
+
+    with pytest.raises(ActiveRunLockError, match="State does not match frozen outcome"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=recovery_token,
+            new_lock_token=new_lock_token,
+        )
+
+
+def test_takeover_rejects_live_or_nonlocal_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: False)
+    with pytest.raises(ActiveRunLockError, match="not confirmed dead"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
+    lock_path = tmp_path / "runs" / ".active_run.lock"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock["hostname"] = "other-host"
+    lock_path.write_bytes(locking._canonical_json_bytes(lock))
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    with pytest.raises(ActiveRunLockError, match="same host"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
+
+
+def test_takeover_requires_controlled_phase_a1_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+
+    with pytest.raises(ActiveRunLockError, match="controlled Phase A1 sandbox"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
+    assert not (tmp_path / "runs" / "run_001" / "lock_recovery_audit").exists()
+
+
+def test_takeover_requires_a_distinct_successor_lock_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, old_lock_token = _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+
+    with pytest.raises(ActiveRunLockError, match="distinct from the old owner"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=old_lock_token,
+        )
+    assert not (tmp_path / "runs" / "run_001" / "lock_recovery_audit").exists()
+
+
+def test_takeover_rejects_a2_recovery_marker_before_writing_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    marker = tmp_path / "runs" / "run_001" / ".publication_recovery_required.json"
+    marker.write_bytes(b"{}\n")
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+
+    with pytest.raises(ActiveRunLockError, match="A2 Publication preflight"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
+    audit_dir = tmp_path / "runs" / "run_001" / "lock_recovery_audit"
+    assert not list(audit_dir.glob("*.intent.json"))
+
+
+def test_takeover_rejects_existing_a1_recovery_marker_before_writing_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    work = tmp_path / "runs" / "run_001" / "work"
+    work.mkdir()
+    (work / ".a1_recovery_required.json").write_bytes(b"{}\n")
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+
+    with pytest.raises(ActiveRunLockError, match="controlled Phase A1 sandbox"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
+    assert not (tmp_path / "runs" / "run_001" / "lock_recovery_audit").exists()
+
+
+def test_manual_takeover_uses_the_same_audit_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    recovery_token = str(uuid.uuid4())
+    recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=recovery_token,
+        new_lock_token=str(uuid.uuid4()),
+        actor_kind="manual",
+        operator_identity="local-owner",
+        reason="resume a verified local stale run",
+    )
+    intent_path = next(
+        (tmp_path / "runs" / "run_001" / "lock_recovery_audit").glob("*.intent.json")
+    )
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    assert intent["actor_kind"] == "manual"
+    assert intent["operator_identity"] == "local-owner"
+    assert intent["reason"] == "resume a verified local stale run"
+
+
+def test_takeover_target_change_after_intent_fails_closed_with_audit_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    original_update = locking._atomic_update_lock
+
+    def replace_target_before_takeover(root: Path, **kwargs: object) -> dict[str, object]:
+        lock_path = root / "runs" / ".active_run.lock"
+        changed = json.loads(lock_path.read_text(encoding="utf-8"))
+        changed["task_id"] = "task_002"
+        lock_path.write_bytes(locking._canonical_json_bytes(changed))
+        return original_update(root, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(locking, "_atomic_update_lock", replace_target_before_takeover)
+    with pytest.raises(ActiveRunLockError, match="bytes changed"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
+    assert list((tmp_path / "runs" / "run_001" / "lock_recovery_audit").glob("*.intent.json"))
+    assert not (tmp_path / "runs" / ".active_run.recovery.lock").exists()
+    monkeypatch.setattr(locking, "_atomic_update_lock", original_update)
+    with pytest.raises(ActiveRunLockError, match="incomplete recovery intent"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
 
 
 def test_malformed_existing_lock_fails_closed(tmp_path: Path) -> None:
