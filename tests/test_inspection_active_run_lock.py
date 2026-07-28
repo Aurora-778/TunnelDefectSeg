@@ -82,6 +82,37 @@ def _recovery_sandbox(root: Path) -> None:
     a1_artifacts.initialize_phase_a1_sandbox(root, run_id="run_001")
 
 
+def _assert_audit_rejected_before_recovery_mutex(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    match: str,
+) -> None:
+    lock_path = root / "runs" / ".active_run.lock"
+    audit_dir = root / "runs" / "run_001" / "lock_recovery_audit"
+    lock_before = lock_path.read_bytes()
+    entries_before = sorted(path.name for path in audit_dir.iterdir())
+    monkeypatch.setattr(
+        locking,
+        "_acquire_recovery_mutex",
+        lambda *_args, **_kwargs: pytest.fail(
+            "recovery audit residue must block before recovery mutex acquisition"
+        ),
+    )
+
+    with pytest.raises(ActiveRunLockError, match=match):
+        recover_stale_active_run(
+            root,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
+
+    assert lock_path.read_bytes() == lock_before
+    assert sorted(path.name for path in audit_dir.iterdir()) == entries_before
+    assert not (root / "runs" / ".active_run.recovery.lock").exists()
+
+
 def test_active_lock_uses_exclusive_creation_and_canonical_bytes(tmp_path: Path) -> None:
     allocation_token, lock_token = _acquire(tmp_path)
     lock_path = tmp_path / "runs" / ".active_run.lock"
@@ -576,6 +607,154 @@ def test_takeover_target_change_after_intent_fails_closed_with_audit_evidence(
             recovery_token=str(uuid.uuid4()),
             new_lock_token=str(uuid.uuid4()),
         )
+
+
+@pytest.mark.parametrize(
+    ("entry_names", "match"),
+    [
+        (["orphan.outcome.1.json"], "orphan recovery outcome"),
+        (
+            ["orphan.intent.json", "orphan.outcome.2.json"],
+            "unknown recovery audit entry",
+        ),
+        (
+            ["first.intent.json", "second.intent.json", "first.outcome.1.json"],
+            "exactly one intent/outcome pair",
+        ),
+        (
+            ["first.intent.json", "first.outcome.1.json", "second.outcome.1.json"],
+            "exactly one intent/outcome pair",
+        ),
+        (
+            ["first.intent.json", "second.outcome.1.json"],
+            "basenames do not match",
+        ),
+    ],
+)
+def test_recovery_audit_residue_blocks_before_mutex_and_lock_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_names: list[str],
+    match: str,
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    audit_dir = tmp_path / "runs" / "run_001" / "lock_recovery_audit"
+    audit_dir.mkdir()
+    for name in entry_names:
+        (audit_dir / name).write_bytes(b"{}\n")
+
+    _assert_audit_rejected_before_recovery_mutex(
+        tmp_path,
+        monkeypatch,
+        match=match,
+    )
+
+
+def test_completed_recovery_with_an_extra_intent_fails_closed_on_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    recovery_token = str(uuid.uuid4())
+    new_lock_token = str(uuid.uuid4())
+    recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=recovery_token,
+        new_lock_token=new_lock_token,
+    )
+    audit_dir = tmp_path / "runs" / "run_001" / "lock_recovery_audit"
+    (audit_dir / "orphan.intent.json").write_bytes(b"{}\n")
+    lock_path = tmp_path / "runs" / ".active_run.lock"
+    lock_before = lock_path.read_bytes()
+    entries_before = sorted(path.name for path in audit_dir.iterdir())
+    monkeypatch.setattr(
+        locking,
+        "_validate_completed_outcome_runtime",
+        lambda *_args, **_kwargs: pytest.fail(
+            "ambiguous audit collection must block before completed outcome replay"
+        ),
+    )
+
+    with pytest.raises(ActiveRunLockError, match="exactly one intent/outcome pair"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=recovery_token,
+            new_lock_token=new_lock_token,
+        )
+
+    assert lock_path.read_bytes() == lock_before
+    assert sorted(path.name for path in audit_dir.iterdir()) == entries_before
+
+
+def test_recovery_audit_directory_entry_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    audit_dir = tmp_path / "runs" / "run_001" / "lock_recovery_audit"
+    audit_dir.mkdir()
+    (audit_dir / "blocked.intent.json").mkdir()
+
+    _assert_audit_rejected_before_recovery_mutex(
+        tmp_path,
+        monkeypatch,
+        match="must be a regular file",
+    )
+
+
+def test_recovery_audit_reparse_entry_fails_closed_without_link_privileges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    audit_dir = tmp_path / "runs" / "run_001" / "lock_recovery_audit"
+    audit_dir.mkdir()
+    reparse_entry = audit_dir / "blocked.intent.json"
+    reparse_entry.write_bytes(b"{}\n")
+    original_lstat = locking._lstat
+
+    class FakeReparseStat:
+        st_mode = stat.S_IFREG
+        st_file_attributes = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+    def fake_lstat(path: Path, *, label: str) -> os.stat_result | FakeReparseStat | None:
+        if path == reparse_entry:
+            return FakeReparseStat()
+        return original_lstat(path, label=label)
+
+    monkeypatch.setattr(locking, "_lstat", fake_lstat)
+    _assert_audit_rejected_before_recovery_mutex(
+        tmp_path,
+        monkeypatch,
+        match="symlink or reparse point",
+    )
+
+
+def test_recovery_audit_symlink_entry_fails_closed_when_supported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _running(tmp_path)
+    _recovery_sandbox(tmp_path)
+    audit_dir = tmp_path / "runs" / "run_001" / "lock_recovery_audit"
+    audit_dir.mkdir()
+    target = tmp_path / "external-intent.json"
+    target.write_bytes(b"{}\n")
+    link = audit_dir / "blocked.intent.json"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("file symlink creation is unavailable")
+
+    _assert_audit_rejected_before_recovery_mutex(
+        tmp_path,
+        monkeypatch,
+        match="symlink or reparse point",
+    )
 
 
 def test_malformed_existing_lock_fails_closed(tmp_path: Path) -> None:

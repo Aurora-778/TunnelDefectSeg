@@ -1246,34 +1246,60 @@ def validate_recovery_audit_reference(
     return deepcopy(document)
 
 
-def _completed_outcome_path(audit_dir: Path) -> Path | None:
-    try:
-        paths = sorted(audit_dir.glob("*.outcome.1.json"))
-    except OSError as exc:
-        raise ActiveRunLockError("unable to inspect recovery audit outcomes") from exc
-    if not paths:
+def _recovery_audit_pair(audit_dir: Path) -> tuple[Path, Path] | None:
+    """Return the one complete immutable audit pair or fail closed on residue."""
+
+    entry = _lstat(audit_dir, label="recovery audit directory")
+    if entry is None:
         return None
-    if len(paths) != 1:
-        raise ActiveRunLockError("multiple completed recovery outcomes require manual review")
-    return paths[0]
-
-
-def _reject_incomplete_recovery_audit(audit_dir: Path) -> None:
+    _assert_plain_entry(audit_dir, label="recovery audit directory", directory=True)
     try:
-        intents = list(audit_dir.glob("*.intent.json"))
-        outcomes = list(audit_dir.glob("*.outcome.*.json"))
+        entries = sorted(audit_dir.iterdir(), key=lambda path: path.name)
     except OSError as exc:
-        raise ActiveRunLockError("unable to inspect recovery audit residue") from exc
-    if intents and not outcomes:
+        raise ActiveRunLockError("unable to inspect recovery audit entries") from exc
+    if not entries:
+        return None
+
+    intents: list[Path] = []
+    outcomes: list[Path] = []
+    for path in entries:
+        _assert_plain_entry(path, label="recovery audit entry", directory=False)
+        if path.name.endswith(".intent.json"):
+            intents.append(path)
+        elif path.name.endswith(".outcome.1.json"):
+            outcomes.append(path)
+        else:
+            raise ActiveRunLockError(
+                f"unknown recovery audit entry requires manual review: {path.name}"
+            )
+
+    if len(intents) == 1 and not outcomes:
         raise ActiveRunLockError(
             "incomplete recovery intent exists; explicit manual recovery is required"
         )
+    if len(outcomes) == 1 and not intents:
+        raise ActiveRunLockError(
+            "orphan recovery outcome exists; explicit manual recovery is required"
+        )
+    if len(intents) != 1 or len(outcomes) != 1:
+        raise ActiveRunLockError(
+            "recovery audit must contain exactly one intent/outcome pair"
+        )
+
+    intent_basename = intents[0].name[: -len(".intent.json")]
+    outcome_basename = outcomes[0].name[: -len(".outcome.1.json")]
+    if intent_basename != outcome_basename:
+        raise ActiveRunLockError(
+            "recovery audit intent and outcome basenames do not match"
+        )
+    return intents[0], outcomes[0]
 
 
 def _read_completed_outcome(audit_dir: Path) -> tuple[dict[str, Any], bytes] | None:
-    path = _completed_outcome_path(audit_dir)
-    if path is None:
+    pair = _recovery_audit_pair(audit_dir)
+    if pair is None:
         return None
+    _, path = pair
     document, data = _read_canonical_document(
         path,
         label="Active Run recovery outcome",
@@ -1522,7 +1548,6 @@ def recover_stale_active_run(
             intent=intent,
         )
         return {"replayed": True, "successor_phase": outcome["successor_phase"]}
-    _reject_incomplete_recovery_audit(audit_dir)
 
     old_lock, old_bytes = _read_lock(active_path)
     if old_lock["run_id"] != run_id or old_lock["reserved_run_id"] != run_id:

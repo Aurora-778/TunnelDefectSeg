@@ -100,6 +100,11 @@ Recovery reuses the persisted mutation timestamp and does not read a new time fo
 - it persists an immutable, Windows-safe UTC recovery intent in
   `runs/<run_id>/lock_recovery_audit/` before replacing the Active Lock with a
   `recovering` lock carrying a new token and exact intent path/SHA-256;
+- the recovery audit directory is a closed set: an empty directory represents no
+  prior recovery, while a completed recovery contains exactly one regular-file
+  intent and one regular-file `outcome.1` with the same basename. Orphan,
+  additional, unknown-numbered, basename-mismatched, symlink, reparse, directory,
+  or other non-regular entries fail closed before recovery mutex acquisition;
 - automatic and explicit manual callers share the same closed audit schema.
   Automatic recovery records canonical-null actor fields; a manual caller must
   provide bounded non-empty `operator_identity` and `reason`. Neither form is a
