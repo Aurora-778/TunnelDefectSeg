@@ -1284,7 +1284,7 @@ def _read_completed_outcome(audit_dir: Path) -> tuple[dict[str, Any], bytes] | N
 
 def _validate_completed_outcome_binding(
     root: Path, outcome: Mapping[str, Any]
-) -> None:
+) -> dict[str, Any]:
     run_id = outcome["run_id"]
     path_text = outcome["intent_path"]
     if (
@@ -1311,6 +1311,49 @@ def _validate_completed_outcome_binding(
         or intent["recovery_token"] != outcome["recovery_token"]
     ):
         raise ActiveRunLockError("completed recovery outcome does not bind its intent")
+    return intent
+
+
+def _validate_completed_outcome_successor(
+    root: Path,
+    runs: Path,
+    active_path: Path,
+    *,
+    outcome: Mapping[str, Any],
+    intent: Mapping[str, Any],
+) -> None:
+    """Accept only the exact outcome-frozen successor, never merely its hash."""
+
+    entry = _lstat(active_path, label="Active Run Lock")
+    if outcome["successor_phase"] == "released":
+        if entry is not None:
+            raise ActiveRunLockError("released recovery outcome conflicts with an Active Run Lock")
+        _reject_recovery_or_release_entries(runs)
+        return
+    if entry is None:
+        raise ActiveRunLockError("recovery outcome successor Active Run Lock is missing")
+    active, active_bytes = _read_lock(active_path)
+    if _sha256(active_bytes) != outcome["successor_lock_sha256"]:
+        raise ActiveRunLockError("Active Run Lock does not match completed recovery outcome")
+    if (
+        active["phase"] != "running"
+        or active["run_id"] != outcome["run_id"]
+        or active["reserved_run_id"] != outcome["run_id"]
+        or active["allocation_token"] != outcome["allocation_token"]
+        or active["lock_token"] != intent["new_lock_token"]
+        or any(
+            active[name] is not None
+            for name in (
+                "recovery_of_lock_token",
+                "recovery_token",
+                "recovery_intent_path",
+                "recovery_intent_sha256",
+            )
+        )
+    ):
+        raise ActiveRunLockError(
+            "Active Run Lock successor fields do not match completed recovery outcome"
+        )
 
 
 def _validate_a3_recovery_sandbox(root: Path, *, run_id: str) -> None:
@@ -1467,20 +1510,17 @@ def recover_stale_active_run(
     completed = _read_completed_outcome(audit_dir)
     if completed is not None:
         outcome, _ = completed
-        _validate_completed_outcome_binding(root, outcome)
+        intent = _validate_completed_outcome_binding(root, outcome)
         if outcome["run_id"] != run_id or outcome["recovery_token"] != recovery_token:
             raise ActiveRunLockError("completed recovery outcome does not match this request")
         _validate_completed_outcome_runtime(root, outcome)
-        entry = _lstat(active_path, label="Active Run Lock")
-        if outcome["successor_phase"] == "released":
-            if entry is not None:
-                raise ActiveRunLockError("released recovery outcome conflicts with an Active Run Lock")
-        else:
-            if entry is None:
-                raise ActiveRunLockError("recovery outcome successor Active Run Lock is missing")
-            _, active_bytes = _read_lock(active_path)
-            if _sha256(active_bytes) != outcome["successor_lock_sha256"]:
-                raise ActiveRunLockError("Active Run Lock does not match completed recovery outcome")
+        _validate_completed_outcome_successor(
+            root,
+            runs,
+            active_path,
+            outcome=outcome,
+            intent=intent,
+        )
         return {"replayed": True, "successor_phase": outcome["successor_phase"]}
     _reject_incomplete_recovery_audit(audit_dir)
 
@@ -1599,6 +1639,20 @@ def recover_stale_active_run(
             anchor_bytes = anchor_path.read_bytes()
         except OSError as exc:
             raise ActiveRunLockError("unable to read recovery journal anchor") from exc
+        final_publication_status, final_publication_transaction_id, final_publication_manifest_sha256 = (
+            _publication_recovery_binding(
+                root,
+                run_id=run_id,
+                plan_fingerprint=state["plan_fingerprint"],
+            )
+        )
+        if (
+            (final_publication_status, final_publication_transaction_id, final_publication_manifest_sha256)
+            != (publication_status, publication_transaction_id, publication_manifest_sha256)
+        ):
+            raise ActiveRunLockError(
+                "Publication changed between stale takeover preflight and recovery outcome"
+            )
         successor_phase = "released" if state["status"] in {"FAILED", "COMPLETED"} else "running"
         successor_bytes: bytes | None = None
         if successor_phase == "running":
@@ -1665,6 +1719,15 @@ def recover_stale_active_run(
             if _canonical_json_bytes(persisted) != successor_bytes:
                 raise ActiveRunLockError("recovery successor bytes do not match frozen outcome")
         else:
+            current_recovering, current_recovering_bytes = _read_lock(active_path)
+            if (
+                _sha256(current_recovering_bytes) != _sha256(recovering_bytes)
+                or current_recovering["phase"] != "recovering"
+                or current_recovering["lock_token"] != new_lock_token
+            ):
+                raise ActiveRunLockError(
+                    "recovering Active Run Lock changed before terminal release"
+                )
             release_active_run_lock(
                 root,
                 run_id=run_id,

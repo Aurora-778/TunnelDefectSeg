@@ -24,6 +24,7 @@ from orchestrator.inspection_workflow import initialize_phase_a1_sandbox
 from orchestrator.inspection_workflow import publication
 
 from orchestrator.inspection_workflow.locking import (
+    ActiveRunLockError,
     acquire_active_run_lock,
     mark_active_run_running,
     recover_stale_active_run,
@@ -790,12 +791,14 @@ def test_terminal_state_takeover_freezes_and_releases_the_active_lock(
     initialize_phase_a1_sandbox(tmp_path, run_id="run_001")
     monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
     monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    recovery_token = str(uuid.uuid4())
+    new_lock_token = str(uuid.uuid4())
 
     result = recover_stale_active_run(
         tmp_path,
         run_id="run_001",
-        recovery_token=str(uuid.uuid4()),
-        new_lock_token=str(uuid.uuid4()),
+        recovery_token=recovery_token,
+        new_lock_token=new_lock_token,
     )
 
     assert result == {"replayed": False, "successor_phase": "released"}
@@ -804,6 +807,15 @@ def test_terminal_state_takeover_freezes_and_releases_the_active_lock(
         (tmp_path / "runs" / "run_001" / "lock_recovery_audit").glob("*.outcome.1.json")
     )
     assert json.loads(outcome_path.read_text(encoding="utf-8"))["successor_phase"] == "released"
+    tombstone = tmp_path / "runs" / f".active_run.release.{new_lock_token}.json"
+    tombstone.write_bytes(b"preserved recovery residue")
+    with pytest.raises(ActiveRunLockError, match="release tombstone"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=recovery_token,
+            new_lock_token=new_lock_token,
+        )
 
 
 def test_committed_append_before_anchor_is_recovered_without_new_time(

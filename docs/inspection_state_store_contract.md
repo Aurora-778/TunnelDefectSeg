@@ -110,7 +110,10 @@ Recovery reuses the persisted mutation timestamp and does not read a new time fo
 - it persists a checksum-bound outcome that freezes State, Journal anchor,
   A2 Publication/Manifest presence and hashes, the recovering lock, and the
   single exact successor. The first call performs that successor; later calls
-  revalidate every frozen condition before reporting the outcome.
+  revalidate every frozen condition before reporting the outcome. A running
+  successor must also retain the intent-bound Run, allocation, and new lock
+  token fields; a released successor rejects any recovery mutex or release
+  tombstone residue.
 
 Any missing/mismatched audit, recovery mutex residue, lock replacement, sync, or
 outcome failure leaves the available evidence in place and fails closed. This is
