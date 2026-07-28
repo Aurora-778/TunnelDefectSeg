@@ -117,8 +117,9 @@ Recovery reuses the persisted mutation timestamp and does not read a new time fo
   single exact successor. The first call performs that successor; later calls
   revalidate every frozen condition before reporting the outcome. A running
   successor must also retain the intent-bound Run, allocation, and new lock
-  token fields; a released successor rejects any recovery mutex or release
-  tombstone residue.
+  token fields. Both running and released successors reject any recovery mutex,
+  Active Run state-transition lock, or release tombstone residue before a
+  read-only replay can report success.
 
 Any missing/mismatched audit, recovery mutex residue, lock replacement, sync, or
 outcome failure leaves the available evidence in place and fails closed. This is

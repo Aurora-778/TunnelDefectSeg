@@ -78,6 +78,24 @@ def _running(root: Path) -> tuple[str, str]:
     return allocation_token, lock_token
 
 
+def _transition_to_failed(root: Path, lock_token: str) -> None:
+    StateStore(root).transition_status(
+        run_id="run_001",
+        expected_lock_token=lock_token,
+        expected_status="CREATED",
+        expected_state_version=0,
+        operation_id="run:run_001:transition:v0:CREATED:FAILED:auto",
+        mutation_timestamp="2026-07-27T00:00:01.000000Z",
+        payload={
+            "next_status": "FAILED",
+            "metadata": None,
+            "completion_evidence": None,
+            "transition_kind": "auto",
+            "decision_token": None,
+        },
+    )
+
+
 def _recovery_sandbox(root: Path) -> None:
     a1_artifacts.initialize_phase_a1_sandbox(root, run_id="run_001")
 
@@ -442,6 +460,113 @@ def test_completed_outcome_replay_revalidates_frozen_state(
             recovery_token=recovery_token,
             new_lock_token=new_lock_token,
         )
+
+
+@pytest.mark.parametrize("successor_phase", ["running", "released"])
+@pytest.mark.parametrize(
+    ("residue_kind", "match"),
+    [
+        ("recovery_mutex", "recovery lock"),
+        ("release_tombstone", "release tombstone"),
+        ("state_lock", "state transition"),
+    ],
+)
+def test_completed_outcome_replay_rejects_active_run_residue_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    successor_phase: str,
+    residue_kind: str,
+    match: str,
+) -> None:
+    _, old_lock_token = _running(tmp_path)
+    if successor_phase == "released":
+        _transition_to_failed(tmp_path, old_lock_token)
+    _recovery_sandbox(tmp_path)
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    recovery_token = str(uuid.uuid4())
+    new_lock_token = str(uuid.uuid4())
+    assert recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=recovery_token,
+        new_lock_token=new_lock_token,
+    ) == {"replayed": False, "successor_phase": successor_phase}
+
+    runs = tmp_path / "runs"
+    if residue_kind == "recovery_mutex":
+        residue = runs / ".active_run.recovery.lock"
+    elif residue_kind == "release_tombstone":
+        residue = runs / f".active_run.release.{uuid.uuid4()}.json"
+    else:
+        residue = runs / locking._ACTIVE_RUN_STATE_LOCK_NAME
+    residue.write_bytes(b"preserved recovery residue")
+
+    active_path = runs / ".active_run.lock"
+    active_before = active_path.read_bytes() if active_path.exists() else None
+    audit_dir = runs / "run_001" / "lock_recovery_audit"
+    audit_before = {
+        path.name: path.read_bytes()
+        for path in audit_dir.iterdir()
+    }
+    residue_before = residue.read_bytes()
+
+    with pytest.raises(ActiveRunLockError, match=match):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=recovery_token,
+            new_lock_token=new_lock_token,
+        )
+
+    assert (active_path.read_bytes() if active_path.exists() else None) == active_before
+    assert {
+        path.name: path.read_bytes()
+        for path in audit_dir.iterdir()
+    } == audit_before
+    assert residue.read_bytes() == residue_before
+
+
+def test_completed_released_outcome_replays_read_only_without_residue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, old_lock_token = _running(tmp_path)
+    _transition_to_failed(tmp_path, old_lock_token)
+    _recovery_sandbox(tmp_path)
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    recovery_token = str(uuid.uuid4())
+    new_lock_token = str(uuid.uuid4())
+    assert recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=recovery_token,
+        new_lock_token=new_lock_token,
+    ) == {"replayed": False, "successor_phase": "released"}
+    audit_dir = tmp_path / "runs" / "run_001" / "lock_recovery_audit"
+    audit_before = {
+        path.name: path.read_bytes()
+        for path in audit_dir.iterdir()
+    }
+    monkeypatch.setattr(
+        locking,
+        "release_active_run_lock",
+        lambda *_args, **_kwargs: pytest.fail(
+            "completed released outcome replay must not release the lock again"
+        ),
+    )
+
+    assert recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=recovery_token,
+        new_lock_token=new_lock_token,
+    ) == {"replayed": True, "successor_phase": "released"}
+    assert {
+        path.name: path.read_bytes()
+        for path in audit_dir.iterdir()
+    } == audit_before
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
 
 
 def test_takeover_rejects_live_or_nonlocal_owner(

@@ -1350,11 +1350,11 @@ def _validate_completed_outcome_successor(
 ) -> None:
     """Accept only the exact outcome-frozen successor, never merely its hash."""
 
+    _reject_recovery_or_release_entries(runs)
     entry = _lstat(active_path, label="Active Run Lock")
     if outcome["successor_phase"] == "released":
         if entry is not None:
             raise ActiveRunLockError("released recovery outcome conflicts with an Active Run Lock")
-        _reject_recovery_or_release_entries(runs)
         return
     if entry is None:
         raise ActiveRunLockError("recovery outcome successor Active Run Lock is missing")
