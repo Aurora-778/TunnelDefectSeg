@@ -21,6 +21,20 @@ The A3.1 lock, State, CAS, Journal, and tail-anchor modules are likewise availab
 only through direct component calls; Controller, DAG, Registry, CLI, and Web
 integration remain deferred to A3.2/A3.3.
 
+A3.1 checkpoint calls use a closed, kind-specific event contract rather than a
+free context merge. Run initialization is accepted only in `PLANNED`; task events
+are accepted only in `RUNNING`. Canonical State must remain byte-bound to the
+latest committed Journal result, and completion reuses the A2 Publication
+validator rather than a second reduced Manifest interpretation. These local
+contracts remain opt-in and do not activate the future workflow.
+
+An empty A3.1 Journal represents only the canonical `CREATED` baseline; it can
+never authorize a synthetic running or completed state. A3.1 also requires each
+Journal append actor token to equal the operation owner token. Lock/tombstone
+cleanup uncertainty leaves a Run-local or Active Run recovery sentinel where it
+can be persisted, and that sentinel blocks further direct component entry until
+the deferred explicit recovery protocol is available.
+
 ## Entry Points
 
 - The existing `python run.py --mode full_pipeline` remains the legacy simulated entry point.

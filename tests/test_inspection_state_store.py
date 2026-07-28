@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import csv
+from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
 import uuid
 
 import pytest
+from PIL import Image
+
+from orchestrator.agents.association_agent import AssociationAgent
+from orchestrator.agents.claim_gate_agent import ClaimGateAgent
+from orchestrator.agents.claim_visualization_agent import ClaimVisualizationAgent
+from orchestrator.agents.comparison_evidence_agent import ComparisonEvidenceAgent
+from orchestrator.agents.engineering_claim_report_agent import EngineeringClaimReportAgent
+from orchestrator.agents.growth_report_agent import GrowthReportAgent
+from orchestrator.agents.memory_report_agent import MemoryReportAgent
+from orchestrator.inspection_workflow import initialize_phase_a1_sandbox
+from orchestrator.inspection_workflow import publication
 
 from orchestrator.inspection_workflow.locking import (
     acquire_active_run_lock,
@@ -21,6 +35,7 @@ from orchestrator.state.store import (
     StateStore,
     StateStoreError,
 )
+from scripts import prepare_real_inspection_pilot as preparation
 
 
 T0 = "2026-07-27T00:00:00.000000Z"
@@ -109,6 +124,7 @@ def _checkpoint(
     task_id: str | None = "core",
     attempt: int | None = 0,
     retry_disposition: str | None = None,
+    payload_override: Mapping[str, object] | None = None,
 ) -> Mapping[str, object]:
     timestamp = f"2026-07-27T00:00:{second:02d}.000000Z"
     if kind == "run_initialized":
@@ -117,9 +133,16 @@ def _checkpoint(
             "checkpoint_kind": kind,
             "task_id": None,
             "attempt_number": None,
+            "expected_task_status": None,
+            "next_task_status": None,
+            "retry_disposition": "none",
+            "next_attempt_number": None,
+            "controlled_context_delta": {
+                "task_plan": TASK_PLAN,
+                "plan_fingerprint": PLAN_SHA,
+            },
+            "error_summary": None,
             "created_at": timestamp,
-            "context_delta": {},
-            "task_plan": TASK_PLAN,
         }
     else:
         suffix = {
@@ -135,9 +158,47 @@ def _checkpoint(
             "checkpoint_kind": kind,
             "task_id": task_id,
             "attempt_number": attempt,
+            "expected_task_status": (
+                "pending" if kind in {"task_skipped", "task_cache_hit"} else
+                ("pending" if kind == "task_started" and attempt == 1 else
+                 "retry_scheduled" if kind == "task_started" else
+                 "running" if kind in {"task_succeeded", "task_failed"} else
+                 "retry_pending")
+            ),
+            "next_task_status": {
+                "task_skipped": "skipped",
+                "task_cache_hit": "success",
+                "task_started": "running",
+                "task_succeeded": "success",
+                "task_failed": "retry_pending" if retry_disposition == "retry" else "failed",
+                "task_retry_scheduled": "retry_scheduled",
+            }[kind],
+            "retry_disposition": retry_disposition if kind == "task_failed" else (
+                "retry" if kind == "task_retry_scheduled" else "none"
+            ),
+            "next_attempt_number": None,
+            "controlled_context_delta": {},
+            "error_summary": None,
             "created_at": timestamp,
-            "context_delta": {},
         }
+        if kind == "task_skipped":
+            payload["controlled_context_delta"] = {"skip_reason": "test skip"}
+        elif kind == "task_cache_hit":
+            payload["controlled_context_delta"] = {
+                "task_output": {"artifact": "cache"},
+                "cache_provenance": {"source": "test"},
+            }
+        elif kind == "task_succeeded":
+            payload["controlled_context_delta"] = {"task_output": {"artifact": "test"}}
+        elif kind == "task_failed":
+            payload["controlled_context_delta"] = {"failure_provenance": {"source": "test"}}
+            payload["error_summary"] = "test failure"
+        elif kind == "task_retry_scheduled":
+            payload["controlled_context_delta"] = {
+                "failed_operation_id": f"run:run_001:task:{task_id}:attempt:{attempt}:failed",
+                "retry_policy_sha256": "b" * 64,
+                "backoff_seconds": 0,
+            }
         if kind == "task_failed":
             payload["retry_disposition"] = retry_disposition
             payload["next_attempt_number"] = (
@@ -145,6 +206,8 @@ def _checkpoint(
             )
         if kind == "task_retry_scheduled":
             payload["next_attempt_number"] = attempt + 1 if isinstance(attempt, int) else None
+    if payload_override is not None:
+        payload.update(deepcopy(dict(payload_override)))
     return store.checkpoint_context(
         run_id="run_001",
         expected_lock_token=lock_token,
@@ -182,59 +245,86 @@ def _write_canonical(path: Path, value: object) -> bytes:
     return data
 
 
-def _write_publication_ref(root: Path, relative: str, data: bytes) -> dict[str, object]:
-    path = root.joinpath(*relative.split("/"))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    return {
-        "path": relative,
-        "size_bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
-    }
-
-
 def _completion_fixture(
     root: Path,
 ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
-    source_path = "runs/run_001/artifacts/claim_decision.json"
-    source_ref = _write_publication_ref(root, source_path, b'{"decision":"static_audit"}\n')
-    publication_paths = sorted(
-        [
-            "outputs/final_project_report.md",
-            "outputs/key_insights.md",
-            "outputs/system_summary.md",
-            "runs/run_001/final_summary.md",
-        ]
-    )
-    publication_refs = [
-        _write_publication_ref(root, relative, f"{relative}\n".encode("utf-8"))
-        for relative in publication_paths
+    dataset = root / "dataset"
+    work = root / "runs" / "run_001" / "work"
+    (dataset / "images").mkdir(parents=True)
+    (dataset / "masks").mkdir()
+    Image.new("RGB", (4, 4), color=(90, 100, 110)).save(dataset / "images/a.jpg")
+    mask = Image.new("L", (4, 4), color=0)
+    mask.putpixel((1, 1), 255)
+    mask.save(dataset / "masks/a.png")
+    Image.new("RGB", (4, 4), color=(40, 50, 60)).save(dataset / "images/b.jpg")
+    Image.new("L", (4, 4), color=255).save(dataset / "masks/b.png")
+    rows = [
+        {
+            "sequence_id": "S01", "source_inspection_id": "visit_1", "frame_id": "1",
+            "timestamp": "2026-07-01T10:00:00Z", "mileage_m": "12.0", "ring_id": "1",
+            "clock_direction": "12点", "image_file": "images/a.jpg", "mask_file": "masks/a.png",
+            "local_observation_id": "obs_01", "disease_type": "crack",
+        },
+        {
+            "sequence_id": "S01", "source_inspection_id": "visit_2", "frame_id": "2",
+            "timestamp": "2026-07-02T10:00:00Z", "mileage_m": "10000.0", "ring_id": "9000",
+            "clock_direction": "6点", "image_file": "images/b.jpg", "mask_file": "masks/b.png",
+            "local_observation_id": "obs_02", "disease_type": "crack",
+        },
     ]
-    manifest = {
-        "schema_version": "publication_manifest_v1",
-        "run_id": "run_001",
-        "plan_fingerprint": PLAN_SHA,
-        "transaction_id": "tx-001",
-        "expected_source_artifact_paths": [source_path],
-        "source_artifacts": [source_ref],
-        "publication_files": publication_refs,
+    with (dataset / "metadata.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=preparation.REQUIRED_METADATA_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+    initialize_phase_a1_sandbox(
+        root, run_id="run_001", evidence_source_mode="run_local_projection"
+    )
+    prepared = work / "raw_prepared"
+    preparation.prepare_real_inspection_pilot(dataset, prepared)
+    history = work / "raw_history"
+    AssociationAgent().run(
+        {
+            "inputs": {"association": {
+                "history_only": "true",
+                "frame_records": str(prepared / "frame_records.csv"),
+                "output_path": str(history / "association_records.csv"),
+                "history_output_dir": str(history / "main_progressive"),
+                "manifest_path": str(history / "association_manifest.json"),
+                "use_disease_id_score": "false",
+                "association_mode": "no_id",
+            }},
+            "outputs": {},
+            "shared": {"project_root": str(root)},
+        }
+    )
+    context = {
+        "shared": {
+            "project_root": str(root), "run_id": "run_001",
+            "execution_profile": "phase_a1_sandbox", "plan_fingerprint": PLAN_SHA,
+        },
+        "inputs": {"comparison_evidence": {
+            "projection_mode": "prepared_history_sources",
+            "prepared_manifest_path": "runs/run_001/work/raw_prepared/preparation_manifest.json",
+            "history_association_path": "runs/run_001/work/raw_history/association_records.csv",
+            "history_manifest_path": "runs/run_001/work/raw_history/association_manifest.json",
+        }},
     }
-    manifest_data = _write_canonical(
-        root / "outputs" / "current_publication_manifest.json", manifest
+    ComparisonEvidenceAgent().run(context)
+    ClaimGateAgent().run(context)
+    report_context = {"shared": deepcopy(context["shared"]), "inputs": {}}
+    GrowthReportAgent().run(report_context)
+    MemoryReportAgent().run(report_context)
+    EngineeringClaimReportAgent().run(report_context)
+    ClaimVisualizationAgent().run(report_context)
+    published = publication.publish_run_local_artifacts(
+        root, run_id="run_001", plan_fingerprint=PLAN_SHA
     )
-    transaction = {
-        "run_id": "run_001",
-        "plan_fingerprint": PLAN_SHA,
-        "transaction_id": "tx-001",
-        "phase": "manifest_committed",
-        "manifest_sha256": hashlib.sha256(manifest_data).hexdigest(),
-    }
-    transaction_data = _write_canonical(
-        root / "runs" / "run_001" / "publication_transaction.json", transaction
-    )
-    summary_ref = next(
-        item for item in publication_refs if item["path"] == "runs/run_001/final_summary.md"
-    )
+    manifest = published["manifest"]
+    transaction = published["transaction"]
+    manifest_data = (root / publication.PUBLICATION_MANIFEST_PATH).read_bytes()
+    transaction_path = root / f"runs/run_001/publication_transaction.json"
+    transaction_data = transaction_path.read_bytes()
+    summary_data = (root / "runs/run_001/final_summary.md").read_bytes()
     evidence = {
         "schema_version": COMPLETION_EVIDENCE_SCHEMA_VERSION,
         "run_id": "run_001",
@@ -244,9 +334,9 @@ def _completion_fixture(
         "publication_manifest_sha256": hashlib.sha256(manifest_data).hexdigest(),
         "publication_transaction_path": "runs/run_001/publication_transaction.json",
         "publication_transaction_sha256": hashlib.sha256(transaction_data).hexdigest(),
-        "transaction_id": "tx-001",
+        "transaction_id": manifest["transaction_id"],
         "final_summary_path": "runs/run_001/final_summary.md",
-        "final_summary_sha256": summary_ref["sha256"],
+        "final_summary_sha256": hashlib.sha256(summary_data).hexdigest(),
     }
     return evidence, transaction, manifest
 
@@ -269,6 +359,31 @@ def test_initialize_creates_state_and_genesis_anchor(tmp_path: Path) -> None:
     anchor = json.loads((tmp_path / "runs" / "run_001" / "state_journal_tail.json").read_bytes())
     assert anchor["tail_record_index"] is None
     assert anchor["tail_file_size_bytes"] == 0
+
+
+@pytest.mark.parametrize("forged_status", ["RUNNING", "COMPLETED"])
+def test_empty_journal_accepts_only_the_created_baseline(
+    tmp_path: Path, forged_status: str
+) -> None:
+    store, _, lock_token = _initialized(tmp_path)
+    state_path = tmp_path / "runs" / "run_001" / "state.json"
+    state = json.loads(state_path.read_bytes())
+    state["status"] = forged_status
+    _write_canonical(state_path, state)
+
+    with pytest.raises(StateConflictError, match="valid uncommitted CREATED baseline"):
+        store.load(run_id="run_001")
+    with pytest.raises(StateConflictError, match="valid uncommitted CREATED baseline"):
+        store.recover(run_id="run_001", expected_lock_token=lock_token)
+    with pytest.raises(StateConflictError, match="valid uncommitted CREATED baseline"):
+        _transition(
+            store,
+            lock_token,
+            version=0,
+            current=forged_status,
+            next_status="FAILED",
+            second=1,
+        )
 
 
 def test_initialize_rejects_bool_version_fields_and_optional_core_task(tmp_path: Path) -> None:
@@ -435,6 +550,123 @@ def test_checkpoint_attempts_are_canonical_and_retry_is_contiguous(tmp_path: Pat
     assert result["canonical_state"]["task_attempts"]["core"] == 2
 
 
+def test_checkpoint_lifecycle_rejects_wrong_run_status(tmp_path: Path) -> None:
+    store, _, lock_token = _initialized(tmp_path)
+    with pytest.raises(StateConflictError, match="only allowed in PLANNED"):
+        _checkpoint(
+            store,
+            lock_token,
+            version=0,
+            status="CREATED",
+            kind="run_initialized",
+            second=1,
+            task_id=None,
+            attempt=None,
+        )
+
+    _transition(store, lock_token, version=0, current="CREATED", next_status="PLANNED", second=2)
+    initialized = _checkpoint(
+        store,
+        lock_token,
+        version=1,
+        status="PLANNED",
+        kind="run_initialized",
+        second=3,
+        task_id=None,
+        attempt=None,
+    )
+    with pytest.raises(StateConflictError, match="only allowed in RUNNING"):
+        _checkpoint(
+            store,
+            lock_token,
+            version=initialized["resulting_state_version"],
+            status="PLANNED",
+            kind="task_started",
+            second=4,
+            attempt=1,
+        )
+
+
+def test_checkpoint_rejects_free_context_and_missing_success_provenance(tmp_path: Path) -> None:
+    store, lock_token, version = _planned_with_tasks(tmp_path)
+    _transition(store, lock_token, version=version, current="PLANNED", next_status="RUNNING", second=3)
+    version += 1
+    _checkpoint(
+        store, lock_token, version=version, status="RUNNING", kind="task_started", second=4, attempt=1
+    )
+    version += 1
+    with pytest.raises(StateStoreError, match="controlled_context_delta fields"):
+        _checkpoint(
+            store,
+            lock_token,
+            version=version,
+            status="RUNNING",
+            kind="task_succeeded",
+            second=5,
+            attempt=1,
+            payload_override={
+                "controlled_context_delta": {
+                    "task_output": {"artifact": "test"},
+                    "task_status": {"other": "success"},
+                }
+            },
+        )
+    with pytest.raises(StateStoreError, match="non-empty task_output"):
+        _checkpoint(
+            store,
+            lock_token,
+            version=version,
+            status="RUNNING",
+            kind="task_succeeded",
+            second=6,
+            attempt=1,
+            payload_override={"controlled_context_delta": {"task_output": {}}},
+        )
+
+
+def test_checkpoint_failed_error_summary_is_bounded_and_path_neutral(tmp_path: Path) -> None:
+    store, lock_token, version = _planned_with_tasks(tmp_path)
+    _transition(store, lock_token, version=version, current="PLANNED", next_status="RUNNING", second=3)
+    version += 1
+    _checkpoint(
+        store, lock_token, version=version, status="RUNNING", kind="task_started", second=4, attempt=1
+    )
+    version += 1
+    with pytest.raises(StateStoreError, match="path-neutral"):
+        _checkpoint(
+            store,
+            lock_token,
+            version=version,
+            status="RUNNING",
+            kind="task_failed",
+            second=5,
+            attempt=1,
+            retry_disposition="terminal",
+            payload_override={"error_summary": r"failed at C:\Users\developer\secret.csv"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected_status"),
+    [("task_skipped", "skipped"), ("task_cache_hit", "success")],
+)
+def test_zero_attempt_terminal_checkpoints_follow_closed_contract(
+    tmp_path: Path, kind: str, expected_status: str
+) -> None:
+    store, lock_token, version = _planned_with_tasks(tmp_path)
+    _transition(store, lock_token, version=version, current="PLANNED", next_status="RUNNING", second=3)
+    result = _checkpoint(
+        store,
+        lock_token,
+        version=version + 1,
+        status="RUNNING",
+        kind=kind,
+        second=4,
+        attempt=0,
+    )
+    assert result["canonical_state"]["task_status"]["core"] == expected_status
+
+
 def test_pending_state_write_failure_requires_recovery_and_aborts_operation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -563,6 +795,87 @@ def test_journal_damage_fails_closed(tmp_path: Path, damage: str) -> None:
         store.load(run_id="run_001")
 
 
+def test_committed_state_tamper_blocks_load_recover_and_mutation(tmp_path: Path) -> None:
+    store, _, lock_token = _initialized(tmp_path)
+    _transition(store, lock_token, version=0, current="CREATED", next_status="PLANNED", second=1)
+    state_path = tmp_path / "runs" / "run_001" / "state.json"
+    tampered = json.loads(state_path.read_bytes())
+    tampered["status"] = "BLOCKED"
+    _write_canonical(state_path, tampered)
+
+    with pytest.raises(StateConflictError, match="committed journal tail"):
+        store.load(run_id="run_001")
+    with pytest.raises(StateConflictError, match="committed journal tail"):
+        store.recover(run_id="run_001", expected_lock_token=lock_token)
+    with pytest.raises(StateConflictError, match="committed journal tail"):
+        _transition(
+            store,
+            lock_token,
+            version=1,
+            current="BLOCKED",
+            next_status="FAILED",
+            second=2,
+        )
+
+
+def test_journal_actor_token_must_match_operation_owner(tmp_path: Path) -> None:
+    store, allocation_token, lock_token = _initialized(tmp_path)
+    _transition(store, lock_token, version=0, current="CREATED", next_status="PLANNED", second=1)
+    journal_path = tmp_path / "runs" / "run_001" / "state_journal.jsonl"
+    rows = [json.loads(line) for line in journal_path.read_bytes().splitlines()]
+    rows[-1]["append_actor_lock_token"] = str(uuid.uuid4())
+    rows[-1]["record_checksum"] = store._record_checksum(rows[-1])
+    journal_data = b"".join(_write_canonical(tmp_path / f"row-{index}.json", row) for index, row in enumerate(rows))
+    journal_path.write_bytes(journal_data)
+    anchor = store._anchor_document(
+        run_id="run_001",
+        allocation_token=allocation_token,
+        tail_record_index=rows[-1]["record_index"],
+        tail_record_checksum=rows[-1]["record_checksum"],
+        tail_file_size_bytes=len(journal_data),
+    )
+    _write_canonical(tmp_path / "runs" / "run_001" / "state_journal_tail.json", anchor)
+
+    with pytest.raises(StateConflictError, match="append actor must match"):
+        store.load(run_id="run_001")
+
+
+def test_journal_record_limit_fails_closed_before_full_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, lock_token = _initialized(tmp_path)
+    _transition(store, lock_token, version=0, current="CREATED", next_status="PLANNED", second=1)
+    monkeypatch.setattr(state_module, "MAX_STATE_JOURNAL_RECORDS", 1)
+    with pytest.raises(StateConflictError, match="pilot record limit"):
+        store.load(run_id="run_001")
+
+
+def test_deep_json_returns_domain_error(tmp_path: Path) -> None:
+    store, _, lock_token = _initialized(tmp_path)
+    nested: dict[str, object] = {}
+    cursor = nested
+    for _ in range(40):
+        child: dict[str, object] = {}
+        cursor["child"] = child
+        cursor = child
+    with pytest.raises(StateStoreError, match="nesting depth"):
+        store.transition_status(
+            run_id="run_001",
+            expected_lock_token=lock_token,
+            expected_status="CREATED",
+            expected_state_version=0,
+            operation_id="run:run_001:transition:v0:CREATED:PLANNED:auto",
+            mutation_timestamp="2026-07-27T00:00:01.000000Z",
+            payload={
+                "next_status": "PLANNED",
+                "metadata": nested,
+                "completion_evidence": None,
+                "transition_kind": "auto",
+                "decision_token": None,
+            },
+        )
+
+
 def test_terminal_state_rejects_further_mutation(tmp_path: Path) -> None:
     store, _, lock_token = _initialized(tmp_path)
     _transition(store, lock_token, version=0, current="CREATED", next_status="FAILED", second=1)
@@ -579,8 +892,15 @@ def test_terminal_state_rejects_further_mutation(tmp_path: Path) -> None:
                 "task_id": None,
                 "attempt_number": None,
                 "created_at": "2026-07-27T00:00:02.000000Z",
-                "context_delta": {},
-                "task_plan": TASK_PLAN,
+                "expected_task_status": None,
+                "next_task_status": None,
+                "retry_disposition": "none",
+                "next_attempt_number": None,
+                "controlled_context_delta": {
+                    "task_plan": TASK_PLAN,
+                    "plan_fingerprint": PLAN_SHA,
+                },
+                "error_summary": None,
             },
         )
 
@@ -640,7 +960,7 @@ def test_completed_rejects_publication_hash_or_transaction_mismatch(tmp_path: Pa
         tmp_path / "runs" / "run_001" / "publication_transaction.json", transaction
     )
     evidence["publication_transaction_sha256"] = hashlib.sha256(transaction_data).hexdigest()
-    with pytest.raises(StateConflictError, match="manifest_committed"):
+    with pytest.raises(StateConflictError, match="validate_publication"):
         _transition(
             store,
             lock_token,
@@ -729,6 +1049,151 @@ def test_state_lock_replacement_is_preserved_and_fails_closed(tmp_path: Path) ->
         with store._state_lock("run_001"):
             lock_path.write_bytes(replacement)
     assert lock_path.read_bytes() == replacement
+
+
+def test_state_lock_deleted_during_mutation_prevents_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, lock_token = _initialized(tmp_path)
+    original = store._reduce_transition
+
+    def delete_lock(state, payload):
+        result = original(state, payload)
+        (tmp_path / "runs" / "run_001" / ".state.lock").unlink()
+        return result
+
+    monkeypatch.setattr(store, "_reduce_transition", delete_lock)
+    with pytest.raises(StateConflictError, match="state lock"):
+        _transition(
+            store,
+            lock_token,
+            version=0,
+            current="CREATED",
+            next_status="PLANNED",
+            second=1,
+        )
+    lock_path = tmp_path / "runs" / "run_001" / ".state.lock"
+    assert lock_path.is_file()
+    with pytest.raises(StateConflictError, match="state lock already exists"):
+        _transition(
+            store,
+            lock_token,
+            version=1,
+            current="PLANNED",
+            next_status="RUNNING",
+            second=2,
+        )
+
+
+def test_state_lock_final_sync_failure_restores_blocking_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, lock_token = _initialized(tmp_path)
+    lock_path = tmp_path / "runs" / "run_001" / ".state.lock"
+    original_sync = state_module._sync_directory
+    failed = False
+
+    def fail_release_sync(path: Path, *, label: str) -> None:
+        nonlocal failed
+        if label == "Run directory after state lock release" and not failed:
+            failed = True
+            raise OSError("release directory sync failed")
+        original_sync(path, label=label)
+
+    monkeypatch.setattr(state_module, "_sync_directory", fail_release_sync)
+    with pytest.raises(
+        StateStoreError,
+        match="state lock release is uncertain; blocking evidence was restored",
+    ) as exc_info:
+        _transition(
+            store,
+            lock_token,
+            version=0,
+            current="CREATED",
+            next_status="PLANNED",
+            second=1,
+        )
+
+    assert isinstance(exc_info.value.__cause__, OSError)
+    assert lock_path.is_file()
+    with pytest.raises(StateConflictError, match="state lock already exists"):
+        _transition(
+            store,
+            lock_token,
+            version=1,
+            current="PLANNED",
+            next_status="RUNNING",
+            second=2,
+        )
+
+
+def test_state_lock_restore_failure_leaves_recovery_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, lock_token = _initialized(tmp_path)
+    original_sync = state_module._sync_directory
+    original_open = state_module.os.open
+    lock_open_count = 0
+
+    def fail_release_sync(path: Path, *, label: str) -> None:
+        if label == "Run directory after state lock release":
+            raise OSError("release directory sync failed")
+        original_sync(path, label=label)
+
+    def fail_restore_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes], *args: object
+    ) -> int:
+        nonlocal lock_open_count
+        if Path(path).name == ".state.lock":
+            lock_open_count += 1
+            if lock_open_count == 2:
+                raise OSError("injected state lock restoration failure")
+        return original_open(path, *args)
+
+    monkeypatch.setattr(state_module, "_sync_directory", fail_release_sync)
+    monkeypatch.setattr(state_module.os, "open", fail_restore_open)
+    with pytest.raises(StateStoreError, match="state lock release is uncertain"):
+        _transition(
+            store,
+            lock_token,
+            version=0,
+            current="CREATED",
+            next_status="PLANNED",
+            second=1,
+        )
+
+    marker = tmp_path / "runs" / "run_001" / ".state_lock_recovery_required.json"
+    assert marker.is_file()
+    with pytest.raises(StateRecoveryRequiredError, match="recovery marker"):
+        _transition(
+            store,
+            lock_token,
+            version=1,
+            current="PLANNED",
+            next_status="RUNNING",
+            second=2,
+        )
+
+
+def test_task_status_and_attempt_keys_must_match(tmp_path: Path) -> None:
+    store, _, _ = _initialized(tmp_path)
+    state_path = tmp_path / "runs" / "run_001" / "state.json"
+    state = json.loads(state_path.read_bytes())
+    state["task_status"] = {"core": "pending"}
+    _write_canonical(state_path, state)
+    with pytest.raises(StateConflictError, match="must match exactly"):
+        store.load(run_id="run_001")
+
+
+def test_state_snapshot_is_deeply_immutable(tmp_path: Path) -> None:
+    store, _, _ = _initialized(tmp_path)
+    snapshot = store.load(run_id="run_001")
+    with pytest.raises(TypeError):
+        snapshot["status"] = "FAILED"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        snapshot["canonical_state"]["context"]["injected"] = True  # type: ignore[index]
+    with pytest.raises(TypeError):
+        snapshot["canonical_state"]["task_plan"][0]["required"] = False  # type: ignore[index]
 
 
 def test_legacy_checkpoint_api_behavior_is_preserved(tmp_path: Path) -> None:

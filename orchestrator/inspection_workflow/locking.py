@@ -9,6 +9,7 @@ Automatic takeover is deferred to A3.2.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
@@ -28,6 +29,7 @@ ACTIVE_RUN_RECOVERY_LOCK_PATH = "runs/.active_run.recovery.lock"
 ACTIVE_RUN_RELEASE_PREFIX = ".active_run.release."
 ACTIVE_RUN_PHASES = frozenset({"allocating", "running", "recovering"})
 _BINARY_FLAG = getattr(os, "O_BINARY", 0)
+_ACTIVE_RUN_STATE_LOCK_NAME = ".active_run.state.lock"
 
 _LOCK_FIELDS = frozenset(
     {
@@ -53,6 +55,23 @@ _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z\Z")
 
 class ActiveRunLockError(RuntimeError):
     """Raised when Active Run Lock ownership or durability is uncertain."""
+
+
+def _add_exception_note(error: BaseException, message: str) -> None:
+    """Retain cleanup diagnostics on Python versions before add_note()."""
+
+    add_note = getattr(error, "add_note", None)
+    if callable(add_note):
+        add_note(message)
+        return
+    try:
+        notes = getattr(error, "__notes__", None)
+        if notes is None:
+            notes = []
+            setattr(error, "__notes__", notes)
+        notes.append(message)
+    except (AttributeError, TypeError):
+        error.args = (*error.args, message)
 
 
 def canonical_utc_now() -> str:
@@ -100,7 +119,7 @@ def _canonical_json_bytes(value: Any) -> bytes:
             separators=(",", ":"),
             allow_nan=False,
         )
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise ActiveRunLockError("Active Run Lock JSON is not canonicalizable") from exc
     return (text + "\n").encode("utf-8")
 
@@ -159,17 +178,25 @@ def _sync_directory(path: Path, *, label: str) -> None:
 
     if os.name != "nt":
         descriptor: int | None = None
+        primary: BaseException | None = None
         try:
             descriptor = os.open(path, os.O_RDONLY)
             os.fsync(descriptor)
         except OSError as exc:
-            raise ActiveRunLockError(f"unable to sync {label}: {path}") from exc
+            error = ActiveRunLockError(f"unable to sync {label}: {path}")
+            primary = error
+            raise error from exc
         finally:
             if descriptor is not None:
                 try:
                     os.close(descriptor)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    if primary is not None:
+                        _add_exception_note(primary, f"directory sync descriptor close failed: {exc}")
+                    else:
+                        raise ActiveRunLockError(
+                            f"unable to close directory sync descriptor for {label}"
+                        ) from exc
         return
 
     # CPython has no portable Windows directory fsync.  A same-directory,
@@ -222,7 +249,7 @@ def _sync_directory(path: Path, *, label: str) -> None:
         if cleanup_errors:
             message = f"unable to clean directory sync sentinel for {label}: {path}"
             if primary is not None:
-                primary.add_note(f"{message}: {cleanup_errors[0]}")
+                _add_exception_note(primary, f"{message}: {cleanup_errors[0]}")
             else:
                 raise ActiveRunLockError(message) from cleanup_errors[0]
 
@@ -245,6 +272,186 @@ def _lock_path(project_root: Path) -> tuple[Path, Path, Path]:
     path = runs / ".active_run.lock"
     _assert_project_path(root, path, include_leaf=False, label="Active Run Lock")
     return root, runs, path
+
+
+def _restore_blocking_evidence(
+    path: Path, runs: Path, data: bytes, *, label: str
+) -> list[str]:
+    """Best-effort restoration after a removal barrier becomes uncertain."""
+
+    diagnostics: list[str] = []
+    descriptor: int | None = None
+    try:
+        if _lstat(path, label=label) is None:
+            descriptor = os.open(
+                path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _BINARY_FLAG, 0o600
+            )
+            view = memoryview(data)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError(f"short {label} restoration write")
+                view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = None
+    except FileExistsError:
+        pass
+    except Exception as exc:
+        diagnostics.append(f"unable to restore blocking {label}: {exc}")
+        diagnostics.extend(_write_active_recovery_marker(runs, data))
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                diagnostics.append(f"unable to close restored {label}: {exc}")
+    try:
+        _sync_directory(runs, label=f"runs directory after restoring {label}")
+    except Exception as exc:
+        diagnostics.append(f"unable to sync restored blocking {label}: {exc}")
+    return diagnostics
+
+
+def _write_active_recovery_marker(runs: Path, data: bytes) -> list[str]:
+    """Leave the existing A3.2 recovery sentinel when tombstone restore fails."""
+
+    marker = runs / ".active_run.recovery.lock"
+    diagnostics: list[str] = []
+    descriptor: int | None = None
+    try:
+        if _lstat(marker, label="Active Run recovery lock") is not None:
+            return diagnostics
+        descriptor = os.open(
+            marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _BINARY_FLAG, 0o600
+        )
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short Active Run recovery marker write")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        _sync_directory(runs, label="runs directory after Active Run recovery marker")
+    except Exception as exc:
+        diagnostics.append(f"unable to write Active Run recovery marker: {exc}")
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                diagnostics.append(f"unable to close Active Run recovery marker: {exc}")
+    return diagnostics
+
+
+def _remove_owned_state_lock(path: Path, runs: Path, data: bytes) -> None:
+    try:
+        entry = _lstat(path, label="Active Run state lock")
+        if entry is None:
+            error = ActiveRunLockError(
+                "Active Run state lock disappeared before release; "
+                "blocking residue was restored"
+            )
+            for diagnostic in _restore_blocking_evidence(
+                path, runs, data, label="Active Run state lock"
+            ):
+                _add_exception_note(error, diagnostic)
+            raise error
+        _assert_plain_entry(path, label="Active Run state lock", directory=False)
+        if path.read_bytes() != data:
+            raise ActiveRunLockError(
+                "Active Run state lock ownership changed before release; lock preserved"
+            )
+        path.unlink()
+        try:
+            _sync_directory(runs, label="runs directory after Active Run state lock release")
+        except Exception as exc:
+            error = ActiveRunLockError(
+                "Active Run state lock release is uncertain; blocking residue was restored"
+            )
+            _add_exception_note(error, f"primary state lock cleanup failure: {exc}")
+            for diagnostic in _restore_blocking_evidence(
+                path, runs, data, label="Active Run state lock"
+            ):
+                _add_exception_note(error, diagnostic)
+            raise error from exc
+    except ActiveRunLockError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise ActiveRunLockError("unable to release Active Run state lock") from exc
+
+
+@contextmanager
+def _active_run_state_lock(project_root: Path):
+    """Serialize Active Run document transitions without stale-lock takeover."""
+
+    root, runs, _ = _lock_path(project_root)
+    path = runs / _ACTIVE_RUN_STATE_LOCK_NAME
+    _assert_project_path(root, path, include_leaf=False, label="Active Run state lock")
+    data = _canonical_json_bytes(
+        {
+            "created_at": canonical_utc_now(),
+            "lock_token": str(uuid.uuid4()),
+            "pid": os.getpid(),
+        }
+    )
+    descriptor: int | None = None
+    established = False
+    try:
+        descriptor = os.open(
+            path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _BINARY_FLAG, 0o600
+        )
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short Active Run state lock write")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        _sync_directory(runs, label="runs directory after Active Run state lock acquisition")
+        _assert_plain_entry(path, label="Active Run state lock", directory=False)
+        if path.read_bytes() != data:
+            raise ActiveRunLockError("Active Run state lock changed during acquisition")
+        established = True
+    except FileExistsError as exc:
+        raise ActiveRunLockError(
+            "Active Run Lock state transition is handled by another worker"
+        ) from exc
+    except OSError as exc:
+        raise ActiveRunLockError("unable to acquire Active Run state lock") from exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    primary: BaseException | None = None
+    try:
+        yield
+        _assert_plain_entry(path, label="Active Run state lock", directory=False)
+        if path.read_bytes() != data:
+            raise ActiveRunLockError(
+                "Active Run state lock ownership changed during the critical section"
+            )
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        if established:
+            try:
+                _remove_owned_state_lock(path, runs, data)
+            except Exception as exc:
+                if primary is not None:
+                    _add_exception_note(primary, f"Active Run state lock cleanup failed: {exc}")
+                    for note in getattr(exc, "__notes__", ()):
+                        _add_exception_note(primary, str(note))
+                else:
+                    raise
 
 
 def _validate_lock_document(value: Any) -> dict[str, Any]:
@@ -296,7 +503,7 @@ def _read_lock(path: Path) -> tuple[dict[str, Any], bytes]:
         raise ActiveRunLockError("unable to read Active Run Lock") from exc
     try:
         value = json.loads(data.decode("utf-8"), parse_constant=lambda item: (_ for _ in ()).throw(ValueError(item)))
-    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise ActiveRunLockError("Active Run Lock is invalid JSON") from exc
     lock = _validate_lock_document(value)
     if _canonical_json_bytes(lock) != data:
@@ -305,6 +512,11 @@ def _read_lock(path: Path) -> tuple[dict[str, Any], bytes]:
 
 
 def _reject_recovery_or_release_entries(runs: Path) -> None:
+    state_lock = runs / _ACTIVE_RUN_STATE_LOCK_NAME
+    if _lstat(state_lock, label="Active Run state lock") is not None:
+        raise ActiveRunLockError(
+            "Active Run Lock state transition is handled by another worker"
+        )
     recovery = runs / ".active_run.recovery.lock"
     if _lstat(recovery, label="Active Run recovery lock") is not None:
         raise ActiveRunLockError("Active Run recovery lock exists; A3.2 recovery is required")
@@ -322,8 +534,12 @@ def read_active_run_lock(project_root: Path) -> dict[str, Any]:
     return deepcopy(lock)
 
 
-def _cleanup_failed_acquisition(path: Path, runs: Path, expected_bytes: bytes) -> list[str]:
+def _cleanup_failed_acquisition(
+    path: Path, runs: Path, expected_bytes: bytes, lock_token: str
+) -> list[str]:
     diagnostics: list[str] = []
+    tombstone = runs / f"{ACTIVE_RUN_RELEASE_PREFIX}{lock_token}.json"
+    tombstone_removed = False
     try:
         entry = _lstat(path, label="failed Active Run Lock acquisition")
         if entry is None:
@@ -333,10 +549,35 @@ def _cleanup_failed_acquisition(path: Path, runs: Path, expected_bytes: bytes) -
         current_bytes = path.read_bytes()
         if current_bytes != expected_bytes:
             return ["failed Active Run Lock ownership bytes changed and were preserved"]
-        path.unlink()
-        _sync_directory(runs, label="runs directory after failed lock acquisition")
+        if _lstat(tombstone, label="failed Active Run Lock tombstone") is not None:
+            return ["failed Active Run Lock tombstone already exists; lock was preserved"]
+        os.rename(path, tombstone)
+        _sync_directory(runs, label="runs directory after failed lock acquisition isolation")
+        tombstone.unlink()
+        tombstone_removed = True
+        try:
+            _sync_directory(runs, label="runs directory after failed lock acquisition cleanup")
+        except Exception as exc:
+            diagnostics.append(f"failed Active Run Lock cleanup sync was uncertain: {exc}")
+            diagnostics.extend(
+                _restore_blocking_evidence(
+                    tombstone,
+                    runs,
+                    expected_bytes,
+                    label="failed Active Run Lock tombstone",
+                )
+            )
     except Exception as exc:
         diagnostics.append(f"failed Active Run Lock cleanup was incomplete: {exc}")
+        if tombstone_removed:
+            diagnostics.extend(
+                _restore_blocking_evidence(
+                    tombstone,
+                    runs,
+                    expected_bytes,
+                    label="failed Active Run Lock tombstone",
+                )
+            )
     return diagnostics
 
 
@@ -399,14 +640,14 @@ def acquire_active_run_lock(
         error = ActiveRunLockError("unable to acquire Active Run Lock")
         primary = error
         if created:
-            for diagnostic in _cleanup_failed_acquisition(path, runs, data):
-                error.add_note(diagnostic)
+            for diagnostic in _cleanup_failed_acquisition(path, runs, data, lock_token):
+                _add_exception_note(error, diagnostic)
         raise error from exc
     except BaseException as exc:
         primary = exc
         if created:
-            for diagnostic in _cleanup_failed_acquisition(path, runs, data):
-                exc.add_note(diagnostic)
+            for diagnostic in _cleanup_failed_acquisition(path, runs, data, lock_token):
+                _add_exception_note(exc, diagnostic)
         raise
     finally:
         if descriptor is not None:
@@ -414,7 +655,9 @@ def acquire_active_run_lock(
                 os.close(descriptor)
             except OSError as exc:
                 if primary is not None:
-                    primary.add_note(f"Active Run Lock descriptor cleanup failed: {exc}")
+                    _add_exception_note(
+                        primary, f"Active Run Lock descriptor cleanup failed: {exc}"
+                    )
                 else:
                     raise ActiveRunLockError(
                         "Active Run Lock descriptor cleanup failed"
@@ -427,52 +670,69 @@ def _atomic_update_lock(
     expected_allocation_token: str,
     expected_lock_token: str,
     update: Mapping[str, Any],
+    expected_state: Mapping[str, Any] | None = None,
+    state_error: str = "Active Run Lock state changed before update",
 ) -> dict[str, Any]:
-    root, runs, path = _lock_path(project_root)
-    current, _ = _read_lock(path)
-    if current["allocation_token"] != expected_allocation_token or current["lock_token"] != expected_lock_token:
-        raise ActiveRunLockError("Active Run Lock ownership does not match")
-    next_value = dict(current)
-    next_value.update(update)
-    next_value = _validate_lock_document(next_value)
-    data = _canonical_json_bytes(next_value)
-    temporary: Path | None = None
-    primary: BaseException | None = None
-    try:
-        descriptor, name = tempfile.mkstemp(prefix=".active-run-lock-", suffix=".tmp", dir=runs)
-        temporary = Path(name)
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        latest, _ = _read_lock(path)
-        if latest["allocation_token"] != expected_allocation_token or latest["lock_token"] != expected_lock_token:
-            raise ActiveRunLockError("Active Run Lock changed before update")
-        os.replace(temporary, path)
-        temporary = None
-        _sync_directory(runs, label="runs directory after Active Run Lock update")
-        persisted, persisted_bytes = _read_lock(path)
-        if persisted_bytes != data:
-            raise ActiveRunLockError("Active Run Lock update did not persist expected bytes")
-        return deepcopy(persisted)
-    except OSError as exc:
-        error = ActiveRunLockError("unable to update Active Run Lock")
-        primary = error
-        raise error from exc
-    except BaseException as exc:
-        primary = exc
-        raise
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError as exc:
-                if primary is not None:
-                    primary.add_note(f"Active Run Lock update temporary cleanup failed: {exc}")
-                else:
-                    raise ActiveRunLockError(
-                        "Active Run Lock update temporary cleanup failed"
-                    ) from exc
+    with _active_run_state_lock(project_root):
+        root, runs, path = _lock_path(project_root)
+        current, current_bytes = _read_lock(path)
+        if (
+            current["allocation_token"] != expected_allocation_token
+            or current["lock_token"] != expected_lock_token
+        ):
+            raise ActiveRunLockError("Active Run Lock ownership does not match")
+        if expected_state is not None and any(
+            current.get(name) != value for name, value in expected_state.items()
+        ):
+            raise ActiveRunLockError(state_error)
+        next_value = dict(current)
+        next_value.update(update)
+        next_value = _validate_lock_document(next_value)
+        data = _canonical_json_bytes(next_value)
+        temporary: Path | None = None
+        primary: BaseException | None = None
+        try:
+            descriptor, name = tempfile.mkstemp(
+                prefix=".active-run-lock-", suffix=".tmp", dir=runs
+            )
+            temporary = Path(name)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            _, latest_bytes = _read_lock(path)
+            if latest_bytes != current_bytes:
+                raise ActiveRunLockError("Active Run Lock changed before update")
+            os.replace(temporary, path)
+            temporary = None
+            _sync_directory(runs, label="runs directory after Active Run Lock update")
+            persisted, persisted_bytes = _read_lock(path)
+            if persisted_bytes != data:
+                raise ActiveRunLockError(
+                    "Active Run Lock update did not persist expected bytes"
+                )
+            return deepcopy(persisted)
+        except OSError as exc:
+            error = ActiveRunLockError("unable to update Active Run Lock")
+            primary = error
+            raise error from exc
+        except BaseException as exc:
+            primary = exc
+            raise
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError as exc:
+                    if primary is not None:
+                        _add_exception_note(
+                            primary,
+                            f"Active Run Lock update temporary cleanup failed: {exc}",
+                        )
+                    else:
+                        raise ActiveRunLockError(
+                            "Active Run Lock update temporary cleanup failed"
+                        ) from exc
 
 
 def reserve_active_run_id(
@@ -483,14 +743,13 @@ def reserve_active_run_id(
     expected_lock_token: str,
 ) -> dict[str, Any]:
     _validate_identifier(run_id, label="run_id")
-    current = read_active_run_lock(project_root)
-    if current["phase"] != "allocating" or current["reserved_run_id"] is not None:
-        raise ActiveRunLockError("Active Run Lock is not ready to reserve a Run ID")
     return _atomic_update_lock(
         project_root,
         expected_allocation_token=expected_allocation_token,
         expected_lock_token=expected_lock_token,
         update={"reserved_run_id": run_id},
+        expected_state={"phase": "allocating", "reserved_run_id": None, "run_id": None},
+        state_error="Active Run Lock is not ready to reserve a Run ID",
     )
 
 
@@ -511,12 +770,20 @@ def mark_active_run_running(
         raise ActiveRunLockError("Active Run Lock ownership does not match")
     try:
         # Local import avoids making StateStore module initialization cyclic.
-        from orchestrator.state.store import StateStore, StateStoreError
+        from orchestrator.state.store import StateConflictError, StateStore, StateStoreError
 
         StateStore(project_root).validate_initialized_run(
             run_id=run_id,
             allocation_token=expected_allocation_token,
         )
+    except StateConflictError as exc:
+        if "state lock already exists" in str(exc):
+            raise ActiveRunLockError(
+                "Run state transition is handled by another worker"
+            ) from exc
+        raise ActiveRunLockError(
+            "Active Run Lock requires a valid CREATED state and genesis anchor"
+        ) from exc
     except StateStoreError as exc:
         raise ActiveRunLockError(
             "Active Run Lock requires a valid CREATED state and genesis anchor"
@@ -526,6 +793,12 @@ def mark_active_run_running(
         expected_allocation_token=expected_allocation_token,
         expected_lock_token=expected_lock_token,
         update={"phase": "running", "run_id": run_id},
+        expected_state={
+            "phase": "allocating",
+            "reserved_run_id": run_id,
+            "run_id": None,
+        },
+        state_error="Active Run Lock cannot enter running for this Run",
     )
 
 
@@ -564,27 +837,47 @@ def release_active_run_lock(
     expected_allocation_token: str,
     expected_lock_token: str,
 ) -> dict[str, Any]:
-    root, runs, path = _lock_path(project_root)
-    current, current_bytes = _read_lock(path)
-    if (
-        current["allocation_token"] != expected_allocation_token
-        or current["lock_token"] != expected_lock_token
-        or current["reserved_run_id"] != run_id
-    ):
-        raise ActiveRunLockError("cannot release an Active Run Lock owned by another caller")
-    tombstone = runs / f"{ACTIVE_RUN_RELEASE_PREFIX}{expected_lock_token}.json"
-    if _lstat(tombstone, label="Active Run release tombstone") is not None:
-        raise ActiveRunLockError("Active Run release tombstone already exists")
-    try:
-        os.rename(path, tombstone)
-        _sync_directory(runs, label="runs directory after Active Run Lock isolation")
-        isolated_lock, isolated_bytes = _read_lock(tombstone)
-        if isolated_bytes != current_bytes or isolated_lock["lock_token"] != expected_lock_token:
-            raise ActiveRunLockError("Active Run release tombstone does not match the owned lock")
-        tombstone.unlink()
-        _sync_directory(runs, label="runs directory after Active Run Lock release")
-    except OSError as exc:
-        raise ActiveRunLockError(
-            f"Active Run Lock release is incomplete; inspect tombstone {tombstone.name}"
-        ) from exc
+    with _active_run_state_lock(project_root):
+        root, runs, path = _lock_path(project_root)
+        current, current_bytes = _read_lock(path)
+        if (
+            current["allocation_token"] != expected_allocation_token
+            or current["lock_token"] != expected_lock_token
+            or current["reserved_run_id"] != run_id
+        ):
+            raise ActiveRunLockError(
+                "cannot release an Active Run Lock owned by another caller"
+            )
+        tombstone = runs / f"{ACTIVE_RUN_RELEASE_PREFIX}{expected_lock_token}.json"
+        if _lstat(tombstone, label="Active Run release tombstone") is not None:
+            raise ActiveRunLockError("Active Run release tombstone already exists")
+        tombstone_removed = False
+        try:
+            os.rename(path, tombstone)
+            _sync_directory(runs, label="runs directory after Active Run Lock isolation")
+            isolated_lock, isolated_bytes = _read_lock(tombstone)
+            if (
+                isolated_bytes != current_bytes
+                or isolated_lock["lock_token"] != expected_lock_token
+            ):
+                raise ActiveRunLockError(
+                    "Active Run release tombstone does not match the owned lock"
+                )
+            tombstone.unlink()
+            tombstone_removed = True
+            _sync_directory(runs, label="runs directory after Active Run Lock release")
+        except Exception as exc:
+            error = ActiveRunLockError(
+                f"Active Run Lock release is incomplete; inspect tombstone {tombstone.name}"
+            )
+            _add_exception_note(error, f"primary Active Run Lock release failure: {exc}")
+            if tombstone_removed:
+                for diagnostic in _restore_blocking_evidence(
+                    tombstone,
+                    runs,
+                    current_bytes,
+                    label="Active Run release tombstone",
+                ):
+                    _add_exception_note(error, diagnostic)
+            raise error from exc
     return {"released": True, "run_id": run_id, "lock_token": expected_lock_token}

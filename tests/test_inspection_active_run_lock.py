@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import stat
+import threading
 import uuid
 
 import pytest
@@ -324,3 +328,173 @@ def test_lock_document_rejects_unknown_phase_and_noncanonical_uuid(tmp_path: Pat
             lock_token=lock_token,
             created_at=TIME,
         )
+
+
+def test_concurrent_reservations_allow_only_one_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allocation_token, lock_token = _acquire(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    original = locking._read_lock
+
+    def blocking_read(path: Path):
+        if threading.current_thread().name.startswith("reservation-owner") and not entered.is_set():
+            entered.set()
+            assert release.wait(timeout=5)
+        return original(path)
+
+    monkeypatch.setattr(locking, "_read_lock", blocking_read)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="reservation-owner") as pool:
+        first = pool.submit(
+            reserve_active_run_id,
+            tmp_path,
+            run_id="run_001",
+            expected_allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+        )
+        assert entered.wait(timeout=5)
+        with pytest.raises(ActiveRunLockError, match="another worker"):
+            reserve_active_run_id(
+                tmp_path,
+                run_id="run_002",
+                expected_allocation_token=allocation_token,
+                expected_lock_token=lock_token,
+            )
+        release.set()
+        assert first.result(timeout=5)["reserved_run_id"] == "run_001"
+    assert read_active_run_lock(tmp_path)["reserved_run_id"] == "run_001"
+
+
+def test_running_update_and_release_cannot_both_commit_while_overlapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allocation_token, lock_token = _acquire(tmp_path)
+    reserve_active_run_id(
+        tmp_path,
+        run_id="run_001",
+        expected_allocation_token=allocation_token,
+        expected_lock_token=lock_token,
+    )
+    run_dir = tmp_path / "runs" / "run_001"
+    run_dir.mkdir()
+    StateStore(tmp_path).initialize_run(
+        run_id="run_001",
+        allocation_token=allocation_token,
+        plan_fingerprint=PLAN_SHA,
+        task_plan=TASK_PLAN,
+        expected_lock_token=lock_token,
+        created_at=TIME,
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    original = locking._active_run_state_lock
+
+    @contextmanager
+    def blocking_state_lock(project_root: Path):
+        with original(project_root):
+            if threading.current_thread().name.startswith("running-owner"):
+                entered.set()
+                assert release.wait(timeout=5)
+            yield
+
+    monkeypatch.setattr(locking, "_active_run_state_lock", blocking_state_lock)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="running-owner") as pool:
+        update = pool.submit(
+            mark_active_run_running,
+            tmp_path,
+            run_id="run_001",
+            expected_allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+        )
+        assert entered.wait(timeout=5)
+        with pytest.raises(ActiveRunLockError, match="another worker"):
+            release_active_run_lock(
+                tmp_path,
+                run_id="run_001",
+                expected_allocation_token=allocation_token,
+                expected_lock_token=lock_token,
+            )
+        release.set()
+        assert update.result(timeout=5)["phase"] == "running"
+    assert read_active_run_lock(tmp_path)["phase"] == "running"
+
+
+def test_final_release_sync_failure_restores_blocking_tombstone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allocation_token, lock_token = _running(tmp_path)
+    original = locking._sync_directory
+
+    def fail_final_sync(path: Path, *, label: str) -> None:
+        if label == "runs directory after Active Run Lock release":
+            raise ActiveRunLockError("injected final release sync failure")
+        original(path, label=label)
+
+    monkeypatch.setattr(locking, "_sync_directory", fail_final_sync)
+    with pytest.raises(ActiveRunLockError, match="release is incomplete"):
+        release_active_run_lock(
+            tmp_path,
+            run_id="run_001",
+            expected_allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+        )
+    assert list((tmp_path / "runs").glob(".active_run.release.*"))
+    with pytest.raises(ActiveRunLockError, match="release tombstone"):
+        acquire_active_run_lock(
+            tmp_path,
+            task_id="task_002",
+            allocation_token=str(uuid.uuid4()),
+            lock_token=str(uuid.uuid4()),
+            created_at=TIME,
+        )
+
+
+def test_active_run_state_lock_disappearance_restores_blocking_residue(
+    tmp_path: Path,
+) -> None:
+    runs = tmp_path / "runs"
+    state_lock = runs / ".active_run.state.lock"
+
+    with pytest.raises(ActiveRunLockError, match="state lock"):
+        with locking._active_run_state_lock(tmp_path):
+            state_lock.unlink()
+
+    assert state_lock.is_file()
+    with pytest.raises(ActiveRunLockError, match="another worker"):
+        with locking._active_run_state_lock(tmp_path):
+            pass
+
+
+def test_tombstone_restore_failure_leaves_active_recovery_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allocation_token, lock_token = _running(tmp_path)
+    original_sync = locking._sync_directory
+    original_open = locking.os.open
+
+    def fail_final_sync(path: Path, *, label: str) -> None:
+        if label == "runs directory after Active Run Lock release":
+            raise OSError("injected final release sync failure")
+        original_sync(path, label=label)
+
+    def fail_tombstone_restore(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes], *args: object
+    ) -> int:
+        if Path(path).name.startswith(".active_run.release."):
+            raise OSError("injected tombstone restoration failure")
+        return original_open(path, *args)
+
+    monkeypatch.setattr(locking, "_sync_directory", fail_final_sync)
+    monkeypatch.setattr(locking.os, "open", fail_tombstone_restore)
+    with pytest.raises(ActiveRunLockError, match="release is incomplete"):
+        release_active_run_lock(
+            tmp_path,
+            run_id="run_001",
+            expected_allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+        )
+
+    assert (tmp_path / "runs" / ".active_run.recovery.lock").is_file()
+    with pytest.raises(ActiveRunLockError, match="A3.2 recovery"):
+        _acquire(tmp_path)

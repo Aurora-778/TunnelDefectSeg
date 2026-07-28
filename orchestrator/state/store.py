@@ -13,7 +13,7 @@ from copy import deepcopy
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import stat
 import tempfile
@@ -78,6 +78,7 @@ STATE_LOCK_PATH_TEMPLATE = "runs/{run_id}/.state.lock"
 STATE_INITIALIZATION_RECOVERY_MARKER_TEMPLATE = (
     "runs/{run_id}/.state_initialization_recovery_required.json"
 )
+STATE_LOCK_RECOVERY_MARKER_TEMPLATE = "runs/{run_id}/.state_lock_recovery_required.json"
 
 STATUSES = frozenset(
     {
@@ -200,6 +201,12 @@ _COMPLETION_FIELDS = frozenset(
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _OPERATION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,511}\Z")
 _BINARY_FLAG = getattr(os, "O_BINARY", 0)
+MAX_STATE_JOURNAL_BYTES = 8 * 1024 * 1024
+MAX_STATE_JOURNAL_RECORDS = 10_000
+MAX_CHECKPOINT_ERROR_SUMMARY_CHARS = 1_000
+_ABSOLUTE_PATH_RE = re.compile(
+    r"(?:[A-Za-z]:[\\/]|(?:^|\s)/(?:home|Users|tmp|opt)(?:/|\s|$)|\\\\)"
+)
 
 
 class StateStoreError(RuntimeError):
@@ -246,6 +253,96 @@ def _validate_json_value(value: Any, *, label: str, depth: int = 0) -> None:
     raise StateStoreError(f"{label} is not JSON-compatible")
 
 
+def _safe_deepcopy(value: Any, *, label: str) -> Any:
+    try:
+        return deepcopy(value)
+    except (RecursionError, TypeError, ValueError) as exc:
+        raise StateStoreError(f"{label} cannot be copied safely") from exc
+
+
+def _add_cleanup_diagnostic(primary: BaseException, message: str) -> None:
+    """Attach diagnostics without requiring Python 3.11 ``add_note``."""
+
+    diagnostics = list(getattr(primary, "cleanup_diagnostics", ()))
+    diagnostics.append(message)
+    try:
+        primary.cleanup_diagnostics = tuple(diagnostics)
+    except Exception:
+        pass
+    add_note = getattr(primary, "add_note", None)
+    if callable(add_note):
+        try:
+            add_note(message)
+        except Exception:
+            pass
+
+
+def _restore_state_lock_evidence(path: Path, run_dir: Path, data: bytes) -> list[str]:
+    diagnostics: list[str] = []
+    descriptor: int | None = None
+    try:
+        if _lstat(path, label="state lock recovery evidence") is None:
+            descriptor = os.open(
+                path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _BINARY_FLAG, 0o600
+            )
+            view = memoryview(data)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("short state lock recovery write")
+                view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = None
+    except Exception as exc:
+        diagnostics.append(f"unable to restore blocking state lock evidence: {exc}")
+        diagnostics.extend(_write_state_lock_recovery_marker(path, run_dir, data))
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                diagnostics.append(f"unable to close restored state lock evidence: {exc}")
+    try:
+        _sync_directory(run_dir, label="Run directory after restoring state lock evidence")
+    except Exception as exc:
+        diagnostics.append(f"unable to sync restored state lock evidence: {exc}")
+    return diagnostics
+
+
+def _write_state_lock_recovery_marker(path: Path, run_dir: Path, data: bytes) -> list[str]:
+    """Leave an independent blocker when the owned lock cannot be restored."""
+
+    marker = run_dir / ".state_lock_recovery_required.json"
+    diagnostics: list[str] = []
+    descriptor: int | None = None
+    try:
+        if _lstat(marker, label="state lock recovery marker") is not None:
+            return diagnostics
+        descriptor = os.open(
+            marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _BINARY_FLAG, 0o600
+        )
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short state lock recovery marker write")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        _sync_directory(run_dir, label="Run directory after state lock recovery marker")
+    except Exception as exc:
+        diagnostics.append(f"unable to write state lock recovery marker: {exc}")
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                diagnostics.append(f"unable to close state lock recovery marker: {exc}")
+    return diagnostics
+
+
 def _canonical_json_bytes(value: Any) -> bytes:
     _validate_json_value(value, label="StateStore JSON")
     try:
@@ -259,7 +356,7 @@ def _canonical_json_bytes(value: Any) -> bytes:
             )
             + "\n"
         ).encode("utf-8")
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise StateStoreError("StateStore JSON is not canonicalizable") from exc
 
 
@@ -269,7 +366,7 @@ def _json_loads(data: bytes, *, label: str) -> Any:
             data.decode("utf-8"),
             parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
         )
-    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise StateConflictError(f"{label} is invalid JSON") from exc
 
 
@@ -332,7 +429,10 @@ def _validate_task_plan(value: Any) -> list[dict[str, Any]]:
 def _validate_state(value: Any, *, expected_run_id: str | None = None) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != _STATE_FIELDS:
         raise StateConflictError("canonical state fields are invalid")
-    state = deepcopy(dict(value))
+    try:
+        state = _safe_deepcopy(dict(value), label="canonical state")
+    except StateStoreError as exc:
+        raise StateConflictError(str(exc)) from exc
     if state["schema_version"] != STATE_SCHEMA_VERSION:
         raise StateConflictError("canonical state schema_version is invalid")
     try:
@@ -357,6 +457,10 @@ def _validate_state(value: Any, *, expected_run_id: str | None = None) -> dict[s
         state[field] = dict(state[field])
         if set(state[field]) not in (set(), set(task_ids)):
             raise StateConflictError(f"canonical {field} keys do not match task_plan")
+    if set(state["task_status"]) != set(state["task_attempts"]):
+        raise StateConflictError(
+            "canonical task_status and task_attempts keys must match exactly"
+        )
     for task_id, status in state["task_status"].items():
         if not isinstance(status, str) or status not in TASK_STATUSES:
             raise StateConflictError(f"canonical task status is invalid for {task_id}")
@@ -403,7 +507,7 @@ def _validate_state(value: Any, *, expected_run_id: str | None = None) -> dict[s
 
 
 def _state_snapshot(state: Mapping[str, Any]) -> StateSnapshot:
-    canonical = deepcopy(dict(state))
+    canonical = _safe_deepcopy(dict(state), label="canonical state snapshot")
     return freeze_json(
         {
             "run_id": canonical["run_id"],
@@ -415,7 +519,7 @@ def _state_snapshot(state: Mapping[str, Any]) -> StateSnapshot:
 
 
 def _mutation_result(state: Mapping[str, Any], operation_id: str) -> StateMutationResult:
-    canonical = deepcopy(dict(state))
+    canonical = _safe_deepcopy(dict(state), label="canonical mutation result")
     return freeze_json(
         {
             "run_id": canonical["run_id"],
@@ -461,6 +565,7 @@ class StateStore:
             "anchor": run_dir / "state_journal_tail.json",
             "lock": run_dir / ".state.lock",
             "recovery": run_dir / ".state_initialization_recovery_required.json",
+            "lock_recovery": run_dir / ".state_lock_recovery_required.json",
         }
 
     @contextmanager
@@ -481,6 +586,10 @@ class StateStore:
         primary: BaseException | None = None
         created = False
         try:
+            if _lstat(paths["lock_recovery"], label="state lock recovery marker") is not None:
+                raise StateRecoveryRequiredError(
+                    "state lock recovery marker exists; explicit recovery is required"
+                )
             descriptor = os.open(
                 path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _BINARY_FLAG, 0o600
             )
@@ -495,7 +604,16 @@ class StateStore:
             os.close(descriptor)
             descriptor = None
             _sync_directory(paths["run_dir"], label="Run directory after state lock acquisition")
+            if _lstat(paths["lock_recovery"], label="state lock recovery marker") is not None:
+                raise StateRecoveryRequiredError(
+                    "state lock recovery marker exists; explicit recovery is required"
+                )
             yield
+            persisted = self._read_regular(path, label="state lock")
+            if persisted != data:
+                raise StateConflictError(
+                    "state lock ownership changed during the critical section; lock preserved"
+                )
         except FileExistsError as exc:
             primary = exc
             raise StateConflictError("state lock already exists; automatic cleanup is deferred") from exc
@@ -508,25 +626,60 @@ class StateStore:
                     os.close(descriptor)
                 except OSError as exc:
                     if primary is not None:
-                        primary.add_note(f"state lock descriptor cleanup failed: {exc}")
+                        _add_cleanup_diagnostic(
+                            primary, f"state lock descriptor cleanup failed: {exc}"
+                        )
                     else:
                         raise StateStoreError("state lock descriptor cleanup failed") from exc
             if created:
+                release_failure: StateStoreError | None = None
                 try:
                     entry = _lstat(path, label="state lock")
-                    if entry is not None:
-                        persisted = self._read_regular(path, label="state lock")
-                        if persisted != data:
-                            raise StateConflictError(
-                                "state lock ownership changed before release; lock preserved"
-                            )
-                        path.unlink()
-                        _sync_directory(
-                            paths["run_dir"], label="Run directory after state lock release"
+                    if entry is None:
+                        diagnostics = _restore_state_lock_evidence(
+                            path, paths["run_dir"], data
                         )
+                        failure = StateConflictError(
+                            "state lock disappeared before owned release; "
+                            "blocking evidence was restored"
+                        )
+                        for diagnostic in diagnostics:
+                            _add_cleanup_diagnostic(failure, diagnostic)
+                        raise failure
+                    persisted = self._read_regular(path, label="state lock")
+                    if persisted != data:
+                        raise StateConflictError(
+                            "state lock ownership changed before release; lock preserved"
+                        )
+                    path.unlink()
+                    try:
+                        _sync_directory(
+                            paths["run_dir"],
+                            label="Run directory after state lock release",
+                        )
+                    except Exception as sync_exc:
+                        diagnostics = _restore_state_lock_evidence(
+                            path, paths["run_dir"], data
+                        )
+                        if primary is not None:
+                            _add_cleanup_diagnostic(
+                                primary,
+                                f"state lock release directory sync failed: {sync_exc}",
+                            )
+                            for diagnostic in diagnostics:
+                                _add_cleanup_diagnostic(primary, diagnostic)
+                        else:
+                            release_failure = StateStoreError(
+                                "state lock release is uncertain; blocking evidence was restored"
+                            )
+                            for diagnostic in diagnostics:
+                                _add_cleanup_diagnostic(release_failure, diagnostic)
+                            raise release_failure from sync_exc
                 except Exception as exc:
                     if primary is not None:
-                        primary.add_note(f"state lock cleanup failed: {exc}")
+                        _add_cleanup_diagnostic(primary, f"state lock cleanup failed: {exc}")
+                    elif exc is release_failure:
+                        raise
                     else:
                         raise StateStoreError("state lock cleanup failed") from exc
 
@@ -571,7 +724,9 @@ class StateStore:
                     temporary.unlink(missing_ok=True)
                 except OSError as exc:
                     if primary is not None:
-                        primary.add_note(f"temporary {label} cleanup failed: {exc}")
+                        _add_cleanup_diagnostic(
+                            primary, f"temporary {label} cleanup failed: {exc}"
+                        )
                     else:
                         error = StateStoreError(f"unable to clean temporary {label}")
                         error.write_state_uncertain = replace_attempted
@@ -694,6 +849,10 @@ class StateStore:
             _validate_timestamp(record["journal_timestamp"], label="journal timestamp")
         except ActiveRunLockError as exc:
             raise StateConflictError(str(exc)) from exc
+        if record["append_actor_lock_token"] != record["operation_owner_lock_token"]:
+            raise StateConflictError(
+                "A3.1 state journal append actor must match the operation owner"
+            )
         if record["recovery_audit_ref"] is not None:
             raise StateRecoveryDeferredError(
                 "recovery audit references require A3.2 takeover validation"
@@ -744,8 +903,12 @@ class StateStore:
         run_id: str,
         allocation_token: str,
     ) -> list[dict[str, Any]]:
+        if len(data) > MAX_STATE_JOURNAL_BYTES:
+            raise StateConflictError("state journal exceeds the A3.1 pilot byte limit")
         if data and not data.endswith(b"\n"):
             raise StateConflictError("anchored state journal must end with a newline")
+        if data.count(b"\n") > MAX_STATE_JOURNAL_RECORDS:
+            raise StateConflictError("state journal exceeds the A3.1 pilot record limit")
         records: list[dict[str, Any]] = []
         previous: str | None = None
         for index, line in enumerate(data.splitlines(keepends=True)):
@@ -803,6 +966,47 @@ class StateStore:
             elif rows[0] is not records[-1]:
                 raise StateConflictError("unresolved pending operation must be the journal tail")
 
+    def _operation_index(
+        self, records: list[dict[str, Any]]
+    ) -> dict[tuple[str, str], list[dict[str, Any]]]:
+        index: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in records:
+            index.setdefault((row["mutation_kind"], row["operation_id"]), []).append(row)
+        return index
+
+    def _validate_committed_state_binding(
+        self, state: Mapping[str, Any], records: list[dict[str, Any]]
+    ) -> None:
+        committed = [row for row in records if row["phase"] == "committed"]
+        if not committed:
+            if (
+                state["state_version"] != 0
+                or state["status"] != "CREATED"
+                or state["task_status"]
+                or state["task_attempts"]
+                or state["completed_tasks"]
+                or state["failed_tasks"]
+                or state["last_operation_kind"] is not None
+                or state["last_operation_id"] is not None
+                or state["last_operation_payload_sha256"] is not None
+                or state["created_at"] != state["updated_at"]
+            ):
+                raise StateConflictError(
+                    "canonical state is not a valid uncommitted CREATED baseline"
+                )
+            return
+        latest = committed[-1]
+        state_hash = _sha256(_canonical_json_bytes(state))
+        if (
+            state["state_version"] != latest["resulting_state_version"]
+            or state["status"] != latest["resulting_status"]
+            or state["last_operation_kind"] != latest["mutation_kind"]
+            or state["last_operation_id"] != latest["operation_id"]
+            or state["last_operation_payload_sha256"] != latest["payload_sha256"]
+            or state_hash != latest["resulting_state_sha256"]
+        ):
+            raise StateConflictError("canonical state does not match committed journal tail")
+
     def _journal_state(
         self,
         run_id: str,
@@ -818,6 +1022,8 @@ class StateStore:
         else:
             if stat.S_ISLNK(entry.st_mode) or not stat.S_ISREG(entry.st_mode):
                 raise StateConflictError("state journal must be a regular non-link file")
+            if entry.st_size > MAX_STATE_JOURNAL_BYTES:
+                raise StateConflictError("state journal exceeds the A3.1 pilot byte limit")
             try:
                 journal = paths["journal"].read_bytes()
             except OSError as exc:
@@ -881,6 +1087,9 @@ class StateStore:
             tail_file_size_bytes=len(journal),
         )
         self._write_anchor(run_id, next_anchor)
+        persisted_anchor, _ = self._read_anchor(run_id, allocation_token)
+        if persisted_anchor != next_anchor:
+            raise StateConflictError("state journal recovery anchor changed after advancement")
         return candidate, next_anchor, journal
 
     def _append_record(
@@ -890,6 +1099,8 @@ class StateStore:
         records: list[dict[str, Any]],
         record: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        if len(records) >= MAX_STATE_JOURNAL_RECORDS:
+            raise StateStoreError("state journal exceeds the A3.1 pilot record limit")
         paths = self._paths(run_id)
         record = dict(record)
         record["record_index"] = len(records)
@@ -906,6 +1117,9 @@ class StateStore:
             previous_checksum=record["previous_record_checksum"],
         )
         data = _canonical_json_bytes(validated)
+        current_size = sum(len(_canonical_json_bytes(item)) for item in records)
+        if current_size + len(data) > MAX_STATE_JOURNAL_BYTES:
+            raise StateStoreError("state journal exceeds the A3.1 pilot byte limit")
         descriptor: int | None = None
         primary: BaseException | None = None
         try:
@@ -931,7 +1145,9 @@ class StateStore:
                     os.close(descriptor)
                 except OSError as exc:
                     if primary is not None:
-                        primary.add_note(f"state journal descriptor cleanup failed: {exc}")
+                        _add_cleanup_diagnostic(
+                            primary, f"state journal descriptor cleanup failed: {exc}"
+                        )
                     else:
                         raise StateStoreError(
                             "state journal descriptor cleanup failed after append"
@@ -951,6 +1167,9 @@ class StateStore:
             tail_file_size_bytes=size,
         )
         self._write_anchor(run_id, anchor)
+        persisted_anchor, _ = self._read_anchor(run_id, allocation_token)
+        if persisted_anchor != anchor:
+            raise StateConflictError("state journal tail anchor changed after advancement")
         return [*records, validated]
 
     def _base_record(
@@ -1059,7 +1278,13 @@ class StateStore:
         except ActiveRunLockError as exc:
             raise StateStoreError(str(exc)) from exc
         normalized_plan = _validate_task_plan(task_plan)
-        context = {} if initial_context is None else deepcopy(dict(initial_context))
+        context = (
+            {}
+            if initial_context is None
+            else _safe_deepcopy(dict(initial_context), label="initial_context")
+        )
+        if {"phase_a3_run_initialization", "phase_a3_checkpoint_events"} & set(context):
+            raise StateStoreError("initial_context uses reserved Phase A3 checkpoint fields")
         _validate_json_value(context, label="initial_context")
         timestamp = canonical_utc_now() if created_at is None else created_at
         try:
@@ -1114,15 +1339,6 @@ class StateStore:
                 raise StateConflictError("Run initialization bytes do not match expected state")
             return _state_snapshot(persisted)
 
-    def _operation_rows(
-        self, records: list[dict[str, Any]], mutation_kind: str, operation_id: str
-    ) -> list[dict[str, Any]]:
-        return [
-            row
-            for row in records
-            if row["mutation_kind"] == mutation_kind and row["operation_id"] == operation_id
-        ]
-
     def _recover_unfinished_operations_locked(
         self,
         *,
@@ -1145,15 +1361,16 @@ class StateStore:
             state["allocation_token"],
             repair_unanchored=True,
         )
+        operation_index = self._operation_index(records)
         pending = [
             rows[0]
-            for key in {(row["mutation_kind"], row["operation_id"]) for row in records}
-            if len(rows := self._operation_rows(records, key[0], key[1])) == 1
-            and rows[0]["phase"] == "pending"
+            for rows in operation_index.values()
+            if len(rows) == 1 and rows[0]["phase"] == "pending"
         ]
         if len(pending) > 1:
             raise StateConflictError("more than one unresolved state operation exists")
         if not pending:
+            self._validate_committed_state_binding(state, records)
             return state, records
         row = pending[0]
         if row["operation_owner_lock_token"] != expected_lock_token:
@@ -1198,6 +1415,7 @@ class StateStore:
         records = self._append_record(
             run_id, state["allocation_token"], records, terminal
         )
+        self._validate_committed_state_binding(state, records)
         return state, records
 
     def recover_state_journal(
@@ -1219,22 +1437,12 @@ class StateStore:
         records, _, _ = self._journal_state(
             run_id, state["allocation_token"], repair_unanchored=False
         )
-        if any(
-            len(self._operation_rows(records, key[0], key[1])) == 1
-            for key in {(row["mutation_kind"], row["operation_id"]) for row in records}
-        ):
+        operation_index = self._operation_index(records)
+        if any(len(rows) == 1 for rows in operation_index.values()):
             raise StateRecoveryRequiredError(
                 "state journal has an unresolved pending operation; call recover_state_journal()"
             )
-        if records:
-            latest_committed = [row for row in records if row["phase"] == "committed"]
-            if latest_committed:
-                latest = latest_committed[-1]
-                if (
-                    state["state_version"] != latest["resulting_state_version"]
-                    or _sha256(_canonical_json_bytes(state)) != latest["resulting_state_sha256"]
-                ):
-                    raise StateConflictError("canonical state does not match committed journal tail")
+        self._validate_committed_state_binding(state, records)
         return _state_snapshot(state)
 
     def _validate_checkpoint_payload(
@@ -1248,18 +1456,22 @@ class StateStore:
     ) -> dict[str, Any]:
         if not isinstance(payload, Mapping):
             raise StateStoreError("checkpoint payload must be an object")
-        payload = deepcopy(dict(payload))
+        payload = _safe_deepcopy(dict(payload), label="checkpoint payload")
         kind = payload.get("checkpoint_kind")
         if not isinstance(kind, str) or kind not in CHECKPOINT_KINDS:
             raise StateStoreError("checkpoint_kind is invalid")
-        common = {"checkpoint_kind", "task_id", "attempt_number", "created_at", "context_delta"}
-        expected_fields = set(common)
-        if kind == "run_initialized":
-            expected_fields.add("task_plan")
-        if kind == "task_failed":
-            expected_fields.update({"retry_disposition", "next_attempt_number"})
-        if kind == "task_retry_scheduled":
-            expected_fields.add("next_attempt_number")
+        expected_fields = {
+            "checkpoint_kind",
+            "task_id",
+            "attempt_number",
+            "expected_task_status",
+            "next_task_status",
+            "retry_disposition",
+            "next_attempt_number",
+            "controlled_context_delta",
+            "error_summary",
+            "created_at",
+        }
         if set(payload) != expected_fields:
             raise StateStoreError(f"checkpoint payload fields are invalid for {kind}")
         try:
@@ -1268,16 +1480,25 @@ class StateStore:
             raise StateStoreError(str(exc)) from exc
         if payload["created_at"] != mutation_timestamp:
             raise StateStoreError("checkpoint mutation_timestamp must equal payload created_at")
-        if not isinstance(payload["context_delta"], Mapping):
-            raise StateStoreError("checkpoint context_delta must be an object")
-        _validate_json_value(payload["context_delta"], label="checkpoint context_delta")
+        delta = payload["controlled_context_delta"]
+        if not isinstance(delta, Mapping):
+            raise StateStoreError("controlled_context_delta must be an object")
+        delta = dict(delta)
+        payload["controlled_context_delta"] = delta
+        _validate_json_value(delta, label="controlled_context_delta")
         task_id = payload["task_id"]
         attempt = payload["attempt_number"]
         if kind == "run_initialized":
             if task_id is not None or attempt is not None:
                 raise StateStoreError("run_initialized task_id and attempt_number must be null")
-            if _validate_task_plan(payload["task_plan"]) != state["task_plan"]:
+            if set(delta) != {"task_plan", "plan_fingerprint"}:
+                raise StateStoreError("run_initialized controlled_context_delta is invalid")
+            if _validate_task_plan(delta["task_plan"]) != state["task_plan"]:
                 raise StateConflictError("run_initialized task_plan does not match canonical plan")
+            if delta["plan_fingerprint"] != state["plan_fingerprint"]:
+                raise StateConflictError(
+                    "run_initialized plan_fingerprint does not match canonical state"
+                )
             expected_id = f"run:{run_id}:checkpoint:run_initialized"
         else:
             try:
@@ -1299,34 +1520,122 @@ class StateStore:
             expected_id = f"run:{run_id}:task:{task_id}:attempt:{attempt}:{suffix}"
         if operation_id != expected_id:
             raise StateStoreError(f"operation_id does not match {kind}")
-        if kind == "task_failed":
-            disposition = payload["retry_disposition"]
-            if not isinstance(disposition, str) or disposition not in {"retry", "terminal"}:
+
+        disposition = payload["retry_disposition"]
+        expected_status = payload["expected_task_status"]
+        next_status = payload["next_task_status"]
+        next_attempt = payload["next_attempt_number"]
+        error_summary = payload["error_summary"]
+        if kind == "run_initialized":
+            expected_contract = (None, None, "none", None)
+        elif kind == "task_skipped":
+            expected_contract = ("pending", "skipped", "none", None)
+        elif kind == "task_cache_hit":
+            expected_contract = ("pending", "success", "none", None)
+        elif kind == "task_started":
+            if expected_status not in {"pending", "retry_scheduled"}:
+                raise StateStoreError("task_started expected_task_status is invalid")
+            expected_contract = (expected_status, "running", "none", None)
+        elif kind == "task_succeeded":
+            expected_contract = ("running", "success", "none", None)
+        elif kind == "task_failed":
+            if disposition not in {"retry", "terminal"}:
                 raise StateStoreError("task_failed retry_disposition is invalid")
-            expected_next = attempt + 1 if disposition == "retry" else None
-            if payload["next_attempt_number"] != expected_next:
-                raise StateStoreError("task_failed next_attempt_number is invalid")
-        if kind == "task_retry_scheduled" and payload["next_attempt_number"] != attempt + 1:
-            raise StateStoreError("task_retry_scheduled next_attempt_number is invalid")
+            expected_contract = (
+                "running",
+                "retry_pending" if disposition == "retry" else "failed",
+                disposition,
+                attempt + 1 if disposition == "retry" else None,
+            )
+        else:
+            expected_contract = ("retry_pending", "retry_scheduled", "retry", attempt + 1)
+        if (expected_status, next_status, disposition, next_attempt) != expected_contract:
+            raise StateStoreError(f"checkpoint lifecycle fields are invalid for {kind}")
+
+        delta_fields = {
+            "run_initialized": {"task_plan", "plan_fingerprint"},
+            "task_skipped": {"skip_reason"},
+            "task_cache_hit": {"task_output", "cache_provenance"},
+            "task_started": set(),
+            "task_succeeded": {"task_output"},
+            "task_failed": {"failure_provenance"},
+            "task_retry_scheduled": {
+                "failed_operation_id",
+                "retry_policy_sha256",
+                "backoff_seconds",
+            },
+        }[kind]
+        if set(delta) != delta_fields:
+            raise StateStoreError(f"controlled_context_delta fields are invalid for {kind}")
+        if kind == "task_skipped" and (
+            not isinstance(delta["skip_reason"], str) or not delta["skip_reason"].strip()
+        ):
+            raise StateStoreError("task_skipped requires a non-empty skip_reason")
+        if kind in {"task_cache_hit", "task_succeeded"}:
+            if not isinstance(delta["task_output"], Mapping) or not delta["task_output"]:
+                raise StateStoreError(f"{kind} requires non-empty task_output provenance")
+        if kind == "task_cache_hit" and (
+            not isinstance(delta["cache_provenance"], Mapping)
+            or not delta["cache_provenance"]
+        ):
+            raise StateStoreError("task_cache_hit requires non-empty cache_provenance")
+        if kind == "task_failed" and (
+            not isinstance(delta["failure_provenance"], Mapping)
+            or not delta["failure_provenance"]
+        ):
+            raise StateStoreError("task_failed requires non-empty failure_provenance")
+        if kind == "task_retry_scheduled":
+            failed_id = delta["failed_operation_id"]
+            expected_failed_id = f"run:{run_id}:task:{task_id}:attempt:{attempt}:failed"
+            if failed_id != expected_failed_id:
+                raise StateStoreError(
+                    "task_retry_scheduled must bind the committed task_failed operation"
+                )
+            _validate_sha(delta["retry_policy_sha256"], label="retry policy SHA-256")
+            if type(delta["backoff_seconds"]) is not int or delta["backoff_seconds"] < 0:
+                raise StateStoreError("retry backoff_seconds is invalid")
+        if kind == "task_failed":
+            if (
+                not isinstance(error_summary, str)
+                or not error_summary.strip()
+                or len(error_summary) > MAX_CHECKPOINT_ERROR_SUMMARY_CHARS
+                or _ABSOLUTE_PATH_RE.search(error_summary)
+            ):
+                raise StateStoreError(
+                    "task_failed error_summary must be bounded, non-empty, and path-neutral"
+                )
+        elif error_summary is not None:
+            raise StateStoreError(f"{kind} error_summary must be null")
         _validate_json_value(payload, label="checkpoint payload")
         return payload
 
     def _reduce_checkpoint(self, state: dict[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
-        result = deepcopy(state)
+        result = _safe_deepcopy(state, label="checkpoint state")
         kind = payload["checkpoint_kind"]
         if kind == "run_initialized":
+            if result["status"] != "PLANNED":
+                raise StateConflictError("run_initialized is only allowed in PLANNED")
             if result["task_status"] or result["task_attempts"]:
                 raise StateConflictError("run_initialized may only initialize an empty task map")
             task_ids = [item["task_id"] for item in result["task_plan"]]
             result["task_status"] = {task_id: "pending" for task_id in task_ids}
             result["task_attempts"] = {task_id: 0 for task_id in task_ids}
+            if "phase_a3_run_initialization" in result["context"]:
+                raise StateConflictError("run_initialized context already exists")
+            result["context"]["phase_a3_run_initialization"] = deepcopy(
+                dict(payload["controlled_context_delta"])
+            )
         else:
+            if result["status"] != "RUNNING":
+                raise StateConflictError("task checkpoints are only allowed in RUNNING")
             if not result["task_status"]:
                 raise StateConflictError("task checkpoint requires committed run_initialized")
             task_id = payload["task_id"]
             attempt = payload["attempt_number"]
             current_status = result["task_status"][task_id]
             current_attempt = result["task_attempts"][task_id]
+            if current_status != payload["expected_task_status"]:
+                raise StateConflictError("checkpoint expected_task_status does not match state")
             if kind == "task_skipped":
                 if attempt != 0 or current_status != "pending" or current_attempt != 0:
                     raise StateConflictError("task_skipped state or attempt is invalid")
@@ -1356,8 +1665,41 @@ class StateStore:
             elif kind == "task_retry_scheduled":
                 if current_status != "retry_pending" or current_attempt != attempt or attempt < 1:
                     raise StateConflictError("task_retry_scheduled does not follow retryable failure")
+                events = result["context"].get("phase_a3_checkpoint_events", {})
+                failed = events.get(payload["controlled_context_delta"]["failed_operation_id"])
+                if not isinstance(failed, Mapping) or failed.get("checkpoint_kind") != "task_failed":
+                    raise StateConflictError(
+                        "task_retry_scheduled does not bind a committed task_failed checkpoint"
+                    )
                 result["task_status"][task_id] = "retry_scheduled"
-        result["context"].update(deepcopy(dict(payload["context_delta"])))
+            if result["task_status"][task_id] != payload["next_task_status"]:
+                raise StateConflictError("checkpoint next_task_status does not match reduction")
+            events = result["context"].setdefault("phase_a3_checkpoint_events", {})
+            if not isinstance(events, dict):
+                raise StateConflictError("reserved checkpoint event context is invalid")
+            operation_id = (
+                f"run:{result['run_id']}:task:{task_id}:attempt:{attempt}:"
+                + {
+                    "task_skipped": "skipped",
+                    "task_cache_hit": "cache_hit",
+                    "task_started": "started",
+                    "task_succeeded": "succeeded",
+                    "task_failed": "failed",
+                    "task_retry_scheduled": "retry_scheduled",
+                }[kind]
+            )
+            if operation_id in events:
+                raise StateConflictError("checkpoint event already exists in canonical context")
+            events[operation_id] = {
+                "checkpoint_kind": kind,
+                "task_id": task_id,
+                "attempt_number": attempt,
+                "controlled_context_delta": deepcopy(
+                    dict(payload["controlled_context_delta"])
+                ),
+                "error_summary": payload["error_summary"],
+                "created_at": payload["created_at"],
+            }
         result["completed_tasks"] = sorted(
             task_id for task_id, status in result["task_status"].items() if status == "success"
         )
@@ -1380,7 +1722,7 @@ class StateStore:
     ) -> dict[str, Any]:
         if not isinstance(evidence, Mapping) or set(evidence) != _COMPLETION_FIELDS:
             raise StateConflictError("completion_evidence fields are invalid")
-        result = deepcopy(dict(evidence))
+        result = _safe_deepcopy(dict(evidence), label="completion_evidence")
         if result["schema_version"] != COMPLETION_EVIDENCE_SCHEMA_VERSION:
             raise StateConflictError("completion_evidence schema_version is invalid")
         if result["run_id"] != state["run_id"] or result["plan_fingerprint"] != state["plan_fingerprint"]:
@@ -1398,10 +1740,19 @@ class StateStore:
             task_id for task_id, status in state["task_status"].items() if status == "success"
         ):
             raise StateConflictError("completion task indexes are inconsistent")
+        from orchestrator.inspection_workflow.publication import (
+            FINAL_SUMMARY_PATH_TEMPLATE,
+            PUBLICATION_MANIFEST_PATH,
+            PUBLICATION_TRANSACTION_PATH_TEMPLATE,
+            validate_publication,
+        )
+
         fixed = {
-            "publication_manifest_path": "outputs/current_publication_manifest.json",
-            "publication_transaction_path": f"runs/{state['run_id']}/publication_transaction.json",
-            "final_summary_path": f"runs/{state['run_id']}/final_summary.md",
+            "publication_manifest_path": PUBLICATION_MANIFEST_PATH,
+            "publication_transaction_path": PUBLICATION_TRANSACTION_PATH_TEMPLATE.format(
+                run_id=state["run_id"]
+            ),
+            "final_summary_path": FINAL_SUMMARY_PATH_TEMPLATE.format(run_id=state["run_id"]),
         }
         for field, expected in fixed.items():
             if result[field] != expected:
@@ -1414,110 +1765,29 @@ class StateStore:
             _validate_sha(result[field], label=field)
         if not isinstance(result["transaction_id"], str) or not result["transaction_id"]:
             raise StateConflictError("completion_evidence transaction_id is invalid")
-        loaded: dict[str, bytes] = {}
-        for path_field, sha_field in (
-            ("publication_manifest_path", "publication_manifest_sha256"),
-            ("publication_transaction_path", "publication_transaction_sha256"),
-            ("final_summary_path", "final_summary_sha256"),
-        ):
-            relative = result[path_field]
-            path = self.project_root.joinpath(*relative.split("/"))
-            try:
-                _assert_project_path(
-                    self.project_root, path, include_leaf=True, label=path_field
-                )
-                data = self._read_regular(path, label=path_field)
-            except ActiveRunLockError as exc:
-                raise StateConflictError(str(exc)) from exc
-            if _sha256(data) != result[sha_field]:
-                raise StateConflictError(f"completion_evidence {path_field} SHA-256 does not match")
-            loaded[path_field] = data
-        manifest = self._canonical_json_document(
-            loaded["publication_manifest_path"], label="publication manifest"
-        )
-        transaction = self._canonical_json_document(
-            loaded["publication_transaction_path"], label="publication transaction"
-        )
-        if (
-            manifest.get("run_id") != state["run_id"]
-            or manifest.get("plan_fingerprint") != state["plan_fingerprint"]
-            or manifest.get("transaction_id") != result["transaction_id"]
-        ):
-            raise StateConflictError("publication Manifest identity does not match completion")
-        if (
-            transaction.get("run_id") != state["run_id"]
-            or transaction.get("plan_fingerprint") != state["plan_fingerprint"]
-            or transaction.get("transaction_id") != result["transaction_id"]
-            or transaction.get("phase") != "manifest_committed"
-            or transaction.get("manifest_sha256") != result["publication_manifest_sha256"]
-        ):
-            raise StateConflictError("publication transaction is not durably manifest_committed")
-        summary_entries = []
-        seen_manifest_paths: set[str] = set()
-        for collection_name in ("source_artifacts", "publication_files"):
-            collection = manifest.get(collection_name)
-            if not isinstance(collection, list):
-                raise StateConflictError(f"publication Manifest {collection_name} is invalid")
-            for item in collection:
-                if not isinstance(item, Mapping):
-                    raise StateConflictError(
-                        f"publication Manifest {collection_name} reference is invalid"
-                    )
-                relative = item.get("path")
-                if (
-                    not isinstance(relative, str)
-                    or not relative
-                    or "\\" in relative
-                    or ":" in relative
-                ):
-                    raise StateConflictError("publication Manifest path is not project-relative POSIX")
-                pure = PurePosixPath(relative)
-                if pure.is_absolute() or pure.as_posix() != relative or any(
-                    part in {"", ".", ".."} for part in pure.parts
-                ):
-                    raise StateConflictError("publication Manifest path is not project-relative POSIX")
-                if relative in seen_manifest_paths and relative != result["final_summary_path"]:
-                    raise StateConflictError("publication Manifest contains duplicate paths")
-                seen_manifest_paths.add(relative)
-                path = self.project_root.joinpath(*pure.parts)
-                data = self._read_regular(path, label=f"publication artifact {relative}")
-                if type(item.get("size_bytes")) is not int or item["size_bytes"] != len(data):
-                    raise StateConflictError(
-                        f"publication Manifest size does not match: {relative}"
-                    )
-                if item.get("sha256") != _sha256(data):
-                    raise StateConflictError(
-                        f"publication Manifest SHA-256 does not match: {relative}"
-                    )
-                if relative == result["final_summary_path"]:
-                    summary_entries.append(item)
-        expected_source_paths = manifest.get("expected_source_artifact_paths")
-        actual_source_paths = [item.get("path") for item in manifest["source_artifacts"]]
-        if expected_source_paths != actual_source_paths or actual_source_paths != sorted(
-            actual_source_paths
-        ):
-            raise StateConflictError("publication Manifest source path set is not stable")
-        expected_publication_paths = sorted(
-            [
-                "outputs/final_project_report.md",
-                "outputs/key_insights.md",
-                "outputs/system_summary.md",
-                result["final_summary_path"],
-            ]
-        )
-        if [item.get("path") for item in manifest["publication_files"]] != expected_publication_paths:
-            raise StateConflictError("publication Manifest file path set is incomplete")
-        if not summary_entries or any(
-            item.get("sha256") != result["final_summary_sha256"] for item in summary_entries
-        ):
-            raise StateConflictError("publication Manifest does not bind final_summary")
-        run_dir = self._run_dir(state["run_id"])
-        for marker in (
-            run_dir / ".publication_recovery_required.json",
-            run_dir / "PUBLICATION_CLEANUP_PENDING.json",
-        ):
-            if _lstat(marker, label="publication recovery marker") is not None:
-                raise StateRecoveryRequiredError("publication recovery marker blocks COMPLETED")
+        try:
+            publication = validate_publication(
+                self.project_root,
+                run_id=state["run_id"],
+                plan_fingerprint=state["plan_fingerprint"],
+            )
+        except Exception as exc:
+            raise StateConflictError(
+                "A2 validate_publication rejected completion evidence"
+            ) from exc
+        manifest_bytes = publication["manifest_bytes"]
+        if _sha256(manifest_bytes) != result["publication_manifest_sha256"]:
+            raise StateConflictError("completion_evidence publication Manifest SHA-256 does not match")
+        transaction_path = self.project_root.joinpath(*result["publication_transaction_path"].split("/"))
+        summary_path = self.project_root.joinpath(*result["final_summary_path"].split("/"))
+        transaction_bytes = self._read_regular(transaction_path, label="publication transaction")
+        summary_bytes = self._read_regular(summary_path, label="final_summary")
+        if _sha256(transaction_bytes) != result["publication_transaction_sha256"]:
+            raise StateConflictError("completion_evidence publication transaction SHA-256 does not match")
+        if _sha256(summary_bytes) != result["final_summary_sha256"]:
+            raise StateConflictError("completion_evidence final_summary SHA-256 does not match")
+        if publication["manifest"].get("transaction_id") != result["transaction_id"]:
+            raise StateConflictError("completion_evidence transaction_id does not match Manifest")
         return result
 
     def _reduce_transition(
@@ -1525,7 +1795,7 @@ class StateStore:
         state: dict[str, Any],
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
-        result = deepcopy(state)
+        result = _safe_deepcopy(state, label="status transition state")
         next_status = payload["next_status"]
         if result["status"] in TERMINAL_STATUSES:
             raise StateConflictError("terminal canonical state cannot transition")
@@ -1540,7 +1810,9 @@ class StateStore:
             raise StateStoreError("completion_evidence is only allowed for RUNNING -> COMPLETED")
         metadata = payload["metadata"]
         if metadata is not None:
-            result["context"]["last_transition_metadata"] = deepcopy(dict(metadata))
+            result["context"]["last_transition_metadata"] = _safe_deepcopy(
+                dict(metadata), label="transition metadata"
+            )
         result["status"] = next_status
         return result
 
@@ -1557,7 +1829,7 @@ class StateStore:
         fields = {"next_status", "metadata", "completion_evidence", "transition_kind", "decision_token"}
         if not isinstance(payload, Mapping) or set(payload) != fields:
             raise StateStoreError("status transition payload fields are invalid")
-        result = deepcopy(dict(payload))
+        result = _safe_deepcopy(dict(payload), label="status transition payload")
         next_status = result["next_status"]
         if not isinstance(next_status, str) or next_status not in STATUSES:
             raise StateStoreError("status transition next_status is invalid")
@@ -1620,7 +1892,8 @@ class StateStore:
             state, records = self._recover_unfinished_operations_locked(
                 run_id=run_id, expected_lock_token=expected_lock_token
             )
-            rows = self._operation_rows(records, mutation_kind, operation_id)
+            operation_index = self._operation_index(records)
+            rows = operation_index.get((mutation_kind, operation_id), [])
             if rows:
                 pending = rows[0]
                 if pending["payload_sha256"] != payload_hash:
@@ -1661,7 +1934,7 @@ class StateStore:
                 )
             except ActiveRunLockError as exc:
                 raise StateConflictError(str(exc)) from exc
-            result = reducer(deepcopy(state), payload)
+            result = reducer(_safe_deepcopy(state, label="state mutation input"), payload)
             result["state_version"] = state["state_version"] + 1
             result["updated_at"] = mutation_timestamp
             result["last_operation_kind"] = mutation_kind
