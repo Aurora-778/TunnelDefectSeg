@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import uuid
 
 import pytest
@@ -1029,6 +1030,67 @@ def test_state_or_journal_symlink_is_rejected_when_supported(tmp_path: Path) -> 
         pytest.skip("file symlink creation is unavailable")
     with pytest.raises(StateConflictError, match="symlink"):
         store.load(run_id="run_001")
+
+
+def test_journal_symlink_is_rejected_when_supported(tmp_path: Path) -> None:
+    store, _, _ = _initialized(tmp_path)
+    journal_path = tmp_path / "runs" / "run_001" / "state_journal.jsonl"
+    target = tmp_path / "outside-journal.jsonl"
+    target.write_bytes(b"")
+    try:
+        journal_path.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("file symlink creation is unavailable")
+    with pytest.raises(StateConflictError, match="non-link, non-reparse"):
+        store.load(run_id="run_001")
+
+
+def test_journal_reparse_entry_is_rejected_for_read_append_and_genesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, allocation_token, lock_token = _initialized(tmp_path)
+    journal_path = tmp_path / "runs" / "run_001" / "state_journal.jsonl"
+    original_lstat = state_module._lstat
+
+    class FakeReparseStat:
+        st_mode = stat.S_IFREG
+        st_size = 0
+        st_file_attributes = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+    def reparse_journal(path: Path, *, label: str):
+        if Path(path) == journal_path:
+            return FakeReparseStat()
+        return original_lstat(path, label=label)
+
+    monkeypatch.setattr(state_module, "_lstat", reparse_journal)
+    with pytest.raises(StateConflictError, match="non-reparse"):
+        store.load(run_id="run_001")
+    with pytest.raises(StateConflictError, match="non-reparse"):
+        store._append_record("run_001", allocation_token, [], {})
+
+    fresh_root = tmp_path / "genesis"
+    fresh_root.mkdir()
+    fresh, fresh_allocation_token, fresh_lock_token = _new_allocation(fresh_root)
+    fresh.initialize_run(
+        run_id="run_001",
+        allocation_token=fresh_allocation_token,
+        plan_fingerprint=PLAN_SHA,
+        task_plan=TASK_PLAN,
+        expected_lock_token=fresh_lock_token,
+        created_at=T0,
+    )
+    fresh_journal = fresh_root / "runs" / "run_001" / "state_journal.jsonl"
+
+    def reparse_genesis_journal(path: Path, *, label: str):
+        if Path(path) == fresh_journal:
+            return FakeReparseStat()
+        return original_lstat(path, label=label)
+
+    monkeypatch.setattr(state_module, "_lstat", reparse_genesis_journal)
+    with pytest.raises(StateConflictError, match="non-reparse"):
+        fresh.validate_initialized_run(
+            run_id="run_001", allocation_token=fresh_allocation_token
+        )
 
 
 def test_state_lock_is_not_deleted_when_exclusive_acquire_fails(tmp_path: Path) -> None:

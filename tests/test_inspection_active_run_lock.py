@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import json
@@ -21,6 +22,7 @@ from orchestrator.inspection_workflow.locking import (
     reserve_active_run_id,
     validate_active_run_lock,
 )
+from orchestrator.state import store as state_module
 from orchestrator.state.store import StateStore
 
 
@@ -154,6 +156,77 @@ def test_running_transition_rejects_non_genesis_journal(tmp_path: Path) -> None:
         created_at=TIME,
     )
     (run_dir / "state_journal.jsonl").write_bytes(b"unexpected\n")
+
+    with pytest.raises(ActiveRunLockError, match="valid CREATED state and genesis anchor"):
+        mark_active_run_running(
+            tmp_path,
+            run_id="run_001",
+            expected_allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+        )
+    assert read_active_run_lock(tmp_path)["phase"] == "allocating"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        (
+            lambda state: state.update(
+                {
+                    "task_status": {"core": "success"},
+                    "task_attempts": {"core": 1},
+                    "completed_tasks": ["core"],
+                    "failed_tasks": [],
+                }
+            )
+        ),
+        (
+            lambda state: state.update(
+                {
+                    "task_status": {"core": "failed"},
+                    "task_attempts": {"core": 1},
+                    "completed_tasks": [],
+                    "failed_tasks": ["core"],
+                }
+            )
+        ),
+        lambda state: state.update({"updated_at": "2026-07-27T00:00:01.000000Z"}),
+        (
+            lambda state: state.update(
+                {
+                    "last_operation_kind": "status_transition",
+                    "last_operation_id": "run:run_001:transition:v0:CREATED:PLANNED:auto",
+                    "last_operation_payload_sha256": "b" * 64,
+                }
+            )
+        ),
+    ],
+    ids=("task-status-and-attempts", "failed-index", "timestamp", "last-operation"),
+)
+def test_running_transition_rejects_forged_empty_journal_baseline(
+    tmp_path: Path, mutation: Callable[[dict[str, object]], None]
+) -> None:
+    allocation_token, lock_token = _acquire(tmp_path)
+    reserve_active_run_id(
+        tmp_path,
+        run_id="run_001",
+        expected_allocation_token=allocation_token,
+        expected_lock_token=lock_token,
+    )
+    run_dir = tmp_path / "runs" / "run_001"
+    run_dir.mkdir()
+    StateStore(tmp_path).initialize_run(
+        run_id="run_001",
+        allocation_token=allocation_token,
+        plan_fingerprint=PLAN_SHA,
+        task_plan=TASK_PLAN,
+        expected_lock_token=lock_token,
+        created_at=TIME,
+    )
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_bytes())
+    mutation(state)
+    state_path.write_bytes(state_module._canonical_json_bytes(state))
 
     with pytest.raises(ActiveRunLockError, match="valid CREATED state and genesis anchor"):
         mark_active_run_running(

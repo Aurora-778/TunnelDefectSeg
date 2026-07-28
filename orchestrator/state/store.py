@@ -24,6 +24,7 @@ from orchestrator.inspection_workflow.locking import (
     ActiveRunLockError,
     _assert_plain_entry,
     _assert_project_path,
+    _is_reparse,
     _lstat,
     _sync_directory,
     _validate_identifier,
@@ -382,6 +383,17 @@ def _validate_operation_id(value: Any) -> str:
     if not isinstance(value, str) or not _OPERATION_RE.fullmatch(value):
         raise StateStoreError("operation_id is invalid")
     return value
+
+
+def _assert_regular_journal_entry(entry: os.stat_result, *, label: str) -> None:
+    if (
+        stat.S_ISLNK(entry.st_mode)
+        or _is_reparse(entry)
+        or not stat.S_ISREG(entry.st_mode)
+    ):
+        raise StateConflictError(
+            f"{label} must be a regular non-link, non-reparse file"
+        )
 
 
 def _validate_task_plan(value: Any) -> list[dict[str, Any]]:
@@ -1020,14 +1032,10 @@ class StateStore:
         if entry is None:
             journal = b""
         else:
-            if stat.S_ISLNK(entry.st_mode) or not stat.S_ISREG(entry.st_mode):
-                raise StateConflictError("state journal must be a regular non-link file")
+            _assert_regular_journal_entry(entry, label="state journal")
             if entry.st_size > MAX_STATE_JOURNAL_BYTES:
                 raise StateConflictError("state journal exceeds the A3.1 pilot byte limit")
-            try:
-                journal = paths["journal"].read_bytes()
-            except OSError as exc:
-                raise StateConflictError("unable to read state journal") from exc
+            journal = self._read_regular(paths["journal"], label="state journal")
         anchor_size = anchor["tail_file_size_bytes"]
         if len(journal) < anchor_size:
             raise StateConflictError("state journal is shorter than its confirmed tail anchor")
@@ -1102,6 +1110,9 @@ class StateStore:
         if len(records) >= MAX_STATE_JOURNAL_RECORDS:
             raise StateStoreError("state journal exceeds the A3.1 pilot record limit")
         paths = self._paths(run_id)
+        entry = _lstat(paths["journal"], label="state journal")
+        if entry is not None:
+            _assert_regular_journal_entry(entry, label="state journal")
         record = dict(record)
         record["record_index"] = len(records)
         record["previous_record_checksum"] = (
@@ -1240,13 +1251,13 @@ class StateStore:
                 )
             journal_entry = _lstat(paths["journal"], label="state journal")
             if journal_entry is not None:
-                if not stat.S_ISREG(journal_entry.st_mode) or stat.S_ISLNK(journal_entry.st_mode):
-                    raise StateConflictError("genesis state journal must be a regular file")
+                _assert_regular_journal_entry(journal_entry, label="genesis state journal")
                 try:
                     if paths["journal"].stat().st_size != 0:
                         raise StateConflictError("genesis state journal must be empty")
                 except OSError as exc:
                     raise StateConflictError("unable to inspect genesis state journal") from exc
+            self._validate_committed_state_binding(state, [])
             return _state_snapshot(state)
 
     def initialize_run(
@@ -1297,8 +1308,7 @@ class StateStore:
                     raise StateConflictError(f"cannot initialize Run with existing {name}")
             journal_entry = _lstat(paths["journal"], label="state journal")
             if journal_entry is not None:
-                if not stat.S_ISREG(journal_entry.st_mode) or stat.S_ISLNK(journal_entry.st_mode):
-                    raise StateConflictError("initial state journal must be a regular file")
+                _assert_regular_journal_entry(journal_entry, label="initial state journal")
                 try:
                     if paths["journal"].stat().st_size != 0:
                         raise StateConflictError("initial state journal must be empty")

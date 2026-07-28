@@ -50,6 +50,12 @@ State mutations use:
 - `runs/<run_id>/state_journal.jsonl`
 - `runs/<run_id>/state_journal_tail.json`
 
+When present, the Journal is a project-local regular file. Symlinks, Windows
+reparse points, directories, and other non-regular entries are rejected before
+genesis validation, reading, or append. This is a point-in-time local path
+guard; it does not claim to prevent an external filesystem replacement after a
+check.
+
 Journal rows use schema `state_journal_v1` and phases `pending`, `committed`, or `aborted`. Fields are closed and canonical JSON uses UTF-8 without BOM, sorted keys, compact separators, `allow_nan=false`, and SHA-256. `record_index` is contiguous, `previous_record_checksum` links the chain, and `record_checksum` covers the canonical record excluding itself.
 
 In A3.1, `append_actor_lock_token` must exactly equal `operation_owner_lock_token`; a different recovery actor is an A3.2-only protocol and is rejected here.
@@ -74,6 +80,6 @@ Recovery reuses the persisted mutation timestamp and does not read a new time fo
 
 `load()`, recovery, and every new mutation apply the same committed-state binding check. When committed Journal evidence exists, `state.json` must match its latest committed resulting version, status, last-operation metadata, payload hash, and complete State SHA-256. A modified State cannot be wrapped into a later operation.
 
-With an empty Journal, only the canonical uncommitted `CREATED` baseline is valid: version zero, empty task/index maps, null last-operation fields, and equal creation/update timestamps. Empty-Journal `RUNNING`, `FAILED`, or `COMPLETED` State is rejected rather than treated as initialized work.
+With an empty Journal, only the canonical uncommitted `CREATED` baseline is valid: version zero, empty task/index maps, null last-operation fields, and equal creation/update timestamps. `validate_initialized_run()` applies this same binding before the Active Run Lock can enter `running`. Empty-Journal `RUNNING`, `FAILED`, or `COMPLETED` State is rejected rather than treated as initialized work.
 
 State and genesis anchor are separate atomic replacements. State-only, anchor-only, non-genesis anchor, damaged file, or non-empty Journal initialization states fail closed; A3.1 does not invent the missing peer file or start workers from a partial allocation.
