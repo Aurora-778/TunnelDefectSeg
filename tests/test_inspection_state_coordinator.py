@@ -693,6 +693,86 @@ def test_aborted_task_start_recovers_after_two_deterministic_successors(
     assert all(":attempt:1:started" in operation_id for operation_id in start_ids)
 
 
+def test_aborted_task_start_rejects_well_formed_forged_checksum_successor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks = {"alpha": Task("alpha", "alpha", [], retries=0, cache=False)}
+    controller, lock_token = _controller_fixture(tmp_path, tasks)
+    asyncio.run(controller.prepare_execution(tasks))
+    original_replace = controller._store._atomic_replace
+
+    def fail_task_start_state(path: Path, data: bytes, *, label: str) -> None:
+        if label == "canonical state":
+            raise StateStoreError("injected task_started State replace failure")
+        original_replace(path, data, label=label)
+
+    monkeypatch.setattr(
+        controller._store, "_atomic_replace", fail_task_start_state
+    )
+    with pytest.raises(InspectionWorkflowControllerError, match="task_started"):
+        asyncio.run(
+            controller.submit_checkpoint_event(
+                {"checkpoint_kind": "task_started", "task_id": "alpha"}
+            )
+        )
+    monkeypatch.setattr(controller._store, "_atomic_replace", original_replace)
+
+    store = StateStore(tmp_path)
+    recovered = store.recover_state_journal(
+        run_id="run_001", expected_lock_token=lock_token
+    )
+    journal_path = tmp_path / "runs" / "run_001" / "state_journal.jsonl"
+    state_path = tmp_path / "runs" / "run_001" / "state.json"
+    rows = [
+        json.loads(line)
+        for line in journal_path.read_text(encoding="utf-8").splitlines()
+    ]
+    latest_checksum = next(
+        row["record_checksum"]
+        for row in reversed(rows)
+        if row["phase"] == "aborted" and ":started" in row["operation_id"]
+    )
+    forged_checksum = (
+        ("0" if latest_checksum[0] != "0" else "1") + latest_checksum[1:]
+    )
+    assert forged_checksum != latest_checksum
+    assert len(forged_checksum) == 64
+    assert set(forged_checksum).issubset(set("0123456789abcdef"))
+    journal_before = journal_path.read_bytes()
+    state_before = state_path.read_bytes()
+    timestamp = "2026-07-29T00:00:05.000000Z"
+
+    with pytest.raises(
+        StateConflictError, match="canonical aborted-start successor"
+    ):
+        store.checkpoint_context(
+            run_id="run_001",
+            expected_lock_token=lock_token,
+            expected_status="RUNNING",
+            expected_state_version=recovered["state_version"],
+            operation_id=(
+                "run:run_001:task:alpha:attempt:1:started:"
+                f"after_aborted:{forged_checksum}"
+            ),
+            mutation_timestamp=timestamp,
+            payload={
+                "checkpoint_kind": "task_started",
+                "task_id": "alpha",
+                "attempt_number": 1,
+                "expected_task_status": "pending",
+                "next_task_status": "running",
+                "retry_disposition": "none",
+                "next_attempt_number": None,
+                "controlled_context_delta": {},
+                "error_summary": None,
+                "created_at": timestamp,
+            },
+        )
+
+    assert journal_path.read_bytes() == journal_before
+    assert state_path.read_bytes() == state_before
+
+
 def test_aborted_task_start_successor_lookup_is_one_pass_near_journal_limit() -> None:
     class _CountingRecords(list[dict[str, object]]):
         iterations = 0
