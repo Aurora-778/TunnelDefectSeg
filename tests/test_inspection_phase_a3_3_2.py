@@ -56,6 +56,45 @@ def _interrupt_before_publication(
                 )
 
 
+def _interrupt_after_unanchored_task_success(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    request: dict | None = None,
+) -> None:
+    original_write_anchor = StateStore._write_anchor
+    injected = False
+
+    def fail_task_success_anchor(self, run_id, anchor):
+        nonlocal injected
+        journal_path = root / f"runs/{RUN_ID}/state_journal.jsonl"
+        if journal_path.is_file():
+            last_record = json.loads(journal_path.read_bytes().splitlines()[-1])
+            if (
+                last_record["phase"] == "committed"
+                and last_record["operation_id"].endswith(":succeeded")
+            ):
+                injected = True
+                raise OSError("injected committed append before anchor failure")
+        return original_write_anchor(self, run_id, anchor)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(StateStore, "_write_anchor", fail_task_success_anchor)
+        with pytest.raises(InspectionWorkflowLifecycleError, match="lifecycle failed closed"):
+            if request is None:
+                InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID)
+            else:
+                InspectionWorkflowController.run_prepared_task(
+                    root, task_request=request, run_id=RUN_ID
+                )
+    assert injected is True
+    run_dir = root / f"runs/{RUN_ID}"
+    anchor = json.loads((run_dir / "state_journal_tail.json").read_bytes())
+    journal = (run_dir / "state_journal.jsonl").read_bytes()
+    assert anchor["tail_file_size_bytes"] < len(journal)
+    assert json.loads(journal.splitlines()[-1])["phase"] == "committed"
+
+
 def _prepared_source(root: Path) -> dict:
     raw = root / "raw-dataset"
     (raw / "images").mkdir(parents=True)
@@ -548,6 +587,21 @@ def test_ordinary_resume_rejects_a_different_owner_without_side_effects(
     assert _tree_snapshot(root / "runs") == before
 
 
+def test_ordinary_resume_rejects_same_pid_without_process_instance_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "resume-owner-process-instance"
+    root.mkdir()
+    _legacy_source(root)
+    _interrupt_before_publication(root, monkeypatch)
+    before = _tree_snapshot(root / "runs")
+
+    monkeypatch.setattr(locking, "_PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES", set())
+    with pytest.raises(InspectionWorkflowLifecycleError, match="explicit A3.2 takeover"):
+        InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID, resume=True)
+    assert _tree_snapshot(root / "runs") == before
+
+
 def test_resume_without_runs_or_active_lock_creates_no_residue(tmp_path: Path) -> None:
     root = tmp_path / "missing-resume-lock"
     root.mkdir()
@@ -656,6 +710,59 @@ def test_unresolved_pending_is_not_recovered_before_request_identity_check(
         InspectionWorkflowController.run_prepared_task(
             root,
             task_request=changed_request,
+            run_id=RUN_ID,
+            resume=True,
+        )
+    assert _tree_snapshot(root / "runs") == before
+
+
+def test_resume_repairs_one_unanchored_committed_successor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "resume-unanchored-successor"
+    root.mkdir()
+    _legacy_source(root)
+    _interrupt_after_unanchored_task_success(root, monkeypatch)
+
+    result = InspectionWorkflowController.run_legacy_simulated(
+        root, run_id=RUN_ID, resume=True
+    )
+
+    assert result["status"] == "COMPLETED"
+    journal = root / f"runs/{RUN_ID}/state_journal.jsonl"
+    anchor = json.loads(
+        (root / f"runs/{RUN_ID}/state_journal_tail.json").read_bytes()
+    )
+    assert anchor["tail_file_size_bytes"] == len(journal.read_bytes())
+
+
+@pytest.mark.parametrize("drift_kind", ["request", "policy"])
+def test_unanchored_successor_drift_is_rejected_before_recovery_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drift_kind: str,
+) -> None:
+    root = tmp_path / f"resume-unanchored-{drift_kind}-drift"
+    root.mkdir()
+    request = _prepared_source(root)
+    _interrupt_after_unanchored_task_success(root, monkeypatch, request=request)
+    before = _tree_snapshot(root / "runs")
+
+    if drift_kind == "request":
+        resumed_request = deepcopy(request)
+        resumed_request["task_id"] = "task_402"
+    else:
+        resumed_request = request
+        changed_policy = deepcopy(lifecycle.load_workflow_policy())
+        changed_policy["output_mapping"]["association"] = "association_v2"
+        monkeypatch.setattr(
+            lifecycle, "load_workflow_policy", lambda: deepcopy(changed_policy)
+        )
+
+    with pytest.raises(InspectionWorkflowLifecycleError):
+        InspectionWorkflowController.run_prepared_task(
+            root,
+            task_request=resumed_request,
             run_id=RUN_ID,
             resume=True,
         )

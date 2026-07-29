@@ -41,6 +41,7 @@ from orchestrator.inspection_workflow.locking import (
     read_existing_active_run_lock,
     release_active_run_lock,
     reserve_active_run_id,
+    validate_current_process_active_run_owner,
 )
 from orchestrator.inspection_workflow.observation_identity import (
     project_legacy_observation_identities,
@@ -236,16 +237,20 @@ async def _run_lifecycle_async(
             raise InspectionWorkflowLifecycleError(
                 "managed resume requires the matching running Active Run Lock"
             )
-        if (
-            lock.get("hostname") != socket.gethostname()
-            or lock.get("pid") != os.getpid()
-        ):
+        allocation_token = lock["allocation_token"]
+        lock_token = lock["lock_token"]
+        try:
+            validate_current_process_active_run_owner(
+                root,
+                run_id=run_id,
+                allocation_token=allocation_token,
+                expected_lock_token=lock_token,
+            )
+        except ActiveRunLockError as exc:
             raise InspectionWorkflowLifecycleError(
                 "ordinary Resume requires the current live Active Run Lock owner; "
                 "use explicit A3.2 takeover for another owner"
-            )
-        allocation_token = lock["allocation_token"]
-        lock_token = lock["lock_token"]
+            ) from exc
         a1_artifacts.validate_phase_a1_sandbox(
             root,
             run_id=run_id,

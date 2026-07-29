@@ -242,11 +242,15 @@ source, are checked as ordinary in-project entries; symlink, junction, and other
 reparse ancestry is rejected. These remain no-lock point-in-time checks.
 
 Ordinary Resume is restricted to the current hostname and PID recorded by the
-existing running Active Lock. Any other, dead, or unknown owner must use A3.2
-explicit takeover. The Controller first invokes a read-only StateStore identity
-preflight that matches the plan fingerprint, input mode, descriptor SHA-256,
-allocation identity, and lock token. Only after that preflight may Journal
-recovery mutate bytes. Reading a missing Resume lock uses a non-creating path;
+existing running Active Lock and to the process-local ownership lease established
+when that exact lock token was acquired. A restarted process or PID reuse has no
+lease and must use A3.2 explicit takeover. The Controller first invokes a
+read-only StateStore identity preflight that matches the plan fingerprint, input
+mode, descriptor SHA-256, allocation identity, and lock token. Only after that
+preflight may Journal recovery mutate bytes. The preflight accepts at most one
+complete canonical direct-successor beyond the durable tail anchor without
+advancing the anchor; the existing recovery path remains the only writer that can
+confirm it. Reading a missing Resume lock uses a non-creating path;
 missing `runs/` or lock state leaves no directory, lock, transaction, or audit
 residue.
 

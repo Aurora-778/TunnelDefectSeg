@@ -33,6 +33,7 @@ ACTIVE_RUN_RECOVERY_AUDIT_SCHEMA_VERSION = "active_run_recovery_audit_v1"
 ACTIVE_RUN_PHASES = frozenset({"allocating", "running", "recovering"})
 _BINARY_FLAG = getattr(os, "O_BINARY", 0)
 _ACTIVE_RUN_STATE_LOCK_NAME = ".active_run.state.lock"
+_PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES: set[tuple[str, str, str]] = set()
 
 _LOCK_FIELDS = frozenset(
     {
@@ -839,6 +840,38 @@ def read_existing_active_run_lock(project_root: Path) -> dict[str, Any]:
     return deepcopy(lock)
 
 
+def validate_current_process_active_run_owner(
+    project_root: Path,
+    *,
+    run_id: str,
+    allocation_token: str,
+    expected_lock_token: str,
+) -> dict[str, Any]:
+    """Fence ordinary Resume to a lock acquired by this process instance."""
+
+    lock = validate_existing_active_run_lock(
+        project_root,
+        run_id=run_id,
+        allocation_token=allocation_token,
+        expected_lock_token=expected_lock_token,
+        allowed_phases={"running"},
+    )
+    process_identity = (
+        os.path.normcase(str(Path(project_root).absolute())),
+        allocation_token,
+        expected_lock_token,
+    )
+    if (
+        lock["hostname"] != socket.gethostname()
+        or lock["pid"] != os.getpid()
+        or process_identity not in _PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES
+    ):
+        raise ActiveRunLockError(
+            "Active Run Lock is not owned by the current process instance"
+        )
+    return lock
+
+
 def _cleanup_failed_acquisition(
     path: Path, runs: Path, expected_bytes: bytes, lock_token: str
 ) -> list[str]:
@@ -938,6 +971,17 @@ def acquire_active_run_lock(
         if current_bytes != data or current["lock_token"] != lock_token:
             raise ActiveRunLockError("Active Run Lock changed during acquisition")
         _reject_recovery_or_release_entries(runs)
+        if (
+            current["pid"] == os.getpid()
+            and current["hostname"] == socket.gethostname()
+        ):
+            _PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES.add(
+                (
+                    os.path.normcase(str(root)),
+                    current["allocation_token"],
+                    lock_token,
+                )
+            )
         return deepcopy(current)
     except FileExistsError as exc:
         raise ActiveRunLockError("an Active Run Lock already exists") from exc
@@ -1794,6 +1838,17 @@ def recover_stale_active_run(
             )
             if _canonical_json_bytes(persisted) != successor_bytes:
                 raise ActiveRunLockError("recovery successor bytes do not match frozen outcome")
+            if (
+                persisted["pid"] == os.getpid()
+                and persisted["hostname"] == socket.gethostname()
+            ):
+                _PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES.add(
+                    (
+                        os.path.normcase(str(root)),
+                        persisted["allocation_token"],
+                        new_lock_token,
+                    )
+                )
         else:
             current_recovering, current_recovering_bytes = _read_lock(active_path)
             if (
@@ -1883,4 +1938,11 @@ def release_active_run_lock(
                 ):
                     _add_exception_note(error, diagnostic)
             raise error from exc
+    _PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES.discard(
+        (
+            os.path.normcase(str(root)),
+            expected_allocation_token,
+            expected_lock_token,
+        )
+    )
     return {"released": True, "run_id": run_id, "lock_token": expected_lock_token}

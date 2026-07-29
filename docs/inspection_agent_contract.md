@@ -95,10 +95,13 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
   fixed Legacy source must be an in-project ordinary directory entry: symlink,
   junction, or other reparse ancestry fails closed.
 - Ordinary A3.3.2 Resume is owner-preserving: the existing running Active Lock
-  must name the current hostname and PID. A dead, unknown, or different owner can
-  continue only through the explicit A3.2 takeover protocol. Before any Journal
+  must name the current hostname and PID and retain the process-local ownership
+  lease created for that exact lock token. Restarted processes and PID reuse must
+  continue through the explicit A3.2 takeover protocol. Before any Journal
   repair, a read-only State preflight matches the plan fingerprint, input mode,
-  descriptor SHA-256, allocation identity, and lock token. Missing `runs/` or an
+  descriptor SHA-256, allocation identity, and lock token. It may validate one
+  complete canonical direct-successor beyond the durable anchor, but only the
+  existing recovery path advances that anchor. Missing `runs/` or an
   Active Lock is rejected without creating directories or recovery residue.
 - A3.3.2 preflight rejects A1 work/artifact/staging recovery markers, the A2
   publication recovery marker, State recovery markers, Active Run recovery/state

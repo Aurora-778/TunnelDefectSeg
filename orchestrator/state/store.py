@@ -1086,6 +1086,7 @@ class StateStore:
         allocation_token: str,
         *,
         repair_unanchored: bool,
+        accept_unanchored_direct_successor: bool = False,
     ) -> tuple[list[dict[str, Any]], dict[str, Any], bytes]:
         paths = self._paths(run_id)
         anchor, _ = self._read_anchor(run_id, allocation_token)
@@ -1119,12 +1120,16 @@ class StateStore:
         suffix = journal[anchor_size:]
         if not suffix:
             return records, anchor, journal
-        if not repair_unanchored:
+        if not repair_unanchored and not accept_unanchored_direct_successor:
             raise StateRecoveryRequiredError(
                 "state journal has unconfirmed bytes; call recover_state_journal()"
             )
         newline_count = suffix.count(b"\n")
         if newline_count == 0:
+            if not repair_unanchored:
+                raise StateRecoveryRequiredError(
+                    "state journal has an incomplete unconfirmed record"
+                )
             try:
                 with paths["journal"].open("r+b") as handle:
                     handle.truncate(anchor_size)
@@ -1148,6 +1153,8 @@ class StateStore:
             raise StateConflictError("unconfirmed state journal record is not canonical")
         candidate = [*records, record]
         self._validate_operation_sequences(candidate)
+        if not repair_unanchored:
+            return candidate, anchor, journal
         next_anchor = self._anchor_document(
             run_id=run_id,
             allocation_token=allocation_token,
@@ -1473,6 +1480,7 @@ class StateStore:
             run_id,
             state["allocation_token"],
             repair_unanchored=False,
+            accept_unanchored_direct_successor=True,
         )
         self._validate_recovery_audit_bindings(state, records)
         unresolved = [
