@@ -10,7 +10,11 @@ import re
 from typing import Any
 
 from orchestrator.dag.builder import Task
-from orchestrator.inspection_workflow.locking import canonical_utc_now
+from orchestrator.inspection_workflow.locking import (
+    ActiveRunLockError,
+    canonical_utc_now,
+    validate_active_run_lock,
+)
 from orchestrator.inspection_workflow.models import freeze_json
 from orchestrator.inspection_workflow.planning import (
     build_required_task_plan,
@@ -26,12 +30,6 @@ class InspectionWorkflowControllerError(RuntimeError):
 
 _EVENT_FIELDS = {
     "task_skipped": {"checkpoint_kind", "task_id", "skip_reason"},
-    "task_cache_hit": {
-        "checkpoint_kind",
-        "task_id",
-        "task_output",
-        "cache_provenance",
-    },
     "task_started": {"checkpoint_kind", "task_id"},
     "task_succeeded": {"checkpoint_kind", "task_id", "task_output"},
     "task_failed": {
@@ -42,7 +40,6 @@ _EVENT_FIELDS = {
         "error_summary",
     },
 }
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _ERROR_TYPE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
@@ -110,6 +107,18 @@ class InspectionWorkflowController:
             try:
                 self._tasks = dict(tasks)
                 state = self._state()
+                try:
+                    validate_active_run_lock(
+                        self._store.project_root,
+                        run_id=self.run_id,
+                        allocation_token=state["allocation_token"],
+                        expected_lock_token=self._expected_lock_token,
+                        allowed_phases={"running"},
+                    )
+                except ActiveRunLockError as exc:
+                    raise InspectionWorkflowControllerError(
+                        "managed State Coordinator Active Run Lock is invalid"
+                    ) from exc
                 if _thaw_json(state["task_plan"]) != task_plan:
                     raise InspectionWorkflowControllerError(
                         "DAG task plan does not match canonical State"
@@ -141,14 +150,28 @@ class InspectionWorkflowController:
                     raise InspectionWorkflowControllerError(
                         "managed DAG execution requires canonical RUNNING State"
                     )
+                checkpoint_events = state["context"].get(
+                    "phase_a3_checkpoint_events", {}
+                )
+                if (
+                    isinstance(checkpoint_events, Mapping)
+                    and any(
+                        isinstance(value, Mapping)
+                        and value.get("checkpoint_kind") == "task_cache_hit"
+                        for value in checkpoint_events.values()
+                    )
+                ):
+                    raise InspectionWorkflowControllerError(
+                        "managed State contains an unauthenticated legacy cache checkpoint"
+                    )
                 blocked_resume = sorted(
                     task_id
                     for task_id, status in state["task_status"].items()
-                    if status in {"running", "failed", "skipped"}
+                    if status == "running"
                 )
                 if blocked_resume:
                     raise InspectionWorkflowControllerError(
-                        "managed resume cannot continue terminal or in-flight tasks: "
+                        "managed resume cannot continue in-flight tasks: "
                         + ", ".join(blocked_resume)
                     )
                 self._resume_retry_schedules_locked()
@@ -252,22 +275,11 @@ class InspectionWorkflowController:
                     "managed task skip reason is not a controlled code"
                 )
             return
-        if kind in {"task_cache_hit", "task_succeeded"}:
+        if kind == "task_succeeded":
             if not isinstance(event["task_output"], Mapping):
                 raise InspectionWorkflowControllerError(
                     "managed task output must be an object"
                 )
-            if kind == "task_cache_hit":
-                provenance = event["cache_provenance"]
-                if (
-                    not isinstance(provenance, Mapping)
-                    or set(provenance) != {"cache_key_sha256"}
-                    or not isinstance(provenance["cache_key_sha256"], str)
-                    or not _SHA256_RE.fullmatch(provenance["cache_key_sha256"])
-                ):
-                    raise InspectionWorkflowControllerError(
-                        "managed cache provenance is invalid"
-                    )
             return
         if kind == "task_failed":
             provenance = event["failure_provenance"]
@@ -350,6 +362,18 @@ class InspectionWorkflowController:
                 f"run:{self.run_id}:task:{payload['task_id']}:"
                 f"attempt:{payload['attempt_number']}:{suffix}"
             )
+            if kind == "task_started":
+                try:
+                    operation_id = self._store.next_task_start_operation_id(
+                        run_id=self.run_id,
+                        task_id=payload["task_id"],
+                        attempt_number=payload["attempt_number"],
+                        expected_lock_token=self._expected_lock_token,
+                    )
+                except StateStoreError as exc:
+                    raise InspectionWorkflowControllerError(
+                        "managed task start recovery identity is invalid"
+                    ) from exc
         try:
             result = self._store.checkpoint_context(
                 run_id=self.run_id,
@@ -434,23 +458,6 @@ class InspectionWorkflowController:
                     "pending",
                     "skipped",
                     {"skip_reason": event["skip_reason"]},
-                )
-            )
-        elif kind == "task_cache_hit":
-            self._require_successful_dependencies(
-                task_id, dependency_statuses
-            )
-            self._checkpoint_locked(
-                self._task_payload(
-                    kind,
-                    task_id,
-                    0,
-                    "pending",
-                    "success",
-                    {
-                        "task_output": {"result": event["task_output"]},
-                        "cache_provenance": event["cache_provenance"],
-                    },
                 )
             )
         elif kind == "task_started":

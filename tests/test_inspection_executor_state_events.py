@@ -70,13 +70,6 @@ class _AlwaysFailAgent(BaseAgent):
         raise ValueError("/home/private/source.csv")
 
 
-class _MustNotRunAgent(BaseAgent):
-    name = "cached"
-
-    def run(self, context):
-        raise AssertionError("cache-hit Agent must not run")
-
-
 class _IsolatedOutputAgent(BaseAgent):
     name = "beta"
 
@@ -257,13 +250,14 @@ def test_managed_executor_terminal_failure_then_dependency_skip(
     assert "/home/private" not in journal
 
 
-def test_managed_executor_cache_hit_uses_attempt_zero_without_agent(
+def test_managed_executor_ignores_untrusted_global_cache(
     tmp_path: Path,
 ) -> None:
     tasks = {"cached": Task("cached", "cached", [], retries=0, cache=True)}
     controller, _, _ = _managed_fixture(tmp_path, tasks)
+    calls: list[str] = []
     registry = AgentRegistry()
-    registry.register(_MustNotRunAgent())
+    registry.register(_SuccessAgent("cached", tmp_path, calls))
     context = {"inputs": {}, "outputs": {}, "shared": {}, "task_status": {}}
     executor = DAGExecutor(
         registry,
@@ -276,18 +270,21 @@ def test_managed_executor_cache_hit_uses_attempt_zero_without_agent(
         executor.cache_path,
         {"cached": {"key": key, "result": {"value": "from-cache"}}},
     )
+    cache_bytes = executor.cache_path.read_bytes()
 
     result = executor.run(tasks, context)
 
-    assert result["outputs"]["cached"] == {"value": "from-cache"}
-    assert _checkpoint_kinds(tmp_path)[-1] == "task_cache_hit"
-    assert controller.snapshot["canonical_state"]["task_attempts"]["cached"] == 0
+    assert calls == ["cached"]
+    assert result["outputs"]["cached"] == {"value": "cached"}
+    assert _checkpoint_kinds(tmp_path)[-2:] == ["task_started", "task_succeeded"]
+    assert controller.snapshot["canonical_state"]["task_attempts"]["cached"] == 1
+    assert executor.cache_path.read_bytes() == cache_bytes
 
 
 def test_managed_executor_resume_continues_from_canonical_attempt(
     tmp_path: Path,
 ) -> None:
-    tasks = {"alpha": Task("alpha", "alpha", [], retries=1, cache=False)}
+    tasks = {"alpha": Task("alpha", "alpha", [], retries=1, cache=True)}
     controller, lock_token, _ = _managed_fixture(tmp_path, tasks)
     import asyncio
 
@@ -318,6 +315,11 @@ def test_managed_executor_resume_continues_from_canonical_attempt(
     calls: list[str] = []
     registry = AgentRegistry()
     registry.register(_SuccessAgent("alpha", tmp_path, calls))
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    (tmp_path / "logs" / "dag_cache.json").write_text(
+        '{"alpha":{"key":"forged","result":{"value":"stale"}}}',
+        encoding="utf-8",
+    )
 
     result = DAGExecutor(
         registry,
@@ -333,6 +335,114 @@ def test_managed_executor_resume_continues_from_canonical_attempt(
     kinds = _checkpoint_kinds(tmp_path)
     assert kinds[-1] == "task_succeeded"
     assert kinds[-2] == "task_started"
+
+
+def test_managed_executor_requires_matching_explicit_run_before_selection(
+    tmp_path: Path,
+) -> None:
+    tasks = {"alpha": Task("alpha", "alpha", [], retries=0, cache=False)}
+    controller, _, metadata = _managed_fixture(tmp_path, tasks)
+    runs_before = sorted(path.name for path in (tmp_path / "runs").iterdir())
+
+    with pytest.raises(ValueError, match="explicit run_id"):
+        DAGExecutor(
+            AgentRegistry(),
+            tmp_path,
+            checkpoint_event_sink=controller,
+        )
+    with pytest.raises(ValueError, match="does not match"):
+        DAGExecutor(
+            AgentRegistry(),
+            tmp_path,
+            run_id="run_999",
+            checkpoint_event_sink=controller,
+        )
+
+    assert sorted(path.name for path in (tmp_path / "runs").iterdir()) == runs_before
+    assert (tmp_path / "runs" / "run_001" / "metadata.json").read_bytes() == metadata
+    assert not (tmp_path / "runs" / "run_002").exists()
+
+
+def test_managed_resume_preserves_terminal_tasks_and_runs_pending_branch(
+    tmp_path: Path,
+) -> None:
+    tasks = {
+        "done": Task("done", "done", [], retries=0, cache=False),
+        "fail": Task("fail", "fail", [], retries=0, cache=False),
+        "tail": Task("tail", "tail", ["fail"], retries=0, cache=False),
+        "independent": Task(
+            "independent", "independent", [], retries=0, cache=False
+        ),
+    }
+    controller, lock_token, _ = _managed_fixture(tmp_path, tasks)
+    import asyncio
+
+    asyncio.run(controller.prepare_execution(tasks))
+    asyncio.run(
+        controller.submit_checkpoint_event(
+            {"checkpoint_kind": "task_started", "task_id": "done"}
+        )
+    )
+    asyncio.run(
+        controller.submit_checkpoint_event(
+            {
+                "checkpoint_kind": "task_succeeded",
+                "task_id": "done",
+                "task_output": {"value": "already-committed"},
+            }
+        )
+    )
+    asyncio.run(
+        controller.submit_checkpoint_event(
+            {"checkpoint_kind": "task_started", "task_id": "fail"}
+        )
+    )
+    asyncio.run(
+        controller.submit_checkpoint_event(
+            {
+                "checkpoint_kind": "task_failed",
+                "task_id": "fail",
+                "retryable": False,
+                "failure_provenance": {"error_type": "RuntimeError"},
+                "error_summary": "RuntimeError: managed task execution failed",
+            }
+        )
+    )
+    asyncio.run(
+        controller.submit_checkpoint_event(
+            {
+                "checkpoint_kind": "task_skipped",
+                "task_id": "tail",
+                "skip_reason": "dependency_failed",
+            }
+        )
+    )
+    resumed = InspectionWorkflowController(
+        tmp_path,
+        run_id="run_001",
+        expected_lock_token=lock_token,
+        plan_fingerprint=task_plan_fingerprint(tasks),
+        resume=True,
+    )
+    calls: list[str] = []
+    registry = AgentRegistry()
+    registry.register(_SuccessAgent("independent", tmp_path, calls))
+
+    result = DAGExecutor(
+        registry,
+        tmp_path,
+        resume=True,
+        run_id="run_001",
+        checkpoint_event_sink=resumed,
+    ).run(tasks, {"inputs": {}, "outputs": {}, "shared": {}, "task_status": {}})
+
+    assert calls == ["independent"]
+    assert result["task_status"] == {
+        "done": "success",
+        "fail": "failed",
+        "independent": "success",
+        "tail": "skipped",
+    }
 
 
 def test_managed_executor_uses_only_committed_declared_dependency_outputs(

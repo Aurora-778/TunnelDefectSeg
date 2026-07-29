@@ -58,8 +58,12 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
 - With-id remains an evaluation upper bound.
 - Phase 0 does not modify the Registry, DAGExecutor, `config/dag.yaml`, Web routes, model inference, or formal `data/simulated` and `outputs` artifacts.
 - A3.3.1 modifies `DAGExecutor` only through a default-null checkpoint sink.
+- A3.3.1 managed execution requires an explicit matching Run, fences every
+  prepare call, ignores the unauthenticated legacy DAG cache, preserves terminal
+  task branches on Resume, and uses a Journal-checksum-bound successor for an
+  aborted `task_started` without changing its business attempt.
   Omitting the sink preserves the legacy checkpoint and metadata path. Supplying
-  the Controller disables legacy State writes and routes all seven task events
+  the Controller disables legacy State writes and routes the six managed events
   through one StateStore version cursor; this direct test seam is not a new CLI
   or a completed Engineering Agent workflow.
 - The A1 sandbox source projection is available only by direct component invocation

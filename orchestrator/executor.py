@@ -50,6 +50,15 @@ class DAGExecutor:
         self.resume = resume
         self.debug = debug
         self.checkpoint_event_sink = checkpoint_event_sink
+        if checkpoint_event_sink is not None:
+            if run_id is None:
+                raise ValueError(
+                    "managed checkpoint execution requires an explicit run_id"
+                )
+            if checkpoint_event_sink.run_id != run_id:
+                raise ValueError(
+                    "managed checkpoint sink run_id does not match DAGExecutor"
+                )
         self.run_manager = RunManager(project_root)
         self.run_info = self._select_run(dag_config=dag_config, run_id=run_id)
         self.log_path = project_root / "logs" / "dag_execution.json"
@@ -62,11 +71,6 @@ class DAGExecutor:
         self.run_state_path = self.run_info.run_dir / "state.json"
         self.run_timeline_path = self.run_info.run_dir / "timeline.json"
         self.run_dag_path = self.run_info.run_dir / "dag.json"
-        if (
-            checkpoint_event_sink is not None
-            and checkpoint_event_sink.run_id != self.run_id
-        ):
-            raise ValueError("managed checkpoint sink run_id does not match DAGExecutor")
 
     def run(self, tasks: dict[str, Task], context: dict[str, Any]) -> dict[str, Any]:
         return asyncio.run(self.run_async(tasks, context))
@@ -86,17 +90,26 @@ class DAGExecutor:
             context["shared"]["run_id"] = self.run_id
 
         events: list[dict[str, Any]] = []
-        cache = self._read_json(self.cache_path)
+        cache = {} if managed else self._read_json(self.cache_path)
         self._write_dag_json(tasks, context)
         if not managed:
             self.run_manager.update_metadata(self.run_id, status="running")
             self._checkpoint(context)
 
         for layer in execution_layers(tasks):
-            runnable = [name for name in layer if context["task_status"].get(name) != "success"]
+            runnable = [
+                name
+                for name in layer
+                if context["task_status"].get(name)
+                in {"pending", "retry_scheduled"}
+            ]
             runnable = [name for name in runnable if self._deps_ok(tasks[name], context)]
             for skipped in sorted(set(layer) - set(runnable)):
-                if context["task_status"].get(skipped) == "success":
+                if context["task_status"].get(skipped) in {
+                    "success",
+                    "failed",
+                    "skipped",
+                }:
                     continue
                 if managed:
                     await self.checkpoint_event_sink.submit_checkpoint_event(
@@ -142,7 +155,8 @@ class DAGExecutor:
                     self._checkpoint(context)
                 self._write_dag_json(tasks, context)
 
-        self._write_json(self.cache_path, cache)
+        if not managed:
+            self._write_json(self.cache_path, cache)
         self._write_json(self.log_path, events)
         self._write_json(self.trace_path, events)
         self._write_json(self.run_log_path, events)
@@ -253,27 +267,6 @@ class DAGExecutor:
         sink = self.checkpoint_event_sink
         if sink is None:
             raise RuntimeError("managed task execution requires a checkpoint sink")
-        key = self._cache_key(task, context)
-        if task.cache and cache.get(task.name, {}).get("key") == key:
-            result = cache[task.name]["result"]
-            await sink.submit_checkpoint_event(
-                {
-                    "checkpoint_kind": "task_cache_hit",
-                    "task_id": task.name,
-                    "task_output": result,
-                    "cache_provenance": {"cache_key_sha256": key},
-                }
-            )
-            self._apply_managed_projection(context)
-            return task.name, "success", result, self._event(
-                task.name,
-                "success",
-                cached=True,
-                retry_count=0,
-                start_time=datetime.now().isoformat(timespec="seconds"),
-                end_time=datetime.now().isoformat(timespec="seconds"),
-                duration_seconds=0.0,
-            )
 
         while True:
             await sink.submit_checkpoint_event(
@@ -363,8 +356,6 @@ class DAGExecutor:
                 }
             )
             self._apply_managed_projection(context)
-            if task.cache:
-                cache[task.name] = {"key": key, "result": result}
             duration = perf_counter() - start
             return task.name, "success", result, self._event(
                 task.name,

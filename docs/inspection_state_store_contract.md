@@ -147,7 +147,6 @@ The opt-in `DAGExecutor(checkpoint_event_sink=controller)` path submits only:
 ```text
 run_initialized
 task_skipped
-task_cache_hit
 task_started
 task_succeeded
 task_failed
@@ -158,23 +157,49 @@ The Controller derives operation IDs, attempts, lifecycle fields, retry-policy
 Hash, and mutation timestamps from the canonical task plan and current State.
 Workers submit only task results or bounded failure classification. They never
 submit full State, task maps, attempts, version cursors, or context snapshots.
-The Controller also verifies dependency skips, starts, and cache hits against the
-current canonical dependency states rather than trusting the event sender.
+The Controller also verifies dependency skips and starts against the current
+canonical dependency states rather than trusting the event sender.
 A retryable `task_failed` and its `task_retry_scheduled` are committed under one
 Controller serialization boundary. Resume repairs a proven `retry_pending`
 checkpoint from its committed controlled provenance, then uses the next
-canonical attempt.
+canonical attempt. Existing `success`, `failed`, and `skipped` tasks remain
+terminal for the adapter and are not re-executed; independent `pending` or
+`retry_scheduled` branches may continue. Canonical `running` remains Fail Closed
+because worker completion cannot be inferred.
 
 `task_started` must commit before an Agent is invoked. Outputs become visible to
-dependent tasks only after `task_succeeded` or `task_cache_hit` commits. A
+dependent tasks only after `task_succeeded` commits. A
 mutation or fencing failure permanently halts that Controller instance; it does
 not blindly retry CAS or fall back to legacy checkpoint writes.
+
+The A3.3.1 adapter does not trust the legacy project-global
+`logs/dag_cache.json`. Managed execution neither reads nor updates that cache,
+and it does not emit `task_cache_hit`. The StateStore keeps the checkpoint kind
+in its closed A3.1 schema for compatibility, but a future managed cache requires
+a separate receipt binding the plan, inputs, dependency outputs, and result
+bytes before the adapter may use it. Resume also rejects an existing canonical
+`task_cache_hit` checkpoint because A3.3.1 cannot prove its legacy cache source.
+
+If a `task_started` pending record is reconciled as `aborted` because canonical
+State replacement failed, the aborted operation ID remains terminal and cannot
+be reused. A resumed Controller asks StateStore for the sole allowed successor:
+the same canonical business attempt with an
+`after_aborted:<aborted-record-sha256>` suffix. StateStore derives and rechecks
+that suffix from the confirmed Journal under its existing state lock; arbitrary
+or random suffixes Fail Closed. A second aborted start chains from the latest
+confirmed aborted checksum. The business attempt is unchanged, so this recovery
+does not consume retry budget or guess attempt numbering.
 
 Without `checkpoint_event_sink`, `DAGExecutor` retains its existing legacy
 checkpoint, metadata, and context-version behavior. With the sink, it does not
 call `make_state`, `save_checkpoint`, `RunManager.update_metadata`, or
 `save_context_version`; Run-local logs, trace, cache, timeline, and DAG display
 remain non-authoritative diagnostics.
+
+Managed construction requires an explicit `run_id` equal to the sink Run before
+Run selection occurs. `prepare_execution()` validates the current Active Run
+Lock identity and `running` phase even when no State mutation is needed, so a
+stale token cannot return a successful no-op or rewrite diagnostics.
 
 A3.3.1 does not perform Publication or a `RUNNING -> COMPLETED` transition.
 Successful task execution therefore remains canonical `RUNNING` pending the

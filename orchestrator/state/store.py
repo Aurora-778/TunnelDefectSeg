@@ -201,6 +201,7 @@ _COMPLETION_FIELDS = frozenset(
 )
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _OPERATION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,511}\Z")
+_ABORTED_START_SUFFIX_RE = re.compile(r":after_aborted:([0-9a-f]{64})\Z")
 _BINARY_FLAG = getattr(os, "O_BINARY", 0)
 MAX_STATE_JOURNAL_BYTES = 8 * 1024 * 1024
 MAX_STATE_JOURNAL_RECORDS = 10_000
@@ -1664,7 +1665,12 @@ class StateStore:
             }[kind]
             expected_id = f"run:{run_id}:task:{task_id}:attempt:{attempt}:{suffix}"
         if operation_id != expected_id:
-            raise StateStoreError(f"operation_id does not match {kind}")
+            if not (
+                kind == "task_started"
+                and operation_id.startswith(expected_id)
+                and _ABORTED_START_SUFFIX_RE.search(operation_id)
+            ):
+                raise StateStoreError(f"operation_id does not match {kind}")
 
         disposition = payload["retry_disposition"]
         expected_status = payload["expected_task_status"]
@@ -2037,6 +2043,20 @@ class StateStore:
             state, records = self._recover_unfinished_operations_locked(
                 run_id=run_id, expected_lock_token=expected_lock_token
             )
+            if (
+                mutation_kind == "context_checkpoint"
+                and payload.get("checkpoint_kind") == "task_started"
+            ):
+                canonical_start_id = self._task_start_operation_id_from_records(
+                    run_id=run_id,
+                    task_id=payload["task_id"],
+                    attempt_number=payload["attempt_number"],
+                    records=records,
+                )
+                if operation_id != canonical_start_id:
+                    raise StateConflictError(
+                        "task_started operation_id is not the canonical aborted-start successor"
+                    )
             operation_index = self._operation_index(records)
             rows = operation_index.get((mutation_kind, operation_id), [])
             if rows:
@@ -2124,6 +2144,90 @@ class StateStore:
                 run_id, state["allocation_token"], records, terminal
             )
             return _mutation_result(persisted, operation_id)
+
+    @staticmethod
+    def _task_start_operation_id_from_records(
+        *,
+        run_id: str,
+        task_id: str,
+        attempt_number: int,
+        records: list[dict[str, Any]],
+    ) -> str:
+        base = (
+            f"run:{run_id}:task:{task_id}:attempt:{attempt_number}:started"
+        )
+        aborted: list[dict[str, Any]] = []
+        for row in records:
+            if (
+                row["mutation_kind"] != "context_checkpoint"
+                or row["phase"] != "aborted"
+                or not row["operation_id"].startswith(base)
+            ):
+                continue
+            pending = next(
+                (
+                    candidate
+                    for candidate in records
+                    if candidate["mutation_kind"] == "context_checkpoint"
+                    and candidate["operation_id"] == row["operation_id"]
+                    and candidate["phase"] == "pending"
+                ),
+                None,
+            )
+            payload = pending["payload"] if pending is not None else None
+            if (
+                isinstance(payload, Mapping)
+                and payload.get("checkpoint_kind") == "task_started"
+                and payload.get("task_id") == task_id
+                and payload.get("attempt_number") == attempt_number
+            ):
+                aborted.append(row)
+        if not aborted:
+            return base
+        latest = max(aborted, key=lambda row: row["record_index"])
+        return f"{base}:after_aborted:{latest['record_checksum']}"
+
+    def next_task_start_operation_id(
+        self,
+        *,
+        run_id: str,
+        task_id: str,
+        attempt_number: int,
+        expected_lock_token: str,
+    ) -> str:
+        """Return the only operation ID allowed after an aborted task start."""
+
+        with self._state_lock(run_id):
+            state, _ = self._read_state(run_id)
+            try:
+                validate_active_run_lock(
+                    self.project_root,
+                    run_id=run_id,
+                    allocation_token=state["allocation_token"],
+                    expected_lock_token=expected_lock_token,
+                    allowed_phases={"running"},
+                )
+            except ActiveRunLockError as exc:
+                raise StateConflictError(str(exc)) from exc
+            records, _, _ = self._journal_state(
+                run_id,
+                state["allocation_token"],
+                repair_unanchored=False,
+            )
+            self._validate_recovery_audit_bindings(state, records)
+            if any(
+                len(rows) == 1 for rows in self._operation_index(records).values()
+            ):
+                raise StateRecoveryRequiredError(
+                    "unresolved pending operation must be recovered before task start"
+                )
+            self._validate_committed_state_binding(state, records)
+            return self._task_start_operation_id_from_records(
+                run_id=run_id,
+                task_id=task_id,
+                attempt_number=attempt_number,
+                records=records,
+            )
 
     def checkpoint_context(
         self,

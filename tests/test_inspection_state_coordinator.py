@@ -23,7 +23,7 @@ from orchestrator.inspection_workflow.planning import (
     build_required_task_plan,
     task_plan_fingerprint,
 )
-from orchestrator.state.store import StateConflictError, StateStore
+from orchestrator.state.store import StateConflictError, StateStore, StateStoreError
 
 
 T0 = "2026-07-29T00:00:00.000000Z"
@@ -263,7 +263,7 @@ def test_controller_rejects_path_bearing_nested_failure_provenance(
     assert "secret" not in journal
 
 
-def test_controller_rejects_uncontrolled_skip_and_cache_provenance(
+def test_controller_rejects_uncontrolled_skip_and_cache_event(
     tmp_path: Path,
 ) -> None:
     tasks = _tasks()
@@ -280,7 +280,7 @@ def test_controller_rejects_uncontrolled_skip_and_cache_provenance(
                 }
             )
         )
-    with pytest.raises(InspectionWorkflowControllerError, match="cache provenance"):
+    with pytest.raises(InspectionWorkflowControllerError, match="event kind"):
         asyncio.run(
             controller.submit_checkpoint_event(
                 {
@@ -312,16 +312,6 @@ def test_controller_rejects_uncontrolled_skip_and_cache_provenance(
         (
             "early_start",
             {"checkpoint_kind": "task_started", "task_id": "beta"},
-            "dependencies",
-        ),
-        (
-            "early_cache",
-            {
-                "checkpoint_kind": "task_cache_hit",
-                "task_id": "beta",
-                "task_output": {"value": "premature"},
-                "cache_provenance": {"cache_key_sha256": "0" * 64},
-            },
             "dependencies",
         ),
     ],
@@ -384,9 +374,110 @@ def test_controller_rejects_stale_lock_token_even_with_current_version(
         clock=_Clock(),
     )
 
-    with pytest.raises(InspectionWorkflowControllerError, match="transition"):
+    with pytest.raises(
+        InspectionWorkflowControllerError, match="Active Run Lock"
+    ):
         asyncio.run(stale.prepare_execution(tasks))
     assert controller.snapshot["state_version"] == 0
+
+
+def test_prepare_rejects_stale_token_without_rewriting_diagnostics(
+    tmp_path: Path,
+) -> None:
+    tasks = {"alpha": Task("alpha", "alpha", [], retries=0, cache=False)}
+    controller, _ = _controller_fixture(tmp_path, tasks)
+    asyncio.run(controller.prepare_execution(tasks))
+    asyncio.run(
+        controller.submit_checkpoint_event(
+            {"checkpoint_kind": "task_started", "task_id": "alpha"}
+        )
+    )
+    asyncio.run(
+        controller.submit_checkpoint_event(
+            {
+                "checkpoint_kind": "task_succeeded",
+                "task_id": "alpha",
+                "task_output": {"value": "done"},
+            }
+        )
+    )
+    state_before = (
+        tmp_path / "runs" / "run_001" / "state.json"
+    ).read_bytes()
+    diagnostic_paths = [
+        tmp_path / "logs" / "dag_execution.json",
+        tmp_path / "logs" / "execution_trace.json",
+        tmp_path / "runs" / "run_001" / "dag.json",
+        tmp_path / "runs" / "run_001" / "timeline.json",
+    ]
+    before = {
+        path: path.read_bytes() if path.exists() else None
+        for path in diagnostic_paths
+    }
+    stale = InspectionWorkflowController(
+        tmp_path,
+        run_id="run_001",
+        expected_lock_token=str(uuid.uuid4()),
+        plan_fingerprint=task_plan_fingerprint(tasks),
+        clock=_Clock(),
+    )
+
+    with pytest.raises(
+        InspectionWorkflowControllerError, match="Active Run Lock"
+    ):
+        asyncio.run(stale.prepare_execution(tasks))
+
+    assert (tmp_path / "runs" / "run_001" / "state.json").read_bytes() == state_before
+    assert {
+        path: path.read_bytes() if path.exists() else None
+        for path in diagnostic_paths
+    } == before
+
+
+def test_resume_rejects_existing_unauthenticated_cache_checkpoint(
+    tmp_path: Path,
+) -> None:
+    tasks = {"alpha": Task("alpha", "alpha", [], retries=0, cache=True)}
+    controller, lock_token = _controller_fixture(tmp_path, tasks)
+    asyncio.run(controller.prepare_execution(tasks))
+    state = controller.snapshot["canonical_state"]
+    timestamp = "2026-07-29T00:00:06.000000Z"
+    StateStore(tmp_path).checkpoint_context(
+        run_id="run_001",
+        expected_lock_token=lock_token,
+        expected_status="RUNNING",
+        expected_state_version=state["state_version"],
+        operation_id="run:run_001:task:alpha:attempt:0:cache_hit",
+        mutation_timestamp=timestamp,
+        payload={
+            "checkpoint_kind": "task_cache_hit",
+            "task_id": "alpha",
+            "attempt_number": 0,
+            "expected_task_status": "pending",
+            "next_task_status": "success",
+            "retry_disposition": "none",
+            "next_attempt_number": None,
+            "controlled_context_delta": {
+                "task_output": {"result": {"value": "legacy-cache"}},
+                "cache_provenance": {"cache_key_sha256": "0" * 64},
+            },
+            "error_summary": None,
+            "created_at": timestamp,
+        },
+    )
+    resumed = InspectionWorkflowController(
+        tmp_path,
+        run_id="run_001",
+        expected_lock_token=lock_token,
+        plan_fingerprint=task_plan_fingerprint(tasks),
+        resume=True,
+        clock=_Clock(),
+    )
+
+    with pytest.raises(
+        InspectionWorkflowControllerError, match="legacy cache"
+    ):
+        asyncio.run(resumed.prepare_execution(tasks))
 
 
 def test_resume_repairs_retry_pending_and_uses_next_canonical_attempt(
@@ -445,6 +536,124 @@ def test_resume_repairs_retry_pending_and_uses_next_canonical_attempt(
         )
     )
     assert resumed.snapshot["canonical_state"]["task_attempts"]["alpha"] == 2
+
+
+def test_aborted_task_start_recovers_with_one_deterministic_successor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks = {"alpha": Task("alpha", "alpha", [], retries=0, cache=False)}
+    controller, lock_token = _controller_fixture(tmp_path, tasks)
+    asyncio.run(controller.prepare_execution(tasks))
+    original_replace = controller._store._atomic_replace
+
+    def fail_task_start_state(path: Path, data: bytes, *, label: str) -> None:
+        if label == "canonical state":
+            raise StateStoreError("injected task_started State replace failure")
+        original_replace(path, data, label=label)
+
+    monkeypatch.setattr(
+        controller._store, "_atomic_replace", fail_task_start_state
+    )
+    with pytest.raises(
+        InspectionWorkflowControllerError, match="task_started"
+    ):
+        asyncio.run(
+            controller.submit_checkpoint_event(
+                {"checkpoint_kind": "task_started", "task_id": "alpha"}
+            )
+        )
+    monkeypatch.setattr(controller._store, "_atomic_replace", original_replace)
+
+    store = StateStore(tmp_path)
+    recovered = store.recover_state_journal(
+        run_id="run_001", expected_lock_token=lock_token
+    )
+    assert recovered["canonical_state"]["task_status"]["alpha"] == "pending"
+    assert recovered["canonical_state"]["task_attempts"]["alpha"] == 0
+    timestamp = "2026-07-29T00:00:05.000000Z"
+    with pytest.raises(
+        StateConflictError, match="canonical aborted-start successor"
+    ):
+        store.checkpoint_context(
+            run_id="run_001",
+            expected_lock_token=lock_token,
+            expected_status="RUNNING",
+            expected_state_version=recovered["state_version"],
+            operation_id=(
+                "run:run_001:task:alpha:attempt:1:started:"
+                + "after_aborted:"
+                + "0" * 64
+            ),
+            mutation_timestamp=timestamp,
+            payload={
+                "checkpoint_kind": "task_started",
+                "task_id": "alpha",
+                "attempt_number": 1,
+                "expected_task_status": "pending",
+                "next_task_status": "running",
+                "retry_disposition": "none",
+                "next_attempt_number": None,
+                "controlled_context_delta": {},
+                "error_summary": None,
+                "created_at": timestamp,
+            },
+        )
+
+    resumed = InspectionWorkflowController(
+        tmp_path,
+        run_id="run_001",
+        expected_lock_token=lock_token,
+        plan_fingerprint=task_plan_fingerprint(tasks),
+        resume=True,
+        clock=_Clock(),
+    )
+    calls: list[str] = []
+
+    class _Agent:
+        name = "alpha"
+
+        def run(self, _context):
+            calls.append("alpha")
+            return {"value": "recovered"}
+
+    from orchestrator.executor import DAGExecutor
+    from orchestrator.registry import AgentRegistry
+
+    registry = AgentRegistry()
+    registry.register(_Agent())
+    result = DAGExecutor(
+        registry,
+        tmp_path,
+        resume=True,
+        run_id="run_001",
+        checkpoint_event_sink=resumed,
+    ).run(tasks, {"inputs": {}, "outputs": {}, "shared": {}, "task_status": {}})
+
+    assert calls == ["alpha"]
+    assert result["outputs"]["alpha"] == {"value": "recovered"}
+    assert resumed.snapshot["canonical_state"]["task_attempts"]["alpha"] == 1
+    rows = [
+        json.loads(line)
+        for line in (
+            tmp_path / "runs" / "run_001" / "state_journal.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+    starts = [
+        row
+        for row in rows
+        if (
+            row["mutation_kind"] == "context_checkpoint"
+            and (row["payload"] or {}).get("checkpoint_kind") == "task_started"
+        )
+        or (
+            row["phase"] in {"committed", "aborted"}
+            and ":started" in row["operation_id"]
+        )
+    ]
+    start_ids = list(dict.fromkeys(row["operation_id"] for row in starts))
+    assert start_ids[0] == "run:run_001:task:alpha:attempt:1:started"
+    assert start_ids[1].startswith(start_ids[0] + ":after_aborted:")
+    assert all(":attempt:1:started" in operation_id for operation_id in start_ids)
 
 
 def test_resume_rejects_retry_provenance_from_a_different_plan_policy(
