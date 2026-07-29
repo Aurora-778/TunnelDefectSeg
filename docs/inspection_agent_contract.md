@@ -3,10 +3,11 @@
 ## Status
 
 This document freezes inputs and boundaries. Phase A2 publication is implemented
-only as a directly invoked temporary-sandbox transaction. Phase A3.1 now provides
-an opt-in Active Run Lock and canonical StateStore foundation, but Controller and
-executor integration is not enabled. Neither the legacy CLI nor the Phase 0
-workflow policy invokes A2 or A3.1.
+only as a directly invoked temporary-sandbox transaction. Phase A3.1 provides an
+opt-in Active Run Lock and canonical StateStore foundation, A3.2 adds explicit
+single-host recovery, and A3.3.1 adds a directly injected opt-in Controller sink
+for the existing `DAGExecutor`. Neither the legacy CLI nor the Phase 0 workflow
+policy invokes A2 or A3.
 
 Implemented in the current Phase 0 slices: executable Claim Policy and Workflow
 Policy/TaskRequest validation, neutral Prepared/Legacy observation identities,
@@ -17,9 +18,10 @@ Claim Gate, and render the Run-local static audit report. They remain disabled i
 the default Registry/DAG/CLI and cannot write formal `data` or `outputs` artifacts.
 Matched source-proof projection remains blocked pending a Memory schema upgrade.
 The A2 sandbox publication transaction is available for isolated verification.
-The A3.1 lock, State, CAS, Journal, and tail-anchor modules are likewise available
-only through direct component calls; Controller, DAG, Registry, CLI, and Web
-integration remain deferred to A3.2/A3.3.
+The A3 lock, State, CAS, Journal, tail-anchor, explicit recovery, and managed
+Executor adapter remain available only through direct component calls. Registry,
+CLI, Web, Prepared/Legacy dual-entry, and Publication lifecycle integration
+remain deferred to A3.3.2.
 
 A3.1 checkpoint calls use a closed, kind-specific event contract rather than a
 free context merge. Run initialization is accepted only in `PLANNED`; task events
@@ -55,6 +57,11 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
 - The current KICT path remains a static-mask plus simulated-metadata engineering prototype.
 - With-id remains an evaluation upper bound.
 - Phase 0 does not modify the Registry, DAGExecutor, `config/dag.yaml`, Web routes, model inference, or formal `data/simulated` and `outputs` artifacts.
+- A3.3.1 modifies `DAGExecutor` only through a default-null checkpoint sink.
+  Omitting the sink preserves the legacy checkpoint and metadata path. Supplying
+  the Controller disables legacy State writes and routes all seven task events
+  through one StateStore version cursor; this direct test seam is not a new CLI
+  or a completed Engineering Agent workflow.
 - The A1 sandbox source projection is available only by direct component invocation
   with `projection_mode=prepared_history_sources` and explicit Prepared/history-only
   producer paths under an initialized temporary sandbox; it is not a second

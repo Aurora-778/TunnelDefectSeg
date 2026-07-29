@@ -1,9 +1,11 @@
 # Inspection State Store Contract
 
 Phase A3.2 provides an opt-in Active Run Lock, canonical StateStore, and explicit
-single-host stale-owner recovery primitive. It is not connected to
-`DAGExecutor`, `Registry`, `run.py`, the Web application, or the legacy full
-pipeline. Controller ownership and workflow integration remain deferred to A3.3.
+single-host stale-owner recovery primitive. Phase A3.3.1 adds a directly injected,
+opt-in `InspectionWorkflowController` checkpoint sink for `DAGExecutor`. It is
+still not connected to `Registry`, `run.py`, the Web application, or the legacy
+full pipeline. Prepared/Legacy entry integration and Publication-driven terminal
+transitions remain deferred to A3.3.2.
 
 ## Active Run Lock
 
@@ -125,6 +127,59 @@ Any missing/mismatched audit, recovery mutex residue, lock replacement, sync, or
 outcome failure leaves the available evidence in place and fails closed. This is
 still an unlocked point-in-time local filesystem protocol, not cross-host
 takeover or hostile-tamper authentication.
+
+## Opt-in Executor Adapter
+
+`InspectionWorkflowController` is the sole owner of the StateStore, Active Lock
+token, immutable State snapshot, and monotonically advancing version cursor for
+one directly configured A3.3.1 execution. Its single `asyncio.Lock` serializes all
+managed mutations on the existing event loop; it does not create a service,
+worker thread, second executor, or second scheduler.
+
+The Controller projects the existing `Task` graph into the StateStore task-plan
+shape and separately fingerprints the task agent, retry, and cache policy.
+Task-map input order and dependency order do not affect the fingerprint, while a
+real topology or execution-policy change does. The existing scheduler remains
+the DAG authority.
+
+The opt-in `DAGExecutor(checkpoint_event_sink=controller)` path submits only:
+
+```text
+run_initialized
+task_skipped
+task_cache_hit
+task_started
+task_succeeded
+task_failed
+task_retry_scheduled
+```
+
+The Controller derives operation IDs, attempts, lifecycle fields, retry-policy
+Hash, and mutation timestamps from the canonical task plan and current State.
+Workers submit only task results or bounded failure classification. They never
+submit full State, task maps, attempts, version cursors, or context snapshots.
+The Controller also verifies dependency skips, starts, and cache hits against the
+current canonical dependency states rather than trusting the event sender.
+A retryable `task_failed` and its `task_retry_scheduled` are committed under one
+Controller serialization boundary. Resume repairs a proven `retry_pending`
+checkpoint from its committed controlled provenance, then uses the next
+canonical attempt.
+
+`task_started` must commit before an Agent is invoked. Outputs become visible to
+dependent tasks only after `task_succeeded` or `task_cache_hit` commits. A
+mutation or fencing failure permanently halts that Controller instance; it does
+not blindly retry CAS or fall back to legacy checkpoint writes.
+
+Without `checkpoint_event_sink`, `DAGExecutor` retains its existing legacy
+checkpoint, metadata, and context-version behavior. With the sink, it does not
+call `make_state`, `save_checkpoint`, `RunManager.update_metadata`, or
+`save_context_version`; Run-local logs, trace, cache, timeline, and DAG display
+remain non-authoritative diagnostics.
+
+A3.3.1 does not perform Publication or a `RUNNING -> COMPLETED` transition.
+Successful task execution therefore remains canonical `RUNNING` pending the
+A3.3.2 publication/terminal lifecycle. It also does not expose a Prepared or
+Legacy CLI entry and does not activate any A1 Agent in the Registry or DAG.
 
 `load()`, recovery, and every new mutation apply the same committed-state binding check. When committed Journal evidence exists, `state.json` must match its latest committed resulting version, status, last-operation metadata, payload hash, and complete State SHA-256. A modified State cannot be wrapped into a later operation.
 
