@@ -1513,14 +1513,14 @@ class StateStore:
             )
         except ActiveRunLockError as exc:
             raise StateConflictError(str(exc)) from exc
-        records, _, _ = self._journal_state(
-            run_id,
-            state["allocation_token"],
-            repair_unanchored=True,
-        )
-        self._validate_recovery_audit_bindings(state, records)
         normalized_recovery_ref: dict[str, str] | None = None
-        if recovery_audit_ref is not None:
+        if recovery_audit_ref is None:
+            if lock["phase"] == "recovering":
+                raise StateRecoveryDeferredError(
+                    "recovering Journal repair requires "
+                    "recover_taken_over_state_journal() with recovery audit evidence"
+                )
+        else:
             normalized_recovery_ref = _validate_recovery_audit_ref(
                 recovery_audit_ref, run_id=run_id
             )
@@ -1548,6 +1548,12 @@ class StateStore:
                 )
             except ActiveRunLockError as exc:
                 raise StateConflictError(str(exc)) from exc
+        records, _, _ = self._journal_state(
+            run_id,
+            state["allocation_token"],
+            repair_unanchored=True,
+        )
+        self._validate_recovery_audit_bindings(state, records)
         operation_index = self._operation_index(records)
         pending = [
             rows[0]
@@ -1564,10 +1570,6 @@ class StateStore:
             if row["operation_owner_lock_token"] != expected_lock_token:
                 raise StateRecoveryDeferredError(
                     "pending operation belongs to an older lock token; takeover recovery is required"
-                )
-            if lock["phase"] == "recovering":
-                raise StateRecoveryDeferredError(
-                    "recovering lock terminal records require recovery audit evidence"
                 )
         else:
             assert normalized_recovery_ref is not None

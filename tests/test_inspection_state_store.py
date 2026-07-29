@@ -35,6 +35,7 @@ from orchestrator.state import store as state_module
 from orchestrator.state.store import (
     COMPLETION_EVIDENCE_SCHEMA_VERSION,
     StateConflictError,
+    StateRecoveryDeferredError,
     StateRecoveryRequiredError,
     StateStore,
     StateStoreError,
@@ -921,6 +922,80 @@ def test_stale_takeover_recovers_one_unanchored_direct_successor(
     assert [row["phase"] for row in rows] == expected_phases
     assert anchor["tail_file_size_bytes"] == len(journal_path.read_bytes())
     assert store.load(run_id="run_001")["status"] == expected_status
+
+
+@pytest.mark.parametrize("failed_anchor_call", [1, 2])
+def test_ordinary_recovery_cannot_advance_takeover_unanchored_successor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_anchor_call: int,
+) -> None:
+    store, _, old_lock_token = _initialized(tmp_path)
+    original_write_anchor = store._write_anchor
+    calls = 0
+
+    def fail_one_anchor(run_id: str, anchor: Mapping[str, object]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == failed_anchor_call:
+            raise StateStoreError("injected unanchored direct successor")
+        original_write_anchor(run_id, anchor)
+
+    monkeypatch.setattr(store, "_write_anchor", fail_one_anchor)
+    with pytest.raises(StateStoreError, match="unanchored direct successor"):
+        _transition(
+            store,
+            old_lock_token,
+            version=0,
+            current="CREATED",
+            next_status="PLANNED",
+            second=1,
+        )
+    monkeypatch.setattr(store, "_write_anchor", original_write_anchor)
+
+    initialize_phase_a1_sandbox(tmp_path, run_id="run_001")
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    original_recover_taken_over = StateStore.recover_taken_over_state_journal
+    ordinary_recovery_rejected = False
+
+    def verify_exclusive_recovery(self, **kwargs):
+        nonlocal ordinary_recovery_rejected
+        run_dir = tmp_path / "runs" / "run_001"
+        paths = {
+            "active": tmp_path / "runs" / ".active_run.lock",
+            "state": run_dir / "state.json",
+            "journal": run_dir / "state_journal.jsonl",
+            "anchor": run_dir / "state_journal_tail.json",
+        }
+        before = {name: path.read_bytes() for name, path in paths.items()}
+        with pytest.raises(
+            StateRecoveryDeferredError,
+            match="recover_taken_over_state_journal",
+        ):
+            self.recover_state_journal(
+                run_id="run_001",
+                expected_lock_token=kwargs["expected_lock_token"],
+            )
+        assert {name: path.read_bytes() for name, path in paths.items()} == before
+        ordinary_recovery_rejected = True
+        return original_recover_taken_over(self, **kwargs)
+
+    monkeypatch.setattr(
+        StateStore,
+        "recover_taken_over_state_journal",
+        verify_exclusive_recovery,
+    )
+
+    result = recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=str(uuid.uuid4()),
+        new_lock_token=str(uuid.uuid4()),
+    )
+
+    assert result == {"replayed": False, "successor_phase": "running"}
+    assert ordinary_recovery_rejected is True
 
 
 def test_stale_takeover_rejects_multiple_unanchored_records_without_mutation(
