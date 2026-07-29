@@ -14,6 +14,8 @@ class AgentRegistry:
     def register(self, agent: BaseAgent) -> None:
         if not agent.name:
             raise ValueError("Agent must define a non-empty name")
+        if agent.name in self._agents:
+            raise ValueError(f"Agent is already registered: {agent.name}")
         self._agents[agent.name] = agent
 
     def get(self, name: str) -> BaseAgent:
@@ -28,12 +30,18 @@ class AgentRegistry:
 def build_default_registry() -> AgentRegistry:
     """Register the project agents without coupling Orchestrator to business code."""
     from orchestrator.agents.association_agent import AssociationAgent
+    from orchestrator.agents.claim_gate_agent import ClaimGateAgent
+    from orchestrator.agents.claim_visualization_agent import ClaimVisualizationAgent
+    from orchestrator.agents.comparison_evidence_agent import ComparisonEvidenceAgent
     from orchestrator.agents.doc_agent import DocAgent
+    from orchestrator.agents.engineering_claim_report_agent import EngineeringClaimReportAgent
     from orchestrator.agents.engineering_report_agent import EngineeringReportAgent
     from orchestrator.agents.final_report_agent import FinalReportAgent
     from orchestrator.agents.full_pipeline_agent import FullPipelineAgent
     from orchestrator.agents.growth_analysis_agent import GrowthAnalysisAgent
+    from orchestrator.agents.growth_report_agent import GrowthReportAgent
     from orchestrator.agents.memory_agent import MemoryAgent
+    from orchestrator.agents.memory_report_agent import MemoryReportAgent
     from orchestrator.agents.visualization_agent import VisualizationAgent
     from orchestrator.agents.web_agent import WebAgent
 
@@ -48,6 +56,12 @@ def build_default_registry() -> AgentRegistry:
         WebAgent(),
         DocAgent(),
         FullPipelineAgent(),
+        ComparisonEvidenceAgent(),
+        ClaimGateAgent(),
+        GrowthReportAgent(),
+        MemoryReportAgent(),
+        EngineeringClaimReportAgent(),
+        ClaimVisualizationAgent(),
     ):
         registry.register(agent)
     return registry

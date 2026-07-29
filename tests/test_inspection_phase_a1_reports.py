@@ -15,8 +15,10 @@ from orchestrator.agents.claim_gate_agent import ClaimGateAgent
 from orchestrator.agents.comparison_evidence_agent import ComparisonEvidenceAgent
 from orchestrator.agents.growth_report_agent import GrowthReportAgent
 from orchestrator.agents.memory_report_agent import MemoryReportAgent
+from orchestrator.dag.builder import build_dag
 from orchestrator.inspection_workflow import PhaseA1ArtifactError, initialize_phase_a1_sandbox
 from orchestrator.inspection_workflow import a1_artifacts, a1_reports
+from orchestrator.registry import build_default_registry
 from scripts import prepare_real_inspection_pilot as preparation
 
 
@@ -629,17 +631,18 @@ def test_broken_staging_report_leaf_is_rejected_without_following_it(
     assert not target.exists()
 
 
-def test_agents_remain_unregistered_and_formal_artifacts_are_untouched(tmp_path):
+def test_report_agents_are_profile_gated_and_formal_artifacts_are_untouched(tmp_path):
     root, context = _fixture(tmp_path, include_query=True)
     GrowthReportAgent().run(context)
     MemoryReportAgent().run(context)
     repository = Path(__file__).resolve().parents[1]
-    registry = (repository / "orchestrator/registry.py").read_text(encoding="utf-8")
-    dag = (repository / "config/dag.yaml").read_text(encoding="utf-8")
+    legacy_tasks, _ = build_dag(repository / "config/dag.yaml")
+    phase_a_tasks, _ = build_dag(
+        repository / "config/dag.yaml", profile="phase_a_agent_sandbox"
+    )
 
-    assert "GrowthReportAgent" not in registry
-    assert "MemoryReportAgent" not in registry
-    assert "growth_report" not in dag
-    assert "memory_report" not in dag
+    assert {"growth_report", "memory_report"} <= set(build_default_registry().list())
+    assert all(not task_id.startswith("phase_a_") for task_id in legacy_tasks)
+    assert {"phase_a_growth_report", "phase_a_memory_report"} <= set(phase_a_tasks)
     assert not (root / "data/simulated").exists()
     assert not (root / "outputs").exists()

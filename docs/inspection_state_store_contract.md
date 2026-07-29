@@ -226,19 +226,24 @@ The opt-in `InspectionWorkflowController.run_prepared_task(...)` and
 `run_legacy_simulated(...)` calls allocate one Active Run before creating its
 directory, initialize the same canonical State/Journal, and use the existing
 Controller sink for every managed Executor checkpoint. They are temporary-sandbox
-test seams only: they do not alter the legacy CLI, DAG, Registry, Web, or formal
-project artifacts.
+test seams only: they do not alter the legacy CLI, Web, or formal project
+artifacts. A3.3.3 registers the existing A1 Agent names and their profile nodes in
+the single DAG/Registry authority, while `legacy_default` preserves the legacy
+selection unchanged.
 
-Each A3.3.2 entry uses the one sealed A1 task closure; callers cannot inject a
-Controller, task map, Registry, source override, or output override. Prepared
-requests must select the complete fixed output closure. Before allocation the
-lifecycle captures a canonical resolved-input descriptor. Prepared descriptors
+Each A3.3.3 entry selects the one sealed A1 task closure through
+`build_dag(config/dag.yaml, profile="phase_a_agent_sandbox")`; callers cannot
+inject a Controller, task map, Registry, source override, or output override.
+That profile lists only its terminal task and Builder derives the complete closure.
+Task Agent names resolve through `build_default_registry()` before workers start.
+Prepared requests must select the complete fixed output closure. Before allocation
+the lifecycle captures a canonical resolved-input descriptor. Prepared descriptors
 bind the readiness-gated manifest and sibling CSV byte snapshots; Legacy
 descriptors bind the fixed simulated source and its neutral Run-local snapshot.
-The descriptor SHA-256 is stored in canonical State and included in the task-plan
-fingerprint. Resume re-captures and compares the descriptor inputs, rejecting any
-input-mode, request, policy, source, or Run-local snapshot drift before managed
-execution resumes.
+The descriptor SHA-256 and selected execution profile are stored in canonical State
+and included in the task-plan fingerprint. Resume re-captures and compares the
+descriptor inputs, rejecting any input-mode, request, policy, source, or Run-local
+snapshot drift before managed execution resumes.
 
 Prepared readiness and Legacy schema/relation checks consume the exact captured
 bytes later materialized and hashed by the resolved-input descriptor. All parent
@@ -274,6 +279,15 @@ tasks, unresolved Journal evidence, invalid Publication, or recovery residue
 before `RUNNING -> COMPLETED`. A failed Publication or terminal transition keeps
 the Run lock and recovery evidence intact; success releases the lock only after
 the completion commit.
+
+The Phase A closure has independent canonical task checkpoints: association,
+comparison evidence, Claim Gate, the three gated reports, and visualization. Only
+declared successful dependencies are projected into each worker context. Sibling
+reports may execute concurrently, but their State mutations remain serialized by
+the one Controller cursor. This is still opt-in temporary-sandbox behavior; it does
+not enable the default CLI, real project root, lifecycle caller profile injection, or
+Web execution. `build_dag(..., profile=...)` remains the controlled builder/tool API
+used by the lifecycle; callers of the A3.3 lifecycle cannot select a profile.
 
 `load()`, recovery, and every new mutation apply the same committed-state binding check. When committed Journal evidence exists, `state.json` must match its latest committed resulting version, status, last-operation metadata, payload hash, and complete State SHA-256. A modified State cannot be wrapped into a later operation.
 

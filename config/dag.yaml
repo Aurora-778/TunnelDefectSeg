@@ -35,6 +35,54 @@ tasks:
     retries: 2
     cache: false
 
+  phase_a_association:
+    agent: association
+    deps: []
+    retries: 0
+    cache: false
+
+  phase_a_comparison_evidence:
+    agent: comparison_evidence
+    deps: [phase_a_association]
+    retries: 0
+    cache: false
+
+  phase_a_claim_gate:
+    agent: claim_gate
+    deps: [phase_a_comparison_evidence]
+    retries: 0
+    cache: false
+
+  phase_a_growth_report:
+    agent: growth_report
+    deps: [phase_a_claim_gate]
+    retries: 0
+    cache: false
+
+  phase_a_memory_report:
+    agent: memory_report
+    deps: [phase_a_claim_gate]
+    retries: 0
+    cache: false
+
+  phase_a_engineering_claim_report:
+    agent: engineering_claim_report
+    deps: [phase_a_claim_gate]
+    retries: 0
+    cache: false
+
+  phase_a_claim_visualization:
+    agent: claim_visualization
+    deps: [phase_a_claim_gate, phase_a_growth_report, phase_a_memory_report, phase_a_engineering_claim_report]
+    retries: 0
+    cache: false
+
+execution_profiles:
+  legacy_default:
+    terminal_tasks: [final_report]
+  phase_a_agent_sandbox:
+    terminal_tasks: [phase_a_claim_visualization]
+
 shared:
   project_name: tunnel_robot_inspection
 

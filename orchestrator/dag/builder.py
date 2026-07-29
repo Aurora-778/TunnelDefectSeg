@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,11 @@ def load_yaml(path: Path) -> dict[str, Any]:
         return _parse_minimal_dag_yaml(text)
 
 
-def build_dag(path: Path) -> tuple[dict[str, Task], dict[str, Any]]:
+def build_dag(
+    path: Path, *, profile: str | None = None
+) -> tuple[dict[str, Task], dict[str, Any]]:
+    """Build one selected execution-profile closure from the authoritative DAG."""
+
     config = load_yaml(path)
     raw_tasks = config.get("tasks", {})
     if not isinstance(raw_tasks, dict) or not raw_tasks:
@@ -51,7 +55,59 @@ def build_dag(path: Path) -> tuple[dict[str, Task], dict[str, Any]]:
     if missing:
         raise ValueError(f"DAG references missing task(s): {missing}")
     _check_cycles(tasks)
-    return tasks, config
+    selected = _select_profile_tasks(tasks, config, profile=profile)
+    return selected, config
+
+
+def _select_profile_tasks(
+    tasks: Mapping[str, Task], config: Mapping[str, Any], *, profile: str | None
+) -> dict[str, Task]:
+    profiles = config.get("execution_profiles")
+    if profiles is None:
+        if profile is not None:
+            raise ValueError("DAG config does not define execution profiles")
+        return dict(tasks)
+    if not isinstance(profiles, Mapping) or not profiles:
+        raise ValueError("DAG execution_profiles must be a non-empty mapping")
+
+    selected_profile = "legacy_default" if profile is None else profile
+    if not isinstance(selected_profile, str) or not selected_profile:
+        raise ValueError("DAG execution profile must be a non-empty string")
+    raw_profile = profiles.get(selected_profile)
+    if not isinstance(raw_profile, Mapping):
+        raise ValueError(f"DAG execution profile is unknown: {selected_profile}")
+    if set(raw_profile) != {"terminal_tasks"}:
+        raise ValueError(
+            f"DAG execution profile {selected_profile} must contain only terminal_tasks"
+        )
+    terminals = raw_profile.get("terminal_tasks")
+    if (
+        not isinstance(terminals, list)
+        or not terminals
+        or any(not isinstance(name, str) or not name for name in terminals)
+        or len(terminals) != len(set(terminals))
+    ):
+        raise ValueError(
+            f"DAG execution profile {selected_profile} terminal_tasks are invalid"
+        )
+    unknown = sorted(name for name in terminals if name not in tasks)
+    if unknown:
+        raise ValueError(
+            f"DAG execution profile {selected_profile} references unknown terminal task(s): {unknown}"
+        )
+
+    closure: set[str] = set()
+
+    def include(name: str) -> None:
+        if name in closure:
+            return
+        closure.add(name)
+        for dependency in tasks[name].deps:
+            include(dependency)
+
+    for terminal in terminals:
+        include(terminal)
+    return {name: task for name, task in tasks.items() if name in closure}
 
 
 def _check_cycles(tasks: dict[str, Task]) -> None:
@@ -75,10 +131,15 @@ def _check_cycles(tasks: dict[str, Task]) -> None:
 
 def _parse_minimal_dag_yaml(text: str) -> dict[str, Any]:
     # ponytail: tiny fallback parser for this repo's YAML shape; use PyYAML for richer YAML.
-    data: dict[str, Any] = {"tasks": {}, "inputs": {}, "shared": {}}
+    data: dict[str, Any] = {
+        "tasks": {},
+        "inputs": {},
+        "shared": {},
+    }
     section: str | None = None
     current_task: str | None = None
     current_agent: str | None = None
+    current_profile: str | None = None
 
     for raw_line in text.splitlines():
         stripped = raw_line.strip()
@@ -89,6 +150,7 @@ def _parse_minimal_dag_yaml(text: str) -> dict[str, Any]:
             section = stripped[:-1]
             current_task = None
             current_agent = None
+            current_profile = None
             data.setdefault(section, {})
             continue
         if section == "tasks" and indent == 2 and stripped.endswith(":"):
@@ -106,6 +168,31 @@ def _parse_minimal_dag_yaml(text: str) -> dict[str, Any]:
         if section == "inputs" and current_agent and indent >= 4 and ":" in stripped:
             key, value = stripped.split(":", 1)
             data["inputs"][current_agent][key.strip()] = value.strip()
+            continue
+        if (
+            section == "execution_profiles"
+            and indent == 2
+            and stripped.endswith(":")
+        ):
+            current_profile = stripped[:-1]
+            profiles = data.setdefault("execution_profiles", {})
+            if not isinstance(profiles, dict):
+                raise ValueError("execution_profiles must be a mapping")
+            profiles[current_profile] = {}
+            continue
+        if (
+            section == "execution_profiles"
+            and current_profile
+            and indent >= 4
+            and ":" in stripped
+        ):
+            key, value = stripped.split(":", 1)
+            profiles = data["execution_profiles"]
+            if not isinstance(profiles, dict):
+                raise ValueError("execution_profiles must be a mapping")
+            profiles[current_profile][key.strip()] = _parse_value(
+                value.strip()
+            )
             continue
         if section == "shared" and ":" in stripped:
             key, value = stripped.split(":", 1)

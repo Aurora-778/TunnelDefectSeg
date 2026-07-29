@@ -15,6 +15,7 @@ import orchestrator.inspection_workflow.a1_artifacts as a1_artifacts
 from orchestrator.agents.claim_audit_report_agent import ClaimAuditReportAgent
 from orchestrator.agents.claim_gate_agent import ClaimGateAgent
 from orchestrator.agents.comparison_evidence_agent import ComparisonEvidenceAgent
+from orchestrator.dag.builder import build_dag
 from orchestrator.inspection_workflow import (
     COMPARISON_EVIDENCE_FIELDS,
     COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION,
@@ -28,6 +29,7 @@ from conftest import (
     artifact_manifest_diff,
     artifact_snapshot,
 )
+from orchestrator.registry import build_default_registry
 
 
 PLAN_FINGERPRINT = "f" * 64
@@ -1098,15 +1100,15 @@ def test_claim_artifacts_loader_returns_isolated_validated_data(tmp_path):
     assert second["records"][0]["current_value"] == 120
 
 
-def test_phase_a1_agents_are_not_registered_or_scheduled():
-    registry = (PROJECT_ROOT / "orchestrator/registry.py").read_text(encoding="utf-8")
-    dag = (PROJECT_ROOT / "config/dag.yaml").read_text(encoding="utf-8")
+def test_phase_a1_agents_are_registered_only_in_the_sandbox_profile():
+    legacy_tasks, _ = build_dag(PROJECT_ROOT / "config/dag.yaml")
+    phase_a_tasks, _ = build_dag(
+        PROJECT_ROOT / "config/dag.yaml", profile="phase_a_agent_sandbox"
+    )
 
-    assert "ComparisonEvidenceAgent" not in registry
-    assert "ClaimGateAgent" not in registry
-    assert "ClaimAuditReportAgent" not in registry
-    assert "comparison_evidence" not in dag
-    assert "claim_gate" not in dag
+    assert {"comparison_evidence", "claim_gate"} <= set(build_default_registry().list())
+    assert all(not task_id.startswith("phase_a_") for task_id in legacy_tasks)
+    assert {"phase_a_comparison_evidence", "phase_a_claim_gate"} <= set(phase_a_tasks)
 
 
 def test_input_records_are_not_mutated(tmp_path):

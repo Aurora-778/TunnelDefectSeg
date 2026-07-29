@@ -56,6 +56,7 @@ class InspectionWorkflowController:
         plan_fingerprint: str,
         resolved_input_descriptor_sha256: str | None = None,
         workflow_input_mode: str | None = None,
+        execution_profile: str | None = None,
         resume: bool = False,
         clock: Callable[[], str] = canonical_utc_now,
     ) -> None:
@@ -64,6 +65,7 @@ class InspectionWorkflowController:
         self._plan_fingerprint = plan_fingerprint
         self._resolved_input_descriptor_sha256 = resolved_input_descriptor_sha256
         self._workflow_input_mode = workflow_input_mode
+        self._execution_profile = execution_profile
         self._clock = clock
         self._store = StateStore(project_root)
         try:
@@ -178,6 +180,7 @@ class InspectionWorkflowController:
         fingerprint = task_plan_fingerprint(
             tasks,
             resolved_input_descriptor_sha256=self._resolved_input_descriptor_sha256,
+            execution_profile=self._execution_profile,
         )
         if fingerprint != self._plan_fingerprint:
             raise InspectionWorkflowControllerError(

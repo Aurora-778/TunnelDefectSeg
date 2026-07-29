@@ -1,4 +1,4 @@
-"""Explicit A3.3.2 dual-entry lifecycle over the existing workflow primitives."""
+"""A3.3 dual-entry lifecycle with A3.3.3 DAG-profile execution."""
 
 from __future__ import annotations
 
@@ -16,15 +16,7 @@ import tempfile
 import uuid
 from typing import Any
 
-from orchestrator.agents.association_agent import AssociationAgent
-from orchestrator.agents.claim_gate_agent import ClaimGateAgent
-from orchestrator.agents.claim_visualization_agent import ClaimVisualizationAgent
-from orchestrator.agents.comparison_evidence_agent import ComparisonEvidenceAgent
-from orchestrator.agents.engineering_claim_report_agent import EngineeringClaimReportAgent
-from orchestrator.agents.growth_report_agent import GrowthReportAgent
-from orchestrator.agents.memory_report_agent import MemoryReportAgent
-from orchestrator.base_agent import BaseAgent
-from orchestrator.dag.builder import Task
+from orchestrator.dag.builder import build_dag
 from orchestrator.executor import DAGExecutor
 from orchestrator.inspection_workflow import a1_artifacts
 from orchestrator.inspection_workflow.contracts import (
@@ -51,7 +43,7 @@ from orchestrator.inspection_workflow.planning import (
     task_plan_fingerprint,
 )
 from orchestrator.inspection_workflow.publication import publish_run_local_artifacts
-from orchestrator.registry import AgentRegistry
+from orchestrator.registry import build_default_registry
 from orchestrator.schema import validate_csv_schema
 from orchestrator.state.store import StateStore
 from scripts.prepare_real_inspection_pilot import require_inference_ready
@@ -78,9 +70,8 @@ _LEGACY_FORBIDDEN_FIELDS = frozenset(
 _RUN_ID_RE = re.compile(r"run_[0-9]{3}\Z")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _RESOLVED_INPUT_SCHEMA_VERSION = "phase_a3_3_2_resolved_input_v1"
-_FIXED_TASK_ID = "phase_a1_pipeline"
-_FIXED_AGENT_NAME = "phase_a1_pipeline"
-_FIXED_TASK_CLOSURE_VERSION = "phase_a3_3_2_fixed_a1_pipeline_v1"
+_PHASE_A_EXECUTION_PROFILE = "phase_a_agent_sandbox"
+_DAG_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "dag.yaml"
 _STATE_RECOVERY_MARKERS = (
     ".state_initialization_recovery_required.json",
     ".state_lock_recovery_required.json",
@@ -88,17 +79,7 @@ _STATE_RECOVERY_MARKERS = (
 
 
 class InspectionWorkflowLifecycleError(RuntimeError):
-    """Raised when the opt-in A3.3.2 lifecycle cannot safely continue."""
-
-
-class _FixedPhaseA1PipelineAgent(BaseAgent):
-    """The only A3.3.2 task body accepted by the direct sandbox lifecycle."""
-
-    name = _FIXED_AGENT_NAME
-
-    def run(self, context: dict[str, Any]) -> dict[str, Any]:
-        _run_fixed_a1_pipeline(context)
-        return {"artifact_set": "claim_gated_a1"}
+    """Raised when the opt-in A3.3 lifecycle cannot safely continue."""
 
 
 def run_prepared_task(
@@ -108,7 +89,7 @@ def run_prepared_task(
     run_id: str,
     resume: bool = False,
 ) -> Mapping[str, Any]:
-    """Run the closed Prepared A3.3.2 sandbox lifecycle."""
+    """Run the closed Prepared A3.3 managed sandbox lifecycle."""
 
     root = _controlled_root(project_root)
     policy = load_workflow_policy()
@@ -142,7 +123,7 @@ def run_legacy_simulated(
     run_id: str,
     resume: bool = False,
 ) -> Mapping[str, Any]:
-    """Run the closed Legacy simulated A3.3.2 sandbox lifecycle."""
+    """Run the closed Legacy-simulated A3.3 managed sandbox lifecycle."""
 
     root = _controlled_root(project_root)
     source = root.joinpath(*LEGACY_FRAME_RECORDS_PATH.split("/"))
@@ -188,7 +169,7 @@ def _run_lifecycle(
         raise
     except Exception as exc:
         raise InspectionWorkflowLifecycleError(
-            f"A3.3.2 {input_mode} lifecycle failed closed"
+            f"A3.3 managed {input_mode} lifecycle failed closed"
         ) from exc
 
 
@@ -208,9 +189,25 @@ async def _run_lifecycle_async(
         _preflight_recovery_residue(root, run_id=run_id, resume=resume)
     except (a1_artifacts.PhaseA1ArtifactError, InspectionWorkflowLifecycleError) as exc:
         raise InspectionWorkflowLifecycleError(
-            "A3.3.2 requires a clean controlled temporary A1 sandbox"
+            "A3.3 managed lifecycle requires a clean controlled temporary A1 sandbox"
         ) from exc
-    materialized_tasks, registry = _fixed_execution()
+    try:
+        materialized_tasks, _ = build_dag(
+            _DAG_CONFIG_PATH, profile=_PHASE_A_EXECUTION_PROFILE
+        )
+        registry = build_default_registry()
+        missing_agents = sorted(
+            {task.agent for task in materialized_tasks.values()} - set(registry.list())
+        )
+    except (OSError, ValueError) as exc:
+        raise InspectionWorkflowLifecycleError(
+            "A3.3.3 Phase A execution graph is unavailable"
+        ) from exc
+    if missing_agents:
+        raise InspectionWorkflowLifecycleError(
+            "A3.3.3 Phase A execution graph references unregistered agent(s): "
+            + ", ".join(missing_agents)
+        )
     descriptor = source_capture.get("descriptor")
     descriptor_sha256 = source_capture.get("descriptor_sha256")
     if (
@@ -223,6 +220,7 @@ async def _run_lifecycle_async(
     plan_fingerprint = task_plan_fingerprint(
         materialized_tasks,
         resolved_input_descriptor_sha256=descriptor_sha256,
+        execution_profile=_PHASE_A_EXECUTION_PROFILE,
     )
     task_plan = build_required_task_plan(materialized_tasks)
 
@@ -316,6 +314,7 @@ async def _run_lifecycle_async(
         plan_fingerprint=plan_fingerprint,
         resolved_input_descriptor_sha256=descriptor_sha256,
         workflow_input_mode=input_mode,
+        execution_profile=_PHASE_A_EXECUTION_PROFILE,
         resume=resume,
     )
     context = _managed_context(
@@ -438,7 +437,7 @@ def _controlled_root(project_root: Path) -> Path:
         return a1_artifacts._controlled_temporary_root(Path(project_root).absolute())
     except a1_artifacts.PhaseA1ArtifactError as exc:
         raise InspectionWorkflowLifecycleError(
-            "A3.3.2 requires a controlled temporary A1 sandbox"
+            "A3.3 managed lifecycle requires a controlled temporary A1 sandbox"
         ) from exc
 
 
@@ -446,7 +445,7 @@ def _require_fixed_requested_outputs(request: Mapping[str, Any]) -> None:
     requested = request.get("requested_outputs")
     if not isinstance(requested, list) or set(requested) != REQUIRED_OUTPUT_NAMES:
         raise InspectionWorkflowLifecycleError(
-            "A3.3.2 Prepared TaskRequest must request the complete fixed output closure"
+            "A3.3 managed Prepared TaskRequest must request the complete fixed output closure"
         )
 
 
@@ -623,7 +622,7 @@ def _make_source_capture(
         "run_id": run_id,
         "input_mode": input_mode,
         "workflow_task_id": workflow_task_id,
-        "fixed_task_closure": _FIXED_TASK_CLOSURE_VERSION,
+        "execution_profile": _PHASE_A_EXECUTION_PROFILE,
         "requested_outputs": requested_outputs,
         "workflow_policy_sha256": _sha256(_canonical_json_bytes(workflow_policy)),
         "task_request": None if task_request is None else dict(task_request),
@@ -768,38 +767,6 @@ def _validate_resume_input_capture(
             raise InspectionWorkflowLifecycleError(
                 "Run-local workflow input snapshot does not match the requested input"
             )
-
-
-def _fixed_execution() -> tuple[dict[str, Task], AgentRegistry]:
-    """Return the one sealed A3.3.2 task closure and its private registry."""
-
-    registry = AgentRegistry()
-    registry.register(_FixedPhaseA1PipelineAgent())
-    return (
-        {
-            _FIXED_TASK_ID: Task(
-                _FIXED_TASK_ID,
-                _FIXED_AGENT_NAME,
-                [],
-                retries=0,
-                cache=False,
-            )
-        },
-        registry,
-    )
-
-
-def _run_fixed_a1_pipeline(context: dict[str, Any]) -> None:
-    """Run the archived A1 pieces in their established fixed order."""
-
-    AssociationAgent().run(context)
-    ComparisonEvidenceAgent().run(context)
-    ClaimGateAgent().run(context)
-    report_context = {"shared": context["shared"], "inputs": {}}
-    GrowthReportAgent().run(report_context)
-    MemoryReportAgent().run(report_context)
-    EngineeringClaimReportAgent().run(report_context)
-    ClaimVisualizationAgent().run(report_context)
 
 
 def _preflight_recovery_residue(root: Path, *, run_id: str, resume: bool) -> None:

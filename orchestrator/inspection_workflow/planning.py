@@ -73,6 +73,7 @@ def task_plan_fingerprint(
     tasks: Mapping[str, Task],
     *,
     resolved_input_descriptor_sha256: str | None = None,
+    execution_profile: str | None = None,
 ) -> str:
     """Bind the canonical plan, execution policy, and optional resolved input."""
 
@@ -85,6 +86,12 @@ def task_plan_fingerprint(
     ):
         raise WorkflowPlanningError(
             "resolved_input_descriptor_sha256 must be a lowercase SHA-256 digest"
+        )
+    if execution_profile is not None and (
+        not isinstance(execution_profile, str) or not IDENTIFIER_PATTERN.fullmatch(execution_profile)
+    ):
+        raise WorkflowPlanningError(
+            "execution_profile must be a canonical workflow identifier"
         )
 
     task_plan = build_required_task_plan(tasks)
@@ -104,6 +111,8 @@ def task_plan_fingerprint(
     }
     if resolved_input_descriptor_sha256 is not None:
         payload["resolved_input_descriptor_sha256"] = resolved_input_descriptor_sha256
+    if execution_profile is not None:
+        payload["execution_profile"] = execution_profile
     data = json.dumps(
         payload,
         ensure_ascii=False,

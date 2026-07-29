@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image
 import pytest
 
+from orchestrator.agents.association_agent import AssociationAgent
 from orchestrator.inspection_workflow import a1_artifacts
 from orchestrator.inspection_workflow import lifecycle
 from orchestrator.inspection_workflow import locking
@@ -181,6 +182,48 @@ def test_prepared_entry_completes_only_after_manifest_and_releases_lock(tmp_path
     assert resolved_input["input_mode"] == "prepared_dataset"
     assert len(resolved_input["source_artifacts"]) == 3
     assert json.loads(state)["context"]["resolved_input_descriptor_sha256"]
+    assert json.loads(state)["context"]["resolved_input_descriptor"][
+        "execution_profile"
+    ] == "phase_a_agent_sandbox"
+    assert json.loads(state)["task_status"] == {
+        "phase_a_association": "success",
+        "phase_a_comparison_evidence": "success",
+        "phase_a_claim_gate": "success",
+        "phase_a_growth_report": "success",
+        "phase_a_memory_report": "success",
+        "phase_a_engineering_claim_report": "success",
+        "phase_a_claim_visualization": "success",
+    }
+    journal = [
+        json.loads(line)
+        for line in (root / f"runs/{RUN_ID}/state_journal.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    operation_ids = [row["operation_id"] for row in journal if row["phase"] == "committed"]
+    assert operation_ids.index(
+        f"run:{RUN_ID}:task:phase_a_association:attempt:1:succeeded"
+    ) < operation_ids.index(
+        f"run:{RUN_ID}:task:phase_a_comparison_evidence:attempt:1:started"
+    )
+    assert operation_ids.index(
+        f"run:{RUN_ID}:task:phase_a_claim_gate:attempt:1:succeeded"
+    ) < operation_ids.index(
+        f"run:{RUN_ID}:task:phase_a_growth_report:attempt:1:started"
+    )
+    assert all(
+        operation_ids.index(
+            f"run:{RUN_ID}:task:{task_id}:attempt:1:succeeded"
+        )
+        < operation_ids.index(
+            f"run:{RUN_ID}:task:phase_a_claim_visualization:attempt:1:started"
+        )
+        for task_id in (
+            "phase_a_growth_report",
+            "phase_a_memory_report",
+            "phase_a_engineering_claim_report",
+        )
+    )
 
 
 def test_legacy_entry_uses_same_lifecycle_and_stays_static_only(tmp_path: Path) -> None:
@@ -297,10 +340,10 @@ def test_failed_required_task_never_publishes_or_releases_lock(
     root.mkdir()
     request = _prepared_source(root)
 
-    def fail_fixed_pipeline(context: dict) -> None:
+    def fail_association(self, context: dict) -> None:
         raise RuntimeError("injected lifecycle failure")
 
-    monkeypatch.setattr(lifecycle, "_run_fixed_a1_pipeline", fail_fixed_pipeline)
+    monkeypatch.setattr(AssociationAgent, "run", fail_association)
 
     with pytest.raises(InspectionWorkflowLifecycleError, match="required managed tasks"):
         InspectionWorkflowController.run_prepared_task(
@@ -689,7 +732,7 @@ def test_unresolved_pending_is_not_recovered_before_request_identity_check(
     def fail_started_state(self, path: Path, data: bytes, *, label: str) -> None:
         if label == "canonical state":
             candidate = json.loads(data)
-            if candidate["task_status"].get("phase_a1_pipeline") == "running":
+            if any(status == "running" for status in candidate["task_status"].values()):
                 raise OSError("injected task_started state failure")
         original_replace(self, path, data, label=label)
 

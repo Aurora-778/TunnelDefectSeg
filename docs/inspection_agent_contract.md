@@ -7,21 +7,25 @@ only as a directly invoked temporary-sandbox transaction. Phase A3.1 provides an
 opt-in Active Run Lock and canonical StateStore foundation, A3.2 adds explicit
 single-host recovery, and A3.3.1 adds a directly injected opt-in Controller sink
 for the existing `DAGExecutor`. A3.3.2 additionally exposes direct internal
-Prepared and Legacy-simulated lifecycle calls for temporary sandbox tests; neither
-the legacy CLI nor the Phase 0 workflow policy invokes A2 or A3.
+Prepared and Legacy-simulated lifecycle calls for temporary sandbox tests. A3.3.3
+selects their explicit Phase A task closure from the same DAG and Registry used by
+the legacy graph; neither the legacy CLI nor the Phase 0 workflow policy invokes
+A2 or A3.
 
 Implemented in the current Phase 0 slices: executable Claim Policy and Workflow
 Policy/TaskRequest validation, neutral Prepared/Legacy observation identities,
 cross-table source references, history-only Memory Snapshot validation, Comparison
 Evidence, and deterministic ClaimDecision validation. The directly instantiated A1
 sandbox agents can now project fixed Run-local baseline/unmatched sources, apply the
-Claim Gate, and render the Run-local static audit report. They remain disabled in
-the default Registry/DAG/CLI and cannot write formal `data` or `outputs` artifacts.
+Claim Gate, and render the Run-local static audit report. Their real Agent names
+are registered in the single Registry and declared in the single DAG, but
+`legacy_default` never selects their sandbox-only profile; they cannot write formal
+`data` or `outputs` artifacts.
 Matched source-proof projection remains blocked pending a Memory schema upgrade.
 The A2 sandbox publication transaction is available for isolated verification.
 The A3 lock, State, CAS, Journal, tail-anchor, explicit recovery, and managed
-Executor adapter and the A3.3.2 dual entry remain available only through direct
-component calls. Registry, CLI, and Web integration remain deferred.
+Executor adapter and the A3.3.2/A3.3.3 dual entry remain available only through
+direct component calls. Default CLI and Web integration remain deferred.
 
 A3.1 checkpoint calls use a closed, kind-specific event contract rather than a
 free context merge. Run initialization is accepted only in `PLANNED`; task events
@@ -79,12 +83,19 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
   only a successful A2 validation is supplied to the StateStore completion
   invariant before `RUNNING -> COMPLETED`. Publication, State, or lock failures
   retain their existing recovery evidence and do not release the lock.
+- A3.3.3 selects one fixed Phase A closure from `config/dag.yaml` profile
+  `phase_a_agent_sandbox`; every task's agent, dependency, retry, and cache policy
+  is defined exactly once in that DAG. The profile lists only its terminal task and
+  Builder derives the transitive dependency closure. `build_dag()` without a
+  profile selects `legacy_default`, which preserves the legacy task graph. The
+  Phase A lifecycle uses `build_default_registry()` and the real A1 Agent names;
+  no wrapper Agent, private Registry, or handwritten Agent order remains.
 - A3.3.2 accepts one fixed A1 task closure only. A Prepared TaskRequest must name
   the complete frozen output set (`association`, `growth_report`, `visualization`,
   and `final_report`); it cannot select a caller-defined partial graph. Before any
   Active Run Lock allocation, the entry captures a resolved-input descriptor. The
   descriptor binds the validated request, workflow-policy snapshot, input mode,
-  fixed closure version, and bytes/hash of every Run-local source snapshot. Its
+  selected execution profile, and bytes/hash of every Run-local source snapshot. Its
   canonical SHA-256 is part of the managed plan fingerprint and is persisted in
   canonical State. Resume re-captures the declared source and rejects a changed
   source, request, policy, mode, or Run-local snapshot rather than reusing a Run
