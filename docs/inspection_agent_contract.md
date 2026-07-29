@@ -44,7 +44,9 @@ the deferred explicit recovery protocol is available.
   `inspection_task_v1` Prepared dataset only inside an initialized temporary A1
   sandbox. `InspectionWorkflowController.run_legacy_simulated(...)` accepts only
   the fixed `data/simulated/robot_kict_frame_records.csv` counterpart in that same
-  sandbox boundary. Both are opt-in internal calls, not CLI or Web routes.
+  sandbox boundary. Both are opt-in internal calls, not CLI or Web routes. Neither
+  entry accepts a caller-provided Controller, task graph, Registry, source path, or
+  output path.
 - Phase 0 validation does not acquire a lock, create a Run, execute the DAG, or write business artifacts.
 
 The prepared task object contains exactly `schema_version`, `task_id`, `task_type`, `input`, and `requested_outputs`. Its input contains exactly `input_mode=prepared_dataset` and a safe `dataset_id`; paths, URIs, GT labels, split fields, review fields, and audit fields are not accepted.
@@ -77,6 +79,21 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
   only a successful A2 validation is supplied to the StateStore completion
   invariant before `RUNNING -> COMPLETED`. Publication, State, or lock failures
   retain their existing recovery evidence and do not release the lock.
+- A3.3.2 accepts one fixed A1 task closure only. A Prepared TaskRequest must name
+  the complete frozen output set (`association`, `growth_report`, `visualization`,
+  and `final_report`); it cannot select a caller-defined partial graph. Before any
+  Active Run Lock allocation, the entry captures a resolved-input descriptor. The
+  descriptor binds the validated request, workflow-policy snapshot, input mode,
+  fixed closure version, and bytes/hash of every Run-local source snapshot. Its
+  canonical SHA-256 is part of the managed plan fingerprint and is persisted in
+  canonical State. Resume re-captures the declared source and rejects a changed
+  source, request, policy, mode, or Run-local snapshot rather than reusing a Run
+  under ambiguous inputs.
+- A3.3.2 preflight rejects A1 work/artifact/staging recovery markers, the A2
+  publication recovery marker, State recovery markers, Active Run recovery/state
+  mutexes, release tombstones, and a stale Run directory before Active Lock
+  allocation. This is an explicit no-side-effect boundary: rejection does not
+  create or rewrite a lock, Run, transaction, or recovery audit.
 - Legacy simulated execution materializes the same V4 Run-local relation topology
   from the fixed history-only/no-id producer. Its receipt scope is
   `legacy_simulated_and_history_contract`, remains `byte_binding_only`, and maps

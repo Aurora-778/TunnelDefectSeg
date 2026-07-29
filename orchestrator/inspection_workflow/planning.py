@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+import re
 from typing import Any
 
 from orchestrator.dag.builder import Task
@@ -14,6 +15,9 @@ from orchestrator.inspection_workflow.contracts import IDENTIFIER_PATTERN
 
 class WorkflowPlanningError(ValueError):
     """Raised when existing DAG tasks cannot form a canonical Phase A3 plan."""
+
+
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def build_required_task_plan(tasks: Mapping[str, Task]) -> list[dict[str, Any]]:
@@ -65,8 +69,23 @@ def build_required_task_plan(tasks: Mapping[str, Task]) -> list[dict[str, Any]]:
     ]
 
 
-def task_plan_fingerprint(tasks: Mapping[str, Task]) -> str:
-    """Bind the canonical plan and the execution policy used by the adapter."""
+def task_plan_fingerprint(
+    tasks: Mapping[str, Task],
+    *,
+    resolved_input_descriptor_sha256: str | None = None,
+) -> str:
+    """Bind the canonical plan, execution policy, and optional resolved input."""
+
+    if (
+        resolved_input_descriptor_sha256 is not None
+        and (
+            not isinstance(resolved_input_descriptor_sha256, str)
+            or _SHA256_RE.fullmatch(resolved_input_descriptor_sha256) is None
+        )
+    ):
+        raise WorkflowPlanningError(
+            "resolved_input_descriptor_sha256 must be a lowercase SHA-256 digest"
+        )
 
     task_plan = build_required_task_plan(tasks)
     materialized = dict(tasks)
@@ -83,6 +102,8 @@ def task_plan_fingerprint(tasks: Mapping[str, Task]) -> str:
             for task_id in sorted(materialized)
         ],
     }
+    if resolved_input_descriptor_sha256 is not None:
+        payload["resolved_input_descriptor_sha256"] = resolved_input_descriptor_sha256
     data = json.dumps(
         payload,
         ensure_ascii=False,

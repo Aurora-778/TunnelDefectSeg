@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 import csv
+import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -13,10 +15,19 @@ import socket
 import uuid
 from typing import Any
 
+from orchestrator.agents.association_agent import AssociationAgent
+from orchestrator.agents.claim_gate_agent import ClaimGateAgent
+from orchestrator.agents.claim_visualization_agent import ClaimVisualizationAgent
+from orchestrator.agents.comparison_evidence_agent import ComparisonEvidenceAgent
+from orchestrator.agents.engineering_claim_report_agent import EngineeringClaimReportAgent
+from orchestrator.agents.growth_report_agent import GrowthReportAgent
+from orchestrator.agents.memory_report_agent import MemoryReportAgent
+from orchestrator.base_agent import BaseAgent
 from orchestrator.dag.builder import Task
 from orchestrator.executor import DAGExecutor
 from orchestrator.inspection_workflow import a1_artifacts
 from orchestrator.inspection_workflow.contracts import (
+    REQUIRED_OUTPUT_NAMES,
     load_workflow_policy,
     validate_task_request,
 )
@@ -62,27 +73,44 @@ _LEGACY_FORBIDDEN_FIELDS = frozenset(
     }
 )
 _RUN_ID_RE = re.compile(r"run_[0-9]{3}\Z")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+_RESOLVED_INPUT_SCHEMA_VERSION = "phase_a3_3_2_resolved_input_v1"
+_FIXED_TASK_ID = "phase_a1_pipeline"
+_FIXED_AGENT_NAME = "phase_a1_pipeline"
+_FIXED_TASK_CLOSURE_VERSION = "phase_a3_3_2_fixed_a1_pipeline_v1"
+_STATE_RECOVERY_MARKERS = (
+    ".state_initialization_recovery_required.json",
+    ".state_lock_recovery_required.json",
+)
 
 
 class InspectionWorkflowLifecycleError(RuntimeError):
     """Raised when the opt-in A3.3.2 lifecycle cannot safely continue."""
 
 
+class _FixedPhaseA1PipelineAgent(BaseAgent):
+    """The only A3.3.2 task body accepted by the direct sandbox lifecycle."""
+
+    name = _FIXED_AGENT_NAME
+
+    def run(self, context: dict[str, Any]) -> dict[str, Any]:
+        _run_fixed_a1_pipeline(context)
+        return {"artifact_set": "claim_gated_a1"}
+
+
 def run_prepared_task(
-    controller_type: type,
     project_root: Path,
     *,
     task_request: Mapping[str, Any],
-    tasks: Mapping[str, Task],
-    registry: AgentRegistry,
     run_id: str,
     resume: bool = False,
 ) -> Mapping[str, Any]:
-    """Validate one fixed Prepared TaskRequest and execute the managed lifecycle."""
+    """Run the closed Prepared A3.3.2 sandbox lifecycle."""
 
-    root = Path(project_root).absolute()
-    request = validate_task_request(task_request)
+    root = _controlled_root(project_root)
     policy = load_workflow_policy()
+    request = validate_task_request(task_request, workflow_policy=policy)
+    _require_fixed_requested_outputs(request)
     prepared_relative = (
         f"{policy['path_policy']['prepared_dataset_base']}/"
         f"{request['input']['dataset_id']}/preparation_manifest.json"
@@ -94,72 +122,68 @@ def run_prepared_task(
         raise InspectionWorkflowLifecycleError(
             "Prepared dataset failed the inference-readiness gate"
         ) from exc
+    source_capture = _capture_prepared_input(
+        root,
+        run_id=run_id,
+        prepared_manifest=prepared_manifest,
+        task_request=request,
+        workflow_policy=policy,
+    )
     return _run_lifecycle(
-        controller_type,
         root,
         input_mode="prepared_dataset",
         task_id=request["task_id"],
-        tasks=tasks,
-        registry=registry,
         run_id=run_id,
         resume=resume,
-        prepared_manifest=prepared_manifest,
+        source_capture=source_capture,
     )
 
 
 def run_legacy_simulated(
-    controller_type: type,
     project_root: Path,
     *,
-    tasks: Mapping[str, Task],
-    registry: AgentRegistry,
     run_id: str,
     resume: bool = False,
 ) -> Mapping[str, Any]:
-    """Validate the fixed Legacy simulated frame artifact and execute the same lifecycle."""
+    """Run the closed Legacy simulated A3.3.2 sandbox lifecycle."""
 
-    root = Path(project_root).absolute()
+    root = _controlled_root(project_root)
     source = root.joinpath(*LEGACY_FRAME_RECORDS_PATH.split("/"))
     _validate_legacy_frame_records(source)
+    source_capture = _capture_legacy_input(
+        root,
+        run_id=run_id,
+        source=source,
+        workflow_policy=load_workflow_policy(),
+    )
     return _run_lifecycle(
-        controller_type,
         root,
         input_mode="legacy_simulated",
         task_id="legacy_simulated",
-        tasks=tasks,
-        registry=registry,
         run_id=run_id,
         resume=resume,
-        legacy_frame_records=source,
+        source_capture=source_capture,
     )
 
 
 def _run_lifecycle(
-    controller_type: type,
     root: Path,
     *,
     input_mode: str,
     task_id: str,
-    tasks: Mapping[str, Task],
-    registry: AgentRegistry,
     run_id: str,
     resume: bool,
-    prepared_manifest: Path | None = None,
-    legacy_frame_records: Path | None = None,
+    source_capture: Mapping[str, Any],
 ) -> Mapping[str, Any]:
     try:
         return asyncio.run(
             _run_lifecycle_async(
-                controller_type,
                 root,
                 input_mode=input_mode,
                 task_id=task_id,
-                tasks=tasks,
-                registry=registry,
                 run_id=run_id,
                 resume=resume,
-                prepared_manifest=prepared_manifest,
-                legacy_frame_records=legacy_frame_records,
+                source_capture=source_capture,
             )
         )
     except InspectionWorkflowLifecycleError:
@@ -171,32 +195,37 @@ def _run_lifecycle(
 
 
 async def _run_lifecycle_async(
-    controller_type: type,
     root: Path,
     *,
     input_mode: str,
     task_id: str,
-    tasks: Mapping[str, Task],
-    registry: AgentRegistry,
     run_id: str,
     resume: bool,
-    prepared_manifest: Path | None,
-    legacy_frame_records: Path | None,
+    source_capture: Mapping[str, Any],
 ) -> Mapping[str, Any]:
     if not isinstance(run_id, str) or _RUN_ID_RE.fullmatch(run_id) is None:
         raise InspectionWorkflowLifecycleError("run_id must use canonical run_NNN form")
     try:
         root = a1_artifacts._controlled_temporary_root(root)
-        for area in ("work", "artifacts", "staging"):
-            a1_artifacts._reject_recovery_marker(root, run_id, area)
-    except a1_artifacts.PhaseA1ArtifactError as exc:
+        _preflight_recovery_residue(root, run_id=run_id, resume=resume)
+    except (a1_artifacts.PhaseA1ArtifactError, InspectionWorkflowLifecycleError) as exc:
         raise InspectionWorkflowLifecycleError(
             "A3.3.2 requires a clean controlled temporary A1 sandbox"
         ) from exc
-    if not isinstance(registry, AgentRegistry):
-        raise InspectionWorkflowLifecycleError("registry must be the existing AgentRegistry")
-    materialized_tasks = dict(tasks)
-    plan_fingerprint = task_plan_fingerprint(materialized_tasks)
+    materialized_tasks, registry = _fixed_execution()
+    descriptor = source_capture.get("descriptor")
+    descriptor_sha256 = source_capture.get("descriptor_sha256")
+    if (
+        not isinstance(descriptor, Mapping)
+        or not isinstance(descriptor_sha256, str)
+        or _SHA256_RE.fullmatch(descriptor_sha256) is None
+        or _sha256(_canonical_json_bytes(descriptor)) != descriptor_sha256
+    ):
+        raise InspectionWorkflowLifecycleError("resolved input capture is invalid")
+    plan_fingerprint = task_plan_fingerprint(
+        materialized_tasks,
+        resolved_input_descriptor_sha256=descriptor_sha256,
+    )
     task_plan = build_required_task_plan(materialized_tasks)
 
     if resume:
@@ -212,6 +241,7 @@ async def _run_lifecycle_async(
             run_id=run_id,
             execution_profile=a1_artifacts.PHASE_A1_EXECUTION_PROFILE,
         )
+        _validate_resume_input_capture(root, run_id=run_id, source_capture=source_capture)
     else:
         allocation_token = str(uuid.uuid4())
         lock_token = str(uuid.uuid4())
@@ -241,6 +271,7 @@ async def _run_lifecycle_async(
             raise InspectionWorkflowLifecycleError(
                 "unable to create the reserved Run directory"
             ) from exc
+        _materialize_source_capture(root, run_id=run_id, source_capture=source_capture)
         StateStore(root).initialize_run(
             run_id=run_id,
             allocation_token=allocation_token,
@@ -250,6 +281,8 @@ async def _run_lifecycle_async(
             initial_context={
                 "workflow_input_mode": input_mode,
                 "workflow_task_id": task_id,
+                "resolved_input_descriptor": dict(descriptor),
+                "resolved_input_descriptor_sha256": descriptor_sha256,
             },
         )
         mark_active_run_running(
@@ -259,11 +292,14 @@ async def _run_lifecycle_async(
             expected_lock_token=lock_token,
         )
 
-    controller = controller_type(
+    from orchestrator.inspection_workflow.controller import InspectionWorkflowController
+
+    controller = InspectionWorkflowController(
         root,
         run_id=run_id,
         expected_lock_token=lock_token,
         plan_fingerprint=plan_fingerprint,
+        resolved_input_descriptor_sha256=descriptor_sha256,
         resume=resume,
     )
     context = _managed_context(
@@ -271,9 +307,6 @@ async def _run_lifecycle_async(
         run_id=run_id,
         plan_fingerprint=plan_fingerprint,
         input_mode=input_mode,
-        prepared_manifest=prepared_manifest,
-        legacy_frame_records=legacy_frame_records,
-        resume=resume,
     )
     executor = DAGExecutor(
         registry,
@@ -329,22 +362,9 @@ def _managed_context(
     run_id: str,
     plan_fingerprint: str,
     input_mode: str,
-    prepared_manifest: Path | None,
-    legacy_frame_records: Path | None,
-    resume: bool,
 ) -> dict[str, Any]:
     prepared_relative = f"runs/{run_id}/work/raw_prepared/preparation_manifest.json"
     legacy_relative = f"runs/{run_id}/work/legacy_simulated/robot_kict_frame_records.csv"
-    if not resume:
-        if input_mode == "prepared_dataset":
-            if prepared_manifest is None:
-                raise InspectionWorkflowLifecycleError("Prepared manifest is required")
-            _copy_prepared_artifact_set(root, run_id, prepared_manifest)
-        else:
-            if legacy_frame_records is None:
-                raise InspectionWorkflowLifecycleError("Legacy frame records are required")
-            _copy_legacy_frame_artifact(root, run_id, legacy_frame_records)
-    inputs: dict[str, Any] = {}
     if input_mode == "prepared_dataset":
         inputs = {
             "association": {
@@ -397,31 +417,174 @@ def _managed_context(
     }
 
 
-def _copy_prepared_artifact_set(root: Path, run_id: str, manifest_path: Path) -> None:
-    source_dir = manifest_path.parent
-    captured = {name: (source_dir / name).read_bytes() for name in _PREPARED_COPY_NAMES}
-    for name in _PREPARED_COPY_NAMES:
-        relative = f"runs/{run_id}/work/raw_prepared/{name}"
-        a1_artifacts.write_phase_a1_work_artifact(
-            root,
-            run_id=run_id,
-            execution_profile=a1_artifacts.PHASE_A1_EXECUTION_PROFILE,
-            relative_path=relative,
-            data=captured[name],
-        )
-    copied_manifest = root / "runs" / run_id / "work" / "raw_prepared" / "preparation_manifest.json"
-    require_inference_ready(copied_manifest)
-    require_inference_ready(manifest_path)
-    if any((source_dir / name).read_bytes() != captured[name] for name in _PREPARED_COPY_NAMES):
+def _controlled_root(project_root: Path) -> Path:
+    try:
+        return a1_artifacts._controlled_temporary_root(Path(project_root).absolute())
+    except a1_artifacts.PhaseA1ArtifactError as exc:
         raise InspectionWorkflowLifecycleError(
-            "Prepared artifact set changed during Run-local materialization"
+            "A3.3.2 requires a controlled temporary A1 sandbox"
+        ) from exc
+
+
+def _require_fixed_requested_outputs(request: Mapping[str, Any]) -> None:
+    requested = request.get("requested_outputs")
+    if not isinstance(requested, list) or set(requested) != REQUIRED_OUTPUT_NAMES:
+        raise InspectionWorkflowLifecycleError(
+            "A3.3.2 Prepared TaskRequest must request the complete fixed output closure"
         )
 
 
-def _copy_legacy_frame_artifact(root: Path, run_id: str, source: Path) -> None:
-    """Bind the fixed Legacy frame bytes before the managed history-only task runs."""
+def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
+    try:
+        return json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise InspectionWorkflowLifecycleError(
+            "resolved workflow input cannot be canonically encoded"
+        ) from exc
 
-    captured = source.read_bytes()
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _capture_prepared_input(
+    root: Path,
+    *,
+    run_id: str,
+    prepared_manifest: Path,
+    task_request: Mapping[str, Any],
+    workflow_policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    source_dir = prepared_manifest.parent
+    sources = []
+    try:
+        for name in _PREPARED_COPY_NAMES:
+            data = (source_dir / name).read_bytes()
+            sources.append(
+                {
+                    "source_path": source_dir / name,
+                    "relative_path": f"runs/{run_id}/work/raw_prepared/{name}",
+                    "data": data,
+                    "origin_sha256": _sha256(data),
+                }
+            )
+    except OSError as exc:
+        raise InspectionWorkflowLifecycleError(
+            "unable to capture the Prepared artifact set before Run allocation"
+        ) from exc
+    return _make_source_capture(
+        run_id=run_id,
+        input_mode="prepared_dataset",
+        workflow_task_id=task_request["task_id"],
+        requested_outputs=sorted(task_request["requested_outputs"]),
+        workflow_policy=workflow_policy,
+        sources=sources,
+        task_request={
+            "schema_version": task_request["schema_version"],
+            "task_id": task_request["task_id"],
+            "task_type": task_request["task_type"],
+            "input": dict(task_request["input"]),
+            "requested_outputs": sorted(task_request["requested_outputs"]),
+        },
+    )
+
+
+def _capture_legacy_input(
+    root: Path,
+    *,
+    run_id: str,
+    source: Path,
+    workflow_policy: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Capture the fixed Legacy source and neutralize its copied grouping key."""
+
+    try:
+        captured = source.read_bytes()
+    except OSError as exc:
+        raise InspectionWorkflowLifecycleError(
+            "unable to capture the fixed Legacy simulated frame artifact before Run allocation"
+        ) from exc
+    neutral_bytes = _neutralize_legacy_frame_bytes(captured)
+    return _make_source_capture(
+        run_id=run_id,
+        input_mode="legacy_simulated",
+        workflow_task_id="legacy_simulated",
+        requested_outputs=sorted(REQUIRED_OUTPUT_NAMES),
+        workflow_policy=workflow_policy,
+        sources=[
+            {
+                "source_path": source,
+                "relative_path": (
+                    f"runs/{run_id}/work/legacy_simulated/"
+                    "robot_kict_frame_records.csv"
+                ),
+                "data": neutral_bytes,
+                "origin_sha256": _sha256(captured),
+            }
+        ],
+        task_request=None,
+    )
+
+
+def _make_source_capture(
+    *,
+    run_id: str,
+    input_mode: str,
+    workflow_task_id: str,
+    requested_outputs: list[str],
+    workflow_policy: Mapping[str, Any],
+    sources: list[dict[str, Any]],
+    task_request: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not sources:
+        raise InspectionWorkflowLifecycleError("resolved workflow input has no source artifacts")
+    source_artifacts = []
+    origin_artifacts = []
+    for source in sources:
+        data = source["data"]
+        relative_path = source["relative_path"]
+        if not isinstance(data, bytes) or not isinstance(relative_path, str):
+            raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
+        source_artifacts.append(
+            {
+                "path": relative_path,
+                "size_bytes": len(data),
+                "sha256": _sha256(data),
+            }
+        )
+        origin_artifacts.append(
+            {
+                "path": relative_path,
+                "sha256": source["origin_sha256"],
+            }
+        )
+    descriptor = {
+        "schema_version": _RESOLVED_INPUT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "input_mode": input_mode,
+        "workflow_task_id": workflow_task_id,
+        "fixed_task_closure": _FIXED_TASK_CLOSURE_VERSION,
+        "requested_outputs": requested_outputs,
+        "workflow_policy_sha256": _sha256(_canonical_json_bytes(workflow_policy)),
+        "task_request": None if task_request is None else dict(task_request),
+        "source_artifacts": source_artifacts,
+        "origin_artifacts": origin_artifacts,
+    }
+    descriptor_bytes = _canonical_json_bytes(descriptor)
+    return {
+        "descriptor": descriptor,
+        "descriptor_sha256": _sha256(descriptor_bytes),
+        "sources": sources,
+    }
+
+
+def _neutralize_legacy_frame_bytes(captured: bytes) -> bytes:
     try:
         text = captured.decode("utf-8-sig")
         reader = csv.DictReader(io.StringIO(text, newline=""))
@@ -456,18 +619,170 @@ def _copy_legacy_frame_artifact(root: Path, run_id: str, source: Path) -> None:
         projected["disease_id"] = row["local_observation_id"]
         writer.writerow(projected)
     neutral_bytes = output.getvalue().encode("utf-8")
-    relative = f"runs/{run_id}/work/legacy_simulated/robot_kict_frame_records.csv"
-    a1_artifacts.write_phase_a1_work_artifact(
-        root,
-        run_id=run_id,
-        execution_profile=a1_artifacts.PHASE_A1_EXECUTION_PROFILE,
-        relative_path=relative,
-        data=neutral_bytes,
-    )
-    if source.read_bytes() != captured:
-        raise InspectionWorkflowLifecycleError(
-            "Legacy simulated frame artifact changed during Run-local materialization"
+    return neutral_bytes
+
+
+def _materialize_source_capture(
+    root: Path,
+    *,
+    run_id: str,
+    source_capture: Mapping[str, Any],
+) -> None:
+    sources = source_capture.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
+    for source in sources:
+        if not isinstance(source, Mapping):
+            raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
+        source_path = source.get("source_path")
+        relative_path = source.get("relative_path")
+        data = source.get("data")
+        origin_sha256 = source.get("origin_sha256")
+        if (
+            not isinstance(source_path, Path)
+            or not isinstance(relative_path, str)
+            or not isinstance(data, bytes)
+            or not isinstance(origin_sha256, str)
+            or _SHA256_RE.fullmatch(origin_sha256) is None
+        ):
+            raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
+        a1_artifacts.write_phase_a1_work_artifact(
+            root,
+            run_id=run_id,
+            execution_profile=a1_artifacts.PHASE_A1_EXECUTION_PROFILE,
+            relative_path=relative_path,
+            data=data,
         )
+        try:
+            if _sha256(source_path.read_bytes()) != origin_sha256:
+                raise InspectionWorkflowLifecycleError(
+                    "workflow source changed during Run-local materialization"
+                )
+        except OSError as exc:
+            raise InspectionWorkflowLifecycleError(
+                "unable to recheck workflow source after Run-local materialization"
+            ) from exc
+
+
+def _validate_resume_input_capture(
+    root: Path,
+    *,
+    run_id: str,
+    source_capture: Mapping[str, Any],
+) -> None:
+    sources = source_capture.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
+    for source in sources:
+        if not isinstance(source, Mapping):
+            raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
+        source_path = source.get("source_path")
+        relative_path = source.get("relative_path")
+        data = source.get("data")
+        origin_sha256 = source.get("origin_sha256")
+        if (
+            not isinstance(source_path, Path)
+            or not isinstance(relative_path, str)
+            or not isinstance(data, bytes)
+            or not isinstance(origin_sha256, str)
+        ):
+            raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
+        try:
+            if _sha256(source_path.read_bytes()) != origin_sha256:
+                raise InspectionWorkflowLifecycleError(
+                    "workflow source does not match the captured Run input"
+                )
+            snapshot = a1_artifacts.snapshot_phase_a1_work_artifact(
+                root,
+                run_id=run_id,
+                execution_profile=a1_artifacts.PHASE_A1_EXECUTION_PROFILE,
+                relative_path=relative_path,
+            )
+        except a1_artifacts.PhaseA1ArtifactError as exc:
+            raise InspectionWorkflowLifecycleError(
+                "Run-local workflow input snapshot is missing or unsafe"
+            ) from exc
+        except OSError as exc:
+            raise InspectionWorkflowLifecycleError(
+                "unable to recheck workflow source during resume"
+            ) from exc
+        if snapshot["data"] != data:
+            raise InspectionWorkflowLifecycleError(
+                "Run-local workflow input snapshot does not match the requested input"
+            )
+
+
+def _fixed_execution() -> tuple[dict[str, Task], AgentRegistry]:
+    """Return the one sealed A3.3.2 task closure and its private registry."""
+
+    registry = AgentRegistry()
+    registry.register(_FixedPhaseA1PipelineAgent())
+    return (
+        {
+            _FIXED_TASK_ID: Task(
+                _FIXED_TASK_ID,
+                _FIXED_AGENT_NAME,
+                [],
+                retries=0,
+                cache=False,
+            )
+        },
+        registry,
+    )
+
+
+def _run_fixed_a1_pipeline(context: dict[str, Any]) -> None:
+    """Run the archived A1 pieces in their established fixed order."""
+
+    AssociationAgent().run(context)
+    ComparisonEvidenceAgent().run(context)
+    ClaimGateAgent().run(context)
+    report_context = {"shared": context["shared"], "inputs": {}}
+    GrowthReportAgent().run(report_context)
+    MemoryReportAgent().run(report_context)
+    EngineeringClaimReportAgent().run(report_context)
+    ClaimVisualizationAgent().run(report_context)
+
+
+def _preflight_recovery_residue(root: Path, *, run_id: str, resume: bool) -> None:
+    for area in ("work", "artifacts", "staging"):
+        a1_artifacts._reject_recovery_marker(root, run_id, area)
+    from orchestrator.inspection_workflow import publication
+
+    publication._reject_recovery_marker(root, run_id)
+    run_dir = root / "runs" / run_id
+    for name in _STATE_RECOVERY_MARKERS:
+        _reject_any_entry(run_dir / name, label=f"State recovery marker {name}")
+    runs_dir = root / "runs"
+    for entry in (
+        runs_dir / ".active_run.recovery.lock",
+        runs_dir / ".active_run.state.lock",
+    ):
+        _reject_any_entry(entry, label="Active Run recovery residue")
+    try:
+        if runs_dir.exists():
+            for entry in runs_dir.iterdir():
+                if entry.name.startswith(".active_run.release."):
+                    _reject_any_entry(entry, label="Active Run release tombstone")
+    except OSError as exc:
+        raise InspectionWorkflowLifecycleError(
+            "unable to inspect Active Run recovery residue"
+        ) from exc
+    if not resume:
+        _reject_any_entry(run_dir, label="existing Run residue")
+        _reject_any_entry(root / ".phase_a1_sandbox.json", label="A1 sandbox residue")
+
+
+def _reject_any_entry(path: Path, *, label: str) -> None:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as exc:
+        raise InspectionWorkflowLifecycleError(
+            f"unable to inspect {label}"
+        ) from exc
+    raise InspectionWorkflowLifecycleError(f"{label} exists; explicit recovery is required")
 
 
 def _validate_legacy_frame_records(path: Path) -> None:

@@ -1,26 +1,21 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import json
 from pathlib import Path
 
 from PIL import Image
 import pytest
 
-from orchestrator.agents.association_agent import AssociationAgent
-from orchestrator.agents.claim_gate_agent import ClaimGateAgent
-from orchestrator.agents.claim_visualization_agent import ClaimVisualizationAgent
-from orchestrator.agents.comparison_evidence_agent import ComparisonEvidenceAgent
-from orchestrator.agents.engineering_claim_report_agent import EngineeringClaimReportAgent
-from orchestrator.agents.growth_report_agent import GrowthReportAgent
-from orchestrator.agents.memory_report_agent import MemoryReportAgent
-from orchestrator.base_agent import BaseAgent
-from orchestrator.dag.builder import Task
 from orchestrator.inspection_workflow import a1_artifacts
-from orchestrator.inspection_workflow.controller import InspectionWorkflowController
+from orchestrator.inspection_workflow import lifecycle
+from orchestrator.inspection_workflow.controller import (
+    InspectionWorkflowController,
+    InspectionWorkflowControllerError,
+)
 from orchestrator.inspection_workflow.lifecycle import InspectionWorkflowLifecycleError
 from orchestrator.inspection_workflow.locking import read_active_run_lock
-from orchestrator.registry import AgentRegistry
 from scripts import prepare_real_inspection_pilot as preparation
 
 
@@ -85,54 +80,6 @@ def _prepared_source(root: Path) -> dict:
     }
 
 
-def _run_reports(context: dict) -> None:
-    ClaimGateAgent().run(context)
-    report_context = {"shared": context["shared"], "inputs": {}}
-    GrowthReportAgent().run(report_context)
-    MemoryReportAgent().run(report_context)
-    EngineeringClaimReportAgent().run(report_context)
-    ClaimVisualizationAgent().run(report_context)
-
-
-class _PreparedPipelineAgent(BaseAgent):
-    name = "a1_pipeline"
-
-    def run(self, context):
-        state = Path(context["shared"]["project_root"]) / "runs" / RUN_ID / "state.json"
-        assert '"a1_pipeline":"running"' in state.read_text(encoding="utf-8")
-        AssociationAgent().run(context)
-        ComparisonEvidenceAgent().run(context)
-        _run_reports(context)
-        return {"artifact_set": "prepared_a1"}
-
-
-class _LegacyPipelineAgent(BaseAgent):
-    name = "a1_pipeline"
-
-    def run(self, context):
-        AssociationAgent().run(context)
-        ComparisonEvidenceAgent().run(context)
-        _run_reports(context)
-        return {"artifact_set": "legacy_a1"}
-
-
-class _FailingAgent(BaseAgent):
-    name = "a1_pipeline"
-
-    def run(self, context):
-        raise RuntimeError("injected lifecycle failure")
-
-
-def _tasks() -> dict[str, Task]:
-    return {"a1_pipeline": Task("a1_pipeline", "a1_pipeline", [], retries=0, cache=False)}
-
-
-def _registry(agent: BaseAgent) -> AgentRegistry:
-    registry = AgentRegistry()
-    registry.register(agent)
-    return registry
-
-
 def _legacy_source(root: Path) -> None:
     target = root / "data" / "simulated" / "robot_kict_frame_records.csv"
     target.parent.mkdir(parents=True)
@@ -148,8 +95,6 @@ def test_prepared_entry_completes_only_after_manifest_and_releases_lock(tmp_path
     result = InspectionWorkflowController.run_prepared_task(
         root,
         task_request=request,
-        tasks=_tasks(),
-        registry=_registry(_PreparedPipelineAgent()),
         run_id=RUN_ID,
     )
 
@@ -159,6 +104,10 @@ def test_prepared_entry_completes_only_after_manifest_and_releases_lock(tmp_path
     assert not (root / "runs/.active_run.lock").exists()
     state = (root / f"runs/{RUN_ID}/state.json").read_text(encoding="utf-8")
     assert '"status":"COMPLETED"' in state
+    resolved_input = json.loads(state)["context"]["resolved_input_descriptor"]
+    assert resolved_input["input_mode"] == "prepared_dataset"
+    assert len(resolved_input["source_artifacts"]) == 3
+    assert json.loads(state)["context"]["resolved_input_descriptor_sha256"]
 
 
 def test_legacy_entry_uses_same_lifecycle_and_stays_static_only(tmp_path: Path) -> None:
@@ -168,8 +117,6 @@ def test_legacy_entry_uses_same_lifecycle_and_stays_static_only(tmp_path: Path) 
 
     result = InspectionWorkflowController.run_legacy_simulated(
         root,
-        tasks=_tasks(),
-        registry=_registry(_LegacyPipelineAgent()),
         run_id=RUN_ID,
     )
 
@@ -212,15 +159,18 @@ def test_prepared_readiness_failure_has_no_run_or_lock_side_effect(tmp_path: Pat
         "task_id": "task_401",
         "task_type": "inspection_analysis",
         "input": {"input_mode": "prepared_dataset", "dataset_id": "missing"},
-        "requested_outputs": ["association"],
+        "requested_outputs": [
+            "association",
+            "growth_report",
+            "visualization",
+            "final_report",
+        ],
     }
 
     with pytest.raises(InspectionWorkflowLifecycleError, match="readiness"):
         InspectionWorkflowController.run_prepared_task(
             root,
             task_request=request,
-            tasks=_tasks(),
-            registry=_registry(_PreparedPipelineAgent()),
             run_id=RUN_ID,
         )
     assert not (root / "runs").exists()
@@ -241,8 +191,6 @@ def test_legacy_contract_failure_has_no_run_or_lock_side_effect(tmp_path: Path) 
     with pytest.raises(InspectionWorkflowLifecycleError, match="KICT static-mask"):
         InspectionWorkflowController.run_legacy_simulated(
             root,
-            tasks=_tasks(),
-            registry=_registry(_LegacyPipelineAgent()),
             run_id=RUN_ID,
         )
     assert not (root / "runs").exists()
@@ -264,24 +212,27 @@ def test_existing_a1_recovery_marker_blocks_before_active_lock(tmp_path: Path) -
     with pytest.raises(InspectionWorkflowLifecycleError, match="clean controlled"):
         InspectionWorkflowController.run_legacy_simulated(
             root,
-            tasks=_tasks(),
-            registry=_registry(_LegacyPipelineAgent()),
             run_id=RUN_ID,
         )
     assert not (root / "runs" / ".active_run.lock").exists()
 
 
-def test_failed_required_task_never_publishes_or_releases_lock(tmp_path: Path) -> None:
+def test_failed_required_task_never_publishes_or_releases_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = tmp_path / "failed-task"
     root.mkdir()
     request = _prepared_source(root)
+
+    def fail_fixed_pipeline(context: dict) -> None:
+        raise RuntimeError("injected lifecycle failure")
+
+    monkeypatch.setattr(lifecycle, "_run_fixed_a1_pipeline", fail_fixed_pipeline)
 
     with pytest.raises(InspectionWorkflowLifecycleError, match="required managed tasks"):
         InspectionWorkflowController.run_prepared_task(
             root,
             task_request=request,
-            tasks=_tasks(),
-            registry=_registry(_FailingAgent()),
             run_id=RUN_ID,
         )
 
@@ -297,8 +248,163 @@ def test_invalid_run_id_is_rejected_before_lock_allocation(tmp_path: Path) -> No
         InspectionWorkflowController.run_prepared_task(
             root,
             task_request=request,
-            tasks=_tasks(),
-            registry=_registry(_PreparedPipelineAgent()),
             run_id="../escape",
         )
     assert not (root / "runs").exists()
+
+
+def test_task_request_must_select_the_fixed_a1_output_closure(tmp_path: Path) -> None:
+    root = tmp_path / "requested-outputs"
+    root.mkdir()
+    request = _prepared_source(root)
+    request["requested_outputs"] = ["association"]
+
+    with pytest.raises(InspectionWorkflowLifecycleError, match="complete fixed output closure"):
+        InspectionWorkflowController.run_prepared_task(
+            root,
+            task_request=request,
+            run_id=RUN_ID,
+        )
+    assert not (root / "runs").exists()
+
+
+def test_public_lifecycle_cannot_inject_controller_or_task_graph(tmp_path: Path) -> None:
+    root = tmp_path / "sealed-entry"
+    root.mkdir()
+    request = _prepared_source(root)
+
+    class AlternateController(InspectionWorkflowController):
+        pass
+
+    with pytest.raises(InspectionWorkflowControllerError, match="canonical"):
+        AlternateController.run_prepared_task(
+            root,
+            task_request=request,
+            run_id=RUN_ID,
+        )
+    assert "controller_type" not in inspect.signature(lifecycle.run_prepared_task).parameters
+    assert "tasks" not in inspect.signature(lifecycle.run_prepared_task).parameters
+    assert "registry" not in inspect.signature(lifecycle.run_prepared_task).parameters
+    assert "controller_type" not in inspect.signature(
+        InspectionWorkflowController.run_prepared_task
+    ).parameters
+    assert "tasks" not in inspect.signature(
+        InspectionWorkflowController.run_prepared_task
+    ).parameters
+    assert "registry" not in inspect.signature(
+        InspectionWorkflowController.run_prepared_task
+    ).parameters
+    with pytest.raises(TypeError):
+        InspectionWorkflowController.run_prepared_task(
+            root,
+            task_request=request,
+            run_id=RUN_ID,
+            controller_type=AlternateController,
+        )
+    assert not (root / "runs").exists()
+
+
+def test_resume_rejects_legacy_source_change_without_rewriting_state_or_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "legacy-source-drift"
+    root.mkdir()
+    _legacy_source(root)
+
+    def fail_publication(*args, **kwargs):
+        raise RuntimeError("injected publication interruption")
+
+    monkeypatch.setattr(lifecycle, "publish_run_local_artifacts", fail_publication)
+    with pytest.raises(InspectionWorkflowLifecycleError, match="lifecycle failed closed"):
+        InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID)
+    monkeypatch.undo()
+    state_path = root / f"runs/{RUN_ID}/state.json"
+    lock_path = root / "runs/.active_run.lock"
+    previous_state = state_path.read_bytes()
+    previous_lock = lock_path.read_bytes()
+    source = root / "data/simulated/robot_kict_frame_records.csv"
+    source.write_bytes(source.read_bytes().replace(b"D001", b"D777"))
+
+    with pytest.raises(InspectionWorkflowLifecycleError):
+        InspectionWorkflowController.run_legacy_simulated(
+            root,
+            run_id=RUN_ID,
+            resume=True,
+        )
+    assert state_path.read_bytes() == previous_state
+    assert lock_path.read_bytes() == previous_lock
+
+
+def test_resume_rejects_cross_mode_without_rewriting_state_or_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "cross-mode-resume"
+    root.mkdir()
+    _legacy_source(root)
+
+    def fail_publication(*args, **kwargs):
+        raise RuntimeError("injected publication interruption")
+
+    monkeypatch.setattr(lifecycle, "publish_run_local_artifacts", fail_publication)
+    with pytest.raises(InspectionWorkflowLifecycleError, match="lifecycle failed closed"):
+        InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID)
+    monkeypatch.undo()
+    request = _prepared_source(root)
+    state_path = root / f"runs/{RUN_ID}/state.json"
+    lock_path = root / "runs/.active_run.lock"
+    previous_state = state_path.read_bytes()
+    previous_lock = lock_path.read_bytes()
+
+    with pytest.raises(InspectionWorkflowLifecycleError):
+        InspectionWorkflowController.run_prepared_task(
+            root,
+            task_request=request,
+            run_id=RUN_ID,
+            resume=True,
+        )
+    assert state_path.read_bytes() == previous_state
+    assert lock_path.read_bytes() == previous_lock
+
+
+def test_a2_recovery_marker_blocks_before_lock_or_run_allocation(tmp_path: Path) -> None:
+    root = tmp_path / "publication-marker"
+    root.mkdir()
+    _legacy_source(root)
+    marker = root / f"runs/{RUN_ID}/.publication_recovery_required.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(InspectionWorkflowLifecycleError, match="clean controlled"):
+        InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID)
+    assert marker.is_file()
+    assert not (root / "runs/.active_run.lock").exists()
+    assert not (root / f"runs/{RUN_ID}/state.json").exists()
+
+
+@pytest.mark.parametrize(
+    "marker_name",
+    [
+        ".state_initialization_recovery_required.json",
+        ".state_lock_recovery_required.json",
+        ".active_run.recovery.lock",
+        ".active_run.state.lock",
+        ".active_run.release.test-tombstone",
+    ],
+)
+def test_state_or_run_recovery_residue_blocks_before_lock_allocation(
+    tmp_path: Path, marker_name: str
+) -> None:
+    root = tmp_path / "state-residue"
+    root.mkdir()
+    _legacy_source(root)
+    if marker_name.startswith(".state_"):
+        marker = root / "runs" / RUN_ID / marker_name
+    else:
+        marker = root / "runs" / marker_name
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(InspectionWorkflowLifecycleError, match="clean controlled"):
+        InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID)
+    assert marker.is_file()
+    assert not (root / "runs/.active_run.lock").exists()

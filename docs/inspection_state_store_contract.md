@@ -224,6 +224,23 @@ Controller sink for every managed Executor checkpoint. They are temporary-sandbo
 test seams only: they do not alter the legacy CLI, DAG, Registry, Web, or formal
 project artifacts.
 
+Each A3.3.2 entry uses the one sealed A1 task closure; callers cannot inject a
+Controller, task map, Registry, source override, or output override. Prepared
+requests must select the complete fixed output closure. Before allocation the
+lifecycle captures a canonical resolved-input descriptor. Prepared descriptors
+bind the readiness-gated manifest and sibling CSV byte snapshots; Legacy
+descriptors bind the fixed simulated source and its neutral Run-local snapshot.
+The descriptor SHA-256 is stored in canonical State and included in the task-plan
+fingerprint. Resume re-captures and compares the descriptor inputs, rejecting any
+input-mode, request, policy, source, or Run-local snapshot drift before managed
+execution resumes.
+
+Before any Active Run Lock allocation, the lifecycle rejects A1 recovery markers,
+the A2 publication marker, State recovery markers, Active Run recovery/state
+mutexes, release tombstones, and stale non-resume Run state. This preflight is a
+fail-closed no-side-effect check: it does not create or update a lock, Run,
+transaction, or audit record on rejection.
+
 After all committed required task statuses are `success`, the Controller reloads
 and validates the A1 Claim artifacts, invokes the existing A2 transaction, then
 reloads A2 Publication bytes. It submits completion evidence containing the

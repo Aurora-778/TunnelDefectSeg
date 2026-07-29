@@ -54,12 +54,14 @@ class InspectionWorkflowController:
         run_id: str,
         expected_lock_token: str,
         plan_fingerprint: str,
+        resolved_input_descriptor_sha256: str | None = None,
         resume: bool = False,
         clock: Callable[[], str] = canonical_utc_now,
     ) -> None:
         self.run_id = run_id
         self._expected_lock_token = expected_lock_token
         self._plan_fingerprint = plan_fingerprint
+        self._resolved_input_descriptor_sha256 = resolved_input_descriptor_sha256
         self._clock = clock
         self._store = StateStore(project_root)
         try:
@@ -83,6 +85,16 @@ class InspectionWorkflowController:
             raise InspectionWorkflowControllerError(
                 "managed State does not match the requested Run plan"
             )
+        if resolved_input_descriptor_sha256 is not None:
+            context = state["context"]
+            if (
+                not isinstance(context, Mapping)
+                or context.get("resolved_input_descriptor_sha256")
+                != resolved_input_descriptor_sha256
+            ):
+                raise InspectionWorkflowControllerError(
+                    "managed State does not match the resolved workflow input"
+                )
         self._mutation_queue_lock = asyncio.Lock()
         self._halted = False
         self._tasks: dict[str, Task] | None = None
@@ -94,28 +106,59 @@ class InspectionWorkflowController:
         return self._snapshot
 
     @classmethod
-    def run_prepared_task(cls, project_root: Path, **kwargs: Any) -> Mapping[str, Any]:
+    def run_prepared_task(
+        cls,
+        project_root: Path,
+        *,
+        task_request: Mapping[str, Any],
+        run_id: str,
+        resume: bool = False,
+    ) -> Mapping[str, Any]:
         """Run the explicit A3.3.2 Prepared lifecycle without enabling the CLI."""
 
         from orchestrator.inspection_workflow.lifecycle import run_prepared_task
 
-        return run_prepared_task(cls, project_root, **kwargs)
+        if cls is not InspectionWorkflowController:
+            raise InspectionWorkflowControllerError(
+                "A3.3.2 lifecycle requires the canonical InspectionWorkflowController"
+            )
+        return run_prepared_task(
+            project_root,
+            task_request=task_request,
+            run_id=run_id,
+            resume=resume,
+        )
 
     @classmethod
     def run_legacy_simulated(
-        cls, project_root: Path, **kwargs: Any
+        cls,
+        project_root: Path,
+        *,
+        run_id: str,
+        resume: bool = False,
     ) -> Mapping[str, Any]:
         """Run the explicit A3.3.2 Legacy lifecycle without enabling the CLI."""
 
         from orchestrator.inspection_workflow.lifecycle import run_legacy_simulated
 
-        return run_legacy_simulated(cls, project_root, **kwargs)
+        if cls is not InspectionWorkflowController:
+            raise InspectionWorkflowControllerError(
+                "A3.3.2 lifecycle requires the canonical InspectionWorkflowController"
+            )
+        return run_legacy_simulated(
+            project_root,
+            run_id=run_id,
+            resume=resume,
+        )
 
     async def prepare_execution(self, tasks: Mapping[str, Task]) -> Mapping[str, Any]:
         """Initialize or resume the canonical task map before any worker starts."""
 
         task_plan = build_required_task_plan(tasks)
-        fingerprint = task_plan_fingerprint(tasks)
+        fingerprint = task_plan_fingerprint(
+            tasks,
+            resolved_input_descriptor_sha256=self._resolved_input_descriptor_sha256,
+        )
         if fingerprint != self._plan_fingerprint:
             raise InspectionWorkflowControllerError(
                 "DAG execution policy does not match the Run plan fingerprint"
