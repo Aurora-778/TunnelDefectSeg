@@ -842,6 +842,207 @@ def test_committed_append_before_anchor_is_recovered_without_new_time(
     assert store.load(run_id="run_001")["state_version"] == 1
 
 
+@pytest.mark.parametrize(
+    ("failed_anchor_call", "expected_phases", "expected_status"),
+    [
+        (1, ["pending", "aborted"], "CREATED"),
+        (2, ["pending", "committed"], "PLANNED"),
+    ],
+)
+def test_stale_takeover_recovers_one_unanchored_direct_successor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_anchor_call: int,
+    expected_phases: list[str],
+    expected_status: str,
+) -> None:
+    store, _, old_lock_token = _initialized(tmp_path)
+    original_write_anchor = store._write_anchor
+    calls = 0
+
+    def fail_one_anchor(run_id: str, anchor: Mapping[str, object]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == failed_anchor_call:
+            raise StateStoreError("injected unanchored direct successor")
+        original_write_anchor(run_id, anchor)
+
+    monkeypatch.setattr(store, "_write_anchor", fail_one_anchor)
+    with pytest.raises(StateStoreError, match="unanchored direct successor"):
+        _transition(
+            store,
+            old_lock_token,
+            version=0,
+            current="CREATED",
+            next_status="PLANNED",
+            second=1,
+        )
+    monkeypatch.setattr(store, "_write_anchor", original_write_anchor)
+
+    initialize_phase_a1_sandbox(tmp_path, run_id="run_001")
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+    original_recover_taken_over = StateStore.recover_taken_over_state_journal
+    recovery_order_checked = False
+
+    def verify_recovery_order(self, **kwargs):
+        nonlocal recovery_order_checked
+        run_dir = tmp_path / "runs" / "run_001"
+        active = json.loads((tmp_path / "runs" / ".active_run.lock").read_bytes())
+        anchor = json.loads((run_dir / "state_journal_tail.json").read_bytes())
+        journal = (run_dir / "state_journal.jsonl").read_bytes()
+        intents = list((run_dir / "lock_recovery_audit").glob("*.intent.json"))
+        assert active["phase"] == "recovering"
+        assert len(intents) == 1
+        assert anchor["tail_file_size_bytes"] < len(journal)
+        recovery_order_checked = True
+        return original_recover_taken_over(self, **kwargs)
+
+    monkeypatch.setattr(
+        StateStore,
+        "recover_taken_over_state_journal",
+        verify_recovery_order,
+    )
+
+    result = recover_stale_active_run(
+        tmp_path,
+        run_id="run_001",
+        recovery_token=str(uuid.uuid4()),
+        new_lock_token=str(uuid.uuid4()),
+    )
+
+    assert result == {"replayed": False, "successor_phase": "running"}
+    assert recovery_order_checked is True
+    journal_path = tmp_path / "runs" / "run_001" / "state_journal.jsonl"
+    anchor = json.loads(
+        (tmp_path / "runs" / "run_001" / "state_journal_tail.json").read_bytes()
+    )
+    rows = [json.loads(line) for line in journal_path.read_text(encoding="utf-8").splitlines()]
+    assert [row["phase"] for row in rows] == expected_phases
+    assert anchor["tail_file_size_bytes"] == len(journal_path.read_bytes())
+    assert store.load(run_id="run_001")["status"] == expected_status
+
+
+def test_stale_takeover_rejects_multiple_unanchored_records_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, allocation_token, old_lock_token = _initialized(tmp_path)
+    _transition(
+        store,
+        old_lock_token,
+        version=0,
+        current="CREATED",
+        next_status="PLANNED",
+        second=1,
+    )
+    genesis = store._anchor_document(
+        run_id="run_001",
+        allocation_token=allocation_token,
+        tail_record_index=None,
+        tail_record_checksum=None,
+        tail_file_size_bytes=0,
+    )
+    anchor_path = tmp_path / "runs" / "run_001" / "state_journal_tail.json"
+    _write_canonical(anchor_path, genesis)
+    initialize_phase_a1_sandbox(tmp_path, run_id="run_001")
+    active_path = tmp_path / "runs" / ".active_run.lock"
+    state_path = tmp_path / "runs" / "run_001" / "state.json"
+    journal_path = tmp_path / "runs" / "run_001" / "state_journal.jsonl"
+    before = {
+        "active": active_path.read_bytes(),
+        "state": state_path.read_bytes(),
+        "journal": journal_path.read_bytes(),
+        "anchor": anchor_path.read_bytes(),
+    }
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+
+    with pytest.raises(ActiveRunLockError, match="State/Journal preflight"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
+
+    assert active_path.read_bytes() == before["active"]
+    assert state_path.read_bytes() == before["state"]
+    assert journal_path.read_bytes() == before["journal"]
+    assert anchor_path.read_bytes() == before["anchor"]
+    assert not list((tmp_path / "runs" / "run_001" / "lock_recovery_audit").glob("*.intent.json"))
+
+
+@pytest.mark.parametrize(
+    "suffix_kind", ["torn", "noncanonical", "checksum", "sequence"]
+)
+def test_stale_takeover_rejects_invalid_direct_successor_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix_kind: str
+) -> None:
+    store, _, old_lock_token = _initialized(tmp_path)
+    original_write_anchor = store._write_anchor
+
+    def fail_pending_anchor(run_id: str, anchor: Mapping[str, object]) -> None:
+        raise StateStoreError("injected pending anchor failure")
+
+    monkeypatch.setattr(store, "_write_anchor", fail_pending_anchor)
+    with pytest.raises(StateStoreError, match="pending anchor failure"):
+        _transition(
+            store,
+            old_lock_token,
+            version=0,
+            current="CREATED",
+            next_status="PLANNED",
+            second=1,
+        )
+    monkeypatch.setattr(store, "_write_anchor", original_write_anchor)
+
+    run_dir = tmp_path / "runs" / "run_001"
+    journal_path = run_dir / "state_journal.jsonl"
+    anchor_path = run_dir / "state_journal_tail.json"
+    anchor = json.loads(anchor_path.read_bytes())
+    journal = journal_path.read_bytes()
+    prefix = journal[: anchor["tail_file_size_bytes"]]
+    suffix = journal[anchor["tail_file_size_bytes"] :]
+    if suffix_kind == "torn":
+        journal_path.write_bytes(prefix + suffix[:-1])
+    elif suffix_kind == "noncanonical":
+        journal_path.write_bytes(prefix + b" " + suffix)
+    elif suffix_kind == "checksum":
+        record = json.loads(suffix)
+        record["record_checksum"] = "0" * 64
+        journal_path.write_bytes(prefix + state_module._canonical_json_bytes(record))
+    else:
+        record = json.loads(suffix)
+        record["record_index"] = 999
+        journal_path.write_bytes(prefix + state_module._canonical_json_bytes(record))
+
+    initialize_phase_a1_sandbox(tmp_path, run_id="run_001")
+    active_path = tmp_path / "runs" / ".active_run.lock"
+    state_path = run_dir / "state.json"
+    before = {
+        "active": active_path.read_bytes(),
+        "state": state_path.read_bytes(),
+        "journal": journal_path.read_bytes(),
+        "anchor": anchor_path.read_bytes(),
+    }
+    monkeypatch.setattr(locking.socket, "gethostname", lambda: "test-host")
+    monkeypatch.setattr(locking, "_owner_pid_is_confirmed_dead", lambda _pid: True)
+
+    with pytest.raises(ActiveRunLockError, match="State/Journal preflight"):
+        recover_stale_active_run(
+            tmp_path,
+            run_id="run_001",
+            recovery_token=str(uuid.uuid4()),
+            new_lock_token=str(uuid.uuid4()),
+        )
+
+    assert active_path.read_bytes() == before["active"]
+    assert state_path.read_bytes() == before["state"]
+    assert journal_path.read_bytes() == before["journal"]
+    assert anchor_path.read_bytes() == before["anchor"]
+    assert not list((run_dir / "lock_recovery_audit").glob("*.intent.json"))
+
+
 def test_two_unanchored_records_are_rejected(tmp_path: Path) -> None:
     store, _, lock_token = _initialized(tmp_path)
     _transition(store, lock_token, version=0, current="CREATED", next_status="PLANNED", second=1)

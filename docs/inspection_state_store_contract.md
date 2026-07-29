@@ -97,8 +97,11 @@ Recovery reuses the persisted mutation timestamp and does not read a new time fo
   `phase_a1_sandbox`; it is not a recovery mechanism for a live repository;
 - it exclusively creates `runs/.active_run.recovery.lock`, re-reads and hashes
   the target Active Lock, validates the State/Journal pair and any existing A2
-  Publication through its authority. A2 recovery markers block takeover before
-  an intent is written;
+  Publication through its authority. Its preflight may read exactly one complete,
+  canonical direct Journal successor beyond the anchor, but does not advance the
+  anchor; after the intent and `recovering` lock are durable, only
+  `recover_taken_over_state_journal()` may advance it. A2 recovery markers block
+  takeover before an intent is written;
 - it persists an immutable, Windows-safe UTC recovery intent in
   `runs/<run_id>/lock_recovery_audit/` before replacing the Active Lock with a
   `recovering` lock carrying a new token and exact intent path/SHA-256;

@@ -1427,7 +1427,10 @@ class StateStore:
             if state["allocation_token"] != allocation_token:
                 raise StateConflictError("stale takeover allocation_token does not match state")
             records, _, _ = self._journal_state(
-                run_id, allocation_token, repair_unanchored=False
+                run_id,
+                allocation_token,
+                repair_unanchored=False,
+                accept_unanchored_direct_successor=True,
             )
             self._validate_recovery_audit_bindings(state, records)
             unresolved = [rows for rows in self._operation_index(records).values() if len(rows) == 1]
