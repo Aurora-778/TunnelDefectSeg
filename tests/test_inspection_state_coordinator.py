@@ -23,7 +23,12 @@ from orchestrator.inspection_workflow.planning import (
     build_required_task_plan,
     task_plan_fingerprint,
 )
-from orchestrator.state.store import StateConflictError, StateStore, StateStoreError
+from orchestrator.state.store import (
+    MAX_STATE_JOURNAL_RECORDS,
+    StateConflictError,
+    StateStore,
+    StateStoreError,
+)
 
 
 T0 = "2026-07-29T00:00:00.000000Z"
@@ -538,38 +543,71 @@ def test_resume_repairs_retry_pending_and_uses_next_canonical_attempt(
     assert resumed.snapshot["canonical_state"]["task_attempts"]["alpha"] == 2
 
 
-def test_aborted_task_start_recovers_with_one_deterministic_successor(
+def test_aborted_task_start_recovers_after_two_deterministic_successors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tasks = {"alpha": Task("alpha", "alpha", [], retries=0, cache=False)}
     controller, lock_token = _controller_fixture(tmp_path, tasks)
     asyncio.run(controller.prepare_execution(tasks))
-    original_replace = controller._store._atomic_replace
-
-    def fail_task_start_state(path: Path, data: bytes, *, label: str) -> None:
-        if label == "canonical state":
-            raise StateStoreError("injected task_started State replace failure")
-        original_replace(path, data, label=label)
-
-    monkeypatch.setattr(
-        controller._store, "_atomic_replace", fail_task_start_state
-    )
-    with pytest.raises(
-        InspectionWorkflowControllerError, match="task_started"
-    ):
-        asyncio.run(
-            controller.submit_checkpoint_event(
-                {"checkpoint_kind": "task_started", "task_id": "alpha"}
-            )
-        )
-    monkeypatch.setattr(controller._store, "_atomic_replace", original_replace)
-
     store = StateStore(tmp_path)
-    recovered = store.recover_state_journal(
-        run_id="run_001", expected_lock_token=lock_token
+    current = controller
+
+    for _ in range(2):
+        original_replace = current._store._atomic_replace
+
+        def fail_task_start_state(path: Path, data: bytes, *, label: str) -> None:
+            if label == "canonical state":
+                raise StateStoreError(
+                    "injected task_started State replace failure"
+                )
+            original_replace(path, data, label=label)
+
+        monkeypatch.setattr(
+            current._store, "_atomic_replace", fail_task_start_state
+        )
+        with pytest.raises(
+            InspectionWorkflowControllerError, match="task_started"
+        ):
+            asyncio.run(
+                current.submit_checkpoint_event(
+                    {"checkpoint_kind": "task_started", "task_id": "alpha"}
+                )
+            )
+        monkeypatch.setattr(current._store, "_atomic_replace", original_replace)
+
+        recovered = store.recover_state_journal(
+            run_id="run_001", expected_lock_token=lock_token
+        )
+        assert recovered["canonical_state"]["task_status"]["alpha"] == "pending"
+        assert recovered["canonical_state"]["task_attempts"]["alpha"] == 0
+        current = InspectionWorkflowController(
+            tmp_path,
+            run_id="run_001",
+            expected_lock_token=lock_token,
+            plan_fingerprint=task_plan_fingerprint(tasks),
+            resume=True,
+            clock=_Clock(),
+        )
+        asyncio.run(current.prepare_execution(tasks))
+
+    rows = [
+        json.loads(line)
+        for line in (
+            tmp_path / "runs" / "run_001" / "state_journal.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+    ]
+    aborted_starts = [
+        row
+        for row in rows
+        if row["phase"] == "aborted" and ":started" in row["operation_id"]
+    ]
+    assert len(aborted_starts) == 2
+    base = "run:run_001:task:alpha:attempt:1:started"
+    assert aborted_starts[0]["operation_id"] == base
+    assert aborted_starts[1]["operation_id"] == (
+        f"{base}:after_aborted:{aborted_starts[0]['record_checksum']}"
     )
-    assert recovered["canonical_state"]["task_status"]["alpha"] == "pending"
-    assert recovered["canonical_state"]["task_attempts"]["alpha"] == 0
+
     timestamp = "2026-07-29T00:00:05.000000Z"
     with pytest.raises(
         StateConflictError, match="canonical aborted-start successor"
@@ -579,11 +617,7 @@ def test_aborted_task_start_recovers_with_one_deterministic_successor(
             expected_lock_token=lock_token,
             expected_status="RUNNING",
             expected_state_version=recovered["state_version"],
-            operation_id=(
-                "run:run_001:task:alpha:attempt:1:started:"
-                + "after_aborted:"
-                + "0" * 64
-            ),
+            operation_id=aborted_starts[1]["operation_id"],
             mutation_timestamp=timestamp,
             payload={
                 "checkpoint_kind": "task_started",
@@ -652,8 +686,70 @@ def test_aborted_task_start_recovers_with_one_deterministic_successor(
     ]
     start_ids = list(dict.fromkeys(row["operation_id"] for row in starts))
     assert start_ids[0] == "run:run_001:task:alpha:attempt:1:started"
-    assert start_ids[1].startswith(start_ids[0] + ":after_aborted:")
+    assert start_ids[1] == aborted_starts[1]["operation_id"]
+    assert start_ids[2] == (
+        f"{base}:after_aborted:{aborted_starts[1]['record_checksum']}"
+    )
     assert all(":attempt:1:started" in operation_id for operation_id in start_ids)
+
+
+def test_aborted_task_start_successor_lookup_is_one_pass_near_journal_limit() -> None:
+    class _CountingRecords(list[dict[str, object]]):
+        iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
+
+    base = "run:run_001:task:alpha:attempt:1:started"
+    records = _CountingRecords(
+        {
+            "mutation_kind": "status_transition",
+            "phase": "committed",
+            "operation_id": f"unrelated:{index}",
+        }
+        for index in range(MAX_STATE_JOURNAL_RECORDS - 200)
+    )
+    latest_checksum = ""
+    for index in range(100):
+        operation_id = (
+            base
+            if index == 0
+            else f"{base}:after_aborted:{index:064x}"
+        )
+        records.append(
+            {
+                "mutation_kind": "context_checkpoint",
+                "phase": "pending",
+                "operation_id": operation_id,
+                "payload": {
+                    "checkpoint_kind": "task_started",
+                    "task_id": "alpha",
+                    "attempt_number": 1,
+                },
+            }
+        )
+        latest_checksum = f"{index + 1:064x}"
+        records.append(
+            {
+                "mutation_kind": "context_checkpoint",
+                "phase": "aborted",
+                "operation_id": operation_id,
+                "record_index": len(records) + 1,
+                "record_checksum": latest_checksum,
+            }
+        )
+
+    result = StateStore._task_start_operation_id_from_records(
+        run_id="run_001",
+        task_id="alpha",
+        attempt_number=1,
+        records=records,
+    )
+
+    assert len(records) == MAX_STATE_JOURNAL_RECORDS
+    assert records.iterations == 1
+    assert result == f"{base}:after_aborted:{latest_checksum}"
 
 
 def test_resume_rejects_retry_provenance_from_a_different_plan_policy(

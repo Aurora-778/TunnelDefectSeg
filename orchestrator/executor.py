@@ -91,8 +91,8 @@ class DAGExecutor:
 
         events: list[dict[str, Any]] = []
         cache = {} if managed else self._read_json(self.cache_path)
-        self._write_dag_json(tasks, context)
         if not managed:
+            self._write_dag_json(tasks, context)
             self.run_manager.update_metadata(self.run_id, status="running")
             self._checkpoint(context)
 
@@ -125,7 +125,7 @@ class DAGExecutor:
                 self._append_event(events, self._event(skipped, "skipped", reason="dependency failed"))
                 if not managed:
                     self._checkpoint(context)
-                self._write_dag_json(tasks, context)
+                    self._write_dag_json(tasks, context)
 
             queue = TaskQueue()
             for name in runnable:
@@ -153,16 +153,15 @@ class DAGExecutor:
                 self._append_event(events, event)
                 if not managed:
                     self._checkpoint(context)
-                self._write_dag_json(tasks, context)
+                    self._write_dag_json(tasks, context)
 
         if not managed:
             self._write_json(self.cache_path, cache)
-        self._write_json(self.log_path, events)
-        self._write_json(self.trace_path, events)
-        self._write_json(self.run_log_path, events)
-        self._write_json(self.run_trace_path, events)
-        self._write_json(self.run_timeline_path, events)
-        if not managed:
+            self._write_json(self.log_path, events)
+            self._write_json(self.trace_path, events)
+            self._write_json(self.run_log_path, events)
+            self._write_json(self.run_trace_path, events)
+            self._write_json(self.run_timeline_path, events)
             self.run_manager.update_metadata(self.run_id, status=self._overall_status(context))
         return context
 
@@ -441,9 +440,10 @@ class DAGExecutor:
 
     def _append_event(self, events: list[dict[str, Any]], event: dict[str, Any]) -> None:
         events.append({"run_id": self.run_id, **event})
-        self._write_json(self.trace_path, events)
-        self._write_json(self.run_trace_path, events)
-        self._write_json(self.run_timeline_path, events)
+        if self.checkpoint_event_sink is None:
+            self._write_json(self.trace_path, events)
+            self._write_json(self.run_trace_path, events)
+            self._write_json(self.run_timeline_path, events)
 
     def _event(self, task: str, status: str, **extra: Any) -> dict[str, Any]:
         return {"time": datetime.now().isoformat(timespec="seconds"), "task": task, "status": status, **extra}

@@ -13,6 +13,7 @@ from orchestrator.inspection_workflow.controller import (
     InspectionWorkflowController,
     InspectionWorkflowControllerError,
 )
+from orchestrator.inspection_workflow import locking as locking_module
 from orchestrator.inspection_workflow.locking import (
     acquire_active_run_lock,
     mark_active_run_running,
@@ -181,6 +182,13 @@ def test_managed_executor_serializes_concurrent_results_without_legacy_state(
     assert not (tmp_path / "orchestrator" / "state" / "run_state.json").exists()
     assert not list((tmp_path / "runs" / "run_001").glob("context_v*.json"))
     assert (tmp_path / "runs" / "run_001" / "metadata.json").read_bytes() == metadata
+    assert not (tmp_path / "logs" / "dag_execution.json").exists()
+    assert not (tmp_path / "logs" / "execution_trace.json").exists()
+    assert not (tmp_path / "logs" / "dag_cache.json").exists()
+    assert not (tmp_path / "runs" / "run_001" / "dag.json").exists()
+    assert not (tmp_path / "runs" / "run_001" / "dag_execution.json").exists()
+    assert not (tmp_path / "runs" / "run_001" / "execution_trace.json").exists()
+    assert not (tmp_path / "runs" / "run_001" / "timeline.json").exists()
     kinds = _checkpoint_kinds(tmp_path)
     assert kinds[0] == "run_initialized"
     assert kinds.count("task_started") == 2
@@ -532,6 +540,60 @@ def test_managed_executor_does_not_run_agent_after_state_sink_failure(
     assert calls == []
 
 
+def test_managed_executor_does_not_rewrite_diagnostics_after_lock_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tasks = {"alpha": Task("alpha", "alpha", [], retries=0, cache=False)}
+    controller, _, metadata = _managed_fixture(tmp_path, tasks)
+    calls: list[str] = []
+    registry = AgentRegistry()
+    registry.register(_SuccessAgent("alpha", tmp_path, calls))
+    executor = DAGExecutor(
+        registry,
+        tmp_path,
+        run_id="run_001",
+        checkpoint_event_sink=controller,
+    )
+    diagnostic_paths = [
+        executor.log_path,
+        executor.trace_path,
+        executor.cache_path,
+        executor.run_log_path,
+        executor.run_trace_path,
+        executor.run_timeline_path,
+        executor.run_dag_path,
+    ]
+    before: dict[Path, bytes] = {}
+    for index, path in enumerate(diagnostic_paths):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        before[path] = f"diagnostic-sentinel-{index}\n".encode("ascii")
+        path.write_bytes(before[path])
+
+    original_prepare = controller.prepare_execution
+
+    async def prepare_then_rotate_lock(prepared_tasks: dict[str, Task]):
+        snapshot = await original_prepare(prepared_tasks)
+        lock_path = tmp_path / "runs" / ".active_run.lock"
+        changed = locking_module.read_active_run_lock(tmp_path)
+        changed["lock_token"] = str(uuid.uuid4())
+        lock_path.write_bytes(locking_module._canonical_json_bytes(changed))
+        return snapshot
+
+    monkeypatch.setattr(controller, "prepare_execution", prepare_then_rotate_lock)
+
+    with pytest.raises(
+        InspectionWorkflowControllerError, match="recovery identity"
+    ):
+        executor.run(
+            tasks,
+            {"inputs": {}, "outputs": {}, "shared": {}, "task_status": {}},
+        )
+
+    assert calls == []
+    assert {path: path.read_bytes() for path in diagnostic_paths} == before
+    assert (tmp_path / "runs" / "run_001" / "metadata.json").read_bytes() == metadata
+
+
 def test_legacy_executor_without_sink_keeps_existing_checkpoint_path(
     tmp_path: Path,
 ) -> None:
@@ -557,3 +619,7 @@ def test_legacy_executor_without_sink_keeps_existing_checkpoint_path(
     assert result["outputs"]["alpha"] == {"value": "legacy"}
     assert (tmp_path / "orchestrator" / "state" / "run_state.json").exists()
     assert list((tmp_path / "runs" / "run_001").glob("context_v*.json"))
+    assert (tmp_path / "logs" / "dag_execution.json").is_file()
+    assert (tmp_path / "logs" / "execution_trace.json").is_file()
+    assert (tmp_path / "runs" / "run_001" / "dag.json").is_file()
+    assert (tmp_path / "runs" / "run_001" / "timeline.json").is_file()

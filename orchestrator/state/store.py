@@ -2156,36 +2156,30 @@ class StateStore:
         base = (
             f"run:{run_id}:task:{task_id}:attempt:{attempt_number}:started"
         )
-        aborted: list[dict[str, Any]] = []
+        pending_by_operation: dict[str, Mapping[str, Any]] = {}
+        latest_aborted: dict[str, Any] | None = None
         for row in records:
-            if (
-                row["mutation_kind"] != "context_checkpoint"
-                or row["phase"] != "aborted"
-                or not row["operation_id"].startswith(base)
-            ):
+            if row["mutation_kind"] != "context_checkpoint":
                 continue
-            pending = next(
-                (
-                    candidate
-                    for candidate in records
-                    if candidate["mutation_kind"] == "context_checkpoint"
-                    and candidate["operation_id"] == row["operation_id"]
-                    and candidate["phase"] == "pending"
-                ),
-                None,
-            )
-            payload = pending["payload"] if pending is not None else None
+            operation_id = row["operation_id"]
+            if row["phase"] == "pending":
+                payload = row["payload"]
+                if isinstance(payload, Mapping):
+                    pending_by_operation[operation_id] = payload
+                continue
+            if row["phase"] != "aborted" or not operation_id.startswith(base):
+                continue
+            payload = pending_by_operation.get(operation_id)
             if (
                 isinstance(payload, Mapping)
                 and payload.get("checkpoint_kind") == "task_started"
                 and payload.get("task_id") == task_id
                 and payload.get("attempt_number") == attempt_number
             ):
-                aborted.append(row)
-        if not aborted:
+                latest_aborted = row
+        if latest_aborted is None:
             return base
-        latest = max(aborted, key=lambda row: row["record_index"])
-        return f"{base}:after_aborted:{latest['record_checksum']}"
+        return f"{base}:after_aborted:{latest_aborted['record_checksum']}"
 
     def next_task_start_operation_id(
         self,

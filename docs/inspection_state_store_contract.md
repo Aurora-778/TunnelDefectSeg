@@ -193,8 +193,17 @@ does not consume retry budget or guess attempt numbering.
 Without `checkpoint_event_sink`, `DAGExecutor` retains its existing legacy
 checkpoint, metadata, and context-version behavior. With the sink, it does not
 call `make_state`, `save_checkpoint`, `RunManager.update_metadata`, or
-`save_context_version`; Run-local logs, trace, cache, timeline, and DAG display
-remain non-authoritative diagnostics.
+`save_context_version`. A3.3.1 managed execution also does not write the
+project-level execution log/trace or Run-local DAG, log, trace, timeline, and
+cache diagnostics. This keeps a stale Executor from publishing diagnostics
+after its Active Lock token has been fenced. Adding managed diagnostics requires
+a later, separately reviewed fenced receipt; legacy diagnostics remain
+unchanged.
+
+Aborted `task_started` successor selection builds its pending-operation lookup
+and latest matching aborted record in one forward Journal pass. The resulting
+operation ID remains the same checksum-derived successor and does not change the
+business attempt, retry budget, WAL/CAS rules, or Journal size limits.
 
 Managed construction requires an explicit `run_id` equal to the sink Run before
 Run selection occurs. `prepare_execution()` validates the current Active Run
