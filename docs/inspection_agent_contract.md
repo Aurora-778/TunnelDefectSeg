@@ -6,8 +6,9 @@ This document freezes inputs and boundaries. Phase A2 publication is implemented
 only as a directly invoked temporary-sandbox transaction. Phase A3.1 provides an
 opt-in Active Run Lock and canonical StateStore foundation, A3.2 adds explicit
 single-host recovery, and A3.3.1 adds a directly injected opt-in Controller sink
-for the existing `DAGExecutor`. Neither the legacy CLI nor the Phase 0 workflow
-policy invokes A2 or A3.
+for the existing `DAGExecutor`. A3.3.2 additionally exposes direct internal
+Prepared and Legacy-simulated lifecycle calls for temporary sandbox tests; neither
+the legacy CLI nor the Phase 0 workflow policy invokes A2 or A3.
 
 Implemented in the current Phase 0 slices: executable Claim Policy and Workflow
 Policy/TaskRequest validation, neutral Prepared/Legacy observation identities,
@@ -19,9 +20,8 @@ the default Registry/DAG/CLI and cannot write formal `data` or `outputs` artifac
 Matched source-proof projection remains blocked pending a Memory schema upgrade.
 The A2 sandbox publication transaction is available for isolated verification.
 The A3 lock, State, CAS, Journal, tail-anchor, explicit recovery, and managed
-Executor adapter remain available only through direct component calls. Registry,
-CLI, Web, Prepared/Legacy dual-entry, and Publication lifecycle integration
-remain deferred to A3.3.2.
+Executor adapter and the A3.3.2 dual entry remain available only through direct
+component calls. Registry, CLI, and Web integration remain deferred.
 
 A3.1 checkpoint calls use a closed, kind-specific event contract rather than a
 free context merge. Run initialization is accepted only in `PLANNED`; task events
@@ -40,7 +40,11 @@ the deferred explicit recovery protocol is available.
 ## Entry Points
 
 - The existing `python run.py --mode full_pipeline` remains the legacy simulated entry point.
-- A future prepared-data entry point will accept `inspection_task_v1` only after Phase A3 integration.
+- `InspectionWorkflowController.run_prepared_task(...)` accepts one validated
+  `inspection_task_v1` Prepared dataset only inside an initialized temporary A1
+  sandbox. `InspectionWorkflowController.run_legacy_simulated(...)` accepts only
+  the fixed `data/simulated/robot_kict_frame_records.csv` counterpart in that same
+  sandbox boundary. Both are opt-in internal calls, not CLI or Web routes.
 - Phase 0 validation does not acquire a lock, create a Run, execute the DAG, or write business artifacts.
 
 The prepared task object contains exactly `schema_version`, `task_id`, `task_type`, `input`, and `requested_outputs`. Its input contains exactly `input_mode=prepared_dataset` and a safe `dataset_id`; paths, URIs, GT labels, split fields, review fields, and audit fields are not accepted.
@@ -66,6 +70,23 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
   the Controller disables legacy State writes and routes the six managed events
   through one StateStore version cursor; this direct test seam is not a new CLI
   or a completed Engineering Agent workflow.
+- A3.3.2 joins the two explicit input modes to that same fenced Controller,
+  StateStore, Active Run Lock, and version cursor. It creates the A2 transaction
+  only after every required managed task has committed success and the A1 Evidence,
+  ClaimDecision, and staging artifacts validate. The A2 Manifest remains last;
+  only a successful A2 validation is supplied to the StateStore completion
+  invariant before `RUNNING -> COMPLETED`. Publication, State, or lock failures
+  retain their existing recovery evidence and do not release the lock.
+- Legacy simulated execution materializes the same V4 Run-local relation topology
+  from the fixed history-only/no-id producer. Its receipt scope is
+  `legacy_simulated_and_history_contract`, remains `byte_binding_only`, and maps
+  unproven matched Memory relations to blocked `association_invalid` Evidence.
+  Before the existing history-only coordinator sees the Run-local copy, its legacy
+  `disease_id` column is replaced with a deterministic neutral observation key;
+  the simulated label is not used as a candidate or association connection.
+  KICT cyclic static-mask observations remain non-comparable; they cannot produce
+  verified or directional claims. This preserves the legacy input boundary without
+  treating its source as a real longitudinal inspection.
 - The A1 sandbox source projection is available only by direct component invocation
   with `projection_mode=prepared_history_sources` and explicit Prepared/history-only
   producer paths under an initialized temporary sandbox; it is not a second

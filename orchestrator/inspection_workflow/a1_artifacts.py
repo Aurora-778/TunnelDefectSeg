@@ -921,10 +921,19 @@ def _validate_projection_source_set(
         for round_entry in rounds
         if isinstance(round_entry, Mapping)
     )
+    validation_scope = receipt["validation_scope"]
+    if validation_scope == "prepared_readiness_and_history_contract":
+        producer_counts = {
+            "prepared_manifest": 1,
+            "prepared_observation_records": 1,
+            "prepared_frame_records": 1,
+        }
+    elif validation_scope == "legacy_simulated_and_history_contract":
+        producer_counts = {"legacy_frame_records": 1}
+    else:  # parse_projection_receipt already validates the closed scope set.
+        raise PhaseA1ArtifactError("projection receipt validation scope is invalid")
     expected_source_counts = {
-        "prepared_manifest": 1,
-        "prepared_observation_records": 1,
-        "prepared_frame_records": 1,
+        **producer_counts,
         "history_association_records": 1,
         "history_manifest": 1,
         "history_query_frames": len(rounds),
@@ -1242,6 +1251,53 @@ def write_prepared_history_comparison_evidence_bundle(
     except ComparisonEvidenceProjectionError as exc:
         raise PhaseA1ArtifactError(
             f"Comparison Evidence prepared-history projection failed: {exc}"
+        ) from exc
+    return _write_comparison_evidence_bundle(
+        project_root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+        plan_fingerprint=plan_fingerprint,
+        records=projected["records"],
+        source_artifacts=projected["source_artifacts"],
+        source_bundle_kind="run_local_projection",
+    )
+
+
+def write_legacy_history_comparison_evidence_bundle(
+    project_root: Path,
+    *,
+    run_id: str,
+    execution_profile: str,
+    plan_fingerprint: str,
+    legacy_frame_path: str,
+    history_association_path: str,
+    history_manifest_path: str,
+) -> dict[str, Any]:
+    """Commit one static-only V4 bundle from the fixed Legacy history producer."""
+
+    from .comparison_evidence_projection import (
+        ComparisonEvidenceProjectionError,
+        materialize_legacy_history_projection_sources,
+        project_run_local_comparison_evidence,
+    )
+
+    try:
+        materialize_legacy_history_projection_sources(
+            project_root,
+            run_id=run_id,
+            execution_profile=execution_profile,
+            legacy_frame_path=legacy_frame_path,
+            history_association_path=history_association_path,
+            history_manifest_path=history_manifest_path,
+        )
+        projected = project_run_local_comparison_evidence(
+            project_root,
+            run_id=run_id,
+            execution_profile=execution_profile,
+        )
+    except ComparisonEvidenceProjectionError as exc:
+        raise PhaseA1ArtifactError(
+            f"Comparison Evidence Legacy history projection failed: {exc}"
         ) from exc
     return _write_comparison_evidence_bundle(
         project_root,

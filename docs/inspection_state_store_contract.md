@@ -215,6 +215,25 @@ Successful task execution therefore remains canonical `RUNNING` pending the
 A3.3.2 publication/terminal lifecycle. It also does not expose a Prepared or
 Legacy CLI entry and does not activate any A1 Agent in the Registry or DAG.
 
+## A3.3.2 Direct Terminal Lifecycle
+
+The opt-in `InspectionWorkflowController.run_prepared_task(...)` and
+`run_legacy_simulated(...)` calls allocate one Active Run before creating its
+directory, initialize the same canonical State/Journal, and use the existing
+Controller sink for every managed Executor checkpoint. They are temporary-sandbox
+test seams only: they do not alter the legacy CLI, DAG, Registry, Web, or formal
+project artifacts.
+
+After all committed required task statuses are `success`, the Controller reloads
+and validates the A1 Claim artifacts, invokes the existing A2 transaction, then
+reloads A2 Publication bytes. It submits completion evidence containing the
+validated Manifest, transaction, and final-summary hashes through the same
+fenced version cursor. StateStore remains the authority for rejecting incomplete
+tasks, unresolved Journal evidence, invalid Publication, or recovery residue
+before `RUNNING -> COMPLETED`. A failed Publication or terminal transition keeps
+the Run lock and recovery evidence intact; success releases the lock only after
+the completion commit.
+
 `load()`, recovery, and every new mutation apply the same committed-state binding check. When committed Journal evidence exists, `state.json` must match its latest committed resulting version, status, last-operation metadata, payload hash, and complete State SHA-256. A modified State cannot be wrapped into a later operation.
 
 With an empty Journal, only the canonical uncommitted `CREATED` baseline is valid: version zero, empty task/index maps, null last-operation fields, and equal creation/update timestamps. `validate_initialized_run()` applies this same binding before the Active Run Lock can enter `running`. Empty-Journal `RUNNING`, `FAILED`, or `COMPLETED` State is rejected rather than treated as initialized work.

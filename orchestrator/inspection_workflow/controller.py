@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 from copy import deepcopy
+import hashlib
 from pathlib import Path
 import re
 from typing import Any
@@ -91,6 +92,24 @@ class InspectionWorkflowController:
         """Return the immutable StateStore snapshot owned by this Controller."""
 
         return self._snapshot
+
+    @classmethod
+    def run_prepared_task(cls, project_root: Path, **kwargs: Any) -> Mapping[str, Any]:
+        """Run the explicit A3.3.2 Prepared lifecycle without enabling the CLI."""
+
+        from orchestrator.inspection_workflow.lifecycle import run_prepared_task
+
+        return run_prepared_task(cls, project_root, **kwargs)
+
+    @classmethod
+    def run_legacy_simulated(
+        cls, project_root: Path, **kwargs: Any
+    ) -> Mapping[str, Any]:
+        """Run the explicit A3.3.2 Legacy lifecycle without enabling the CLI."""
+
+        from orchestrator.inspection_workflow.lifecycle import run_legacy_simulated
+
+        return run_legacy_simulated(cls, project_root, **kwargs)
 
     async def prepare_execution(self, tasks: Mapping[str, Task]) -> Mapping[str, Any]:
         """Initialize or resume the canonical task map before any worker starts."""
@@ -215,6 +234,82 @@ class InspectionWorkflowController:
                 raise
             return self._snapshot
 
+    async def complete_publication(
+        self, publication_result: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Commit RUNNING -> COMPLETED from the same fenced version cursor."""
+
+        if not isinstance(publication_result, Mapping):
+            raise InspectionWorkflowControllerError(
+                "publication completion result must be an object"
+            )
+        async with self._mutation_queue_lock:
+            self._ensure_accepting()
+            try:
+                state = self._state()
+                from orchestrator.inspection_workflow.publication import (
+                    FINAL_SUMMARY_PATH_TEMPLATE,
+                    PUBLICATION_MANIFEST_PATH,
+                    PUBLICATION_TRANSACTION_PATH_TEMPLATE,
+                    validate_publication,
+                )
+
+                validated = validate_publication(
+                    self._store.project_root,
+                    run_id=self.run_id,
+                    plan_fingerprint=self._plan_fingerprint,
+                )
+                if (
+                    publication_result.get("manifest") != validated["manifest"]
+                    or publication_result.get("manifest_bytes")
+                    != validated["manifest_bytes"]
+                    or publication_result.get("transaction")
+                    != validated["transaction"]
+                ):
+                    raise InspectionWorkflowControllerError(
+                        "publication result does not match the current validated publication"
+                    )
+                transaction_path = self._store.project_root.joinpath(
+                    *PUBLICATION_TRANSACTION_PATH_TEMPLATE.format(
+                        run_id=self.run_id
+                    ).split("/")
+                )
+                summary_path = self._store.project_root.joinpath(
+                    *FINAL_SUMMARY_PATH_TEMPLATE.format(run_id=self.run_id).split("/")
+                )
+                transaction_bytes = transaction_path.read_bytes()
+                summary_bytes = summary_path.read_bytes()
+                completion_evidence = {
+                    "schema_version": "completion_evidence_v1",
+                    "run_id": self.run_id,
+                    "plan_fingerprint": self._plan_fingerprint,
+                    "required_task_ids": sorted(
+                        item["task_id"] for item in state["task_plan"] if item["required"]
+                    ),
+                    "publication_manifest_path": PUBLICATION_MANIFEST_PATH,
+                    "publication_manifest_sha256": hashlib.sha256(
+                        validated["manifest_bytes"]
+                    ).hexdigest(),
+                    "publication_transaction_path": (
+                        PUBLICATION_TRANSACTION_PATH_TEMPLATE.format(run_id=self.run_id)
+                    ),
+                    "publication_transaction_sha256": hashlib.sha256(
+                        transaction_bytes
+                    ).hexdigest(),
+                    "transaction_id": validated["manifest"]["transaction_id"],
+                    "final_summary_path": FINAL_SUMMARY_PATH_TEMPLATE.format(
+                        run_id=self.run_id
+                    ),
+                    "final_summary_sha256": hashlib.sha256(summary_bytes).hexdigest(),
+                }
+                self._transition_locked(
+                    "COMPLETED", completion_evidence=completion_evidence
+                )
+            except BaseException:
+                self._halted = True
+                raise
+            return self._snapshot
+
     def project_executor_context(
         self, context: Mapping[str, Any]
     ) -> dict[str, Any]:
@@ -313,7 +408,12 @@ class InspectionWorkflowController:
             )
         return value
 
-    def _transition_locked(self, next_status: str) -> None:
+    def _transition_locked(
+        self,
+        next_status: str,
+        *,
+        completion_evidence: Mapping[str, Any] | None = None,
+    ) -> None:
         state = self._state()
         timestamp = self._timestamp()
         operation_id = (
@@ -331,7 +431,11 @@ class InspectionWorkflowController:
                 payload={
                     "next_status": next_status,
                     "metadata": None,
-                    "completion_evidence": None,
+                    "completion_evidence": (
+                        None
+                        if completion_evidence is None
+                        else deepcopy(dict(completion_evidence))
+                    ),
                     "transition_kind": "auto",
                     "decision_token": None,
                 },

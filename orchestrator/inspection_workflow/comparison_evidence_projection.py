@@ -35,6 +35,7 @@ from .memory_snapshot import (
     validate_history_memory_snapshots,
 )
 from .observation_identity import project_prepared_observation_identities
+from .observation_identity import project_legacy_observation_identities
 from .source_references import (
     SOURCE_REFERENCE_SCHEMA_VERSION,
     validate_source_reference_contract,
@@ -114,8 +115,10 @@ _PROJECTION_SOURCE_KINDS = {
     "history_round_association",
     "history_memory_before",
     "history_memory_after",
+    "legacy_frame_records",
 }
 _PROJECTION_VALIDATION_SCOPE = "prepared_readiness_and_history_contract"
+_LEGACY_PROJECTION_VALIDATION_SCOPE = "legacy_simulated_and_history_contract"
 _PREPARED_FINGERPRINT_FIELDS = (
     "association_inspection_id",
     "local_observation_id",
@@ -280,7 +283,10 @@ def parse_projection_receipt(
         receipt["schema_version"] != PROJECTION_RECEIPT_SCHEMA_VERSION
         or receipt["run_id"] != run_id
         or receipt["execution_profile"] != execution_profile
-        or receipt["validation_scope"] != _PROJECTION_VALIDATION_SCOPE
+        or receipt["validation_scope"] not in {
+            _PROJECTION_VALIDATION_SCOPE,
+            _LEGACY_PROJECTION_VALIDATION_SCOPE,
+        }
     ):
         raise ComparisonEvidenceProjectionError(
             "projection_receipt.json identity or validation scope is invalid"
@@ -608,18 +614,27 @@ def _normalize_frame_rows(rows: Sequence[Mapping[str, str]]) -> list[dict[str, A
     verified_sources = set(
         policy["source_comparability_rules"]["verified_comparable_allowed_sources"]
     )
-    try:
-        projected = project_prepared_observation_identities(rows)
-    except ValueError as exc:
+    identity_kinds = {row.get("identity_source_kind") for row in rows}
+    if len(identity_kinds) != 1 or identity_kinds not in ({"prepared"}, {"legacy"}):
         raise ComparisonEvidenceProjectionError(
-            f"frame_records.csv prepared observation identity is invalid: {exc}"
-        ) from exc
+            "frame_records.csv must use one supported identity_source_kind"
+        )
+    identity_kind = next(iter(identity_kinds))
+    if identity_kind == "prepared":
+        try:
+            projected = project_prepared_observation_identities(rows)
+        except ValueError as exc:
+            raise ComparisonEvidenceProjectionError(
+                f"frame_records.csv prepared observation identity is invalid: {exc}"
+            ) from exc
+    else:
+        projected = [dict(row) for row in rows]
     normalized: list[dict[str, Any]] = []
     for row_number, row in enumerate(projected, start=1):
         label = f"frame_records.csv row {row_number}"
-        if row["identity_source_kind"] != "prepared":
+        if row["identity_source_kind"] != identity_kind:
             raise ComparisonEvidenceProjectionError(
-                f"{label} identity_source_kind must be prepared in this A1 slice"
+                f"{label} identity_source_kind is inconsistent"
             )
         inspection_id = _canonical_string(
             row["inspection_id"],
@@ -630,6 +645,17 @@ def _normalize_frame_rows(rows: Sequence[Mapping[str, str]]) -> list[dict[str, A
             raise ComparisonEvidenceProjectionError(
                 f"{label} association_inspection_id must equal inspection_id"
             )
+        if identity_kind == "legacy":
+            local_id = _canonical_string(
+                row["local_observation_id"],
+                field="local_observation_id",
+                label=label,
+            )
+            expected_observation_id = f"{inspection_id}::{local_id}"
+            if row["current_observation_id"] != expected_observation_id:
+                raise ComparisonEvidenceProjectionError(
+                    f"{label} current_observation_id does not match the legacy identity"
+                )
         observation_source = row["observation_source"]
         comparability_status = row["comparability_status"]
         if observation_source not in source_enum or observation_source == "mixed_sources":
@@ -727,6 +753,102 @@ def _project_prepared_frame_rows(
                 "frame_id": row["frame_id"],
                 "image_id": row["image_id"],
                 "timestamp": canonical_timestamp,
+                "mask_area_px": row["kict_area_px"],
+                "observation_source": row["observation_source"],
+                "comparability_status": row["comparability_status"],
+            }
+        )
+    return _normalize_frame_rows(projected)
+
+
+def _parse_legacy_frame_rows(
+    data: bytes,
+    *,
+    label: str,
+    expected_fieldnames: Sequence[str] | None = None,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Parse one frozen Legacy producer snapshot without trusting future columns."""
+
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ComparisonEvidenceProjectionError(f"{label} must be UTF-8") from exc
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    try:
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+    except csv.Error as exc:
+        raise ComparisonEvidenceProjectionError(f"{label} contains malformed CSV") from exc
+    if not fieldnames or len(fieldnames) != len(set(fieldnames)):
+        raise ComparisonEvidenceProjectionError(
+            f"{label} must have a non-empty duplicate-free header"
+        )
+    if expected_fieldnames is not None and fieldnames != list(expected_fieldnames):
+        raise ComparisonEvidenceProjectionError(
+            f"{label} fieldnames changed from the validated Legacy source"
+        )
+    from orchestrator.schema import REQUIRED_SCHEMAS
+
+    required = set(REQUIRED_SCHEMAS["robot_kict_frame_records"])
+    if not required.issubset(fieldnames):
+        raise ComparisonEvidenceProjectionError(
+            f"{label} is missing the Legacy frame contract fields"
+        )
+    forbidden = {
+        "label_disease_id",
+        "ground_truth",
+        "ground_truth_id",
+        "gt",
+        "split",
+        "review",
+        "audit",
+        "eval_result",
+    }
+    if forbidden & set(fieldnames):
+        raise ComparisonEvidenceProjectionError(
+            f"{label} contains forbidden answer or evaluation fields"
+        )
+    if any(None in row or any(value is None for value in row.values()) for row in rows):
+        raise ComparisonEvidenceProjectionError(f"{label} has a malformed column count")
+    if not rows:
+        raise ComparisonEvidenceProjectionError(f"{label} must not be empty")
+    return fieldnames, [dict(row) for row in rows]
+
+
+def _project_legacy_frame_rows(
+    rows: Sequence[Mapping[str, str]],
+) -> list[dict[str, Any]]:
+    try:
+        identities = project_legacy_observation_identities(
+            rows,
+            dataset_root="data/simulated",
+            dataset_timezone="UTC",
+        )
+    except ValueError as exc:
+        raise ComparisonEvidenceProjectionError(
+            f"Legacy frame observation identity is invalid: {exc}"
+        ) from exc
+    projected = []
+    for row_number, row in enumerate(identities, start=1):
+        label = f"Legacy frame row {row_number}"
+        if (
+            row["observation_source"] != "kict_static_mask_cyclic_demo"
+            or row["comparability_status"] != "not_longitudinally_comparable"
+        ):
+            raise ComparisonEvidenceProjectionError(
+                f"{label} must preserve the KICT cyclic static-mask boundary"
+            )
+        projected.append(
+            {
+                "source_reference_schema_version": SOURCE_REFERENCE_SCHEMA_VERSION,
+                "identity_source_kind": "legacy",
+                "association_inspection_id": row["inspection_id"],
+                "local_observation_id": row["local_observation_id"],
+                "inspection_id": row["inspection_id"],
+                "current_observation_id": row["current_observation_id"],
+                "frame_id": row["frame_id"],
+                "image_id": row["image_id"],
+                "timestamp": row["timestamp"],
                 "mask_area_px": row["kict_area_px"],
                 "observation_source": row["observation_source"],
                 "comparability_status": row["comparability_status"],
@@ -907,22 +1029,27 @@ def _build_static_evidence(
     association_hash: str,
     manifest_hash: str,
     engineering_hash: str,
+    allow_unverified_matched_blocked: bool = False,
 ) -> dict[str, Any]:
     if association is not None:
         if association["association_status"] == "matched":
-            raise ComparisonEvidenceProjectionError(
-                "matched Association projection requires a source-proof Memory schema upgrade"
-            )
-        if association["association_status"] != "unmatched":
+            if not allow_unverified_matched_blocked:
+                raise ComparisonEvidenceProjectionError(
+                    "matched Association projection requires a source-proof Memory schema upgrade"
+                )
+            identity_state = "association_invalid"
+            comparability_reason = "matched_memory_source_not_verified"
+        elif association["association_status"] != "unmatched":
             raise ComparisonEvidenceProjectionError(
                 "Association status must be matched or unmatched"
             )
-        if association["memory_id"] is not None:
-            raise ComparisonEvidenceProjectionError(
-                "unmatched Association must use canonical empty memory_id"
-            )
-        identity_state = "association_rejected"
-        comparability_reason = "no_history_match"
+        else:
+            if association["memory_id"] is not None:
+                raise ComparisonEvidenceProjectionError(
+                    "unmatched Association must use canonical empty memory_id"
+                )
+            identity_state = "association_rejected"
+            comparability_reason = "no_history_match"
     else:
         identity_state = "association_not_applicable"
         comparability_reason = "baseline_current_only"
@@ -993,8 +1120,12 @@ def _build_static_evidence(
         "temporal_order_valid": False,
         "difference_valid": False,
         "relative_difference_valid": False,
-        "evidence_valid": True,
-        "invalid_reason": None,
+        "evidence_valid": identity_state != "association_invalid",
+        "invalid_reason": (
+            "matched_memory_source_not_verified"
+            if identity_state == "association_invalid"
+            else None
+        ),
         "comparison_comparability_status": "insufficient_history",
         "comparability_reason": comparability_reason,
         "registration_status": "not_verified",
@@ -1139,11 +1270,12 @@ def materialize_prepared_history_projection_sources(
     *,
     run_id: str,
     execution_profile: str,
-    prepared_manifest_path: str,
+    prepared_manifest_path: str | None,
     history_association_path: str,
     history_manifest_path: str,
+    legacy_frame_path: str | None = None,
 ) -> dict[str, str]:
-    """Bridge validated Prepared + history-only outputs into A1 neutral relations.
+    """Bridge one validated source mode plus history-only outputs into neutral relations.
 
     Legacy ``label_disease_id`` is deliberately ignored. Association rows resolve
     through inspection/frame/image only and therefore fail closed when that tuple
@@ -1160,15 +1292,11 @@ def materialize_prepared_history_projection_sources(
         _reject_recovery_marker(root, run_id, "work")
     except PhaseA1ArtifactError as exc:
         raise ComparisonEvidenceProjectionError(str(exc)) from exc
-    try:
-        # Validate containment before passing a filesystem path to the existing
-        # readiness gate. The bytes used below are captured again after that gate.
-        snapshot_phase_a1_work_artifact(
-            project_root,
-            run_id=run_id,
-            execution_profile=execution_profile,
-            relative_path=prepared_manifest_path,
+    if (prepared_manifest_path is None) == (legacy_frame_path is None):
+        raise ComparisonEvidenceProjectionError(
+            "exactly one Prepared manifest or Legacy frame source is required"
         )
+    try:
         history_association_snapshot = snapshot_phase_a1_work_artifact(
             project_root,
             run_id=run_id,
@@ -1184,103 +1312,119 @@ def materialize_prepared_history_projection_sources(
     except PhaseA1ArtifactError as exc:
         raise ComparisonEvidenceProjectionError(str(exc)) from exc
 
-    prepared_manifest_file = root.joinpath(*prepared_manifest_path.split("/"))
-    try:
-        from scripts.prepare_real_inspection_pilot import (
-            FRAME_FIELDNAMES as PREPARED_FRAME_FIELDNAMES,
-            require_inference_ready,
-            validate_prepared_artifacts,
+    source_result: dict[str, str]
+    if prepared_manifest_path is not None:
+        prepared_manifest_file = root.joinpath(*prepared_manifest_path.split("/"))
+        try:
+            from scripts.prepare_real_inspection_pilot import (
+                FRAME_FIELDNAMES as PREPARED_FRAME_FIELDNAMES,
+                require_inference_ready,
+                validate_prepared_artifacts,
+            )
+
+            require_inference_ready(prepared_manifest_file)
+        except (OSError, ValueError) as exc:
+            raise ComparisonEvidenceProjectionError(
+                f"Prepared input is not inference-ready: {exc}"
+            ) from exc
+        prepared_frame_path = prepared_manifest_file.parent / "frame_records.csv"
+        prepared_observation_path = prepared_manifest_file.parent / "observation_records.csv"
+        try:
+            source_frame_relative = prepared_frame_path.resolve().relative_to(
+                root.resolve()
+            ).as_posix()
+            prepared_observation_relative = prepared_observation_path.resolve().relative_to(
+                root.resolve()
+            ).as_posix()
+        except ValueError as exc:
+            raise ComparisonEvidenceProjectionError(
+                "Prepared artifact paths must remain inside the A1 sandbox"
+            ) from exc
+        prepared_manifest_snapshot = _snapshot(
+            project_root, run_id=run_id, relative_path=prepared_manifest_path
         )
-
-        require_inference_ready(prepared_manifest_file)
-    except (OSError, ValueError) as exc:
-        raise ComparisonEvidenceProjectionError(
-            f"Prepared input is not inference-ready: {exc}"
-        ) from exc
-
-    prepared_frame_path = prepared_manifest_file.parent / "frame_records.csv"
-    prepared_observation_path = prepared_manifest_file.parent / "observation_records.csv"
-    try:
-        prepared_frame_relative = prepared_frame_path.resolve().relative_to(
-            root.resolve()
-        ).as_posix()
-        prepared_observation_relative = prepared_observation_path.resolve().relative_to(
-            root.resolve()
-        ).as_posix()
-    except ValueError as exc:
-        raise ComparisonEvidenceProjectionError(
-            "Prepared artifact paths must remain inside the A1 sandbox"
-        ) from exc
-    prepared_manifest_snapshot = _snapshot(
-        project_root,
-        run_id=run_id,
-        relative_path=prepared_manifest_path,
-    )
-    prepared_frame_snapshot = _snapshot(
-        project_root,
-        run_id=run_id,
-        relative_path=prepared_frame_relative,
-    )
-    prepared_observation_snapshot = _snapshot(
-        project_root,
-        run_id=run_id,
-        relative_path=prepared_observation_relative,
-    )
-    prepared_manifest = _parse_json_object(
-        prepared_manifest_snapshot["data"],
-        label="Prepared preparation_manifest.json",
-    )
-    try:
-        require_inference_ready(prepared_manifest)
-    except ValueError as exc:
-        raise ComparisonEvidenceProjectionError(
-            f"Prepared manifest snapshot is not logically inference-ready: {exc}"
-        ) from exc
-    _require_prepared_snapshot_fingerprint(
-        prepared_manifest,
-        output_name="observation_records",
-        snapshot=prepared_observation_snapshot,
-    )
-    _require_prepared_snapshot_fingerprint(
-        prepared_manifest,
-        output_name="frame_records",
-        snapshot=prepared_frame_snapshot,
-    )
-    _validate_prepared_snapshot_bytes(
-        prepared_manifest,
-        observation_snapshot=prepared_observation_snapshot,
-        frame_snapshot=prepared_frame_snapshot,
-        validator=validate_prepared_artifacts,
-    )
-    receipt_sources = [
-        _receipt_reference(
-            kind="prepared_manifest",
-            snapshot=prepared_manifest_snapshot,
-        ),
-        _receipt_reference(
-            kind="prepared_observation_records",
+        source_frame_snapshot = _snapshot(
+            project_root, run_id=run_id, relative_path=source_frame_relative
+        )
+        prepared_observation_snapshot = _snapshot(
+            project_root, run_id=run_id, relative_path=prepared_observation_relative
+        )
+        prepared_manifest = _parse_json_object(
+            prepared_manifest_snapshot["data"], label="Prepared preparation_manifest.json"
+        )
+        try:
+            require_inference_ready(prepared_manifest)
+        except ValueError as exc:
+            raise ComparisonEvidenceProjectionError(
+                f"Prepared manifest snapshot is not logically inference-ready: {exc}"
+            ) from exc
+        _require_prepared_snapshot_fingerprint(
+            prepared_manifest,
+            output_name="observation_records",
             snapshot=prepared_observation_snapshot,
-        ),
-        _receipt_reference(
-            kind="prepared_frame_records",
-            snapshot=prepared_frame_snapshot,
-        ),
-        _receipt_reference(
-            kind="history_association_records",
-            snapshot=history_association_snapshot,
-        ),
-        _receipt_reference(
-            kind="history_manifest",
-            snapshot=history_manifest_snapshot,
-        ),
-    ]
-    prepared_rows = _parse_producer_csv_rows(
-        prepared_frame_snapshot["data"],
-        expected_fieldnames=PREPARED_FRAME_FIELDNAMES,
-        label="Prepared frame_records.csv",
-        allow_empty=False,
+        )
+        _require_prepared_snapshot_fingerprint(
+            prepared_manifest, output_name="frame_records", snapshot=source_frame_snapshot
+        )
+        _validate_prepared_snapshot_bytes(
+            prepared_manifest,
+            observation_snapshot=prepared_observation_snapshot,
+            frame_snapshot=source_frame_snapshot,
+            validator=validate_prepared_artifacts,
+        )
+        receipt_sources = [
+            _receipt_reference(kind="prepared_manifest", snapshot=prepared_manifest_snapshot),
+            _receipt_reference(
+                kind="prepared_observation_records", snapshot=prepared_observation_snapshot
+            ),
+            _receipt_reference(kind="prepared_frame_records", snapshot=source_frame_snapshot),
+        ]
+        frame_rows = _project_prepared_frame_rows(
+            _parse_producer_csv_rows(
+                source_frame_snapshot["data"],
+                expected_fieldnames=PREPARED_FRAME_FIELDNAMES,
+                label="Prepared frame_records.csv",
+                allow_empty=False,
+            )
+        )
+        query_fieldnames = PREPARED_FRAME_FIELDNAMES
+        project_query_rows = lambda data, label: _project_prepared_frame_rows(
+            _parse_producer_csv_rows(
+                data,
+                expected_fieldnames=query_fieldnames,
+                label=label,
+                allow_empty=False,
+            )
+        )
+        validation_scope = _PROJECTION_VALIDATION_SCOPE
+        source_result = {"prepared_manifest_path": prepared_manifest_snapshot["path"]}
+    else:
+        source_frame_relative = legacy_frame_path
+        source_frame_snapshot = _snapshot(
+            project_root, run_id=run_id, relative_path=source_frame_relative
+        )
+        query_fieldnames, legacy_rows = _parse_legacy_frame_rows(
+            source_frame_snapshot["data"], label="Legacy robot_kict_frame_records.csv"
+        )
+        frame_rows = _project_legacy_frame_rows(legacy_rows)
+        receipt_sources = [
+            _receipt_reference(kind="legacy_frame_records", snapshot=source_frame_snapshot)
+        ]
+        project_query_rows = lambda data, label: _project_legacy_frame_rows(
+            _parse_legacy_frame_rows(
+                data, label=label, expected_fieldnames=query_fieldnames
+            )[1]
+        )
+        validation_scope = _LEGACY_PROJECTION_VALIDATION_SCOPE
+        source_result = {"legacy_frame_path": source_frame_snapshot["path"]}
+    receipt_sources.extend(
+        [
+            _receipt_reference(
+                kind="history_association_records", snapshot=history_association_snapshot
+            ),
+            _receipt_reference(kind="history_manifest", snapshot=history_manifest_snapshot),
+        ]
     )
-    frame_rows = _project_prepared_frame_rows(prepared_rows)
 
     from orchestrator.agents.association_agent import AssociationAgent
 
@@ -1336,14 +1480,7 @@ def materialize_prepared_history_projection_sources(
                 snapshot=query_snapshot,
             )
         )
-        query_rows = _project_prepared_frame_rows(
-            _parse_producer_csv_rows(
-                query_snapshot["data"],
-                expected_fieldnames=PREPARED_FRAME_FIELDNAMES,
-                label=query_path,
-                allow_empty=False,
-            )
-        )
+        query_rows = project_query_rows(query_snapshot["data"], query_path)
         round_source: dict[str, Any] = {
             "query_rows": query_rows,
             "raw_round": round_entry,
@@ -1419,9 +1556,9 @@ def materialize_prepared_history_projection_sources(
         raise ComparisonEvidenceProjectionError(
             f"history-only manifest is invalid: {exc}"
         ) from exc
-    if raw_history_manifest["source_frame_records"] != prepared_frame_relative:
+    if raw_history_manifest["source_frame_records"] != source_frame_relative:
         raise ComparisonEvidenceProjectionError(
-            "history-only manifest source_frame_records does not match Prepared frame records"
+            "history-only manifest source_frame_records does not match the validated source frames"
         )
     engineering_rows = _project_engineering_rows(frame_rows)
     projected_rounds = []
@@ -1439,7 +1576,7 @@ def materialize_prepared_history_projection_sources(
         key = lambda row: (row["inspection_id"], row["current_observation_id"])
         if sorted(query_rows, key=key) != sorted(expected_query_rows, key=key):
             raise ComparisonEvidenceProjectionError(
-                f"history-only round {round_number} query frames do not match Prepared frames"
+                f"history-only round {round_number} query frames do not match source frames"
             )
         outputs[fixed_query_path] = _canonical_csv_bytes(
             FRAME_PROJECTION_FIELDS,
@@ -1514,7 +1651,7 @@ def materialize_prepared_history_projection_sources(
         "schema_version": PROJECTION_RECEIPT_SCHEMA_VERSION,
         "run_id": run_id,
         "execution_profile": execution_profile,
-        "validation_scope": _PROJECTION_VALIDATION_SCOPE,
+        "validation_scope": validation_scope,
         "source_artifacts": canonical_receipt_sources,
         "projected_artifacts": sorted(
             (
@@ -1557,7 +1694,11 @@ def materialize_prepared_history_projection_sources(
                     project_root=root,
                     run_id=run_id,
                     area="work",
-                    stage="prepared_history_projection_materialization",
+                    stage=(
+                        "prepared_history_projection_materialization"
+                        if prepared_manifest_path is not None
+                        else "legacy_history_projection_materialization"
+                    ),
                     committed_paths=committed_paths,
                     primary_error=exc,
                 )
@@ -1569,7 +1710,7 @@ def materialize_prepared_history_projection_sources(
             f"unable to materialize A1 projection sources: {exc}"
         ) from exc
     return {
-        "prepared_manifest_path": prepared_manifest_snapshot["path"],
+        **source_result,
         "history_association_path": history_association_snapshot["path"],
         "history_manifest_path": history_manifest_snapshot["path"],
         "projection_frame_path": _fixed_work_path(run_id, "frame_records.csv"),
@@ -1581,12 +1722,34 @@ def materialize_prepared_history_projection_sources(
     }
 
 
+def materialize_legacy_history_projection_sources(
+    project_root: Any,
+    *,
+    run_id: str,
+    execution_profile: str,
+    legacy_frame_path: str,
+    history_association_path: str,
+    history_manifest_path: str,
+) -> dict[str, str]:
+    """Materialize the fixed Legacy simulated source as static-only V4 relations."""
+
+    return materialize_prepared_history_projection_sources(
+        project_root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+        prepared_manifest_path=None,
+        legacy_frame_path=legacy_frame_path,
+        history_association_path=history_association_path,
+        history_manifest_path=history_manifest_path,
+    )
+
+
 def _load_projection_receipt_snapshots(
     project_root: Any,
     *,
     run_id: str,
     execution_profile: str,
-) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     receipt_path = PROJECTION_RECEIPT_PATH_TEMPLATE.format(run_id=run_id)
     receipt_snapshot = _snapshot(
         project_root,
@@ -1618,7 +1781,7 @@ def _load_projection_receipt_snapshots(
                     f"projection receipt artifact changed: {reference['path']}"
                 )
             destination[reference["path"]] = snapshot
-    return receipt_snapshot, source_snapshots, projected_snapshots
+    return receipt_snapshot, receipt, source_snapshots, projected_snapshots
 
 
 def project_run_local_comparison_evidence(
@@ -1636,6 +1799,7 @@ def project_run_local_comparison_evidence(
 
     (
         receipt_snapshot,
+        receipt,
         receipt_source_snapshots,
         receipt_projected_snapshots,
     ) = _load_projection_receipt_snapshots(
@@ -1884,6 +2048,9 @@ def project_run_local_comparison_evidence(
             association_hash=association_snapshot["sha256"],
             manifest_hash=manifest_snapshot["sha256"],
             engineering_hash=engineering_snapshot["sha256"],
+            allow_unverified_matched_blocked=(
+                receipt["validation_scope"] == _LEGACY_PROJECTION_VALIDATION_SCOPE
+            ),
         )
         for frame in sorted(
             relations["frame_records"],
