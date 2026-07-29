@@ -32,6 +32,7 @@ from orchestrator.inspection_workflow.locking import (
     _validate_uuid,
     canonical_utc_now,
     validate_active_run_lock,
+    validate_existing_active_run_lock,
 )
 from orchestrator.inspection_workflow.models import (
     StateMutationResult,
@@ -1333,7 +1334,7 @@ class StateStore:
     ) -> StateSnapshot:
         paths = self._paths(run_id)
         try:
-            validate_active_run_lock(
+            validate_existing_active_run_lock(
                 self.project_root,
                 run_id=run_id,
                 allocation_token=allocation_token,
@@ -1428,6 +1429,60 @@ class StateStore:
             if not unresolved:
                 self._validate_committed_state_binding(state, records)
             return _state_snapshot(state)
+
+    def validate_resume_identity(
+        self,
+        *,
+        run_id: str,
+        expected_lock_token: str,
+        expected_plan_fingerprint: str,
+        expected_input_mode: str,
+        expected_resolved_input_descriptor_sha256: str,
+    ) -> StateSnapshot:
+        """Read-only fencing before ordinary Resume may repair Journal state."""
+
+        _validate_sha(expected_plan_fingerprint, label="expected plan_fingerprint")
+        _validate_sha(
+            expected_resolved_input_descriptor_sha256,
+            label="expected resolved input descriptor SHA-256",
+        )
+        if not isinstance(expected_input_mode, str) or not expected_input_mode:
+            raise StateStoreError("expected workflow input mode is invalid")
+        state, _ = self._read_state(run_id)
+        context = state["context"]
+        if (
+            state["plan_fingerprint"] != expected_plan_fingerprint
+            or context.get("workflow_input_mode") != expected_input_mode
+            or context.get("resolved_input_descriptor_sha256")
+            != expected_resolved_input_descriptor_sha256
+        ):
+            raise StateConflictError(
+                "managed Resume identity does not match canonical State"
+            )
+        try:
+            validate_existing_active_run_lock(
+                self.project_root,
+                run_id=run_id,
+                allocation_token=state["allocation_token"],
+                expected_lock_token=expected_lock_token,
+                allowed_phases={"running"},
+            )
+        except ActiveRunLockError as exc:
+            raise StateConflictError(str(exc)) from exc
+        records, _, _ = self._journal_state(
+            run_id,
+            state["allocation_token"],
+            repair_unanchored=False,
+        )
+        self._validate_recovery_audit_bindings(state, records)
+        unresolved = [
+            rows for rows in self._operation_index(records).values() if len(rows) == 1
+        ]
+        if len(unresolved) > 1:
+            raise StateConflictError("more than one unresolved state operation exists")
+        if not unresolved:
+            self._validate_committed_state_binding(state, records)
+        return _state_snapshot(state)
 
     def _recover_unfinished_operations_locked(
         self,

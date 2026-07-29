@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import tempfile
 import uuid
 from typing import Any
 
@@ -32,11 +33,12 @@ from orchestrator.inspection_workflow.contracts import (
     validate_task_request,
 )
 from orchestrator.inspection_workflow.locking import (
+    ActiveRunLockError,
     _assert_plain_entry,
     _assert_project_path,
     acquire_active_run_lock,
     mark_active_run_running,
-    read_active_run_lock,
+    read_existing_active_run_lock,
     release_active_run_lock,
     reserve_active_run_id,
 )
@@ -116,12 +118,6 @@ def run_prepared_task(
         f"{request['input']['dataset_id']}/preparation_manifest.json"
     )
     prepared_manifest = root.joinpath(*prepared_relative.split("/"))
-    try:
-        require_inference_ready(prepared_manifest)
-    except (OSError, ValueError) as exc:
-        raise InspectionWorkflowLifecycleError(
-            "Prepared dataset failed the inference-readiness gate"
-        ) from exc
     source_capture = _capture_prepared_input(
         root,
         run_id=run_id,
@@ -149,11 +145,12 @@ def run_legacy_simulated(
 
     root = _controlled_root(project_root)
     source = root.joinpath(*LEGACY_FRAME_RECORDS_PATH.split("/"))
-    _validate_legacy_frame_records(source)
+    captured = _validate_legacy_frame_records(source)
     source_capture = _capture_legacy_input(
         root,
         run_id=run_id,
         source=source,
+        captured=captured,
         workflow_policy=load_workflow_policy(),
     )
     return _run_lifecycle(
@@ -229,10 +226,23 @@ async def _run_lifecycle_async(
     task_plan = build_required_task_plan(materialized_tasks)
 
     if resume:
-        lock = read_active_run_lock(root)
+        try:
+            lock = read_existing_active_run_lock(root)
+        except (ActiveRunLockError, OSError, ValueError) as exc:
+            raise InspectionWorkflowLifecycleError(
+                "managed resume requires an existing Active Run Lock"
+            ) from exc
         if lock.get("run_id") != run_id or lock.get("phase") != "running":
             raise InspectionWorkflowLifecycleError(
                 "managed resume requires the matching running Active Run Lock"
+            )
+        if (
+            lock.get("hostname") != socket.gethostname()
+            or lock.get("pid") != os.getpid()
+        ):
+            raise InspectionWorkflowLifecycleError(
+                "ordinary Resume requires the current live Active Run Lock owner; "
+                "use explicit A3.2 takeover for another owner"
             )
         allocation_token = lock["allocation_token"]
         lock_token = lock["lock_token"]
@@ -300,6 +310,7 @@ async def _run_lifecycle_async(
         expected_lock_token=lock_token,
         plan_fingerprint=plan_fingerprint,
         resolved_input_descriptor_sha256=descriptor_sha256,
+        workflow_input_mode=input_mode,
         resume=resume,
     )
     context = _managed_context(
@@ -453,6 +464,44 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _snapshot_project_source(root: Path, path: Path, *, label: str) -> bytes:
+    """Capture one guarded project file for point-in-time validation and binding."""
+
+    try:
+        _assert_project_path(root, path, include_leaf=True, label=label)
+        _assert_plain_entry(path, label=label, directory=False)
+        data = path.read_bytes()
+        _assert_project_path(root, path, include_leaf=True, label=label)
+        _assert_plain_entry(path, label=label, directory=False)
+        return data
+    except (ActiveRunLockError, OSError, ValueError) as exc:
+        raise InspectionWorkflowLifecycleError(
+            f"{label} path is missing or unsafe"
+        ) from exc
+
+
+def _validate_prepared_source_snapshot(sources: list[dict[str, Any]]) -> None:
+    """Run the existing Path readiness gate against the exact captured bytes."""
+
+    by_name = {
+        Path(source["relative_path"]).name: source["data"] for source in sources
+    }
+    if set(by_name) != set(_PREPARED_COPY_NAMES):
+        raise InspectionWorkflowLifecycleError("Prepared source snapshot is incomplete")
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="phase-a3-prepared-snapshot-"
+        ) as directory:
+            snapshot_dir = Path(directory)
+            for name in _PREPARED_COPY_NAMES:
+                (snapshot_dir / name).write_bytes(by_name[name])
+            require_inference_ready(snapshot_dir / "preparation_manifest.json")
+    except (OSError, ValueError) as exc:
+        raise InspectionWorkflowLifecycleError(
+            "Prepared dataset failed the inference-readiness gate"
+        ) from exc
+
+
 def _capture_prepared_input(
     root: Path,
     *,
@@ -465,18 +514,23 @@ def _capture_prepared_input(
     sources = []
     try:
         for name in _PREPARED_COPY_NAMES:
-            data = (source_dir / name).read_bytes()
+            source_path = source_dir / name
+            data = _snapshot_project_source(
+                root, source_path, label=f"Prepared artifact {name}"
+            )
             sources.append(
                 {
-                    "source_path": source_dir / name,
+                    "source_path": source_path,
                     "relative_path": f"runs/{run_id}/work/raw_prepared/{name}",
                     "data": data,
                     "origin_sha256": _sha256(data),
                 }
             )
-    except OSError as exc:
+        _validate_prepared_source_snapshot(sources)
+    except InspectionWorkflowLifecycleError as exc:
         raise InspectionWorkflowLifecycleError(
-            "unable to capture the Prepared artifact set before Run allocation"
+            "Prepared dataset failed the inference-readiness gate; "
+            "its captured source set is missing, unsafe, or invalid"
         ) from exc
     return _make_source_capture(
         run_id=run_id,
@@ -500,16 +554,11 @@ def _capture_legacy_input(
     *,
     run_id: str,
     source: Path,
+    captured: bytes,
     workflow_policy: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Capture the fixed Legacy source and neutralize its copied grouping key."""
 
-    try:
-        captured = source.read_bytes()
-    except OSError as exc:
-        raise InspectionWorkflowLifecycleError(
-            "unable to capture the fixed Legacy simulated frame artifact before Run allocation"
-        ) from exc
     neutral_bytes = _neutralize_legacy_frame_bytes(captured)
     return _make_source_capture(
         run_id=run_id,
@@ -654,7 +703,9 @@ def _materialize_source_capture(
             data=data,
         )
         try:
-            if _sha256(source_path.read_bytes()) != origin_sha256:
+            if _sha256(
+                _snapshot_project_source(root, source_path, label="workflow source")
+            ) != origin_sha256:
                 raise InspectionWorkflowLifecycleError(
                     "workflow source changed during Run-local materialization"
                 )
@@ -688,7 +739,9 @@ def _validate_resume_input_capture(
         ):
             raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
         try:
-            if _sha256(source_path.read_bytes()) != origin_sha256:
+            if _sha256(
+                _snapshot_project_source(root, source_path, label="workflow source")
+            ) != origin_sha256:
                 raise InspectionWorkflowLifecycleError(
                     "workflow source does not match the captured Run input"
                 )
@@ -785,35 +838,29 @@ def _reject_any_entry(path: Path, *, label: str) -> None:
     raise InspectionWorkflowLifecycleError(f"{label} exists; explicit recovery is required")
 
 
-def _validate_legacy_frame_records(path: Path) -> None:
+def _validate_legacy_frame_records(path: Path) -> bytes:
     root = path.parents[2]
+    captured = _snapshot_project_source(
+        root, path, label="Legacy simulated frame artifact"
+    )
     try:
-        _assert_project_path(
-            root,
-            path,
-            include_leaf=True,
-            label="Legacy simulated frame artifact",
-        )
-        _assert_plain_entry(
-            path,
-            label="Legacy simulated frame artifact",
-            directory=False,
-        )
-    except Exception as exc:
-        raise InspectionWorkflowLifecycleError(
-            "Legacy simulated frame artifact path is unsafe"
-        ) from exc
-    errors = validate_csv_schema(path, "robot_kict_frame_records", allow_empty=False)
-    if errors:
-        raise InspectionWorkflowLifecycleError(
-            "Legacy simulated frame artifact schema is invalid: " + "; ".join(errors)
-        )
-    try:
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        with tempfile.TemporaryDirectory(prefix="phase-a3-legacy-snapshot-") as directory:
+            snapshot_path = Path(directory) / "robot_kict_frame_records.csv"
+            snapshot_path.write_bytes(captured)
+            errors = validate_csv_schema(
+                snapshot_path, "robot_kict_frame_records", allow_empty=False
+            )
+        if errors:
+            raise InspectionWorkflowLifecycleError(
+                "Legacy simulated frame artifact schema is invalid: "
+                + "; ".join(errors)
+            )
+        text = captured.decode("utf-8-sig")
+        with io.StringIO(text, newline="") as handle:
             reader = csv.DictReader(handle)
             fieldnames = list(reader.fieldnames or [])
             rows = list(reader)
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
         raise InspectionWorkflowLifecycleError(
             "unable to read the fixed Legacy simulated frame artifact"
         ) from exc
@@ -839,6 +886,7 @@ def _validate_legacy_frame_records(path: Path) -> None:
         raise InspectionWorkflowLifecycleError(
             "Legacy simulated input must preserve the KICT static-mask noncomparable boundary"
         )
+    return captured
 
 
 def _validate_input_mode_claim_boundary(

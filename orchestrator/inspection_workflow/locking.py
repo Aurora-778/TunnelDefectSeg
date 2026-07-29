@@ -825,6 +825,20 @@ def read_active_run_lock(project_root: Path) -> dict[str, Any]:
     return deepcopy(lock)
 
 
+def read_existing_active_run_lock(project_root: Path) -> dict[str, Any]:
+    """Read the Active Run Lock without creating ``runs/`` as a side effect."""
+
+    root = Path(project_root).absolute()
+    _assert_plain_entry(root, label="project_root", directory=True)
+    runs = root / "runs"
+    _assert_project_path(root, runs, include_leaf=True, label="runs directory")
+    _assert_plain_entry(runs, label="runs directory", directory=True)
+    path = runs / ".active_run.lock"
+    _assert_project_path(root, path, include_leaf=True, label="Active Run Lock")
+    lock, _ = _read_lock(path)
+    return deepcopy(lock)
+
+
 def _cleanup_failed_acquisition(
     path: Path, runs: Path, expected_bytes: bytes, lock_token: str
 ) -> list[str]:
@@ -1104,6 +1118,44 @@ def validate_active_run_lock(
     expected_lock_token: str,
     allowed_phases: set[str] | frozenset[str],
 ) -> dict[str, Any]:
+    lock = read_active_run_lock(project_root)
+    return _validate_active_run_lock_identity(
+        lock,
+        run_id=run_id,
+        allocation_token=allocation_token,
+        expected_lock_token=expected_lock_token,
+        allowed_phases=allowed_phases,
+    )
+
+
+def validate_existing_active_run_lock(
+    project_root: Path,
+    *,
+    run_id: str,
+    allocation_token: str,
+    expected_lock_token: str,
+    allowed_phases: set[str] | frozenset[str],
+) -> dict[str, Any]:
+    """Validate an existing lock without creating a missing ``runs/`` directory."""
+
+    lock = read_existing_active_run_lock(project_root)
+    return _validate_active_run_lock_identity(
+        lock,
+        run_id=run_id,
+        allocation_token=allocation_token,
+        expected_lock_token=expected_lock_token,
+        allowed_phases=allowed_phases,
+    )
+
+
+def _validate_active_run_lock_identity(
+    lock: Mapping[str, Any],
+    *,
+    run_id: str,
+    allocation_token: str,
+    expected_lock_token: str,
+    allowed_phases: set[str] | frozenset[str],
+) -> dict[str, Any]:
     if (
         not isinstance(allowed_phases, (set, frozenset))
         or not allowed_phases
@@ -1111,7 +1163,6 @@ def validate_active_run_lock(
         or not allowed_phases.issubset(ACTIVE_RUN_PHASES)
     ):
         raise ActiveRunLockError("allowed Active Run Lock phases are invalid")
-    lock = read_active_run_lock(project_root)
     if (
         lock["allocation_token"] != allocation_token
         or lock["lock_token"] != expected_lock_token
@@ -1121,7 +1172,7 @@ def validate_active_run_lock(
         raise ActiveRunLockError("Active Run Lock fencing check failed")
     if lock["phase"] in {"running", "recovering"} and lock["run_id"] != run_id:
         raise ActiveRunLockError("Active Run Lock does not identify the requested Run")
-    return lock
+    return deepcopy(dict(lock))
 
 
 def _recovery_mutex_path(runs: Path) -> Path:

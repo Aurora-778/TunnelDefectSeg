@@ -235,6 +235,21 @@ fingerprint. Resume re-captures and compares the descriptor inputs, rejecting an
 input-mode, request, policy, source, or Run-local snapshot drift before managed
 execution resumes.
 
+Prepared readiness and Legacy schema/relation checks consume the exact captured
+bytes later materialized and hashed by the resolved-input descriptor. All parent
+components for the Prepared manifest and sibling CSVs, and for the fixed Legacy
+source, are checked as ordinary in-project entries; symlink, junction, and other
+reparse ancestry is rejected. These remain no-lock point-in-time checks.
+
+Ordinary Resume is restricted to the current hostname and PID recorded by the
+existing running Active Lock. Any other, dead, or unknown owner must use A3.2
+explicit takeover. The Controller first invokes a read-only StateStore identity
+preflight that matches the plan fingerprint, input mode, descriptor SHA-256,
+allocation identity, and lock token. Only after that preflight may Journal
+recovery mutate bytes. Reading a missing Resume lock uses a non-creating path;
+missing `runs/` or lock state leaves no directory, lock, transaction, or audit
+residue.
+
 Before any Active Run Lock allocation, the lifecycle rejects A1 recovery markers,
 the A2 publication marker, State recovery markers, Active Run recovery/state
 mutexes, release tombstones, and stale non-resume Run state. This preflight is a

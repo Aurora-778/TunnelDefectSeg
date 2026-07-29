@@ -55,6 +55,7 @@ class InspectionWorkflowController:
         expected_lock_token: str,
         plan_fingerprint: str,
         resolved_input_descriptor_sha256: str | None = None,
+        workflow_input_mode: str | None = None,
         resume: bool = False,
         clock: Callable[[], str] = canonical_utc_now,
     ) -> None:
@@ -62,9 +63,24 @@ class InspectionWorkflowController:
         self._expected_lock_token = expected_lock_token
         self._plan_fingerprint = plan_fingerprint
         self._resolved_input_descriptor_sha256 = resolved_input_descriptor_sha256
+        self._workflow_input_mode = workflow_input_mode
         self._clock = clock
         self._store = StateStore(project_root)
         try:
+            if resume and resolved_input_descriptor_sha256 is not None:
+                if workflow_input_mode is None:
+                    raise InspectionWorkflowControllerError(
+                        "managed Resume requires the resolved workflow input mode"
+                    )
+                self._store.validate_resume_identity(
+                    run_id=run_id,
+                    expected_lock_token=expected_lock_token,
+                    expected_plan_fingerprint=plan_fingerprint,
+                    expected_input_mode=workflow_input_mode,
+                    expected_resolved_input_descriptor_sha256=(
+                        resolved_input_descriptor_sha256
+                    ),
+                )
             self._snapshot = (
                 self._store.recover(
                     run_id=run_id,
@@ -91,6 +107,10 @@ class InspectionWorkflowController:
                 not isinstance(context, Mapping)
                 or context.get("resolved_input_descriptor_sha256")
                 != resolved_input_descriptor_sha256
+                or (
+                    workflow_input_mode is not None
+                    and context.get("workflow_input_mode") != workflow_input_mode
+                )
             ):
                 raise InspectionWorkflowControllerError(
                     "managed State does not match the resolved workflow input"

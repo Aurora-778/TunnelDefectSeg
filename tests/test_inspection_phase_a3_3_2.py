@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
+import hashlib
 import inspect
 import json
 from pathlib import Path
@@ -10,16 +12,48 @@ import pytest
 
 from orchestrator.inspection_workflow import a1_artifacts
 from orchestrator.inspection_workflow import lifecycle
+from orchestrator.inspection_workflow import locking
 from orchestrator.inspection_workflow.controller import (
     InspectionWorkflowController,
     InspectionWorkflowControllerError,
 )
 from orchestrator.inspection_workflow.lifecycle import InspectionWorkflowLifecycleError
 from orchestrator.inspection_workflow.locking import read_active_run_lock
+from orchestrator.state.store import StateStore
 from scripts import prepare_real_inspection_pilot as preparation
 
 
 RUN_ID = "run_401"
+
+
+def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
+    if not root.exists():
+        return {}
+    snapshot: dict[str, bytes | None] = {}
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        relative = path.relative_to(root).as_posix()
+        snapshot[relative] = None if path.is_dir() else path.read_bytes()
+    return snapshot
+
+
+def _interrupt_before_publication(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    request: dict | None = None,
+) -> None:
+    def fail_publication(*args, **kwargs):
+        raise RuntimeError("injected publication interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lifecycle, "publish_run_local_artifacts", fail_publication)
+        with pytest.raises(InspectionWorkflowLifecycleError, match="lifecycle failed closed"):
+            if request is None:
+                InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID)
+            else:
+                InspectionWorkflowController.run_prepared_task(
+                    root, task_request=request, run_id=RUN_ID
+                )
 
 
 def _prepared_source(root: Path) -> dict:
@@ -408,3 +442,221 @@ def test_state_or_run_recovery_residue_blocks_before_lock_allocation(
         InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID)
     assert marker.is_file()
     assert not (root / "runs/.active_run.lock").exists()
+
+
+@pytest.mark.parametrize("input_mode", ["prepared", "legacy"])
+def test_input_parent_reparse_is_rejected_before_run_allocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, input_mode: str
+) -> None:
+    root = tmp_path / f"{input_mode}-reparse-parent"
+    root.mkdir()
+    request = _prepared_source(root) if input_mode == "prepared" else None
+    if input_mode == "legacy":
+        _legacy_source(root)
+        guarded_parent = root / "data" / "simulated"
+    else:
+        guarded_parent = root / "data" / "prepared_inspections" / "pilot_001"
+    guarded_identity = guarded_parent.lstat().st_ino
+    original_is_reparse = locking._is_reparse
+
+    def simulated_reparse(entry) -> bool:
+        return entry.st_ino == guarded_identity or original_is_reparse(entry)
+
+    monkeypatch.setattr(locking, "_is_reparse", simulated_reparse)
+    with pytest.raises(InspectionWorkflowLifecycleError):
+        if request is None:
+            InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID)
+        else:
+            InspectionWorkflowController.run_prepared_task(
+                root, task_request=request, run_id=RUN_ID
+            )
+    assert not (root / "runs").exists()
+
+
+def test_prepared_readiness_validates_the_exact_captured_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "prepared-exact-snapshot"
+    root.mkdir()
+    request = _prepared_source(root)
+    original_gate = lifecycle.require_inference_ready
+    validated: dict[str, bytes] = {}
+
+    def record_snapshot(manifest_path: Path):
+        assert manifest_path.parent != (
+            root / "data" / "prepared_inspections" / "pilot_001"
+        )
+        for name in lifecycle._PREPARED_COPY_NAMES:
+            validated[name] = (manifest_path.parent / name).read_bytes()
+        return original_gate(manifest_path)
+
+    monkeypatch.setattr(lifecycle, "require_inference_ready", record_snapshot)
+    InspectionWorkflowController.run_prepared_task(
+        root, task_request=request, run_id=RUN_ID
+    )
+
+    for name, data in validated.items():
+        assert (root / f"runs/{RUN_ID}/work/raw_prepared/{name}").read_bytes() == data
+
+
+def test_legacy_validation_and_capture_share_one_source_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "legacy-exact-snapshot"
+    root.mkdir()
+    _legacy_source(root)
+    original_validator = lifecycle.validate_csv_schema
+    validated: list[bytes] = []
+
+    def record_snapshot(path: Path, schema_name: str, *, allow_empty: bool):
+        validated.append(path.read_bytes())
+        return original_validator(path, schema_name, allow_empty=allow_empty)
+
+    monkeypatch.setattr(lifecycle, "validate_csv_schema", record_snapshot)
+    InspectionWorkflowController.run_legacy_simulated(root, run_id=RUN_ID)
+
+    state = json.loads((root / f"runs/{RUN_ID}/state.json").read_bytes())
+    origin = state["context"]["resolved_input_descriptor"]["origin_artifacts"]
+    assert len(validated) == 1
+    assert origin == [
+        {
+            "path": f"runs/{RUN_ID}/work/legacy_simulated/robot_kict_frame_records.csv",
+            "sha256": hashlib.sha256(validated[0]).hexdigest(),
+        }
+    ]
+
+
+@pytest.mark.parametrize("owner_field", ["pid", "hostname"])
+def test_ordinary_resume_rejects_a_different_owner_without_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner_field: str
+) -> None:
+    root = tmp_path / f"resume-owner-{owner_field}"
+    root.mkdir()
+    _legacy_source(root)
+    _interrupt_before_publication(root, monkeypatch)
+    before = _tree_snapshot(root / "runs")
+    lock = read_active_run_lock(root)
+    if owner_field == "pid":
+        monkeypatch.setattr(lifecycle.os, "getpid", lambda: lock["pid"] + 1)
+    else:
+        monkeypatch.setattr(lifecycle.socket, "gethostname", lambda: "other-host")
+
+    with pytest.raises(InspectionWorkflowLifecycleError, match="explicit A3.2 takeover"):
+        InspectionWorkflowController.run_legacy_simulated(
+            root, run_id=RUN_ID, resume=True
+        )
+    assert _tree_snapshot(root / "runs") == before
+
+
+def test_resume_without_runs_or_active_lock_creates_no_residue(tmp_path: Path) -> None:
+    root = tmp_path / "missing-resume-lock"
+    root.mkdir()
+    _legacy_source(root)
+
+    with pytest.raises(
+        InspectionWorkflowLifecycleError, match="existing Active Run Lock"
+    ):
+        InspectionWorkflowController.run_legacy_simulated(
+            root, run_id=RUN_ID, resume=True
+        )
+    assert not (root / "runs").exists()
+
+
+def test_resume_request_drift_is_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "resume-request-drift"
+    root.mkdir()
+    request = _prepared_source(root)
+    _interrupt_before_publication(root, monkeypatch, request=request)
+    before = _tree_snapshot(root / "runs")
+    changed_request = deepcopy(request)
+    changed_request["task_id"] = "task_402"
+
+    with pytest.raises(InspectionWorkflowLifecycleError):
+        InspectionWorkflowController.run_prepared_task(
+            root,
+            task_request=changed_request,
+            run_id=RUN_ID,
+            resume=True,
+        )
+    assert _tree_snapshot(root / "runs") == before
+
+
+def test_resume_policy_drift_is_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "resume-policy-drift"
+    root.mkdir()
+    request = _prepared_source(root)
+    _interrupt_before_publication(root, monkeypatch, request=request)
+    before = _tree_snapshot(root / "runs")
+    changed_policy = deepcopy(lifecycle.load_workflow_policy())
+    changed_policy["output_mapping"]["association"] = "association_v2"
+    monkeypatch.setattr(
+        lifecycle, "load_workflow_policy", lambda: deepcopy(changed_policy)
+    )
+
+    with pytest.raises(InspectionWorkflowLifecycleError):
+        InspectionWorkflowController.run_prepared_task(
+            root, task_request=request, run_id=RUN_ID, resume=True
+        )
+    assert _tree_snapshot(root / "runs") == before
+
+
+def test_resume_run_local_snapshot_drift_is_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "resume-run-local-drift"
+    root.mkdir()
+    _legacy_source(root)
+    _interrupt_before_publication(root, monkeypatch)
+    snapshot_path = (
+        root / f"runs/{RUN_ID}/work/legacy_simulated/robot_kict_frame_records.csv"
+    )
+    snapshot_path.write_bytes(snapshot_path.read_bytes() + b"\n")
+    before = _tree_snapshot(root / "runs")
+
+    with pytest.raises(InspectionWorkflowLifecycleError, match="snapshot"):
+        InspectionWorkflowController.run_legacy_simulated(
+            root, run_id=RUN_ID, resume=True
+        )
+    assert _tree_snapshot(root / "runs") == before
+
+
+def test_unresolved_pending_is_not_recovered_before_request_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "resume-pending-request-drift"
+    root.mkdir()
+    request = _prepared_source(root)
+    original_replace = StateStore._atomic_replace
+
+    def fail_started_state(self, path: Path, data: bytes, *, label: str) -> None:
+        if label == "canonical state":
+            candidate = json.loads(data)
+            if candidate["task_status"].get("phase_a1_pipeline") == "running":
+                raise OSError("injected task_started state failure")
+        original_replace(self, path, data, label=label)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(StateStore, "_atomic_replace", fail_started_state)
+        with pytest.raises(InspectionWorkflowLifecycleError):
+            InspectionWorkflowController.run_prepared_task(
+                root, task_request=request, run_id=RUN_ID
+            )
+    journal_path = root / f"runs/{RUN_ID}/state_journal.jsonl"
+    records = [json.loads(line) for line in journal_path.read_bytes().splitlines()]
+    assert records[-1]["phase"] == "pending"
+    before = _tree_snapshot(root / "runs")
+    changed_request = deepcopy(request)
+    changed_request["task_id"] = "task_402"
+
+    with pytest.raises(InspectionWorkflowLifecycleError):
+        InspectionWorkflowController.run_prepared_task(
+            root,
+            task_request=changed_request,
+            run_id=RUN_ID,
+            resume=True,
+        )
+    assert _tree_snapshot(root / "runs") == before

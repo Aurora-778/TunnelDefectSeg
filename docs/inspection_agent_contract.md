@@ -88,7 +88,18 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
   canonical SHA-256 is part of the managed plan fingerprint and is persisted in
   canonical State. Resume re-captures the declared source and rejects a changed
   source, request, policy, mode, or Run-local snapshot rather than reusing a Run
-  under ambiguous inputs.
+  under ambiguous inputs. Prepared readiness and Legacy schema/relation validation
+  operate on the same captured byte snapshot later bound into that descriptor;
+  neither entry validates one source version and then silently captures another.
+  Every parent component of the Prepared manifest, both sibling CSVs, and the
+  fixed Legacy source must be an in-project ordinary directory entry: symlink,
+  junction, or other reparse ancestry fails closed.
+- Ordinary A3.3.2 Resume is owner-preserving: the existing running Active Lock
+  must name the current hostname and PID. A dead, unknown, or different owner can
+  continue only through the explicit A3.2 takeover protocol. Before any Journal
+  repair, a read-only State preflight matches the plan fingerprint, input mode,
+  descriptor SHA-256, allocation identity, and lock token. Missing `runs/` or an
+  Active Lock is rejected without creating directories or recovery residue.
 - A3.3.2 preflight rejects A1 work/artifact/staging recovery markers, the A2
   publication recovery marker, State recovery markers, Active Run recovery/state
   mutexes, release tombstones, and a stale Run directory before Active Lock
