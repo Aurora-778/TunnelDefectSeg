@@ -22,6 +22,15 @@
 | `scripts/generate_engineering_report.py` | 工程化中文病害描述生成逻辑。 |
 | `scripts/analyze_disease_growth.py` | 规则面积变化提示生成逻辑。 |
 | `scripts/generate_visualization_and_recheck_list.py` | 图表与重点复检清单生成逻辑。 |
+| `robot_sequence.py` | 连续巡检帧与路线元数据记录。 |
+| `spatiotemporal_monitoring.py` | 路线级观测、defect track 关联和趋势声明门控。 |
+| `robot_inspection_report.py` | 路线级 JSON 报告、复检队列和 claim guard 输出。 |
+| `scripts/prepare_real_inspection_pilot.py` | 单 sequence 真实巡检图像、已有 mask 与元数据的数据合同、完整性清单和就绪性校验。 |
+| `scripts/run_inspection_workflow.py` | 受控巡检工作流的固定 CLI 边界。 |
+| `orchestrator/inspection_workflow/contracts.py` | 任务请求、固定输入输出及路径约束。 |
+| `orchestrator/inspection_workflow/controller.py` | 受控运行的任务状态事件与完成门控。 |
+| `orchestrator/inspection_workflow/lifecycle.py` | 输入快照、固定 DAG 执行、恢复检查和发布串联。 |
+| `orchestrator/state/store.py` | 状态快照、版本控制、操作日志和恢复一致性校验。 |
 | `scripts/create_demo_tunnel_video_from_kict.py` | KICT demo video 合成逻辑，体现视频展示支路的数据准备能力。 |
 | `scripts/run_video_inspection_pipeline.py` | 视频抽帧、视频巡检元数据和视频 mask 特征串联逻辑。 |
 | `scripts/annotate_video_frames.py` | OpenCV 标注帧生成逻辑。 |
@@ -39,6 +48,7 @@
 - 数据集原图、mask 和压缩包；
 - `outputs/` 下生成的报告、图表和中间结果；
 - `data/videos/`、`data/video_frames/`、`data/video_inspection/`、`data/video_masks/`、`outputs/video_inspection/` 下生成的视频、抽帧图片、CSV 和标注视频产物；
+- `runs/`、`logs/`、`orchestrator/state/` 下的运行状态、操作日志、恢复标志和发布产物；应提交相应的程序源码，而非某次运行留下的证据文件；
 - `experiments/` 下的大型实验产物；
 - `__pycache__/`、`.pytest_cache/`、日志文件；
 - `.codegraph/`、`.codebase-memory/` 等本地索引；
@@ -96,11 +106,13 @@
 3. 工程化报告生成代码；
 4. Disease Memory Bank 代码；
 5. Association 规则评分代码；
-6. 规则面积变化提示和复检清单代码；
-7. 视频 demo 生成、视频标注和视频产物校验代码；
-8. Web 服务和接口代码；
-9. 最终报告生成代码。
+6. 路线级时空 track、比较证据和声明门控代码；
+7. 真实巡检输入适配、固定任务契约、状态与受控工作流代码；
+8. 规则面积变化提示和复检清单代码；
+9. 视频 demo 生成、视频标注和视频产物校验代码；
+10. Web 服务和接口代码；
+11. 最终报告生成代码。
 
 ## 7. 当前版本边界说明
 
-当前版本基于 KICT 静态图像 / mask 与仿真巡检元数据进行工程原型验证。视频 demo 由 KICT 静态图像 / mask 合成，用于展示视频输入处理和可视化流程。源代码提交材料应体现软件功能实现，不应把 demo 数据、合成视频和仿真元数据描述为真实线路长期巡检验证结果。
+当前版本主要基于 KICT 静态图像 / mask 与仿真巡检元数据进行工程原型验证。视频 demo 由 KICT 静态图像 / mask 合成，用于展示视频输入处理和可视化流程。真实巡检输入适配目前只覆盖单 sequence、已有 mask 的离线数据合同与就绪性校验；受控工作流目前只在隔离临时沙箱中按固定任务契约运行。源代码提交材料应体现软件功能实现，不应把 demo 数据、合成视频、仿真元数据、单轮表观变化或运行产物描述为真实线路长期巡检验证结果。

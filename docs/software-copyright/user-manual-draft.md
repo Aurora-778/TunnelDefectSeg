@@ -41,6 +41,14 @@ pip install -r requirements.txt
 
 当前版本默认使用仓库中已整理的 KICT 静态图像 / mask 几何特征和仿真巡检元数据。当前版本基于 KICT 静态图像 / mask 与仿真巡检元数据进行工程原型验证。
 
+如需准备单 sequence 的真实巡检离线样例，数据目录应包含 `images/`、`masks/` 和严格字段集合的 `metadata.csv`。执行：
+
+```bash
+python scripts/prepare_real_inspection_pilot.py --dataset-root C:/path/to/dataset-root --output-dir C:/path/to/isolated-output
+```
+
+该命令只接入已有 mask，不执行模型推理；会生成观测记录、下游帧记录和完整性清单。巡检次数不足或任一轮没有有效前景观测时，清单会标记为不可推理，不能作为趋势结论依据。
+
 ## 2. 运行完整 pipeline
 
 在项目根目录执行：
@@ -118,6 +126,16 @@ python scripts/validate_video_artifacts.py --video_id tunnel_demo
 
 需要注意：该视频由 KICT 静态图像 / mask 合成，用于演示视频输入和可视化展示流程，不是真实机器人连续巡检视频，也不是实时视频流分析。
 
+## 4.1 运行受控巡检工作流（高级功能）
+
+受控工作流用于对已准备的任务请求执行固定的离线分析闭环。任务请求必须是受控临时沙箱内的 `inspection_task_v1` JSON 文件；先使用 `--plan-only` 检查计划：
+
+```bash
+python scripts/run_inspection_workflow.py --project-root C:/path/to/controlled-sandbox --task-file tasks/task.json --run-id run_001 --plan-only
+```
+
+计划通过后去掉 `--plan-only` 执行。系统会固定输入快照、记录任务状态和操作日志，并发布带清单的最终产物；遇到恢复标志、状态冲突或输入漂移会停止执行，需先按错误信息处理恢复，不应强行删除运行目录。该功能不通过 Web Dashboard 在线启动，也不等同于生产调度服务。
+
 ## 5. 查看系统总览
 
 进入 Web Dashboard 后，系统总览区域会展示巡检次数、图像帧数量、病害对象数量、重点复检数量和高风险记录数量等信息。该区域用于快速了解当前 demo 数据的总体分析结果。
@@ -150,6 +168,10 @@ python scripts/validate_video_artifacts.py --video_id tunnel_demo
 - 视频可视化 manifest 表格。
 
 如果页面提示“尚未生成该视频分析产物”，应先运行 `run_demo_showcase.bat` 或 `python scripts/run_demo_showcase.py --video_id tunnel_demo`。
+
+## 10.1 查看路线级时空分析结果
+
+路线报告将连续帧中的病害观测按类别、里程、环号、相机和图像位置等证据聚合为 defect track，并输出复检队列。查看时应同时阅读 `comparability_status`、`claim_level` 和 `measurement_basis`：同一轮次内的变化只表示 `apparent-change-evidence`，只有可比较的跨轮证据或人工确认才可能标为 `suspected-growth`。
 
 ## 11. 单图检测 / 上传图片复核
 
@@ -194,5 +216,7 @@ python run.py --mode full_pipeline
 3. 视频 demo 由 KICT 静态图像 / mask 合成，不是真实机器人连续巡检视频。
 4. Web Dashboard 当前主要用于展示已生成的 demo 分析结果。
 5. Supervision 只是可选标注展示层，不参与 Disease Memory Bank、no-id Association 和规则面积变化提示等核心分析逻辑。
-6. 使用真实数据前，需要补充真实巡检图像、病害标注、巡检元数据和跨巡检对应关系。
-7. 输出报告可用于项目展示和材料整理，但正式工程应用前需要人工复核和专业检测流程确认。
+6. 真实巡检输入适配当前只处理单 sequence 的已有 mask 离线数据；尚不提供在线上传、自动推理、真实跨轮 GT 评分或长期增长结论。
+7. 路线级输出必须保留 `comparability_status`、`claim_level` 和 `measurement_basis`，不可将同一轮内变化写成真实增长或安全结论。
+8. 受控工作流只在隔离临时沙箱中按固定任务契约运行；发生恢复或冲突提示时，应保留证据并按恢复流程处理。
+9. 输出报告可用于项目展示和材料整理，但正式工程应用前需要人工复核和专业检测流程确认。

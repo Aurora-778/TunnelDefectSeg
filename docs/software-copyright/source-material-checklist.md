@@ -20,7 +20,7 @@
 - 登记业务：计算机软件著作权相关登记，选择 R11 软件著作权登记申请。
 - 申请前需要完成账号注册和实名认证。
 - 若按学校流程办理，我校师生注册身份按规范选择“个人”，登记时按系统要求选择“我是代理人”。
-- 本次当前口径：著作权人填写“西安理工大学”，第一开发者填写“陈志鹏”，开发完成日期填写“2026 年 7 月 5 日”，发表状态填写“未发表”，权利取得方式填写“原始取得”；若系统选项显示“原创取得”，按系统选项填写。
+- 本材料以 2026 年 7 月 30 日的功能基线更新：著作权人填写“西安理工大学”、第一开发者填写“陈志鹏”、发表状态填写“未发表”、权利取得方式填写“原始取得”（若系统选项显示“原创取得”，按系统选项填写）。如以该基线申报，开发完成日期建议按“2026 年 7 月 30 日”与内部完成记录核验后填写。
 - 提交申请后需要处理授权码、签章页打印、学校审批、盖章页上传和授权证书成果登记等流程。
 - 学生申请或教师申请的学校端入口可能不同，需由指导老师确认学校端申请类型、授权码、签章页打印和盖章流程。
 
@@ -67,6 +67,15 @@
 - `scripts/export_annotated_video.py`
 - `scripts/validate_video_artifacts.py`
 - `scripts/run_demo_showcase.py`
+- `robot_sequence.py`
+- `spatiotemporal_monitoring.py`
+- `robot_inspection_report.py`
+- `scripts/prepare_real_inspection_pilot.py`
+- `scripts/run_inspection_workflow.py`
+- `orchestrator/inspection_workflow/contracts.py`
+- `orchestrator/inspection_workflow/controller.py`
+- `orchestrator/inspection_workflow/lifecycle.py`
+- `orchestrator/state/store.py`
 
 以下早期单图检测相关文件可作为补充材料，但不建议覆盖主线；`web_app.py` 已在主线代码列表中体现，此处不重复列出：
 
@@ -88,6 +97,7 @@
 - 模型权重 `.pth`。
 - 数据集图片和人工 mask。
 - 生成的视频、抽帧图片、视频巡检 CSV 和标注视频产物，例如 `data/videos/`、`data/video_frames/`、`data/video_inspection/`、`data/video_masks/`、`outputs/video_inspection/`。
+- 某次受控工作流的 `runs/`、`logs/`、状态快照、操作日志、恢复标志和发布清单；这些是运行证据，不是源程序。
 - `.codegraph/`、`.understand-anything/` 等本地索引文件。
 
 ## 说明书应包含的内容
@@ -99,6 +109,7 @@
 - 操作流程。
 - 主要界面截图。
 - 视频分析结果页面或系统总览界面截图。
+- 路线级报告或复检队列截图，并在图注中保留“趋势表述受比较条件和人工复核约束”的说明。
 - 输出结果说明。
 - 第三方依赖说明。
 - 非结构安全诊断边界说明。
@@ -108,6 +119,8 @@
 - README 中能找到 Web 启动方式。
 - Web 页面能打开并展示系统总览、视频分析结果或拖拽检测入口。
 - `run_demo_showcase.bat` 可作为本地视频 demo 展示入口；若未安装 Supervision，可使用 `--skip_supervision`。
+- `scripts/prepare_real_inspection_pilot.py --validate-only` 可检查单 sequence、已有 mask 的真实巡检输入数据合同；它不等同于在线推理或真实跨轮评测。
+- `scripts/run_inspection_workflow.py --plan-only` 可检查受控工作流计划；该工作流只能在隔离临时沙箱中执行，不通过 Web 页面启动。
 - `docs/software-copyright/tunnel-defect-review-system.md` 已标记为早期单图分割与可信复核能力的历史补充参考，不作为本次主提交材料。
 - 源代码材料不包含第三方库源码或模型权重。
 - 源代码材料不包含本地生成的视频 demo 产物。
