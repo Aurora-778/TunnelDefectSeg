@@ -85,6 +85,45 @@ def test_profile_selection_rejects_unknown_terminal_and_dependency_drift(tmp_pat
                 "    deps: []",
                 "execution_profiles:",
                 "  phase:",
+                "    terminal_tasks: [unknown_terminal]",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unknown terminal task"):
+        build_dag(dag_path, profile="phase")
+
+    dag_path.write_text(
+        "\n".join(
+            [
+                "tasks:",
+                "  alpha:",
+                "    agent: alpha",
+                "    deps: [beta]",
+                "  beta:",
+                "    agent: beta",
+                "    deps: [alpha]",
+                "execution_profiles:",
+                "  phase:",
+                "    terminal_tasks: [alpha]",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cycle detected"):
+        build_dag(dag_path, profile="phase")
+
+    dag_path.write_text(
+        "\n".join(
+            [
+                "tasks:",
+                "  alpha:",
+                "    agent: alpha",
+                "    deps: []",
+                "execution_profiles:",
+                "  phase:",
                 "    terminal_tasks: [alpha]",
             ]
         )
