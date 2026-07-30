@@ -24,8 +24,10 @@ are registered in the single Registry and declared in the single DAG, but
 Matched source-proof projection remains blocked pending a Memory schema upgrade.
 The A2 sandbox publication transaction is available for isolated verification.
 The A3 lock, State, CAS, Journal, tail-anchor, explicit recovery, and managed
-Executor adapter and the A3.3.2/A3.3.3 dual entry remain available only through
-direct component calls. Default CLI and Web integration remain deferred.
+Executor adapter and the A3.3.2/A3.3.3 dual entry remain available through direct
+component calls. A3.4 additionally provides one explicit Prepared-only CLI for a
+controlled temporary sandbox; the default legacy CLI and Web integration remain
+unchanged.
 
 A3.1 checkpoint calls use a closed, kind-specific event contract rather than a
 free context merge. Run initialization is accepted only in `PLANNED`; task events
@@ -51,6 +53,19 @@ the deferred explicit recovery protocol is available.
   sandbox boundary. Both are opt-in internal calls, not CLI or Web routes. Neither
   entry accepts a caller-provided Controller, task graph, Registry, source path, or
   output path.
+- `python scripts/run_inspection_workflow.py --task-file <relative-task.json>
+  --project-root <temporary-sandbox> --run-id run_NNN` is the sole public
+  Phase-A Prepared entry. The task file must be a plain, project-root-relative
+  JSON file and the input mode must be `prepared_dataset`; this command has no
+  Legacy-simulated mode, source/output override, resume switch, or Web route.
+  It performs read-only task, sandbox, recovery, lock, and readiness preflight
+  before delegating the normal path exactly once to
+  `InspectionWorkflowController.run_prepared_task(...)`. `--plan-only` captures
+  and validates the exact Prepared bytes and prints a deterministic plan summary
+  without creating a Run, lock, State, Journal, transaction, staging, or
+  publication artifact. Success JSON exposes only relative POSIX artifact paths;
+  error JSON is a stable code without traceback or local paths. Exit code 10
+  means recovery/cleanup is required, never successful completion.
 - Phase 0 validation does not acquire a lock, create a Run, execute the DAG, or write business artifacts.
 
 The prepared task object contains exactly `schema_version`, `task_id`, `task_type`, `input`, and `requested_outputs`. Its input contains exactly `input_mode=prepared_dataset` and a safe `dataset_id`; paths, URIs, GT labels, split fields, review fields, and audit fields are not accepted.

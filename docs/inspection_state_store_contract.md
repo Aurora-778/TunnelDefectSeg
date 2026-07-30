@@ -294,3 +294,22 @@ used by the lifecycle; callers of the A3.3 lifecycle cannot select a profile.
 With an empty Journal, only the canonical uncommitted `CREATED` baseline is valid: version zero, empty task/index maps, null last-operation fields, and equal creation/update timestamps. `validate_initialized_run()` applies this same binding before the Active Run Lock can enter `running`. Empty-Journal `RUNNING`, `FAILED`, or `COMPLETED` State is rejected rather than treated as initialized work.
 
 State and genesis anchor are separate atomic replacements. State-only, anchor-only, non-genesis anchor, damaged file, or non-empty Journal initialization states fail closed; A3.1 does not invent the missing peer file or start workers from a partial allocation.
+
+## A3.4 Prepared Workflow CLI Boundary
+
+`scripts/run_inspection_workflow.py` is the sole explicit CLI boundary for the
+Prepared A3 workflow. It accepts only an `inspection_task_v1` JSON task stored as
+a plain POSIX-relative file under a controlled temporary sandbox and only calls
+`InspectionWorkflowController.run_prepared_task(...)` for execution. It never
+exposes the Legacy-simulated entry, a caller-supplied DAG, Registry, Controller,
+source/output override, lock/recovery API, or resume operation.
+
+Before any Run, Active Lock, State, Journal, transaction, audit, staging, or
+publication write, the CLI validates the task, canonical run ID, plain sandbox and
+task-file paths, A1/A2/State/Active-Run recovery residue, and existing Active Lock.
+`--plan-only` captures the exact Prepared source bytes through the existing
+readiness path and derives the existing Phase-A plan fingerprint without creating
+workflow artifacts. Normal execution delegates once to the existing lifecycle.
+The output is canonical JSON with relative POSIX paths only. Exit code 10 means
+recovery or cleanup is required; it is never success. This remains a no-lock,
+point-in-time boundary and does not add A3.3.4 orchestration.
