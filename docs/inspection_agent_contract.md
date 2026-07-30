@@ -58,14 +58,18 @@ the deferred explicit recovery protocol is available.
   Phase-A Prepared entry. The task file must be a plain, project-root-relative
   JSON file and the input mode must be `prepared_dataset`; this command has no
   Legacy-simulated mode, source/output override, resume switch, or Web route.
-  It performs read-only task, sandbox, recovery, lock, and readiness preflight
-  before delegating the normal path exactly once to
+  It performs read-only task, sandbox, and run-ID validation before delegating
+  the normal path exactly once to
   `InspectionWorkflowController.run_prepared_task(...)`. `--plan-only` captures
   and validates the exact Prepared bytes and prints a deterministic plan summary
   without creating a Run, lock, State, Journal, transaction, staging, or
-  publication artifact. Success JSON exposes only relative POSIX artifact paths;
-  error JSON is a stable code without traceback or local paths. Exit code 10
-  means recovery/cleanup is required, never successful completion.
+  publication artifact. The Controller-owned Prepared lifecycle performs its
+  readiness, recovery, and Active-Lock checks before it can create workflow
+  artifacts. Success JSON exposes only relative POSIX artifact paths;
+  error JSON is a stable typed code without traceback or local paths: readiness
+  failure is exit 3, Active-Lock contention is exit 4, recovery/cleanup required
+  is exit 10, and other lifecycle failures are exit 5. Exit code 10 never means
+  successful completion.
 - Phase 0 validation does not acquire a lock, create a Run, execute the DAG, or write business artifacts.
 
 The prepared task object contains exactly `schema_version`, `task_id`, `task_type`, `input`, and `requested_outputs`. Its input contains exactly `input_mode=prepared_dataset` and a safe `dataset_id`; paths, URIs, GT labels, split fields, review fields, and audit fields are not accepted.

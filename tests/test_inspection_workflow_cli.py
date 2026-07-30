@@ -311,6 +311,91 @@ def test_readiness_failure_is_nonzero_and_does_not_create_controlled_artifacts(
     assert "traceback" not in result.stdout.lower()
 
 
+def test_normal_cli_delegates_without_direct_private_lifecycle_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    called: list[tuple[Path, Mapping[str, Any], str]] = []
+
+    def fail_if_cli_captures(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("normal CLI path must not call private lifecycle capture")
+
+    def controller_result(
+        project_root: Path, *, task_request: Mapping[str, Any], run_id: str
+    ) -> dict[str, Any]:
+        called.append((project_root, task_request, run_id))
+        return {
+            "run_id": run_id,
+            "input_mode": "prepared_dataset",
+            "status": "COMPLETED",
+            "state_version": 1,
+            "plan_fingerprint": "a" * 64,
+            "transaction_id": "transaction_test",
+            "publication_manifest_path": "outputs/current_publication_manifest.json",
+            "released": True,
+        }
+
+    monkeypatch.setattr(module.lifecycle, "_capture_prepared_input", fail_if_cli_captures)
+    monkeypatch.setattr(
+        module.InspectionWorkflowController,
+        "run_prepared_task",
+        controller_result,
+    )
+
+    assert (
+        module.main(
+            [
+                "--task-file",
+                "task.json",
+                "--project-root",
+                str(root),
+                "--run-id",
+                RUN_ID,
+            ]
+        )
+        == 0
+    )
+    assert called == [(root, task, RUN_ID)]
+
+
+def test_source_change_before_controller_entry_fails_without_controlled_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    original = module.InspectionWorkflowController.run_prepared_task
+    frame_records = root / "data" / "prepared_inspections" / "pilot_001" / "frame_records.csv"
+
+    def change_source_then_delegate(
+        project_root: Path, *, task_request: Mapping[str, Any], run_id: str
+    ) -> Mapping[str, Any]:
+        frame_records.unlink()
+        return original(project_root, task_request=task_request, run_id=run_id)
+
+    monkeypatch.setattr(
+        module.InspectionWorkflowController,
+        "run_prepared_task",
+        change_source_then_delegate,
+    )
+
+    assert (
+        module.main(
+            [
+                "--task-file",
+                "task.json",
+                "--project-root",
+                str(root),
+                "--run-id",
+                RUN_ID,
+            ]
+        )
+        == 3
+    )
+    assert not (root / "runs").exists()
+    assert not (root / "outputs").exists()
+
+
 def test_reparse_guard_fails_closed_without_link_permissions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -355,8 +440,9 @@ def test_task_file_replacement_after_read_fails_closed(tmp_path: Path, monkeypat
     [
         ("active", 4, "active_run_conflict"),
         ("transition", 4, "active_run_conflict"),
-        ("wrapped_readiness", 3, "prepared_not_ready"),
-        ("recovery", 10, "recovery_required"),
+        ("typed_readiness", 3, "prepared_not_ready"),
+        ("typed_recovery", 10, "recovery_required"),
+        ("ordinary_cleanup", 5, "workflow_failed"),
     ],
 )
 def test_lifecycle_race_failures_keep_typed_exit_codes(
@@ -371,16 +457,14 @@ def test_lifecycle_race_failures_keep_typed_exit_codes(
         error.__cause__ = module.ActiveRunLockError(
             "Run state transition is handled by another worker"
         )
-    elif cause == "wrapped_readiness":
-        error = module.lifecycle.InspectionWorkflowLifecycleError("lifecycle failed closed")
-        lock_error = module.ActiveRunLockError("Active Run Lock check failed")
-        lock_error.__cause__ = module.lifecycle.InspectionWorkflowLifecycleError(
-            "Prepared dataset failed the inference-readiness gate"
+    elif cause == "typed_readiness":
+        error = module.lifecycle.PreparedReadinessError("arbitrary diagnostic")
+    elif cause == "typed_recovery":
+        error = module.lifecycle.WorkflowRecoveryRequiredError("arbitrary diagnostic")
+    elif cause == "ordinary_cleanup":
+        error = module.lifecycle.InspectionWorkflowLifecycleError(
+            "ordinary task cleanup text is not recovery state"
         )
-        error.__cause__ = lock_error
-    else:
-        error = module.lifecycle.InspectionWorkflowLifecycleError("A1 recovery marker exists")
-
     classified = module._classify_lifecycle_failure(error)
 
     assert (classified.code, classified.error) == (expected_code, expected_error)

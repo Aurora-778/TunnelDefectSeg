@@ -173,29 +173,6 @@ def _preflight_clean_run(root: Path, *, run_id: str) -> None:
     raise _CliError(EXIT_ACTIVE_RUN_CONFLICT, "active_run_conflict")
 
 
-def _capture_prepared_input_preflight(
-    root: Path,
-    *,
-    run_id: str,
-    task_request: Mapping[str, Any],
-) -> Mapping[str, Any]:
-    policy = load_workflow_policy()
-    prepared_relative = (
-        f"{policy['path_policy']['prepared_dataset_base']}/"
-        f"{task_request['input']['dataset_id']}/preparation_manifest.json"
-    )
-    try:
-        return lifecycle._capture_prepared_input(
-            root,
-            run_id=run_id,
-            prepared_manifest=root.joinpath(*prepared_relative.split("/")),
-            task_request=task_request,
-            workflow_policy=policy,
-        )
-    except lifecycle.InspectionWorkflowLifecycleError as exc:
-        raise _CliError(EXIT_BLOCKED_BY_READINESS, "prepared_not_ready") from exc
-
-
 def _exception_chain(error: BaseException) -> list[BaseException]:
     result: list[BaseException] = []
     current: BaseException | None = error
@@ -207,12 +184,9 @@ def _exception_chain(error: BaseException) -> list[BaseException]:
 
 def _classify_lifecycle_failure(error: lifecycle.InspectionWorkflowLifecycleError) -> _CliError:
     chain = _exception_chain(error)
-    messages = " ".join(str(item).lower() for item in chain)
-    # Recovery-specific lock failures are not ordinary contention.  Preserve the
-    # recovery-required exit code before classifying all other lock failures.
-    if "recovery" in messages or "cleanup" in messages:
+    if any(isinstance(item, lifecycle.WorkflowRecoveryRequiredError) for item in chain):
         return _CliError(EXIT_PUBLICATION_RECOVERY_REQUIRED, "recovery_required")
-    if "prepared dataset failed the inference-readiness gate" in messages:
+    if any(isinstance(item, lifecycle.PreparedReadinessError) for item in chain):
         return _CliError(EXIT_BLOCKED_BY_READINESS, "prepared_not_ready")
     if any(
         isinstance(item, ActiveRunLockError)
@@ -225,8 +199,10 @@ def _classify_lifecycle_failure(error: lifecycle.InspectionWorkflowLifecycleErro
 def _plan_only_result(
     root: Path, *, run_id: str, task_request: Mapping[str, Any]
 ) -> dict[str, Any]:
-    source_capture = _capture_prepared_input_preflight(
-        root, run_id=run_id, task_request=task_request
+    _, _, source_capture = lifecycle.preflight_prepared_task(
+        root,
+        run_id=run_id,
+        task_request=task_request,
     )
     descriptor_sha256 = source_capture.get("descriptor_sha256")
     if not isinstance(descriptor_sha256, str):
@@ -298,18 +274,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         root = _validated_sandbox(args.project_root)
         _validate_run_id(args.run_id)
         task_request = _load_task(root, args.task_file)
-        _preflight_clean_run(root, run_id=args.run_id)
         if args.plan_only:
+            _preflight_clean_run(root, run_id=args.run_id)
             _write_result(_plan_only_result(root, run_id=args.run_id, task_request=task_request))
             return EXIT_SUCCESS
-        # The lifecycle owns the authoritative Run-local capture.  This
-        # side-effect-free pass keeps malformed Prepared input from reaching
-        # its Active Lock allocation path.
-        _capture_prepared_input_preflight(
-            root,
-            run_id=args.run_id,
-            task_request=task_request,
-        )
         try:
             result = InspectionWorkflowController.run_prepared_task(
                 root,

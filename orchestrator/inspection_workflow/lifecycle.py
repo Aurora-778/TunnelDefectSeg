@@ -82,6 +82,42 @@ class InspectionWorkflowLifecycleError(RuntimeError):
     """Raised when the opt-in A3.3 lifecycle cannot safely continue."""
 
 
+class PreparedReadinessError(InspectionWorkflowLifecycleError):
+    """Raised when the captured Prepared source set fails the readiness gate."""
+
+
+class WorkflowRecoveryRequiredError(InspectionWorkflowLifecycleError):
+    """Raised when recovery residue or cleanup state blocks a new Run."""
+
+
+def preflight_prepared_task(
+    project_root: Path,
+    *,
+    task_request: Mapping[str, Any],
+    run_id: str,
+) -> tuple[Path, Mapping[str, Any], Mapping[str, Any]]:
+    """Capture and validate one Prepared input set without creating Run artifacts."""
+
+    if not isinstance(run_id, str) or _RUN_ID_RE.fullmatch(run_id) is None:
+        raise InspectionWorkflowLifecycleError("run_id must use canonical run_NNN form")
+    root = _controlled_root(project_root)
+    policy = load_workflow_policy()
+    request = validate_task_request(task_request, workflow_policy=policy)
+    _require_fixed_requested_outputs(request)
+    prepared_relative = (
+        f"{policy['path_policy']['prepared_dataset_base']}/"
+        f"{request['input']['dataset_id']}/preparation_manifest.json"
+    )
+    source_capture = _capture_prepared_input(
+        root,
+        run_id=run_id,
+        prepared_manifest=root.joinpath(*prepared_relative.split("/")),
+        task_request=request,
+        workflow_policy=policy,
+    )
+    return root, request, source_capture
+
+
 def run_prepared_task(
     project_root: Path,
     *,
@@ -91,21 +127,10 @@ def run_prepared_task(
 ) -> Mapping[str, Any]:
     """Run the closed Prepared A3.3 managed sandbox lifecycle."""
 
-    root = _controlled_root(project_root)
-    policy = load_workflow_policy()
-    request = validate_task_request(task_request, workflow_policy=policy)
-    _require_fixed_requested_outputs(request)
-    prepared_relative = (
-        f"{policy['path_policy']['prepared_dataset_base']}/"
-        f"{request['input']['dataset_id']}/preparation_manifest.json"
-    )
-    prepared_manifest = root.joinpath(*prepared_relative.split("/"))
-    source_capture = _capture_prepared_input(
-        root,
+    root, request, source_capture = preflight_prepared_task(
+        project_root,
+        task_request=task_request,
         run_id=run_id,
-        prepared_manifest=prepared_manifest,
-        task_request=request,
-        workflow_policy=policy,
     )
     return _run_lifecycle(
         root,
@@ -186,9 +211,14 @@ async def _run_lifecycle_async(
         raise InspectionWorkflowLifecycleError("run_id must use canonical run_NNN form")
     try:
         root = a1_artifacts._controlled_temporary_root(root)
+    except a1_artifacts.PhaseA1ArtifactError as exc:
+        raise InspectionWorkflowLifecycleError(
+            "A3.3 managed lifecycle requires a controlled temporary A1 sandbox"
+        ) from exc
+    try:
         _preflight_recovery_residue(root, run_id=run_id, resume=resume)
     except (a1_artifacts.PhaseA1ArtifactError, InspectionWorkflowLifecycleError) as exc:
-        raise InspectionWorkflowLifecycleError(
+        raise WorkflowRecoveryRequiredError(
             "A3.3 managed lifecycle requires a clean controlled temporary A1 sandbox"
         ) from exc
     try:
@@ -532,7 +562,7 @@ def _capture_prepared_input(
             )
         _validate_prepared_source_snapshot(sources)
     except InspectionWorkflowLifecycleError as exc:
-        raise InspectionWorkflowLifecycleError(
+        raise PreparedReadinessError(
             "Prepared dataset failed the inference-readiness gate; "
             "its captured source set is missing, unsafe, or invalid"
         ) from exc

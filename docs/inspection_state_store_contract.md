@@ -305,11 +305,14 @@ exposes the Legacy-simulated entry, a caller-supplied DAG, Registry, Controller,
 source/output override, lock/recovery API, or resume operation.
 
 Before any Run, Active Lock, State, Journal, transaction, audit, staging, or
-publication write, the CLI validates the task, canonical run ID, plain sandbox and
-task-file paths, A1/A2/State/Active-Run recovery residue, and existing Active Lock.
+publication write, the CLI validates the task, canonical run ID, and plain sandbox
+and task-file paths; the Controller-owned Prepared lifecycle then validates
+readiness, A1/A2/State/Active-Run recovery residue, and Active Lock state.
 `--plan-only` captures the exact Prepared source bytes through the existing
 readiness path and derives the existing Phase-A plan fingerprint without creating
 workflow artifacts. Normal execution delegates once to the existing lifecycle.
 The output is canonical JSON with relative POSIX paths only. Exit code 10 means
-recovery or cleanup is required; it is never success. This remains a no-lock,
+typed recovery or cleanup is required; it is never success. Readiness and Active
+Lock contention use distinct stable exit codes 3 and 4 rather than exception
+message matching. This remains a no-lock,
 point-in-time boundary and does not add A3.3.4 orchestration.
