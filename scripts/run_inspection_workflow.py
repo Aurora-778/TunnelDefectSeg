@@ -197,13 +197,11 @@ def _classify_lifecycle_failure(error: lifecycle.InspectionWorkflowLifecycleErro
 
 
 def _plan_only_result(
-    root: Path, *, run_id: str, task_request: Mapping[str, Any]
+    *,
+    run_id: str,
+    task_request: Mapping[str, Any],
+    source_capture: Mapping[str, Any],
 ) -> dict[str, Any]:
-    _, _, source_capture = lifecycle.preflight_prepared_task(
-        root,
-        run_id=run_id,
-        task_request=task_request,
-    )
     descriptor_sha256 = source_capture.get("descriptor_sha256")
     if not isinstance(descriptor_sha256, str):
         raise _CliError(EXIT_VALIDATION_FAILED, "invalid_resolved_input")
@@ -275,8 +273,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         _validate_run_id(args.run_id)
         task_request = _load_task(root, args.task_file)
         if args.plan_only:
+            try:
+                _, task_request, source_capture = lifecycle.preflight_prepared_task(
+                    root,
+                    run_id=args.run_id,
+                    task_request=task_request,
+                )
+            except lifecycle.InspectionWorkflowLifecycleError as exc:
+                raise _classify_lifecycle_failure(exc) from exc
             _preflight_clean_run(root, run_id=args.run_id)
-            _write_result(_plan_only_result(root, run_id=args.run_id, task_request=task_request))
+            _write_result(
+                _plan_only_result(
+                    run_id=args.run_id,
+                    task_request=task_request,
+                    source_capture=source_capture,
+                )
+            )
             return EXIT_SUCCESS
         try:
             result = InspectionWorkflowController.run_prepared_task(

@@ -60,16 +60,28 @@ the deferred explicit recovery protocol is available.
   Legacy-simulated mode, source/output override, resume switch, or Web route.
   It performs read-only task, sandbox, and run-ID validation before delegating
   the normal path exactly once to
-  `InspectionWorkflowController.run_prepared_task(...)`. `--plan-only` captures
-  and validates the exact Prepared bytes and prints a deterministic plan summary
-  without creating a Run, lock, State, Journal, transaction, staging, or
-  publication artifact. The Controller-owned Prepared lifecycle performs its
-  readiness, recovery, and Active-Lock checks before it can create workflow
-  artifacts. Success JSON exposes only relative POSIX artifact paths;
-  error JSON is a stable typed code without traceback or local paths: readiness
-  failure is exit 3, Active-Lock contention is exit 4, recovery/cleanup required
-  is exit 10, and other lifecycle failures are exit 5. Exit code 10 never means
-  successful completion.
+  `InspectionWorkflowController.run_prepared_task(...)`. `--plan-only` first
+  captures and validates the exact Prepared bytes once through
+  `lifecycle.preflight_prepared_task(...)`, then performs the read-only
+  Active-Lock/Run/State/Journal/recovery-residue check, and finally prints a
+  deterministic plan summary without creating a Run, lock, State, Journal,
+  transaction, staging, or publication artifact. The normal CLI path never
+  calls private lifecycle capture directly; it delegates exactly once to the
+  Controller. The Controller-owned Prepared lifecycle performs its readiness,
+  recovery, and Active-Lock checks before it can create workflow artifacts.
+  Success JSON exposes only relative POSIX artifact paths; error JSON is a
+  stable typed code without traceback or local paths: readiness failure is
+  exit 3, ordinary Active-Lock contention is exit 4, recovery/cleanup
+  required is exit 10, and other lifecycle failures are exit 5. Exit code 10
+  is produced only by stable typed recovery exceptions or by the presence of
+  a durable recovery sentinel; it never depends on diagnostic wording such as
+  "recovery" or "cleanup" in an exception message, and never means successful
+  completion. The stable recovery types are
+  `WorkflowRecoveryRequiredError`, `StateRecoveryRequiredError`,
+  `StateRecoveryDeferredError`, `ActiveRunRecoveryRequiredError`, and a
+  `PublicationTransactionError` (or `PhaseA1ArtifactError`/`StateStoreError`)
+  that carries `write_state_uncertain` or `cleanup_error`, or that leaves a
+  durable recovery marker. Ordinary Active-Lock contention remains exit 4.
 - Phase 0 validation does not acquire a lock, create a Run, execute the DAG, or write business artifacts.
 
 The prepared task object contains exactly `schema_version`, `task_id`, `task_type`, `input`, and `requested_outputs`. Its input contains exactly `input_mode=prepared_dataset` and a safe `dataset_id`; paths, URIs, GT labels, split fields, review fields, and audit fields are not accepted.

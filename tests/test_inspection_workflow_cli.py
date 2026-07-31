@@ -8,7 +8,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 from PIL import Image
 import pytest
@@ -359,6 +359,159 @@ def test_normal_cli_delegates_without_direct_private_lifecycle_capture(
     assert called == [(root, task, RUN_ID)]
 
 
+@pytest.mark.parametrize("plan_only", [False, True])
+@pytest.mark.parametrize("blocker", ["active_lock", "recovery_marker"])
+def test_readiness_failure_precedes_controlled_blockers_without_side_effects(
+    tmp_path: Path, plan_only: bool, blocker: str
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    prepared = root / "data" / "prepared_inspections" / "pilot_001"
+    (prepared / "frame_records.csv").unlink()
+    if blocker == "active_lock":
+        marker = root / "runs" / ".active_run.lock"
+    else:
+        marker = root / "runs" / RUN_ID / ".publication_recovery_required.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("private recovery diagnostic", encoding="utf-8")
+    before = _snapshot(root)
+
+    result = _run_cli(root, *(["--plan-only"] if plan_only else []))
+
+    assert result.returncode == 3
+    assert _json_output(result) == {"error": "prepared_not_ready", "status": "ERROR"}
+    assert _snapshot(root) == before
+    assert str(root) not in result.stdout
+    assert "private recovery diagnostic" not in result.stdout
+    assert "traceback" not in result.stdout.lower()
+
+
+@pytest.mark.parametrize(
+    ("marker_relative", "plan_only"),
+    [
+        (f"runs/{RUN_ID}/.publication_recovery_required.json", False),
+        (f"runs/{RUN_ID}/.state_initialization_recovery_required.json", False),
+        (f"runs/{RUN_ID}/.state_lock_recovery_required.json", False),
+        (f"runs/{RUN_ID}/.publication_recovery_required.json", True),
+        (f"runs/{RUN_ID}/.state_initialization_recovery_required.json", True),
+    ],
+)
+def test_durable_recovery_markers_yield_exit_10_without_leak(
+    tmp_path: Path, marker_relative: str, plan_only: bool
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    marker = root.joinpath(*marker_relative.split("/"))
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("private recovery diagnostic", encoding="utf-8")
+    before = _snapshot(root)
+
+    result = _run_cli(root, *(["--plan-only"] if plan_only else []))
+
+    assert result.returncode == 10
+    assert _json_output(result) == {"error": "recovery_required", "status": "ERROR"}
+    assert _snapshot(root) == before
+    assert str(root) not in result.stdout
+    assert "private recovery diagnostic" not in result.stdout
+    assert "traceback" not in result.stdout.lower()
+
+
+def test_normal_cli_publish_cleanup_pending_recovery_returns_exit_10(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    from orchestrator.inspection_workflow import publication
+
+    def fail_after_manifest(*args: Any, **kwargs: Any) -> Mapping[str, Any]:
+        error = publication.PublicationTransactionError(
+            "publication committed but cleanup requires recovery"
+        )
+        error.write_state_uncertain = True
+        error.cleanup_error = RuntimeError("transaction cleanup failed")
+        raise error
+
+    monkeypatch.setattr(
+        module.lifecycle, "publish_run_local_artifacts", fail_after_manifest
+    )
+
+    code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+
+    assert code == 10
+
+
+def test_normal_cli_ordinary_publication_failure_returns_exit_5(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    from orchestrator.inspection_workflow import publication
+
+    def fail_clean(*args: Any, **kwargs: Any) -> None:
+        raise publication.PublicationTransactionError(
+            "staging validation failed without recovery marker"
+        )
+
+    monkeypatch.setattr(
+        module.lifecycle, "publish_run_local_artifacts", fail_clean
+    )
+
+    code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+
+    assert code == 5
+
+
+def test_plan_only_captures_prepared_source_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    original = module.lifecycle._capture_prepared_input
+    calls = 0
+
+    def count_capture(*args: Any, **kwargs: Any) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module.lifecycle, "_capture_prepared_input", count_capture)
+    before = _snapshot(root)
+
+    assert (
+        module.main(
+            [
+                "--task-file",
+                "task.json",
+                "--project-root",
+                str(root),
+                "--run-id",
+                RUN_ID,
+                "--plan-only",
+            ]
+        )
+        == 0
+    )
+    assert calls == 1
+    assert _snapshot(root) == before
+    assert task["input"]["dataset_id"] == "pilot_001"
+
+
 def test_source_change_before_controller_entry_fails_without_controlled_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -468,3 +621,89 @@ def test_lifecycle_race_failures_keep_typed_exit_codes(
     classified = module._classify_lifecycle_failure(error)
 
     assert (classified.code, classified.error) == (expected_code, expected_error)
+
+
+@pytest.mark.parametrize(
+    ("failure", "recovery", "expected_code"),
+    [
+        ("publication_uncertain", True, 10),
+        ("publication_clean", False, 5),
+        ("state_recovery", True, 10),
+        ("state_uncertain", True, 10),
+        ("a1_marker", True, 10),
+        ("generic_with_a1_marker", True, 10),
+        ("active_recovery", True, 10),
+        ("active_release_tombstone", True, 10),
+        ("active_contention", False, 4),
+    ],
+)
+def test_real_lifecycle_failure_types_reach_stable_cli_exit_codes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    recovery: bool,
+    expected_code: int,
+) -> None:
+    module = _load_cli_module()
+    root = tmp_path / "controlled"
+    root.mkdir()
+    run_dir = root / "runs" / RUN_ID
+    run_dir.mkdir(parents=True)
+
+    from orchestrator.inspection_workflow import publication
+    from orchestrator.state.store import StateRecoveryRequiredError, StateStoreError
+
+    if failure == "publication_uncertain":
+        error = publication.PublicationTransactionError("injected publication write")
+        error.write_state_uncertain = True
+    elif failure == "publication_clean":
+        error = publication.PublicationTransactionError("ordinary publication validation failed")
+    elif failure == "state_recovery":
+        error = StateRecoveryRequiredError("journal has unconfirmed bytes")
+    elif failure == "state_uncertain":
+        error = StateStoreError("state replace failed")
+        error.write_state_uncertain = True
+    elif failure in {"a1_marker", "generic_with_a1_marker"}:
+        marker = run_dir / "work" / ".a1_recovery_required.json"
+        marker.parent.mkdir()
+        marker.write_text("{}", encoding="utf-8")
+        error = (
+            module.lifecycle.a1_artifacts.PhaseA1ArtifactError("A1 write failed")
+            if failure == "a1_marker"
+            else module.lifecycle.InspectionWorkflowLifecycleError(
+                "required managed tasks did not all complete successfully"
+            )
+        )
+    elif failure == "active_recovery":
+        (root / "runs" / ".active_run.recovery.lock").write_text("{}", encoding="utf-8")
+        error = module.lifecycle.ActiveRunRecoveryRequiredError(
+            "recovery lock exists"
+        )
+    elif failure == "active_release_tombstone":
+        (root / "runs" / ".active_run.release.test.json").write_text(
+            "{}", encoding="utf-8"
+        )
+        error = module.lifecycle.ActiveRunRecoveryRequiredError(
+            "release tombstone exists"
+        )
+    else:
+        error = module.ActiveRunLockError("an Active Run Lock already exists")
+
+    def fail_run(_awaitable):
+        _awaitable.close()
+        raise error
+
+    monkeypatch.setattr(module.lifecycle.asyncio, "run", fail_run)
+    with pytest.raises(module.lifecycle.InspectionWorkflowLifecycleError) as captured:
+        module.lifecycle._run_lifecycle(
+            root,
+            input_mode="prepared_dataset",
+            task_id="task_610",
+            run_id=RUN_ID,
+            resume=False,
+            source_capture={},
+        )
+
+    classified = module._classify_lifecycle_failure(captured.value)
+    assert classified.code == expected_code
+    assert (classified.error == "recovery_required") is recovery

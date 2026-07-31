@@ -306,13 +306,25 @@ source/output override, lock/recovery API, or resume operation.
 
 Before any Run, Active Lock, State, Journal, transaction, audit, staging, or
 publication write, the CLI validates the task, canonical run ID, and plain sandbox
-and task-file paths; the Controller-owned Prepared lifecycle then validates
+and task-file paths. The Controller-owned Prepared lifecycle then validates
 readiness, A1/A2/State/Active-Run recovery residue, and Active Lock state.
-`--plan-only` captures the exact Prepared source bytes through the existing
-readiness path and derives the existing Phase-A plan fingerprint without creating
-workflow artifacts. Normal execution delegates once to the existing lifecycle.
-The output is canonical JSON with relative POSIX paths only. Exit code 10 means
-typed recovery or cleanup is required; it is never success. Readiness and Active
-Lock contention use distinct stable exit codes 3 and 4 rather than exception
-message matching. This remains a no-lock,
-point-in-time boundary and does not add A3.3.4 orchestration.
+`--plan-only` first captures the exact Prepared source bytes through
+`lifecycle.preflight_prepared_task(...)` exactly once, then performs the
+read-only Active-Lock/Run/State/Journal/recovery-residue check, and finally
+derives the Phase-A plan fingerprint without creating workflow artifacts. The
+normal CLI path delegates exactly once to the Controller and never calls private
+lifecycle capture directly.
+
+Exit codes are produced only by stable typed exceptions, never by exception
+message wording. Readiness failure (`PreparedReadinessError`) is exit 3.
+Ordinary Active-Lock or CAS contention (`ActiveRunLockError` that is not a
+recovery subtype) is exit 4. Recovery/cleanup required (`WorkflowRecoveryRequiredError`,
+`StateRecoveryRequiredError`, `StateRecoveryDeferredError`,
+`ActiveRunRecoveryRequiredError`, or a `PublicationTransactionError` /
+`PhaseA1ArtifactError` / `StateStoreError` that carries `write_state_uncertain`
+or `cleanup_error`, or that leaves a durable recovery marker) is exit 10.
+A generic lifecycle failure in the presence of a durable recovery sentinel is
+also classified as exit 10. Other lifecycle failures are exit 5. Exit code 10
+never means successful completion and never depends on diagnostic wording such
+as "recovery" or "cleanup". This remains a no-lock, point-in-time boundary and
+does not add A3.3.4 orchestration.

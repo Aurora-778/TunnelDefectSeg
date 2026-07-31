@@ -26,6 +26,7 @@ from orchestrator.inspection_workflow.contracts import (
 )
 from orchestrator.inspection_workflow.locking import (
     ActiveRunLockError,
+    ActiveRunRecoveryRequiredError,
     _assert_plain_entry,
     _assert_project_path,
     acquire_active_run_lock,
@@ -42,10 +43,18 @@ from orchestrator.inspection_workflow.planning import (
     build_required_task_plan,
     task_plan_fingerprint,
 )
-from orchestrator.inspection_workflow.publication import publish_run_local_artifacts
+from orchestrator.inspection_workflow.publication import (
+    PublicationTransactionError,
+    publish_run_local_artifacts,
+)
 from orchestrator.registry import build_default_registry
 from orchestrator.schema import validate_csv_schema
-from orchestrator.state.store import StateStore
+from orchestrator.state.store import (
+    StateRecoveryDeferredError,
+    StateRecoveryRequiredError,
+    StateStore,
+    StateStoreError,
+)
 from scripts.prepare_real_inspection_pilot import require_inference_ready
 
 
@@ -88,6 +97,94 @@ class PreparedReadinessError(InspectionWorkflowLifecycleError):
 
 class WorkflowRecoveryRequiredError(InspectionWorkflowLifecycleError):
     """Raised when recovery residue or cleanup state blocks a new Run."""
+
+
+def _has_recovery_residue(root: Path, *, run_id: str) -> bool:
+    """Return whether one known durable recovery sentinel is present."""
+
+    run_dir = root / "runs" / run_id
+    fixed = [
+        *(run_dir / area / ".a1_recovery_required.json" for area in ("work", "artifacts", "staging")),
+        run_dir / ".publication_recovery_required.json",
+        *(run_dir / name for name in _STATE_RECOVERY_MARKERS),
+        root / "runs" / ".active_run.recovery.lock",
+    ]
+    for path in fixed:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            continue
+        return True
+    runs_dir = root / "runs"
+    try:
+        return runs_dir.is_dir() and any(
+            entry.name.startswith(".active_run.release.")
+            for entry in runs_dir.iterdir()
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def _is_recovery_required_error(
+    error: BaseException,
+    *,
+    root: Path,
+    run_id: str,
+) -> bool:
+    """Classify only explicit recovery types or durable sentinels."""
+
+    if isinstance(
+        error,
+        (
+            WorkflowRecoveryRequiredError,
+            StateRecoveryRequiredError,
+            StateRecoveryDeferredError,
+            ActiveRunRecoveryRequiredError,
+        ),
+    ):
+        return True
+    if isinstance(error, PublicationTransactionError):
+        return bool(
+            getattr(error, "write_state_uncertain", False)
+            or getattr(error, "cleanup_error", None) is not None
+            or _has_recovery_residue(root, run_id=run_id)
+        )
+    if isinstance(error, (a1_artifacts.PhaseA1ArtifactError, StateStoreError)):
+        return bool(
+            getattr(error, "write_state_uncertain", False)
+            or _has_recovery_residue(root, run_id=run_id)
+        )
+    return False
+
+
+def _raise_lifecycle_error(
+    error: BaseException,
+    *,
+    root: Path,
+    run_id: str,
+    input_mode: str,
+) -> None:
+    if isinstance(error, WorkflowRecoveryRequiredError):
+        raise error
+    if _is_recovery_required_error(error, root=root, run_id=run_id):
+        raise WorkflowRecoveryRequiredError(
+            f"A3.3 managed {input_mode} lifecycle requires explicit recovery"
+        ) from error
+    if isinstance(error, ActiveRunLockError):
+        raise InspectionWorkflowLifecycleError(
+            f"A3.3 managed {input_mode} lifecycle encountered an Active Run Lock conflict"
+        ) from error
+    if isinstance(error, InspectionWorkflowLifecycleError):
+        if _has_recovery_residue(root, run_id=run_id):
+            raise WorkflowRecoveryRequiredError(
+                f"A3.3 managed {input_mode} lifecycle requires explicit recovery"
+            ) from error
+        raise error
+    raise InspectionWorkflowLifecycleError(
+        f"A3.3 managed {input_mode} lifecycle failed closed"
+    ) from error
 
 
 def preflight_prepared_task(
@@ -190,12 +287,22 @@ def _run_lifecycle(
                 source_capture=source_capture,
             )
         )
-    except InspectionWorkflowLifecycleError:
-        raise
-    except Exception as exc:
-        raise InspectionWorkflowLifecycleError(
-            f"A3.3 managed {input_mode} lifecycle failed closed"
-        ) from exc
+    except InspectionWorkflowLifecycleError as exc:
+        _raise_lifecycle_error(
+            exc,
+            root=Path(root),
+            run_id=run_id,
+            input_mode=input_mode,
+        )
+        raise AssertionError("unreachable")
+    except BaseException as exc:
+        _raise_lifecycle_error(
+            exc,
+            root=Path(root),
+            run_id=run_id,
+            input_mode=input_mode,
+        )
+        raise AssertionError("unreachable")
 
 
 async def _run_lifecycle_async(

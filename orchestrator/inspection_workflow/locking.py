@@ -118,6 +118,10 @@ class ActiveRunLockError(RuntimeError):
     """Raised when Active Run Lock ownership or durability is uncertain."""
 
 
+class ActiveRunRecoveryRequiredError(ActiveRunLockError):
+    """Raised when Active Run recovery residue blocks ordinary acquisition."""
+
+
 def _add_exception_note(error: BaseException, message: str) -> None:
     """Retain cleanup diagnostics on Python versions before add_note()."""
 
@@ -811,13 +815,17 @@ def _reject_recovery_or_release_entries(runs: Path) -> None:
         )
     recovery = runs / ".active_run.recovery.lock"
     if _lstat(recovery, label="Active Run recovery lock") is not None:
-        raise ActiveRunLockError("Active Run recovery lock exists; A3.2 recovery is required")
+        raise ActiveRunRecoveryRequiredError(
+            "Active Run recovery lock exists; A3.2 recovery is required"
+        )
     try:
         entries = list(runs.iterdir())
     except OSError as exc:
         raise ActiveRunLockError("unable to inspect Active Run release tombstones") from exc
     if any(entry.name.startswith(ACTIVE_RUN_RELEASE_PREFIX) for entry in entries):
-        raise ActiveRunLockError("Active Run release tombstone exists; cleanup recovery is required")
+        raise ActiveRunRecoveryRequiredError(
+            "Active Run release tombstone exists; cleanup recovery is required"
+        )
 
 
 def read_active_run_lock(project_root: Path) -> dict[str, Any]:
