@@ -16,6 +16,11 @@ PROTECTED_ARTIFACTS = [
     PROJECT_ROOT / "data/simulated",
     PROJECT_ROOT / "logs",
     PROJECT_ROOT / "orchestrator/state/run_state.json",
+    # Protect the complete formal outputs tree.  The explicitly excluded
+    # directories below contain local video/demo WIP or caches and are not
+    # part of the repository's formal artifact contract.
+    PROJECT_ROOT / "outputs",
+    PROJECT_ROOT / "outputs/current_publication_manifest.json",
     PROJECT_ROOT / "outputs/visualizations",
     PROJECT_ROOT / "outputs/association_benchmark",
     PROJECT_ROOT / "outputs/progressive_evaluation",
@@ -40,6 +45,19 @@ PROTECTED_ARTIFACTS = [
 ]
 
 
+_FORMAL_OUTPUT_EXCLUDED_DIRS = frozenset(
+    {
+        "video_inspection",
+        "algorithm_visualization",
+        ".pytest_cache",
+        "__pycache__",
+        ".cache",
+        "cache",
+        "caches",
+    }
+)
+
+
 def _file_digest(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -59,6 +77,22 @@ def artifact_snapshot(
         relative_root = protected.relative_to(base).as_posix()
         if not protected.exists():
             manifest[relative_root] = ("missing", 0, "")
+            continue
+        if paths is None and protected == PROJECT_ROOT / "outputs":
+            manifest[relative_root] = ("directory", 0, "")
+            for candidate in sorted(protected.rglob("*")):
+                relative = candidate.relative_to(base).as_posix()
+                output_parts = candidate.relative_to(protected).parts
+                if any(part in _FORMAL_OUTPUT_EXCLUDED_DIRS for part in output_parts):
+                    continue
+                if candidate.is_dir():
+                    manifest[relative] = ("directory", 0, "")
+                else:
+                    manifest[relative] = (
+                        "file",
+                        candidate.stat().st_size,
+                        _file_digest(candidate),
+                    )
             continue
         candidates = [protected]
         if protected.is_dir():

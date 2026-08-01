@@ -429,7 +429,13 @@ async def _run_lifecycle_async(
             raise InspectionWorkflowLifecycleError(
                 "unable to create the reserved Run directory"
             ) from exc
-        _materialize_source_capture(root, run_id=run_id, source_capture=source_capture)
+        _materialize_source_capture(
+            root,
+            run_id=run_id,
+            source_capture=source_capture,
+            allocation_token=allocation_token,
+            lock_token=lock_token,
+        )
         StateStore(root).initialize_run(
             run_id=run_id,
             allocation_token=allocation_token,
@@ -825,32 +831,62 @@ def _materialize_source_capture(
     *,
     run_id: str,
     source_capture: Mapping[str, Any],
+    allocation_token: str,
+    lock_token: str,
 ) -> None:
     sources = source_capture.get("sources")
     if not isinstance(sources, list) or not sources:
         raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
+    committed_paths: list[str] = []
     for source in sources:
-        if not isinstance(source, Mapping):
-            raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
-        source_path = source.get("source_path")
-        relative_path = source.get("relative_path")
-        data = source.get("data")
-        origin_sha256 = source.get("origin_sha256")
-        if (
-            not isinstance(source_path, Path)
-            or not isinstance(relative_path, str)
-            or not isinstance(data, bytes)
-            or not isinstance(origin_sha256, str)
-            or _SHA256_RE.fullmatch(origin_sha256) is None
-        ):
-            raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
-        a1_artifacts.write_phase_a1_work_artifact(
-            root,
-            run_id=run_id,
-            execution_profile=a1_artifacts.PHASE_A1_EXECUTION_PROFILE,
-            relative_path=relative_path,
-            data=data,
-        )
+        try:
+            if not isinstance(source, Mapping):
+                raise InspectionWorkflowLifecycleError(
+                    "resolved workflow source capture is invalid"
+                )
+            source_path = source.get("source_path")
+            relative_path = source.get("relative_path")
+            data = source.get("data")
+            origin_sha256 = source.get("origin_sha256")
+            if (
+                not isinstance(source_path, Path)
+                or not isinstance(relative_path, str)
+                or not isinstance(data, bytes)
+                or not isinstance(origin_sha256, str)
+                or _SHA256_RE.fullmatch(origin_sha256) is None
+            ):
+                raise InspectionWorkflowLifecycleError(
+                    "resolved workflow source capture is invalid"
+                )
+            wrote = a1_artifacts.write_phase_a1_work_artifact(
+                root,
+                run_id=run_id,
+                execution_profile=a1_artifacts.PHASE_A1_EXECUTION_PROFILE,
+                relative_path=relative_path,
+                data=data,
+            )
+            if wrote:
+                committed_paths.append(relative_path)
+        except Exception as exc:
+            if (
+                not committed_paths
+                and not a1_artifacts._write_failure_requires_recovery(exc)
+            ):
+                _cleanup_clean_source_materialization_failure(
+                    root,
+                    run_id=run_id,
+                    allocation_token=allocation_token,
+                    lock_token=lock_token,
+                    primary_error=exc,
+                )
+            if committed_paths or a1_artifacts._write_failure_requires_recovery(exc):
+                _raise_source_materialization_recovery(
+                    root,
+                    run_id=run_id,
+                    committed_paths=committed_paths,
+                    primary_error=exc,
+                )
+            raise
         try:
             if _sha256(
                 _snapshot_project_source(root, source_path, label="workflow source")
@@ -858,10 +894,99 @@ def _materialize_source_capture(
                 raise InspectionWorkflowLifecycleError(
                     "workflow source changed during Run-local materialization"
                 )
-        except OSError as exc:
-            raise InspectionWorkflowLifecycleError(
-                "unable to recheck workflow source after Run-local materialization"
-            ) from exc
+        except Exception as exc:
+            if isinstance(exc, OSError):
+                source_error = exc
+                exc = InspectionWorkflowLifecycleError(
+                    "unable to recheck workflow source after Run-local materialization"
+                )
+                exc.__cause__ = source_error
+            _raise_source_materialization_recovery(
+                root,
+                run_id=run_id,
+                committed_paths=committed_paths,
+                primary_error=exc,
+            )
+
+
+def _raise_source_materialization_recovery(
+    root: Path,
+    *,
+    run_id: str,
+    committed_paths: list[str],
+    primary_error: Exception,
+) -> None:
+    try:
+        a1_artifacts._raise_recovery_required(
+            project_root=root,
+            run_id=run_id,
+            area="work",
+            stage="source_materialization",
+            committed_paths=committed_paths,
+            primary_error=primary_error,
+        )
+    except a1_artifacts.PhaseA1ArtifactError as exc:
+        # A marker-write failure is itself state-uncertain.  Preserve that
+        # diagnostic so the CLI still returns recovery_required instead of
+        # treating a half-materialized Run as an ordinary workflow failure.
+        exc.write_state_uncertain = True
+        raise
+
+
+def _cleanup_clean_source_materialization_failure(
+    root: Path,
+    *,
+    run_id: str,
+    allocation_token: str,
+    lock_token: str,
+    primary_error: Exception,
+) -> None:
+    """Remove only the empty Run allocated by a clean, zero-commit failure."""
+
+    try:
+        release_active_run_lock(
+            root,
+            run_id=run_id,
+            expected_allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+        )
+        sandbox_marker = root / a1_artifacts._SANDBOX_MARKER_NAME
+        if sandbox_marker.exists():
+            if not sandbox_marker.is_file() or a1_artifacts._path_is_reparse_point(
+                sandbox_marker
+            ):
+                raise OSError("A1 sandbox marker is not a removable regular file")
+            sandbox_marker.unlink()
+        run_dir = root / "runs" / run_id
+        if run_dir.exists():
+            entries = list(run_dir.rglob("*"))
+            if any(not child.is_dir() or child.is_symlink() for child in entries):
+                residue = next(
+                    child for child in entries if not child.is_dir() or child.is_symlink()
+                )
+                raise OSError(
+                    f"unexpected source materialization residue: {residue.name}"
+                )
+            for child in sorted(
+                (entry for entry in entries if entry.is_dir()),
+                key=lambda entry: len(entry.parts),
+                reverse=True,
+            ):
+                child.rmdir()
+            run_dir.rmdir()
+    except Exception as cleanup_error:
+        diagnostic = InspectionWorkflowLifecycleError(
+            f"{primary_error}; clean source materialization rollback failed: "
+            f"{type(cleanup_error).__name__}: {cleanup_error}"
+        )
+        diagnostic.__cause__ = primary_error
+        _raise_source_materialization_recovery(
+            root,
+            run_id=run_id,
+            committed_paths=[],
+            primary_error=diagnostic,
+        )
+    raise primary_error
 
 
 def _validate_resume_input_capture(

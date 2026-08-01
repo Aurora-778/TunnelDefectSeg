@@ -235,6 +235,37 @@ def test_subprocess_executes_controller_dag_and_publication(tmp_path: Path) -> N
             if capability != "static_descriptive_audit"
         )
 
+    staging_paths = [
+        root / "runs" / RUN_ID / "staging" / "disease_growth_analysis_report.md",
+        root / "runs" / RUN_ID / "staging" / "disease_growth_analysis_summary.md",
+        root / "runs" / RUN_ID / "staging" / "memory_agent_report.md",
+        root / "runs" / RUN_ID / "staging" / "disease_memory_bank_summary.md",
+    ]
+    staging_text = []
+    for path in staging_paths:
+        assert path.is_file()
+        text = path.read_text(encoding="utf-8")
+        staging_text.append(text)
+        assert text.strip()
+    combined_staging = "\n".join(staging_text)
+    assert "限定语：" in combined_staging
+    assert "static_descriptive_audit" in combined_staging
+    assert "status=allowed" in combined_staging
+    assert "template_id=" in combined_staging
+    assert "不可纵向比较" in combined_staging
+    for forbidden in (
+        "增长",
+        "减小",
+        "稳定",
+        "风险上升",
+        "风险下降",
+        "风险升高",
+        "风险降低",
+        "风险增加",
+        "风险减少",
+    ):
+        assert forbidden not in combined_staging
+
 
 @pytest.mark.parametrize(
     ("mutate", "expected_error"),
@@ -475,10 +506,11 @@ def test_durable_recovery_markers_yield_exit_10_without_leak(
 
 
 def test_normal_cli_publish_cleanup_pending_recovery_returns_exit_10(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     root, _ = _sandbox(tmp_path)
     module = _load_cli_module()
+    input_before = _snapshot(root / "data")
     from orchestrator.inspection_workflow import publication
 
     def fail_after_manifest(*args: Any, **kwargs: Any) -> Mapping[str, Any]:
@@ -505,6 +537,193 @@ def test_normal_cli_publish_cleanup_pending_recovery_returns_exit_10(
     )
 
     assert code == 10
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert json.loads(output.out) == {"error": "recovery_required", "status": "ERROR"}
+    assert str(root) not in output.out
+    assert "traceback" not in output.out.lower()
+    assert _snapshot(root / "data") == input_before
+
+
+def test_normal_cli_release_failure_creates_real_tombstone_and_returns_exit_10(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    original_unlink = Path.unlink
+
+    def fail_release_tombstone_cleanup(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path.parent == root / "runs" and path.name.startswith(".active_run.release."):
+            raise OSError("injected release tombstone cleanup failure")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_release_tombstone_cleanup)
+    code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert code == 10
+    assert output.err == ""
+    assert json.loads(output.out) == {"error": "recovery_required", "status": "ERROR"}
+    assert str(root) not in output.out
+    assert "traceback" not in output.out.lower()
+    assert source_before == _snapshot(root / "data")
+    assert any(
+        path.name.startswith(".active_run.release.")
+        for path in (root / "runs").iterdir()
+    )
+
+
+def test_normal_cli_unreadable_recovery_sentinel_returns_exit_10_without_side_effects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    before = _snapshot(root)
+    marker = root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
+    original_lstat = Path.lstat
+
+    def fail_marker_lstat(path: Path):
+        if path == marker:
+            raise PermissionError("injected recovery marker inspection failure")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_marker_lstat)
+    code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert code == 10
+    assert output.err == ""
+    assert json.loads(output.out) == {"error": "recovery_required", "status": "ERROR"}
+    assert str(root) not in output.out
+    assert "traceback" not in output.out.lower()
+    assert _snapshot(root) == before
+
+
+def test_source_change_after_materialization_write_creates_recovery_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    target = root / "data" / "prepared_inspections" / "pilot_001" / "preparation_manifest.json"
+    original_snapshot = module.lifecycle._snapshot_project_source
+    seen: dict[Path, int] = {}
+
+    def mutate_on_materialization_recheck(
+        project_root: Path, path: Path, *, label: str
+    ) -> bytes:
+        seen[path] = seen.get(path, 0) + 1
+        if path == target and seen[path] == 2:
+            path.write_bytes(path.read_bytes() + b"\n")
+        return original_snapshot(project_root, path, label=label)
+
+    monkeypatch.setattr(
+        module.lifecycle,
+        "_snapshot_project_source",
+        mutate_on_materialization_recheck,
+    )
+    code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert code == 10
+    assert output.err == ""
+    assert json.loads(output.out) == {"error": "recovery_required", "status": "ERROR"}
+    assert str(root) not in output.out
+    assert "traceback" not in output.out.lower()
+    marker_path = root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["committed_paths"] == [
+        f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json"
+    ]
+    assert (root / "runs" / ".active_run.lock").is_file()
+
+
+def test_clean_zero_source_materialization_failure_cleans_up_and_allows_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    original_write = module.lifecycle.a1_artifacts.write_phase_a1_work_artifact
+    calls = {"count": 0}
+
+    def fail_once(*args: Any, **kwargs: Any) -> bool:
+        if calls["count"] == 0:
+            calls["count"] += 1
+            raise module.lifecycle.a1_artifacts.PhaseA1ArtifactError(
+                "injected clean source write failure"
+            )
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(
+        module.lifecycle.a1_artifacts,
+        "write_phase_a1_work_artifact",
+        fail_once,
+    )
+    first_code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+    first_output = capsys.readouterr()
+    assert first_code == 5
+    assert json.loads(first_output.out) == {"error": "workflow_failed", "status": "ERROR"}
+    assert not (root / "runs" / ".active_run.lock").exists()
+    assert not (root / "runs" / RUN_ID).exists()
+    assert not (root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json").exists()
+
+    second_code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+    second_output = capsys.readouterr()
+    assert second_code == 0
+    assert json.loads(second_output.out)["status"] == "COMPLETED"
 
 
 def test_normal_cli_ordinary_publication_failure_returns_exit_5(

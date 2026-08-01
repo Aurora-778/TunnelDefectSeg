@@ -37,6 +37,20 @@ def test_manifest_detects_added_removed_modified_and_directory_changes(tmp_path)
     assert modified == {"protected/modified.txt"}
 
 
+def test_formal_outputs_snapshot_covers_public_artifacts_and_excludes_local_wip():
+    before = _snapshot()
+
+    assert "outputs" in before
+    assert "outputs/current_publication_manifest.json" in before
+    assert "outputs/visualizations" in before
+    assert "outputs/progressive_evaluation" in before
+    assert "outputs/association_benchmark" in before
+    assert "logs" in before
+    assert "orchestrator/state/run_state.json" in before
+    assert not any(path.startswith("outputs/video_inspection/") for path in before)
+    assert not any(path.startswith("outputs/algorithm_visualization/") for path in before)
+
+
 def test_representative_cli_generation_keeps_formal_artifacts_unchanged(tmp_path):
     before = _snapshot()
     engineering_dir = tmp_path / "engineering"

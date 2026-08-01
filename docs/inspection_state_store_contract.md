@@ -315,6 +315,15 @@ derives the Phase-A plan fingerprint without creating workflow artifacts. The
 normal CLI path delegates exactly once to the Controller and never calls private
 lifecycle capture directly.
 
+During a normal Prepared materialization, every copied source is re-read and
+hashed after its Run-local write. A mismatch, partial commit, uncertain replace,
+or cleanup failure writes the A1 work recovery marker with only the files that
+were actually committed and blocks the Run with exit 10. A failure with zero
+committed files and a known-clean rollback releases the newly allocated lock,
+removes the current attempt's sandbox marker and empty Run tree, and remains
+retryable. The materialization guard is point-in-time and best-effort; it does
+not claim lock-free protection against a replacement after the final recheck.
+
 Exit codes are produced only by stable typed exceptions, never by exception
 message wording. Readiness failure (`PreparedReadinessError`) is exit 3.
 Ordinary Active-Lock or CAS contention (`ActiveRunLockError` that is not a
