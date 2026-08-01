@@ -24,7 +24,7 @@
 4. 自适应输出选择：比较 single/fused/hybrid 候选，避免 fixed fusion 抑制小病害。
 5. 可信复核分析：输出 uncertainty、disagreement、Self IoU、review priority 和复核理由。
 6. 形态量化分析：计算面积、连通域、骨架长度、主方向、fragmentation 和 morphology delta。
-7. Web 可视化展示：支持浏览器拖拽图片实时检测，并展示原图、mask、overlay、uncertainty、disagreement、skeleton 和结构化报告。
+7. Web 可视化展示：支持浏览器拖拽图片进行本地单图即时推理（需模型环境），并展示原图、mask、overlay、uncertainty、disagreement、skeleton 和结构化报告。
 8. 实验证据导出：生成 enhancement evidence summary、patent evidence pack 和 review queue summary。
 
 ## 技术特点
@@ -72,7 +72,7 @@
 | 形态分析 | `morphology_adapter.py` | 面积、连通域、骨架、方向、morphology delta |
 | 风险与复核 | `risk_adapter.py` | risk、review priority 和理由 |
 | 证据汇总 | `evaluate_confidence_risk.py`、`enhancement_evidence.py` | full evaluation、evidence summary、patent pack、review queue |
-| Web 展示 | `web_app.py`、`web_demo/index.html` | 拖拽上传、实时检测、多视图展示 |
+| Web 展示 | `web_app.py`、`web_demo/index.html` | 拖拽上传、本地单图即时推理（需模型环境）、多视图展示 |
 
 ## 操作流程
 

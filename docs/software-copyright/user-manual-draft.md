@@ -134,7 +134,7 @@ python scripts/validate_video_artifacts.py --video_id tunnel_demo
 python scripts/run_inspection_workflow.py --project-root C:/path/to/controlled-sandbox --task-file tasks/task.json --run-id run_001 --plan-only
 ```
 
-计划通过后去掉 `--plan-only` 执行。系统会固定输入快照、记录任务状态和操作日志，并发布带清单的最终产物；遇到恢复标志、状态冲突或输入漂移会停止执行，需先按错误信息处理恢复，不应强行删除运行目录。该功能不通过 Web Dashboard 在线启动，也不等同于生产调度服务。
+计划通过后去掉 `--plan-only` 执行。系统会固定输入快照、记录任务状态和操作日志，并发布带清单的最终产物；遇到恢复标志、状态冲突或输入漂移会停止执行并保留审计证据，应交由受控维护流程处理，不应强行删除运行目录。当前 CLI 不提供普通用户恢复命令。该功能不通过 Web Dashboard 在线启动，也不等同于生产调度服务。
 
 ## 5. 查看系统总览
 
@@ -171,7 +171,7 @@ python scripts/run_inspection_workflow.py --project-root C:/path/to/controlled-s
 
 ## 10.1 查看路线级时空分析结果
 
-路线报告将连续帧中的病害观测按类别、里程、环号、相机和图像位置等证据聚合为 defect track，并输出复检队列。查看时应同时阅读 `comparability_status`、`claim_level` 和 `measurement_basis`：同一轮次内的变化只表示 `apparent-change-evidence`，只有可比较的跨轮证据或人工确认才可能标为 `suspected-growth`。
+当前 Web 页面展示的是已生成的 JSON/demo 路线级结果，不接收路线数据或在线执行分析。路线报告将连续帧中的病害观测按类别、里程、环号、相机和图像位置等证据聚合为 defect track，并输出复检队列。查看时应同时阅读 `comparability_status`、`claim_level` 和 `measurement_basis`：同一轮次内的变化只表示 `apparent-change-evidence`，只有可比较的跨轮证据或人工确认才可能标为 `suspected-growth`。
 
 ## 11. 单图检测 / 上传图片复核
 
