@@ -295,7 +295,7 @@ def _run_lifecycle(
             input_mode=input_mode,
         )
         raise AssertionError("unreachable")
-    except BaseException as exc:
+    except Exception as exc:
         _raise_lifecycle_error(
             exc,
             root=Path(root),
