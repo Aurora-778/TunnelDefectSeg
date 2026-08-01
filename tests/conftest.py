@@ -14,6 +14,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 PROTECTED_ARTIFACTS = [
     PROJECT_ROOT / "data/simulated",
+    PROJECT_ROOT / "logs",
+    PROJECT_ROOT / "orchestrator/state/run_state.json",
     PROJECT_ROOT / "outputs/visualizations",
     PROJECT_ROOT / "outputs/association_benchmark",
     PROJECT_ROOT / "outputs/progressive_evaluation",

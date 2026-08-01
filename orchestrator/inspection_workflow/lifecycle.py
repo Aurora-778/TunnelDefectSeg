@@ -114,8 +114,10 @@ def _has_recovery_residue(root: Path, *, run_id: str) -> bool:
             path.lstat()
         except FileNotFoundError:
             continue
-        except (OSError, ValueError):
-            continue
+        except (OSError, ValueError) as exc:
+            raise WorkflowRecoveryRequiredError(
+                "unable to inspect durable recovery residue"
+            ) from exc
         return True
     runs_dir = root / "runs"
     try:
@@ -123,8 +125,10 @@ def _has_recovery_residue(root: Path, *, run_id: str) -> bool:
             entry.name.startswith(".active_run.release.")
             for entry in runs_dir.iterdir()
         )
-    except (OSError, ValueError):
-        return False
+    except (OSError, ValueError) as exc:
+        raise WorkflowRecoveryRequiredError(
+            "unable to inspect durable recovery residue"
+        ) from exc
 
 
 def _is_recovery_required_error(
@@ -173,6 +177,10 @@ def _raise_lifecycle_error(
             f"A3.3 managed {input_mode} lifecycle requires explicit recovery"
         ) from error
     if isinstance(error, ActiveRunLockError):
+        if _has_recovery_residue(root, run_id=run_id):
+            raise WorkflowRecoveryRequiredError(
+                f"A3.3 managed {input_mode} lifecycle requires explicit recovery"
+            ) from error
         raise InspectionWorkflowLifecycleError(
             f"A3.3 managed {input_mode} lifecycle encountered an Active Run Lock conflict"
         ) from error

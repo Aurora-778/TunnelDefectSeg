@@ -323,8 +323,11 @@ recovery subtype) is exit 4. Recovery/cleanup required (`WorkflowRecoveryRequire
 `ActiveRunRecoveryRequiredError`, or a `PublicationTransactionError` /
 `PhaseA1ArtifactError` / `StateStoreError` that carries `write_state_uncertain`
 or `cleanup_error`, or that leaves a durable recovery marker) is exit 10.
-A generic lifecycle failure in the presence of a durable recovery sentinel is
-also classified as exit 10. Other lifecycle failures are exit 5. Exit code 10
+A generic lifecycle failure, including an Active Run Lock release failure, in
+the presence of a durable recovery sentinel is also classified as exit 10. An
+unreadable sentinel location is itself recovery uncertainty and is classified
+as exit 10 rather than as an absent marker. Other lifecycle failures are exit
+5. Exit code 10
 never means successful completion and never depends on diagnostic wording such
 as "recovery" or "cleanup". This remains a no-lock, point-in-time boundary and
 does not add A3.3.4 orchestration.

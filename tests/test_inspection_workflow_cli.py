@@ -174,6 +174,66 @@ def test_subprocess_executes_controller_dag_and_publication(tmp_path: Path) -> N
         "phase_a_engineering_claim_report",
         "phase_a_claim_visualization",
     }
+    assert not (root / "runs" / ".active_run.lock").exists()
+
+    transaction = json.loads(
+        (root / "runs" / RUN_ID / "publication_transaction.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert transaction["phase"] == "cleanup_complete"
+
+    publication_manifest = json.loads(
+        (root / "outputs" / "current_publication_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert publication_manifest["transaction_id"] == payload["transaction_id"]
+    assert publication_manifest["final_summary_path"] == f"runs/{RUN_ID}/final_summary.md"
+    assert (root / publication_manifest["final_summary_path"]).is_file()
+
+    association_manifest = json.loads(
+        (root / "runs" / RUN_ID / "work" / "association_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert association_manifest["mode"] == "history_only"
+    assert association_manifest["rounds"][0]["mode"] == "baseline_only"
+    assert association_manifest["rounds"][0]["history_inspection_ids"] == []
+    assert association_manifest["rounds"][1]["history_inspection_ids"] == ["I0001"]
+
+    with (root / "runs" / RUN_ID / "work" / "association_records.csv").open(
+        "r", encoding="utf-8-sig", newline=""
+    ) as handle:
+        association_rows = list(csv.DictReader(handle))
+    assert association_rows
+    assert {row["inspection_id"] for row in association_rows} == {"I0002"}
+    assert all(row["association_mode"] == "no_id" for row in association_rows)
+    assert all(row["use_disease_id_score"] == "false" for row in association_rows)
+
+    claim_decision = json.loads(
+        (root / "runs" / RUN_ID / "artifacts" / "claim_decision.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert claim_decision["summary"] == {
+        "difference_allowed_with_limits": 0,
+        "difference_blocked": 2,
+        "directional_allowed": 0,
+        "pattern_allowed": 0,
+        "physical_allowed": 0,
+        "prediction_allowed": 0,
+        "static_audit_allowed": 2,
+        "total_records": 2,
+    }
+    for decision in claim_decision["record_decisions"]:
+        capabilities = decision["capabilities"]
+        assert capabilities["static_descriptive_audit"] == "allowed"
+        assert all(
+            status == "blocked"
+            for capability, status in capabilities.items()
+            if capability != "static_descriptive_audit"
+        )
 
 
 @pytest.mark.parametrize(
@@ -683,9 +743,7 @@ def test_real_lifecycle_failure_types_reach_stable_cli_exit_codes(
         (root / "runs" / ".active_run.release.test.json").write_text(
             "{}", encoding="utf-8"
         )
-        error = module.lifecycle.ActiveRunRecoveryRequiredError(
-            "release tombstone exists"
-        )
+        error = module.ActiveRunLockError("release tombstone exists")
     else:
         error = module.ActiveRunLockError("an Active Run Lock already exists")
 
@@ -707,3 +765,68 @@ def test_real_lifecycle_failure_types_reach_stable_cli_exit_codes(
     classified = module._classify_lifecycle_failure(captured.value)
     assert classified.code == expected_code
     assert (classified.error == "recovery_required") is recovery
+
+
+def test_lifecycle_fails_closed_when_recovery_residue_cannot_be_inspected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_cli_module()
+    root = tmp_path / "controlled"
+    root.mkdir()
+    before = _snapshot(root)
+    original_lstat = Path.lstat
+
+    def fail_marker_inspection(path: Path):
+        if path.name == ".publication_recovery_required.json":
+            raise PermissionError("injected recovery marker inspection failure")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_marker_inspection)
+    with pytest.raises(module.lifecycle.WorkflowRecoveryRequiredError) as captured:
+        module.lifecycle._raise_lifecycle_error(
+            module.lifecycle.InspectionWorkflowLifecycleError("ordinary workflow failure"),
+            root=root,
+            run_id=RUN_ID,
+            input_mode="prepared_dataset",
+        )
+
+    assert isinstance(captured.value.__cause__, PermissionError)
+    assert module._classify_lifecycle_failure(captured.value).code == 10
+    assert _snapshot(root) == before
+
+
+@pytest.mark.parametrize(
+    ("error_type", "error_value"),
+    [(KeyboardInterrupt, "operator interrupt"), (SystemExit, 17)],
+)
+def test_lifecycle_preserves_process_control_exceptions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[BaseException],
+    error_value: str | int,
+) -> None:
+    module = _load_cli_module()
+    root = tmp_path / "controlled"
+    root.mkdir()
+    before = _snapshot(root)
+    expected = error_type(error_value)
+
+    def stop_process(awaitable):
+        awaitable.close()
+        raise expected
+
+    monkeypatch.setattr(module.lifecycle.asyncio, "run", stop_process)
+
+    with pytest.raises(error_type) as captured:
+        module.lifecycle._run_lifecycle(
+            root,
+            input_mode="prepared_dataset",
+            task_id="task_610",
+            run_id=RUN_ID,
+            resume=False,
+            source_capture={},
+        )
+
+    assert captured.value is expected
+    assert _snapshot(root) == before
