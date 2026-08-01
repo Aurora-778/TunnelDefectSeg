@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -58,12 +61,100 @@ _FORMAL_OUTPUT_EXCLUDED_DIRS = frozenset(
 )
 
 
-def _file_digest(path: Path) -> str:
+def _file_snapshot(path: Path) -> tuple[int, str]:
+    """Hash one protected regular file without accepting a link replacement."""
+
+    if _formal_entry_kind(path) != "file":
+        raise AssertionError(
+            f"protected formal artifact entry is not a regular file: {path.as_posix()}"
+        )
+    try:
+        before = path.lstat()
+    except (OSError, ValueError) as exc:
+        raise AssertionError(
+            f"cannot inspect protected formal artifact entry: {path.as_posix()}"
+        ) from exc
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise AssertionError(
+            f"cannot read protected formal artifact entry: {path.as_posix()}"
+        ) from exc
+    if _formal_entry_kind(path) != "file":
+        raise AssertionError(
+            f"protected formal artifact entry changed while being hashed: {path.as_posix()}"
+        )
+    try:
+        after = path.lstat()
+    except (OSError, ValueError) as exc:
+        raise AssertionError(
+            f"cannot inspect protected formal artifact entry after hashing: {path.as_posix()}"
+        ) from exc
+    if after.st_size != before.st_size:
+        raise AssertionError(
+            f"protected formal artifact size changed while being hashed: {path.as_posix()}"
+        )
+    return before.st_size, digest.hexdigest()
+
+
+def _formal_entry_kind(path: Path) -> str | None:
+    """Return a safe artifact kind without following links or reparse entries."""
+
+    try:
+        entry = path.lstat()
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise AssertionError(
+            f"cannot inspect protected formal artifact entry: {path.as_posix()}"
+        ) from exc
+    attributes = getattr(entry, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+    if stat.S_ISLNK(entry.st_mode) or attributes & reparse_flag:
+        raise AssertionError(
+            f"protected formal artifact entry is a link or reparse point: {path.as_posix()}"
+        )
+    if stat.S_ISDIR(entry.st_mode):
+        return "directory"
+    if stat.S_ISREG(entry.st_mode):
+        return "file"
+    raise AssertionError(
+        f"protected formal artifact entry is not a regular file or directory: {path.as_posix()}"
+    )
+
+
+def _walk_formal_entries(
+    directory: Path,
+    *,
+    exclude: Callable[[Path], bool] | None = None,
+) -> list[tuple[Path, str]]:
+    """Enumerate regular formal entries without swallowing inaccessible directories."""
+
+    try:
+        with os.scandir(directory) as scan:
+            children = sorted(scan, key=lambda item: item.name)
+    except (OSError, ValueError) as exc:
+        raise AssertionError(
+            f"cannot enumerate protected formal artifact directory: {directory.as_posix()}"
+        ) from exc
+    result: list[tuple[Path, str]] = []
+    for child in children:
+        candidate = Path(child.path)
+        if exclude is not None and exclude(candidate):
+            continue
+        kind = _formal_entry_kind(candidate)
+        if kind is None:
+            raise AssertionError(
+                "protected formal artifact disappeared during snapshot: "
+                f"{candidate.as_posix()}"
+            )
+        result.append((candidate, kind))
+        if kind == "directory":
+            result.extend(_walk_formal_entries(candidate, exclude=exclude))
+    return result
 
 
 def artifact_snapshot(
@@ -75,34 +166,50 @@ def artifact_snapshot(
     manifest: dict[str, tuple[str, int, str]] = {}
     for protected in PROTECTED_ARTIFACTS if paths is None else paths:
         relative_root = protected.relative_to(base).as_posix()
-        if not protected.exists():
+        protected_kind = _formal_entry_kind(protected)
+        if protected_kind is None:
             manifest[relative_root] = ("missing", 0, "")
             continue
         if paths is None and protected == PROJECT_ROOT / "outputs":
+            if protected_kind != "directory":
+                raise AssertionError("protected formal outputs entry is not a directory")
             manifest[relative_root] = ("directory", 0, "")
-            for candidate in sorted(protected.rglob("*")):
+            for candidate, candidate_kind in _walk_formal_entries(
+                protected,
+                exclude=lambda item: any(
+                    part in _FORMAL_OUTPUT_EXCLUDED_DIRS
+                    for part in item.relative_to(protected).parts
+                ),
+            ):
                 relative = candidate.relative_to(base).as_posix()
-                output_parts = candidate.relative_to(protected).parts
-                if any(part in _FORMAL_OUTPUT_EXCLUDED_DIRS for part in output_parts):
-                    continue
-                if candidate.is_dir():
+                if candidate_kind == "directory":
                     manifest[relative] = ("directory", 0, "")
                 else:
+                    size, digest = _file_snapshot(candidate)
                     manifest[relative] = (
                         "file",
-                        candidate.stat().st_size,
-                        _file_digest(candidate),
+                        size,
+                        digest,
                     )
             continue
         candidates = [protected]
-        if protected.is_dir():
-            candidates.extend(sorted(protected.rglob("*")))
+        if protected_kind == "directory":
+            candidates.extend(
+                candidate for candidate, _ in _walk_formal_entries(protected)
+            )
         for candidate in candidates:
             relative = candidate.relative_to(base).as_posix()
-            if candidate.is_dir():
+            candidate_kind = _formal_entry_kind(candidate)
+            if candidate_kind is None:
+                raise AssertionError(
+                    "protected formal artifact disappeared during snapshot: "
+                    f"{candidate.as_posix()}"
+                )
+            if candidate_kind == "directory":
                 manifest[relative] = ("directory", 0, "")
             else:
-                manifest[relative] = ("file", candidate.stat().st_size, _file_digest(candidate))
+                size, digest = _file_snapshot(candidate)
+                manifest[relative] = ("file", size, digest)
     return manifest
 
 

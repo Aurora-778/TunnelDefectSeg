@@ -235,36 +235,52 @@ def test_subprocess_executes_controller_dag_and_publication(tmp_path: Path) -> N
             if capability != "static_descriptive_audit"
         )
 
-    staging_paths = [
-        root / "runs" / RUN_ID / "staging" / "disease_growth_analysis_report.md",
-        root / "runs" / RUN_ID / "staging" / "disease_growth_analysis_summary.md",
-        root / "runs" / RUN_ID / "staging" / "memory_agent_report.md",
-        root / "runs" / RUN_ID / "staging" / "disease_memory_bank_summary.md",
-    ]
-    staging_text = []
-    for path in staging_paths:
+    staging_contracts = {
+        "disease_growth_analysis_report.md": (
+            "evidence_id：",
+            "static_descriptive_audit：status=allowed",
+            "template_id=",
+            "限定语：",
+            "不可纵向比较",
+        ),
+        "disease_growth_analysis_summary.md": (
+            "记录数：",
+            "允许静态审计：",
+            "来源验证范围：byte_binding_only",
+            "发布状态：Run-local Staging，非正式发布物",
+        ),
+        "memory_agent_report.md": (
+            "内部候选 Memory Snapshot，非正式工程结论。",
+            "memory_id：",
+            "关联 decision_id：",
+            "限定语：",
+        ),
+        "disease_memory_bank_summary.md": (
+            "候选快照条目数：",
+            "memory_id：唯一候选解析键",
+            "disease_id：不参与候选解析",
+            "限定语：",
+        ),
+    }
+    for filename, required_lines in staging_contracts.items():
+        path = root / "runs" / RUN_ID / "staging" / filename
         assert path.is_file()
         text = path.read_text(encoding="utf-8")
-        staging_text.append(text)
         assert text.strip()
-    combined_staging = "\n".join(staging_text)
-    assert "限定语：" in combined_staging
-    assert "static_descriptive_audit" in combined_staging
-    assert "status=allowed" in combined_staging
-    assert "template_id=" in combined_staging
-    assert "不可纵向比较" in combined_staging
-    for forbidden in (
-        "增长",
-        "减小",
-        "稳定",
-        "风险上升",
-        "风险下降",
-        "风险升高",
-        "风险降低",
-        "风险增加",
-        "风险减少",
-    ):
-        assert forbidden not in combined_staging
+        for required_line in required_lines:
+            assert required_line in text
+        for forbidden in (
+            "增长",
+            "减小",
+            "稳定",
+            "风险上升",
+            "风险下降",
+            "风险升高",
+            "风险降低",
+            "风险增加",
+            "风险减少",
+        ):
+            assert forbidden not in text
 
 
 @pytest.mark.parametrize(
@@ -668,6 +684,316 @@ def test_source_change_after_materialization_write_creates_recovery_marker(
     assert marker["committed_paths"] == [
         f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json"
     ]
+    assert (root / "runs" / ".active_run.lock").is_file()
+
+
+def test_earlier_source_change_during_later_materialization_is_recovered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    first_source = (
+        root
+        / "data"
+        / "prepared_inspections"
+        / "pilot_001"
+        / "preparation_manifest.json"
+    )
+    original_snapshot = module.lifecycle._snapshot_project_source
+    seen: dict[Path, int] = {}
+
+    def mutate_after_first_recheck(
+        project_root: Path, path: Path, *, label: str
+    ) -> bytes:
+        data = original_snapshot(project_root, path, label=label)
+        seen[path] = seen.get(path, 0) + 1
+        # Capture is first, the per-source check is second.  Mutating only
+        # after that second read proves the final all-source recheck detects
+        # a source changed while later files were being materialized.
+        if path == first_source and seen[path] == 2:
+            path.write_bytes(path.read_bytes() + b"\n")
+        return data
+
+    monkeypatch.setattr(
+        module.lifecycle,
+        "_snapshot_project_source",
+        mutate_after_first_recheck,
+    )
+    code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert code == 10
+    assert output.err == ""
+    assert json.loads(output.out) == {"error": "recovery_required", "status": "ERROR"}
+    marker_path = root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert set(marker["committed_paths"]) == {
+        f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json",
+        f"runs/{RUN_ID}/work/raw_prepared/observation_records.csv",
+        f"runs/{RUN_ID}/work/raw_prepared/frame_records.csv",
+    }
+    assert (root / "runs" / ".active_run.lock").is_file()
+
+
+@pytest.mark.parametrize(
+    "failure_point",
+    ["after_acquire", "reserve", "sandbox", "run_directory"],
+)
+def test_clean_run_initialization_failures_leave_no_unmarked_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure_point: str,
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    if failure_point == "after_acquire":
+        original_acquire = module.lifecycle.acquire_active_run_lock
+
+        def acquire_then_fail(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            original_acquire(*args, **kwargs)
+            raise module.lifecycle.InspectionWorkflowLifecycleError(
+                "injected failure after Active Run Lock acquisition"
+            )
+
+        monkeypatch.setattr(module.lifecycle, "acquire_active_run_lock", acquire_then_fail)
+    elif failure_point == "reserve":
+        monkeypatch.setattr(
+            module.lifecycle,
+            "reserve_active_run_id",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                module.lifecycle.InspectionWorkflowLifecycleError(
+                    "injected reserve failure"
+                )
+            ),
+        )
+    elif failure_point == "sandbox":
+        monkeypatch.setattr(
+            module.lifecycle.a1_artifacts,
+            "initialize_phase_a1_sandbox",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                module.lifecycle.a1_artifacts.PhaseA1ArtifactError(
+                    "injected sandbox initialization failure"
+                )
+            ),
+        )
+    else:
+        original_mkdir = Path.mkdir
+        run_dir = root / "runs" / RUN_ID
+
+        def fail_run_directory(path: Path, *args: Any, **kwargs: Any) -> None:
+            if path == run_dir:
+                raise OSError("injected Run directory creation failure")
+            original_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", fail_run_directory)
+
+    code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert code == 5
+    assert output.err == ""
+    assert json.loads(output.out) == {"error": "workflow_failed", "status": "ERROR"}
+    assert not (root / "runs" / ".active_run.lock").exists()
+    assert not (root / "runs" / RUN_ID).exists()
+    assert not (root / ".phase_a1_sandbox.json").exists()
+
+
+def test_keyboard_interrupt_after_uncertain_sandbox_initialization_marks_recovery_then_propagates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    original_initialize = module.lifecycle.a1_artifacts.initialize_phase_a1_sandbox
+    interrupt = KeyboardInterrupt("injected operator interrupt")
+
+    def initialize_then_interrupt(*args: Any, **kwargs: Any) -> Path:
+        original_initialize(*args, **kwargs)
+        raise interrupt
+
+    monkeypatch.setattr(
+        module.lifecycle.a1_artifacts,
+        "initialize_phase_a1_sandbox",
+        initialize_then_interrupt,
+    )
+    with pytest.raises(KeyboardInterrupt) as captured:
+        module.main(
+            [
+                "--task-file",
+                "task.json",
+                "--project-root",
+                str(root),
+                "--run-id",
+                RUN_ID,
+            ]
+        )
+
+    assert captured.value is interrupt
+    assert not (root / "runs" / ".active_run.lock").exists()
+    marker_path = root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["stage"] == "run_initialization"
+    assert marker["committed_paths"] == []
+    assert (root / ".phase_a1_sandbox.json").is_file()
+
+
+def test_keyboard_interrupt_before_run_directory_creation_cleans_up_then_propagates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    original_mkdir = Path.mkdir
+    run_dir = root / "runs" / RUN_ID
+    interrupt = KeyboardInterrupt("injected operator interrupt")
+
+    def interrupt_run_directory(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path == run_dir:
+            raise interrupt
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", interrupt_run_directory)
+    with pytest.raises(KeyboardInterrupt) as captured:
+        module.main(
+            [
+                "--task-file",
+                "task.json",
+                "--project-root",
+                str(root),
+                "--run-id",
+                RUN_ID,
+            ]
+        )
+
+    assert captured.value is interrupt
+    assert not (root / "runs" / ".active_run.lock").exists()
+    assert not run_dir.exists()
+    assert not (root / ".phase_a1_sandbox.json").exists()
+
+
+def test_uncertain_run_initialization_failure_writes_recovery_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+
+    def fail_uncertain_sandbox(*args: Any, **kwargs: Any) -> None:
+        error = module.lifecycle.a1_artifacts.PhaseA1ArtifactError(
+            "injected uncertain sandbox initialization failure"
+        )
+        error.write_state_uncertain = True
+        raise error
+
+    monkeypatch.setattr(
+        module.lifecycle.a1_artifacts,
+        "initialize_phase_a1_sandbox",
+        fail_uncertain_sandbox,
+    )
+    code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert code == 10
+    assert output.err == ""
+    assert json.loads(output.out) == {"error": "recovery_required", "status": "ERROR"}
+    marker_path = root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["stage"] == "run_initialization"
+    assert marker["committed_paths"] == []
+    assert (root / "runs" / ".active_run.lock").is_file()
+
+
+@pytest.mark.parametrize(
+    ("failure_point", "stage"),
+    [
+        ("state_initialization", "state_initialization"),
+        ("run_activation", "run_activation"),
+    ],
+)
+def test_post_materialization_lifecycle_failure_requires_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure_point: str,
+    stage: str,
+) -> None:
+    root, _ = _sandbox(tmp_path)
+    module = _load_cli_module()
+    if failure_point == "state_initialization":
+
+        def fail_state_initialization(self: Any, *args: Any, **kwargs: Any) -> None:
+            raise module.lifecycle.StateStoreError("injected state initialization failure")
+
+        monkeypatch.setattr(
+            module.lifecycle.StateStore,
+            "initialize_run",
+            fail_state_initialization,
+        )
+    else:
+
+        def fail_run_activation(*args: Any, **kwargs: Any) -> None:
+            raise module.lifecycle.ActiveRunLockError("injected Run activation failure")
+
+        monkeypatch.setattr(
+            module.lifecycle,
+            "mark_active_run_running",
+            fail_run_activation,
+        )
+
+    code = module.main(
+        [
+            "--task-file",
+            "task.json",
+            "--project-root",
+            str(root),
+            "--run-id",
+            RUN_ID,
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert code == 10
+    assert output.err == ""
+    assert json.loads(output.out) == {"error": "recovery_required", "status": "ERROR"}
+    marker_path = root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["stage"] == stage
+    assert set(marker["committed_paths"]) == {
+        f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json",
+        f"runs/{RUN_ID}/work/raw_prepared/observation_records.csv",
+        f"runs/{RUN_ID}/work/raw_prepared/frame_records.csv",
+    }
     assert (root / "runs" / ".active_run.lock").is_file()
 
 

@@ -29,6 +29,8 @@ from orchestrator.inspection_workflow.locking import (
     ActiveRunRecoveryRequiredError,
     _assert_plain_entry,
     _assert_project_path,
+    _PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES,
+    _cleanup_failed_acquisition,
     acquire_active_run_lock,
     mark_active_run_running,
     read_existing_active_run_lock,
@@ -403,58 +405,117 @@ async def _run_lifecycle_async(
     else:
         allocation_token = str(uuid.uuid4())
         lock_token = str(uuid.uuid4())
-        acquire_active_run_lock(
-            root,
-            task_id=task_id,
-            allocation_token=allocation_token,
-            lock_token=lock_token,
-            pid=os.getpid(),
-            hostname=socket.gethostname(),
-        )
-        reserve_active_run_id(
-            root,
-            run_id=run_id,
-            expected_allocation_token=allocation_token,
-            expected_lock_token=lock_token,
-        )
-        a1_artifacts.initialize_phase_a1_sandbox(
-            root,
-            run_id=run_id,
-            evidence_source_mode="run_local_projection",
-        )
-        run_dir = root / "runs" / run_id
+        lock_acquired = False
+        sandbox_marker_created = False
+        run_dir_created = False
         try:
+            acquire_active_run_lock(
+                root,
+                task_id=task_id,
+                allocation_token=allocation_token,
+                lock_token=lock_token,
+                pid=os.getpid(),
+                hostname=socket.gethostname(),
+            )
+            lock_acquired = True
+            reserve_active_run_id(
+                root,
+                run_id=run_id,
+                expected_allocation_token=allocation_token,
+                expected_lock_token=lock_token,
+            )
+            a1_artifacts.initialize_phase_a1_sandbox(
+                root,
+                run_id=run_id,
+                evidence_source_mode="run_local_projection",
+            )
+            sandbox_marker_created = True
+            run_dir = root / "runs" / run_id
             run_dir.mkdir(parents=False, exist_ok=False)
-        except OSError as exc:
-            raise InspectionWorkflowLifecycleError(
-                "unable to create the reserved Run directory"
-            ) from exc
-        _materialize_source_capture(
+            run_dir_created = True
+        except BaseException as exc:
+            if not lock_acquired:
+                # The lock layer owns O_EXCL acquisition failures and its own
+                # uncertainty diagnostics.  Only clean up when a seam raised
+                # after it had actually returned an owned lock.
+                if not _attempt_lock_matches(root, allocation_token, lock_token):
+                    raise
+                lock_acquired = True
+            if not isinstance(exc, Exception):
+                _cleanup_process_control_initialization_failure(
+                    root,
+                    run_id=run_id,
+                    allocation_token=allocation_token,
+                    lock_token=lock_token,
+                    control_error=exc,
+                    sandbox_marker_created=sandbox_marker_created,
+                    run_dir_created=run_dir_created,
+                )
+                raise
+            if a1_artifacts._write_failure_requires_recovery(exc):
+                _raise_source_materialization_recovery(
+                    root,
+                    run_id=run_id,
+                    committed_paths=[],
+                    primary_error=exc,
+                    stage="run_initialization",
+                )
+            _cleanup_clean_source_materialization_failure(
+                root,
+                run_id=run_id,
+                allocation_token=allocation_token,
+                lock_token=lock_token,
+                primary_error=exc,
+                stage="run_initialization",
+                sandbox_marker_created=sandbox_marker_created,
+                run_dir_created=run_dir_created,
+            )
+        committed_source_paths = _materialize_source_capture(
             root,
             run_id=run_id,
             source_capture=source_capture,
             allocation_token=allocation_token,
             lock_token=lock_token,
+            sandbox_marker_created=sandbox_marker_created,
+            run_dir_created=run_dir_created,
         )
-        StateStore(root).initialize_run(
-            run_id=run_id,
-            allocation_token=allocation_token,
-            plan_fingerprint=plan_fingerprint,
-            task_plan=task_plan,
-            expected_lock_token=lock_token,
-            initial_context={
-                "workflow_input_mode": input_mode,
-                "workflow_task_id": task_id,
-                "resolved_input_descriptor": dict(descriptor),
-                "resolved_input_descriptor_sha256": descriptor_sha256,
-            },
-        )
-        mark_active_run_running(
-            root,
-            run_id=run_id,
-            expected_allocation_token=allocation_token,
-            expected_lock_token=lock_token,
-        )
+        try:
+            StateStore(root).initialize_run(
+                run_id=run_id,
+                allocation_token=allocation_token,
+                plan_fingerprint=plan_fingerprint,
+                task_plan=task_plan,
+                expected_lock_token=lock_token,
+                initial_context={
+                    "workflow_input_mode": input_mode,
+                    "workflow_task_id": task_id,
+                    "resolved_input_descriptor": dict(descriptor),
+                    "resolved_input_descriptor_sha256": descriptor_sha256,
+                },
+            )
+        except Exception as exc:
+            _raise_source_materialization_recovery(
+                root,
+                run_id=run_id,
+                committed_paths=committed_source_paths,
+                primary_error=exc,
+                stage="state_initialization",
+            )
+        try:
+            mark_active_run_running(
+                root,
+                run_id=run_id,
+                expected_allocation_token=allocation_token,
+                expected_lock_token=lock_token,
+            )
+        except Exception as exc:
+            _raise_source_materialization_recovery(
+                root,
+                run_id=run_id,
+                committed_paths=committed_source_paths,
+                primary_error=exc,
+                stage="run_activation",
+            )
 
     from orchestrator.inspection_workflow.controller import InspectionWorkflowController
 
@@ -833,7 +894,9 @@ def _materialize_source_capture(
     source_capture: Mapping[str, Any],
     allocation_token: str,
     lock_token: str,
-) -> None:
+    sandbox_marker_created: bool,
+    run_dir_created: bool,
+) -> list[str]:
     sources = source_capture.get("sources")
     if not isinstance(sources, list) or not sources:
         raise InspectionWorkflowLifecycleError("resolved workflow source capture is invalid")
@@ -878,6 +941,9 @@ def _materialize_source_capture(
                     allocation_token=allocation_token,
                     lock_token=lock_token,
                     primary_error=exc,
+                    stage="source_materialization",
+                    sandbox_marker_created=sandbox_marker_created,
+                    run_dir_created=run_dir_created,
                 )
             if committed_paths or a1_artifacts._write_failure_requires_recovery(exc):
                 _raise_source_materialization_recovery(
@@ -888,24 +954,35 @@ def _materialize_source_capture(
                 )
             raise
         try:
-            if _sha256(
-                _snapshot_project_source(root, source_path, label="workflow source")
-            ) != origin_sha256:
-                raise InspectionWorkflowLifecycleError(
-                    "workflow source changed during Run-local materialization"
-                )
+            _recheck_source_capture(root, [source])
         except Exception as exc:
-            if isinstance(exc, OSError):
-                source_error = exc
-                exc = InspectionWorkflowLifecycleError(
-                    "unable to recheck workflow source after Run-local materialization"
-                )
-                exc.__cause__ = source_error
             _raise_source_materialization_recovery(
                 root,
                 run_id=run_id,
                 committed_paths=committed_paths,
                 primary_error=exc,
+            )
+    try:
+        _recheck_source_capture(root, sources)
+    except Exception as exc:
+        _raise_source_materialization_recovery(
+            root,
+            run_id=run_id,
+            committed_paths=committed_paths,
+            primary_error=exc,
+        )
+    return committed_paths
+
+
+def _recheck_source_capture(root: Path, sources: list[Mapping[str, Any]]) -> None:
+    for source in sources:
+        source_path = source["source_path"]
+        origin_sha256 = source["origin_sha256"]
+        if _sha256(
+            _snapshot_project_source(root, source_path, label="workflow source")
+        ) != origin_sha256:
+            raise InspectionWorkflowLifecycleError(
+                "workflow source changed during Run-local materialization"
             )
 
 
@@ -915,13 +992,14 @@ def _raise_source_materialization_recovery(
     run_id: str,
     committed_paths: list[str],
     primary_error: Exception,
+    stage: str = "source_materialization",
 ) -> None:
     try:
         a1_artifacts._raise_recovery_required(
             project_root=root,
             run_id=run_id,
             area="work",
-            stage="source_materialization",
+            stage=stage,
             committed_paths=committed_paths,
             primary_error=primary_error,
         )
@@ -939,30 +1017,65 @@ def _cleanup_clean_source_materialization_failure(
     run_id: str,
     allocation_token: str,
     lock_token: str,
-    primary_error: Exception,
+    primary_error: BaseException,
+    stage: str = "source_materialization",
+    sandbox_marker_created: bool = True,
+    run_dir_created: bool = True,
 ) -> None:
     """Remove only the empty Run allocated by a clean, zero-commit failure."""
 
     try:
-        release_active_run_lock(
+        _cleanup_owned_allocation_lock(
             root,
-            run_id=run_id,
-            expected_allocation_token=allocation_token,
-            expected_lock_token=lock_token,
+            allocation_token=allocation_token,
+            lock_token=lock_token,
         )
         sandbox_marker = root / a1_artifacts._SANDBOX_MARKER_NAME
-        if sandbox_marker.exists():
+        try:
+            sandbox_marker.lstat()
+        except FileNotFoundError:
+            marker_exists = False
+        else:
+            marker_exists = True
+        if marker_exists:
+            if not sandbox_marker_created:
+                raise OSError("sandbox marker was not created by this attempt")
             if not sandbox_marker.is_file() or a1_artifacts._path_is_reparse_point(
                 sandbox_marker
             ):
                 raise OSError("A1 sandbox marker is not a removable regular file")
             sandbox_marker.unlink()
         run_dir = root / "runs" / run_id
-        if run_dir.exists():
+        try:
+            run_dir.lstat()
+        except FileNotFoundError:
+            run_dir_exists = False
+        else:
+            run_dir_exists = True
+        if run_dir_exists:
+            if not run_dir_created:
+                raise OSError("Run directory was not created by this attempt")
+            if (
+                not run_dir.is_dir()
+                or run_dir.is_symlink()
+                or a1_artifacts._path_is_reparse_point(run_dir)
+            ):
+                raise OSError("Run directory is not a removable regular directory")
             entries = list(run_dir.rglob("*"))
-            if any(not child.is_dir() or child.is_symlink() for child in entries):
+            if any(
+                not child.is_dir()
+                or child.is_symlink()
+                or a1_artifacts._path_is_reparse_point(child)
+                for child in entries
+            ):
                 residue = next(
-                    child for child in entries if not child.is_dir() or child.is_symlink()
+                    child
+                    for child in entries
+                    if (
+                        not child.is_dir()
+                        or child.is_symlink()
+                        or a1_artifacts._path_is_reparse_point(child)
+                    )
                 )
                 raise OSError(
                     f"unexpected source materialization residue: {residue.name}"
@@ -985,8 +1098,87 @@ def _cleanup_clean_source_materialization_failure(
             run_id=run_id,
             committed_paths=[],
             primary_error=diagnostic,
+            stage=stage,
         )
     raise primary_error
+
+
+def _cleanup_process_control_initialization_failure(
+    root: Path,
+    *,
+    run_id: str,
+    allocation_token: str,
+    lock_token: str,
+    control_error: BaseException,
+    sandbox_marker_created: bool,
+    run_dir_created: bool,
+) -> None:
+    """Best-effort cleanup that never converts process-control flow to CLI JSON."""
+
+    try:
+        _cleanup_clean_source_materialization_failure(
+            root,
+            run_id=run_id,
+            allocation_token=allocation_token,
+            lock_token=lock_token,
+            primary_error=control_error,
+            stage="run_initialization",
+            sandbox_marker_created=sandbox_marker_created,
+            run_dir_created=run_dir_created,
+        )
+    except BaseException as cleanup_result:
+        if cleanup_result is control_error:
+            return
+        add_note = getattr(control_error, "add_note", None)
+        if callable(add_note):
+            add_note(
+                "Run initialization cleanup required recovery evidence: "
+                f"{type(cleanup_result).__name__}: {cleanup_result}"
+            )
+
+
+def _attempt_lock_matches(root: Path, allocation_token: str, lock_token: str) -> bool:
+    try:
+        current = read_existing_active_run_lock(root)
+    except Exception:
+        return False
+    return (
+        current.get("allocation_token") == allocation_token
+        and current.get("lock_token") == lock_token
+    )
+
+
+def _cleanup_owned_allocation_lock(
+    root: Path,
+    *,
+    allocation_token: str,
+    lock_token: str,
+) -> None:
+    identity = (
+        os.path.normcase(str(root.absolute())),
+        allocation_token,
+        lock_token,
+    )
+    try:
+        current = read_existing_active_run_lock(root)
+        if (
+            current.get("allocation_token") != allocation_token
+            or current.get("lock_token") != lock_token
+            or current.get("phase") != "allocating"
+        ):
+            raise OSError("Active Run Lock ownership changed during Run initialization")
+        lock_path = root / "runs" / ".active_run.lock"
+        expected_bytes = lock_path.read_bytes()
+        diagnostics = _cleanup_failed_acquisition(
+            lock_path,
+            root / "runs",
+            expected_bytes,
+            lock_token,
+        )
+        if diagnostics:
+            raise OSError("; ".join(diagnostics))
+    finally:
+        _PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES.discard(identity)
 
 
 def _validate_resume_input_capture(
