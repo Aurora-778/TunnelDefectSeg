@@ -1,9 +1,24 @@
 # TunnelDefect 工程 Agent 化 CEPlan v6 Review 关闭表
 
 > 对应计划：`docs/plans/2026-07-20-001-feat-inspection-engineering-agent-phase-a-plan.md`
-> 基线：Git `main@7203da7`
-> 状态：历次 Review 问题已写入计划；最新修订仅条件关闭，Phase 0 schema review 尚未完成
-> 更新日期：2026-07-20
+> 基线：Git `origin/main@7ea3825`（计划原始基线为 `main@7203da7`）
+> 状态：设计合同已完成多轮 Review；Phase A1/A2/A3 已实现并合入，完整验收复跑待补；Phase E（Web Manifest reader）仍未开始
+> 更新日期：2026-08-01
+
+## 0.1 执行状态增补（2026-08-01）
+
+本节覆盖本表早期“只记录计划、不代表实现”的历史说明。第 2 节及其子节保留各轮 Review 的入场状态和设计理由；实施状态以本节、Git 提交和当前测试文件为准。
+
+|阶段|当前状态|实现/验收证据|剩余工作|
+|---|---|---|---|
+|Phase 0 合同与边界|已落盘|`config/inspection_workflow.yaml`、有效/无效 task fixtures、Claim/Publication/StateStore 合同文档已存在|把机器 schema review 结果逐项回填到本表|
+|Phase A1 Evidence + Claim Gate|已实现|A1 提交链：`fbeff2c` → `1382903`；Claim Decision、Comparison Evidence、受门控报告及隔离测试已纳入|按当前文件名重跑专项验收并记录结果|
+|Phase A2 Publication|已实现|`da2f5ea`、`615e090`、`c8f83fd` 等提交；Run-local staging、Manifest-last transaction、恢复/回滚测试已纳入|完成一次不受超时限制的专项回归，补充结果链接/日志|
+|Phase A3 State/Lock/WAL + 双入口|已实现|`a92501f` → `3706083` 及后续 fencing/recovery 修复；Controller、Active Run Lock、Canonical State、CAS/WAL、Prepared/Legacy 生命周期已接入|完成全量故障注入验收复跑；保留失败即 Fail Closed 约束|
+|Phase A 最终验收|部分完成|`7ea3825` 已补齐 CLI、发布、history-only/no-id、Claim 和恢复边界覆盖|当前验收命令中部分旧文件名已重命名；本次复跑在 64 秒上限内未完成，不能标记“全量通过”|
+|Phase E Web Manifest reader|未开始|计划明确将现有 Web 保持 legacy reader|另立 Phase E 计划，不纳入 Phase A 完成度|
+
+当前工作树另有 Web/视频/工作流 WIP（未纳入上述提交）；本次计划更新不修改、不提交这些文件。
 
 ## 1. 使用说明
 
@@ -211,14 +226,15 @@
 
 ## 7. 当前阻断项
 
-- [ ] 创建 Phase 0 五份合同文档。
-- [ ] 创建 `config/inspection_workflow.yaml`。
-- [ ] 创建有效与无效 task fixture。
-- [ ] 对 ClaimDecision、Comparison Evidence、Publication Manifest 和 StateStore API 做 schema review。
-- [ ] 对 baseline/current-only、不可比较输入、物理量、多时点、Manifest 首次发布/提交后崩溃、allocation 各窗口和 unresolved pending 建立反例。
-- [ ] 明确现有 Web/视频 WIP 的隔离方式。
-- [ ] 对计划最终自检逐项给出代码或测试证据。
+- [x] Phase 0 合同、`config/inspection_workflow.yaml` 及有效/无效 task fixture 已落盘；后续只需把逐项 schema review 结果回填到本表。
+- [x] A1/A2/A3 代码、测试和分段提交已完成；不得因本表历史条目仍写“待实施”而重复开工或扩大范围。
+- [ ] 按当前仓库文件名重跑并记录 Phase A 专项验收；计划原命令中的部分测试路径已失效，需要先更新命令清单。
+- [ ] 对本次专项验收未覆盖或超时的故障注入项补跑；任何 P0/P1 失败都保持 Phase A “部分完成”。
+- [ ] 明确并持续隔离现有 Web/视频 WIP；不得把这些未提交改动混入 Phase A 提交。
+- [ ] 对计划最终自检逐项补充代码、测试或“未适用/后续 Phase E”证据。
 
 ## 8. 结论
 
-本轮 Review 指出的合同矛盾已进入 CEPlan，但整体计划仍只是“条件关闭”。当前只允许进入 Phase 0 合同与 schema review，不允许直接开始 Phase A1，更不能宣布 Phase A、Web Manifest 接入或工程 Agent 闭环已经完成。
+本轮 Review 指出的合同矛盾已进入 CEPlan；截至 2026-08-01，Phase 0 合同已落盘，Phase A1/A2/A3 已实现并有对应提交与测试覆盖，且最新提交已补充最终 CLI/发布/Claim/恢复验收断言。由于本次专项回归未在执行时限内完成，当前应表述为“Phase A 已实现、最终验收待复跑”，不得表述为“全量验收通过”。
+
+Phase E 的 Web Manifest reader 尚未开始；现有 Web 仍是 legacy reader。工作区中的 Web、视频和工作流 WIP 不属于本计划完成证据，必须继续隔离。
