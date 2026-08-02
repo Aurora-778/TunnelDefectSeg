@@ -136,6 +136,14 @@ def _json_output(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     return json.loads(result.stdout)
 
 
+def _run_controller(module: Any, root: Path, task: Mapping[str, Any]) -> Mapping[str, Any]:
+    return module.InspectionWorkflowController.run_prepared_task(
+        root,
+        task_request=task,
+        run_id=RUN_ID,
+    )
+
+
 def test_plan_only_is_deterministic_and_has_no_side_effects(tmp_path: Path) -> None:
     root, _ = _sandbox(tmp_path)
     before = _snapshot(root)
@@ -817,6 +825,375 @@ def test_clean_run_initialization_failures_leave_no_unmarked_artifacts(
     assert not (root / "runs" / ".active_run.lock").exists()
     assert not (root / "runs" / RUN_ID).exists()
     assert not (root / ".phase_a1_sandbox.json").exists()
+
+
+@pytest.mark.parametrize(
+    "control_error",
+    [KeyboardInterrupt("source write interrupted"), SystemExit(23)],
+)
+def test_process_control_before_first_source_write_cleans_up_and_allows_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    control_error: BaseException,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    original_write = module.lifecycle.a1_artifacts.write_phase_a1_work_artifact
+
+    def stop_before_write(*args: Any, **kwargs: Any) -> bool:
+        raise control_error
+
+    monkeypatch.setattr(
+        module.lifecycle.a1_artifacts,
+        "write_phase_a1_work_artifact",
+        stop_before_write,
+    )
+    with pytest.raises(type(control_error)) as captured:
+        _run_controller(module, root, task)
+
+    assert captured.value is control_error
+    assert _snapshot(root / "data") == source_before
+    assert not (root / "runs" / ".active_run.lock").exists()
+    assert not (root / "runs" / RUN_ID).exists()
+    assert not (root / ".phase_a1_sandbox.json").exists()
+    assert not (root / "outputs").exists()
+    assert not (root / "logs").exists()
+
+    monkeypatch.setattr(
+        module.lifecycle.a1_artifacts,
+        "write_phase_a1_work_artifact",
+        original_write,
+    )
+    retry_result = _run_controller(module, root, task)
+    assert retry_result["status"] == "COMPLETED"
+
+
+def test_keyboard_interrupt_after_first_source_commit_preserves_exact_commit_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    original_write = module.lifecycle.a1_artifacts.write_phase_a1_work_artifact
+    interrupt = KeyboardInterrupt("interrupt after first source commit")
+    calls = {"count": 0}
+
+    def commit_one_then_interrupt(*args: Any, **kwargs: Any) -> bool:
+        if calls["count"] == 0:
+            calls["count"] += 1
+            return original_write(*args, **kwargs)
+        raise interrupt
+
+    monkeypatch.setattr(
+        module.lifecycle.a1_artifacts,
+        "write_phase_a1_work_artifact",
+        commit_one_then_interrupt,
+    )
+    with pytest.raises(KeyboardInterrupt) as captured:
+        _run_controller(module, root, task)
+
+    marker_path = root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    first_relative = f"runs/{RUN_ID}/work/raw_prepared/preparation_manifest.json"
+    assert captured.value is interrupt
+    assert marker["stage"] == "source_materialization"
+    assert marker["committed_paths"] == [first_relative]
+    assert (root / first_relative).is_file()
+    assert (root / "runs" / ".active_run.lock").is_file()
+    assert _snapshot(root / "data") == source_before
+    assert not (root / "outputs").exists()
+    assert not (root / "logs").exists()
+
+
+@pytest.mark.parametrize("recheck_scope", [1, 3])
+def test_keyboard_interrupt_during_source_recheck_preserves_commit_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recheck_scope: int,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    original_recheck = module.lifecycle._recheck_source_capture
+    interrupt = KeyboardInterrupt("source recheck interrupted")
+
+    def interrupt_selected_recheck(
+        project_root: Path, sources: list[Mapping[str, Any]]
+    ) -> None:
+        if len(sources) == recheck_scope:
+            raise interrupt
+        original_recheck(project_root, sources)
+
+    monkeypatch.setattr(
+        module.lifecycle,
+        "_recheck_source_capture",
+        interrupt_selected_recheck,
+    )
+    with pytest.raises(KeyboardInterrupt) as captured:
+        _run_controller(module, root, task)
+
+    marker = json.loads(
+        (
+            root
+            / "runs"
+            / RUN_ID
+            / "work"
+            / ".a1_recovery_required.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert captured.value is interrupt
+    assert marker["stage"] == "source_materialization"
+    assert len(marker["committed_paths"]) == recheck_scope
+    assert (root / "runs" / ".active_run.lock").is_file()
+    assert _snapshot(root / "data") == source_before
+    assert not (root / "outputs").exists()
+    assert not (root / "logs").exists()
+
+
+def test_system_exit_during_source_replace_does_not_claim_uncertain_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    original_replace = module.lifecycle.a1_artifacts.os.replace
+    exit_error = SystemExit(31)
+    target = (
+        root
+        / "runs"
+        / RUN_ID
+        / "work"
+        / "raw_prepared"
+        / "preparation_manifest.json"
+    )
+    injected = {"done": False}
+
+    def replace_then_exit(source: Any, destination: Any) -> None:
+        original_replace(source, destination)
+        if Path(destination) == target and not injected["done"]:
+            injected["done"] = True
+            raise exit_error
+
+    monkeypatch.setattr(module.lifecycle.a1_artifacts.os, "replace", replace_then_exit)
+    with pytest.raises(SystemExit) as captured:
+        _run_controller(module, root, task)
+
+    marker_path = root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert captured.value is exit_error
+    assert marker["stage"] == "source_materialization"
+    assert marker["committed_paths"] == []
+    assert target.is_file()
+    assert (root / "runs" / ".active_run.lock").is_file()
+    assert _snapshot(root / "data") == source_before
+    assert not (root / "outputs").exists()
+    assert not (root / "logs").exists()
+
+
+@pytest.mark.parametrize("commit_mode", ["none", "state_only", "complete"])
+def test_keyboard_interrupt_during_state_initialization_preserves_state_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    commit_mode: str,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    original_initialize = module.lifecycle.StateStore.initialize_run
+    interrupt = KeyboardInterrupt("state initialization interrupted")
+
+    if commit_mode == "state_only":
+        monkeypatch.setattr(
+            module.lifecycle.StateStore,
+            "_write_anchor",
+            lambda *args, **kwargs: (_ for _ in ()).throw(interrupt),
+        )
+    else:
+        def stop_state_initialization(self: Any, *args: Any, **kwargs: Any) -> None:
+            if commit_mode == "complete":
+                original_initialize(self, *args, **kwargs)
+            raise interrupt
+
+        monkeypatch.setattr(
+            module.lifecycle.StateStore,
+            "initialize_run",
+            stop_state_initialization,
+        )
+    with pytest.raises(KeyboardInterrupt) as captured:
+        _run_controller(module, root, task)
+
+    run_dir = root / "runs" / RUN_ID
+    marker = json.loads(
+        (run_dir / "work" / ".a1_recovery_required.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert captured.value is interrupt
+    assert marker["stage"] == "state_initialization"
+    assert len(marker["committed_paths"]) == 3
+    assert (run_dir / "state.json").is_file() is (commit_mode != "none")
+    assert (run_dir / "state_journal_tail.json").is_file() is (commit_mode == "complete")
+    assert not (run_dir / "state_journal.jsonl").exists()
+    assert (root / "runs" / ".active_run.lock").is_file()
+    assert _snapshot(root / "data") == source_before
+    assert not (root / "outputs").exists()
+    assert not (root / "logs").exists()
+
+
+@pytest.mark.parametrize("activation_mode", ["before", "after", "after_replace"])
+def test_process_control_during_run_activation_preserves_lock_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    activation_mode: str,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    original_activate = module.lifecycle.mark_active_run_running
+    control_error: BaseException = (
+        SystemExit(37)
+        if activation_mode == "before"
+        else KeyboardInterrupt("run activation interrupted")
+    )
+
+    if activation_mode == "after_replace":
+        from orchestrator.inspection_workflow import locking
+
+        lock_path = root / "runs" / ".active_run.lock"
+        original_replace = locking.os.replace
+
+        def replace_lock_then_interrupt(source: Any, destination: Any) -> None:
+            should_interrupt = (
+                Path(destination) == lock_path
+                and b'"phase":"running"' in Path(source).read_bytes()
+            )
+            original_replace(source, destination)
+            if should_interrupt:
+                raise control_error
+
+        monkeypatch.setattr(locking.os, "replace", replace_lock_then_interrupt)
+    else:
+        def stop_run_activation(*args: Any, **kwargs: Any) -> None:
+            if activation_mode == "after":
+                original_activate(*args, **kwargs)
+            raise control_error
+
+        monkeypatch.setattr(
+            module.lifecycle,
+            "mark_active_run_running",
+            stop_run_activation,
+        )
+    with pytest.raises(type(control_error)) as captured:
+        _run_controller(module, root, task)
+
+    marker = json.loads(
+        (
+            root
+            / "runs"
+            / RUN_ID
+            / "work"
+            / ".a1_recovery_required.json"
+        ).read_text(encoding="utf-8")
+    )
+    lock = json.loads(
+        (root / "runs" / ".active_run.lock").read_text(encoding="utf-8")
+    )
+    assert captured.value is control_error
+    assert marker["stage"] == "run_activation"
+    assert len(marker["committed_paths"]) == 3
+    assert lock["phase"] == ("allocating" if activation_mode == "before" else "running")
+    assert (root / "runs" / RUN_ID / "state.json").is_file()
+    assert (root / "runs" / RUN_ID / "state_journal_tail.json").is_file()
+    assert _snapshot(root / "data") == source_before
+    assert not (root / "outputs").exists()
+    assert not (root / "logs").exists()
+
+
+def test_recovery_marker_failure_does_not_replace_process_control_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    interrupt = KeyboardInterrupt("state initialization interrupted")
+
+    monkeypatch.setattr(
+        module.lifecycle.StateStore,
+        "initialize_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(interrupt),
+    )
+    monkeypatch.setattr(
+        module.lifecycle.a1_artifacts,
+        "_raise_recovery_required",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            module.lifecycle.a1_artifacts.PhaseA1ArtifactError(
+                "injected recovery marker failure"
+            )
+        ),
+    )
+    with pytest.raises(KeyboardInterrupt) as captured:
+        _run_controller(module, root, task)
+
+    run_dir = root / "runs" / RUN_ID
+    assert captured.value is interrupt
+    assert not (run_dir / "work" / ".a1_recovery_required.json").exists()
+    assert len(list((run_dir / "work" / "raw_prepared").glob("*"))) == 3
+    assert (root / "runs" / ".active_run.lock").is_file()
+    assert any(
+        "state_initialization required recovery evidence" in note
+        and "injected recovery marker failure" in note
+        for note in interrupt.__notes__
+    )
+    assert _snapshot(root / "data") == source_before
+    assert not (root / "outputs").exists()
+    assert not (root / "logs").exists()
+
+
+def test_cleanup_failure_does_not_replace_process_control_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    interrupt = KeyboardInterrupt("source write interrupted")
+
+    monkeypatch.setattr(
+        module.lifecycle.a1_artifacts,
+        "write_phase_a1_work_artifact",
+        lambda *args, **kwargs: (_ for _ in ()).throw(interrupt),
+    )
+    monkeypatch.setattr(
+        module.lifecycle,
+        "_cleanup_owned_allocation_lock",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            OSError("injected allocation cleanup failure")
+        ),
+    )
+    with pytest.raises(KeyboardInterrupt) as captured:
+        _run_controller(module, root, task)
+
+    marker = json.loads(
+        (
+            root
+            / "runs"
+            / RUN_ID
+            / "work"
+            / ".a1_recovery_required.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert captured.value is interrupt
+    assert marker["stage"] == "source_materialization"
+    assert marker["committed_paths"] == []
+    assert (root / "runs" / ".active_run.lock").is_file()
+    assert any("cleanup required recovery evidence" in note for note in interrupt.__notes__)
+    assert _snapshot(root / "data") == source_before
+    assert not (root / "outputs").exists()
+    assert not (root / "logs").exists()
 
 
 def test_keyboard_interrupt_after_uncertain_sandbox_initialization_marks_recovery_then_propagates(

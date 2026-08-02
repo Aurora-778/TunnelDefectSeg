@@ -493,7 +493,16 @@ async def _run_lifecycle_async(
                     "resolved_input_descriptor_sha256": descriptor_sha256,
                 },
             )
-        except Exception as exc:
+        except BaseException as exc:
+            if not isinstance(exc, Exception):
+                _preserve_process_control_recovery(
+                    root,
+                    run_id=run_id,
+                    committed_paths=committed_source_paths,
+                    control_error=exc,
+                    stage="state_initialization",
+                )
+                raise
             _raise_source_materialization_recovery(
                 root,
                 run_id=run_id,
@@ -508,7 +517,16 @@ async def _run_lifecycle_async(
                 expected_allocation_token=allocation_token,
                 expected_lock_token=lock_token,
             )
-        except Exception as exc:
+        except BaseException as exc:
+            if not isinstance(exc, Exception):
+                _preserve_process_control_recovery(
+                    root,
+                    run_id=run_id,
+                    committed_paths=committed_source_paths,
+                    control_error=exc,
+                    stage="run_activation",
+                )
+                raise
             _raise_source_materialization_recovery(
                 root,
                 run_id=run_id,
@@ -930,7 +948,30 @@ def _materialize_source_capture(
             )
             if wrote:
                 committed_paths.append(relative_path)
-        except Exception as exc:
+        except BaseException as exc:
+            if not isinstance(exc, Exception):
+                if committed_paths or _source_materialization_has_file_residue(
+                    root, run_id=run_id
+                ):
+                    _preserve_process_control_recovery(
+                        root,
+                        run_id=run_id,
+                        committed_paths=committed_paths,
+                        control_error=exc,
+                        stage="source_materialization",
+                    )
+                else:
+                    _cleanup_process_control_initialization_failure(
+                        root,
+                        run_id=run_id,
+                        allocation_token=allocation_token,
+                        lock_token=lock_token,
+                        control_error=exc,
+                        sandbox_marker_created=sandbox_marker_created,
+                        run_dir_created=run_dir_created,
+                        stage="source_materialization",
+                    )
+                raise
             if (
                 not committed_paths
                 and not a1_artifacts._write_failure_requires_recovery(exc)
@@ -955,7 +996,16 @@ def _materialize_source_capture(
             raise
         try:
             _recheck_source_capture(root, [source])
-        except Exception as exc:
+        except BaseException as exc:
+            if not isinstance(exc, Exception):
+                _preserve_process_control_recovery(
+                    root,
+                    run_id=run_id,
+                    committed_paths=committed_paths,
+                    control_error=exc,
+                    stage="source_materialization",
+                )
+                raise
             _raise_source_materialization_recovery(
                 root,
                 run_id=run_id,
@@ -964,7 +1014,16 @@ def _materialize_source_capture(
             )
     try:
         _recheck_source_capture(root, sources)
-    except Exception as exc:
+    except BaseException as exc:
+        if not isinstance(exc, Exception):
+            _preserve_process_control_recovery(
+                root,
+                run_id=run_id,
+                committed_paths=committed_paths,
+                control_error=exc,
+                stage="source_materialization",
+            )
+            raise
         _raise_source_materialization_recovery(
             root,
             run_id=run_id,
@@ -986,12 +1045,22 @@ def _recheck_source_capture(root: Path, sources: list[Mapping[str, Any]]) -> Non
             )
 
 
+def _source_materialization_has_file_residue(root: Path, *, run_id: str) -> bool:
+    """Conservatively detect a write that may have started before control flow stopped."""
+
+    run_dir = root / "runs" / run_id
+    try:
+        return any(entry.is_file() for entry in run_dir.rglob("*"))
+    except (OSError, ValueError):
+        return True
+
+
 def _raise_source_materialization_recovery(
     root: Path,
     *,
     run_id: str,
     committed_paths: list[str],
-    primary_error: Exception,
+    primary_error: BaseException,
     stage: str = "source_materialization",
 ) -> None:
     try:
@@ -1112,6 +1181,7 @@ def _cleanup_process_control_initialization_failure(
     control_error: BaseException,
     sandbox_marker_created: bool,
     run_dir_created: bool,
+    stage: str = "run_initialization",
 ) -> None:
     """Best-effort cleanup that never converts process-control flow to CLI JSON."""
 
@@ -1122,7 +1192,7 @@ def _cleanup_process_control_initialization_failure(
             allocation_token=allocation_token,
             lock_token=lock_token,
             primary_error=control_error,
-            stage="run_initialization",
+            stage=stage,
             sandbox_marker_created=sandbox_marker_created,
             run_dir_created=run_dir_created,
         )
@@ -1132,8 +1202,35 @@ def _cleanup_process_control_initialization_failure(
         add_note = getattr(control_error, "add_note", None)
         if callable(add_note):
             add_note(
-                "Run initialization cleanup required recovery evidence: "
+                f"{stage} cleanup required recovery evidence: "
                 f"{type(cleanup_result).__name__}: {cleanup_result}"
+            )
+
+
+def _preserve_process_control_recovery(
+    root: Path,
+    *,
+    run_id: str,
+    committed_paths: list[str],
+    control_error: BaseException,
+    stage: str,
+) -> None:
+    """Write recovery evidence without replacing process-control flow."""
+
+    try:
+        _raise_source_materialization_recovery(
+            root,
+            run_id=run_id,
+            committed_paths=committed_paths,
+            primary_error=control_error,
+            stage=stage,
+        )
+    except BaseException as recovery_result:
+        add_note = getattr(control_error, "add_note", None)
+        if callable(add_note):
+            add_note(
+                f"{stage} required recovery evidence: "
+                f"{type(recovery_result).__name__}: {recovery_result}"
             )
 
 

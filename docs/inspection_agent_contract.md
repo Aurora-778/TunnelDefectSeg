@@ -182,7 +182,18 @@ Phase 0 validates the frozen output names and unambiguous task identifiers. A3 P
   write-state-uncertain failures create a Run-local work recovery marker that
   blocks readers and reruns until explicit inspection; any directory entry at
   the marker path, or inability to inspect that path, is treated as a blocking
-  sentinel.
+  sentinel. `KeyboardInterrupt` and `SystemExit` retain their original exception
+  identity across Prepared source materialization, State initialization, and
+  Active Lock activation. A provable zero-commit source interruption removes only
+  the owned empty Run, sandbox marker, and allocating lock. Once a Run-local work
+  file is confirmed committed, a write may have reached replace, State/anchor
+  initialization has begun, or running-lock activation has begun, the lifecycle
+  preserves existing evidence and writes `.a1_recovery_required.json` with stage
+  `source_materialization`, `state_initialization`, or `run_activation`.
+  `committed_paths` lists only work files whose write call returned success; an
+  uncertain current target is not promoted to committed. Recovery-marker or
+  cleanup failures are supplemental exception diagnostics and never replace the
+  original process-control exception.
 - The current single-sequence A1 pilot accepts at most 31 inspection rounds
   (252 complete V4 references); round 32 would require 260 and is rejected
   before work materialization.
