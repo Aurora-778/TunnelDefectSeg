@@ -87,7 +87,7 @@ http://127.0.0.1:8000/
 
 如果图片或图表无法显示，可先确认 `outputs/visualizations/` 下存在 PNG 文件，并重启 Web 服务后刷新浏览器。
 
-## 4. 运行视频 demo 展示闭环
+## 4. 运行视频 demo 展示流程
 
 当前版本提供本地视频 demo 展示流程。该流程使用 KICT 静态图像 / mask 合成 `tunnel_demo.mp4`，并生成视频抽帧、视频巡检元数据、视频病害几何特征、OpenCV 标注帧、OpenCV 标注视频和可选 Supervision 标注视频。
 
@@ -128,13 +128,13 @@ python scripts/validate_video_artifacts.py --video_id tunnel_demo
 
 ## 4.1 运行受控巡检工作流（高级功能）
 
-受控工作流用于对已准备的任务请求执行固定的离线分析闭环。任务请求必须是受控临时沙箱内的 `inspection_task_v1` JSON 文件；先使用 `--plan-only` 检查计划：
+受控工作流用于对已准备的任务请求执行固定的离线分析流程。任务请求必须是受控临时沙箱内的 `inspection_task_v1` JSON 文件；先使用 `--plan-only` 检查计划：
 
 ```bash
 python scripts/run_inspection_workflow.py --project-root C:/path/to/controlled-sandbox --task-file tasks/task.json --run-id run_001 --plan-only
 ```
 
-计划通过后去掉 `--plan-only` 执行。系统会固定输入快照、记录任务状态和操作日志，并发布带清单的最终产物；遇到恢复标志、状态冲突或输入漂移会停止执行并保留审计证据，应交由受控维护流程处理，不应强行删除运行目录。当前 CLI 不提供普通用户恢复命令。该功能不通过 Web Dashboard 在线启动，也不等同于生产调度服务。
+计划通过后去掉 `--plan-only` 执行。系统会固定输入快照、记录任务状态和操作日志，并发布带清单的最终产物；发现异常、状态冲突或输入漂移即阻断并保留审计证据，交由受控维护流程处理，不应强行删除运行目录。当前 CLI 不提供普通用户恢复命令。该功能不通过 Web Dashboard 在线启动，也不等同于生产调度服务。
 
 ## 5. 查看系统总览
 

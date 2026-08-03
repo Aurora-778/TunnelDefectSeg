@@ -180,12 +180,12 @@ Web Dashboard 支持以下展示功能：
 - 规则面积变化提示；
 - 重点复检清单；
 - 可视化图表；
-- 单图检测和现场复核入口；
+- 单图离线检测和复核入口（需模型环境）；
 - 视频分析结果页面，包括 demo video、OpenCV 标注视频、Supervision 标注视频和相关 CSV 表格；
 - 已生成 JSON/demo 路线级时空报告、defect track 和带声明边界的复检队列；
 - KICT 静态数据与仿真巡检元数据边界说明。
 
-当前 Web Dashboard 为本地演示和结果查看界面，后续可扩展为上传数据、异步分析和任务状态查看流程。
+当前 Web Dashboard 为本地演示和结果查看界面；后续如扩展数据导入或任务状态查看，也应保持本地、离线和受控边界。
 
 ## 10. 输出结果说明
 
@@ -208,7 +208,7 @@ Web Dashboard 支持以下展示功能：
 - `outputs/video_inspection/<video_id>/supervision_annotated_video.mp4`：Supervision 可选标注视频；
 - `outputs/video_inspection/<video_id>/video_visualization_manifest.csv`：视频可视化产物清单。
 - `web_demo/assets/robot_route_report.json`：路线级时空分析展示用 JSON 报告。
-- 受控工作流在隔离运行目录中产生任务状态、操作日志、发布清单和最终报告；这些运行产物用于审计与恢复，不作为在线服务接口。
+- 受控工作流在隔离运行目录中产生任务状态、操作日志、发布清单和最终报告；这些运行产物仅用于审计，异常应阻断并交由受控维护流程处理，不作为在线服务接口。
 
 ## 11. 软件特点
 
