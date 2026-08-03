@@ -144,6 +144,349 @@ def _run_controller(module: Any, root: Path, task: Mapping[str, Any]) -> Mapping
     )
 
 
+class _InterruptingFile:
+    def __init__(
+        self,
+        handle: Any,
+        *,
+        operation: str,
+        control_error: BaseException,
+        observed: dict[str, Any],
+    ) -> None:
+        self._handle = handle
+        self._operation = operation
+        self._control_error = control_error
+        self._observed = observed
+
+    def __enter__(self) -> "_InterruptingFile":
+        self._handle.__enter__()
+        return self
+
+    def __exit__(self, *args: Any) -> Any:
+        return self._handle.__exit__(*args)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._handle, name)
+
+    def write(self, data: bytes) -> Any:
+        self._observed["data"] = data
+        if self._operation == "write_before":
+            raise self._control_error
+        if self._operation == "write_during":
+            self._handle.write(data[: max(1, len(data) // 2)])
+            raise self._control_error
+        return self._handle.write(data)
+
+    def flush(self) -> Any:
+        if self._operation == "flush":
+            raise self._control_error
+        return self._handle.flush()
+
+
+def _assert_control_failure_boundary(
+    root: Path,
+    *,
+    source_before: Mapping[str, bytes | None],
+    stage: str,
+    committed_paths: list[str],
+) -> dict[str, Any]:
+    marker_path = root / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker["stage"] == stage
+    assert marker["committed_paths"] == sorted(committed_paths)
+    assert _snapshot(root / "data") == source_before
+    assert not (root / "outputs").exists()
+    assert not (root / "logs").exists()
+    return marker
+
+
+def _source_relative(name: str) -> str:
+    return f"runs/{RUN_ID}/work/raw_prepared/{name}"
+
+
+def _patch_source_io_window(
+    module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    target_name: str,
+    operation: str,
+    control_error: BaseException,
+) -> dict[str, Any]:
+    artifacts = module.lifecycle.a1_artifacts
+    original_named_temporary = artifacts.tempfile.NamedTemporaryFile
+    original_fsync = artifacts.os.fsync
+    original_replace = artifacts.os.replace
+    observed: dict[str, Any] = {
+        "target_fd": None,
+        "replace_called": False,
+        "injected": False,
+    }
+    target_path_suffix = f"/raw_prepared/{target_name}"
+
+    def named_temporary(*args: Any, **kwargs: Any) -> Any:
+        handle = original_named_temporary(*args, **kwargs)
+        if (
+            kwargs.get("prefix") != f".{target_name}."
+            or observed["injected"]
+        ):
+            return handle
+        observed["injected"] = True
+        observed["temporary"] = Path(handle.name)
+        observed["target_fd"] = handle.fileno()
+        if operation in {"write_before", "write_during", "flush"}:
+            return _InterruptingFile(
+                handle,
+                operation=operation,
+                control_error=control_error,
+                observed=observed,
+            )
+        return handle
+
+    def fsync(descriptor: int) -> None:
+        if (
+            operation == "fsync"
+            and descriptor == observed.get("target_fd")
+            and not observed.get("fsync_raised")
+        ):
+            observed["fsync_raised"] = True
+            raise control_error
+        original_fsync(descriptor)
+
+    def replace(source: Any, destination: Any) -> None:
+        destination_text = Path(destination).as_posix()
+        if destination_text.endswith(target_path_suffix) and observed["injected"]:
+            observed["replace_called"] = True
+            observed["data"] = Path(source).read_bytes()
+            if operation == "replace_before":
+                raise control_error
+            original_replace(source, destination)
+            if operation == "replace_after":
+                raise control_error
+            return
+        original_replace(source, destination)
+
+    monkeypatch.setattr(artifacts.tempfile, "NamedTemporaryFile", named_temporary)
+    monkeypatch.setattr(artifacts.os, "fsync", fsync)
+    monkeypatch.setattr(artifacts.os, "replace", replace)
+    return observed
+
+
+def _patch_state_io_window(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    target_name: str,
+    operation: str,
+    control_error: BaseException,
+) -> dict[str, Any]:
+    from orchestrator.state import store
+
+    original_mkstemp = store.tempfile.mkstemp
+    original_fdopen = store.os.fdopen
+    original_fsync = store.os.fsync
+    original_replace = store.os.replace
+    original_sync = store._sync_directory
+    original_read_regular = store.StateStore._read_regular
+    original_read_state = store.StateStore._read_state
+    original_read_anchor = store.StateStore._read_anchor
+    observed: dict[str, Any] = {
+        "target_fd": None,
+        "replace_called": False,
+        "replaced": False,
+    }
+    target_label = "canonical state" if target_name == "state.json" else "state journal tail"
+
+    def mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
+        descriptor, name = original_mkstemp(*args, **kwargs)
+        if kwargs.get("prefix") == f".{target_name}.":
+            observed["target_fd"] = descriptor
+            observed["temporary"] = Path(name)
+        return descriptor, name
+
+    def fdopen(descriptor: int, *args: Any, **kwargs: Any) -> Any:
+        handle = original_fdopen(descriptor, *args, **kwargs)
+        if descriptor != observed.get("target_fd"):
+            return handle
+        if operation in {"write_before", "write_during", "flush"}:
+            return _InterruptingFile(
+                handle,
+                operation=operation,
+                control_error=control_error,
+                observed=observed,
+            )
+        return _InterruptingFile(
+            handle,
+            operation="observe",
+            control_error=control_error,
+            observed=observed,
+        )
+
+    def fsync(descriptor: int) -> None:
+        if (
+            operation == "fsync"
+            and descriptor == observed.get("target_fd")
+            and not observed.get("fsync_raised")
+        ):
+            observed["fsync_raised"] = True
+            raise control_error
+        original_fsync(descriptor)
+
+    def replace(source: Any, destination: Any) -> None:
+        if Path(destination).name == target_name:
+            observed["replace_called"] = True
+            observed["data"] = Path(source).read_bytes()
+            if operation == "replace_before":
+                raise control_error
+            original_replace(source, destination)
+            observed["replaced"] = True
+            if operation == "replace_after":
+                raise control_error
+            return
+        original_replace(source, destination)
+
+    def sync_directory(path: Path, *, label: str) -> None:
+        if operation == "directory_sync" and label == f"{target_label} parent":
+            raise control_error
+        original_sync(path, label=label)
+
+    def read_regular(self: Any, path: Path, *, label: str) -> bytes:
+        if (
+            operation == "persisted_reread"
+            and observed["replaced"]
+            and path.name == target_name
+            and label == target_label
+        ):
+            raise control_error
+        return original_read_regular(self, path, label=label)
+
+    def read_state(self: Any, run_id: str) -> Any:
+        if operation == "final_read_state":
+            raise control_error
+        return original_read_state(self, run_id)
+
+    def read_anchor(self: Any, run_id: str, allocation_token: str) -> Any:
+        if operation == "final_read_anchor":
+            raise control_error
+        return original_read_anchor(self, run_id, allocation_token)
+
+    monkeypatch.setattr(store.tempfile, "mkstemp", mkstemp)
+    monkeypatch.setattr(store.os, "fdopen", fdopen)
+    monkeypatch.setattr(store.os, "fsync", fsync)
+    monkeypatch.setattr(store.os, "replace", replace)
+    monkeypatch.setattr(store, "_sync_directory", sync_directory)
+    monkeypatch.setattr(store.StateStore, "_read_regular", read_regular)
+    monkeypatch.setattr(store.StateStore, "_read_state", read_state)
+    monkeypatch.setattr(store.StateStore, "_read_anchor", read_anchor)
+    return observed
+
+
+def _patch_running_lock_io_window(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    operation: str,
+    control_error: BaseException,
+    cleanup_error: OSError | None = None,
+) -> dict[str, Any]:
+    from orchestrator.inspection_workflow import locking
+
+    original_mkstemp = locking.tempfile.mkstemp
+    original_fdopen = locking.os.fdopen
+    original_fsync = locking.os.fsync
+    original_replace = locking.os.replace
+    original_sync = locking._sync_directory
+    original_read_lock = locking._read_lock
+    original_unlink = Path.unlink
+    observed: dict[str, Any] = {
+        "target_fd": None,
+        "update_count": 0,
+        "activation_started": False,
+        "read_after_start": 0,
+        "replaced": False,
+    }
+
+    def mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
+        descriptor, name = original_mkstemp(*args, **kwargs)
+        if kwargs.get("prefix") == ".active-run-lock-":
+            observed["update_count"] += 1
+            if observed["update_count"] == 2:
+                observed["activation_started"] = True
+                observed["target_fd"] = descriptor
+                observed["temporary"] = Path(name)
+                observed["lock_before"] = (
+                    Path(kwargs["dir"]) / ".active_run.lock"
+                ).read_bytes()
+        return descriptor, name
+
+    def fdopen(descriptor: int, *args: Any, **kwargs: Any) -> Any:
+        handle = original_fdopen(descriptor, *args, **kwargs)
+        if descriptor != observed.get("target_fd"):
+            return handle
+        if operation in {"write_before", "write_during", "flush"}:
+            return _InterruptingFile(
+                handle,
+                operation=operation,
+                control_error=control_error,
+                observed=observed,
+            )
+        return _InterruptingFile(
+            handle,
+            operation="observe",
+            control_error=control_error,
+            observed=observed,
+        )
+
+    def fsync(descriptor: int) -> None:
+        if (
+            operation == "fsync"
+            and descriptor == observed.get("target_fd")
+            and not observed.get("fsync_raised")
+        ):
+            observed["fsync_raised"] = True
+            raise control_error
+        original_fsync(descriptor)
+
+    def read_lock(path: Path) -> Any:
+        if observed["activation_started"]:
+            observed["read_after_start"] += 1
+            if operation == "final_reread" and observed["read_after_start"] == 2:
+                raise control_error
+        return original_read_lock(path)
+
+    def replace(source: Any, destination: Any) -> None:
+        if observed["activation_started"] and Path(destination).name == ".active_run.lock":
+            observed["data"] = Path(source).read_bytes()
+            if operation == "replace_before":
+                raise control_error
+            original_replace(source, destination)
+            observed["replaced"] = True
+            if operation == "replace_after":
+                raise control_error
+            return
+        original_replace(source, destination)
+
+    def sync_directory(path: Path, *, label: str) -> None:
+        if (
+            operation == "directory_sync"
+            and observed["activation_started"]
+            and label == "runs directory after Active Run Lock update"
+        ):
+            raise control_error
+        original_sync(path, label=label)
+
+    def unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if cleanup_error is not None and path == observed.get("temporary"):
+            raise cleanup_error
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(locking.tempfile, "mkstemp", mkstemp)
+    monkeypatch.setattr(locking.os, "fdopen", fdopen)
+    monkeypatch.setattr(locking.os, "fsync", fsync)
+    monkeypatch.setattr(locking, "_read_lock", read_lock)
+    monkeypatch.setattr(locking.os, "replace", replace)
+    monkeypatch.setattr(locking, "_sync_directory", sync_directory)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    return observed
+
+
 def test_plan_only_is_deterministic_and_has_no_side_effects(tmp_path: Path) -> None:
     root, _ = _sandbox(tmp_path)
     before = _snapshot(root)
@@ -869,6 +1212,99 @@ def test_process_control_before_first_source_write_cleans_up_and_allows_retry(
     assert retry_result["status"] == "COMPLETED"
 
 
+@pytest.mark.parametrize(
+    ("operation", "control_error"),
+    [
+        ("write_before", KeyboardInterrupt("source temporary write not started")),
+        ("write_during", KeyboardInterrupt("source temporary write interrupted")),
+        ("flush", SystemExit(41)),
+        ("fsync", KeyboardInterrupt("source temporary fsync interrupted")),
+        ("replace_before", SystemExit(42)),
+        ("replace_after", KeyboardInterrupt("source replace returned late")),
+    ],
+)
+def test_process_control_in_source_atomic_io_window_preserves_exact_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    control_error: BaseException,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    target_name = "preparation_manifest.json"
+    target = root / _source_relative(target_name)
+    observed = _patch_source_io_window(
+        module,
+        monkeypatch,
+        target_name=target_name,
+        operation=operation,
+        control_error=control_error,
+    )
+
+    with pytest.raises(type(control_error)) as captured:
+        _run_controller(module, root, task)
+
+    assert captured.value is control_error
+    assert observed["injected"] is True
+    _assert_control_failure_boundary(
+        root,
+        source_before=source_before,
+        stage="source_materialization",
+        committed_paths=[],
+    )
+    assert target.is_file() is (operation == "replace_after")
+    assert observed["replace_called"] == (operation in {"replace_before", "replace_after"})
+    if target.exists():
+        assert target.read_bytes() == observed["data"]
+    temporary = observed.get("temporary")
+    assert temporary is not None
+    if operation == "replace_after":
+        assert not temporary.exists()
+    else:
+        assert temporary.exists()
+    assert (root / "runs" / ".active_run.lock").is_file()
+    assert not (root / "runs" / RUN_ID / "state.json").exists()
+    assert not (root / "runs" / RUN_ID / ".state.lock").exists()
+
+
+def test_keyboard_interrupt_during_third_source_write_preserves_first_two_commits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    interrupt = KeyboardInterrupt("third source temporary write interrupted")
+    observed = _patch_source_io_window(
+        module,
+        monkeypatch,
+        target_name="frame_records.csv",
+        operation="write_during",
+        control_error=interrupt,
+    )
+
+    with pytest.raises(KeyboardInterrupt) as captured:
+        _run_controller(module, root, task)
+
+    committed = [
+        _source_relative("preparation_manifest.json"),
+        _source_relative("observation_records.csv"),
+    ]
+    assert captured.value is interrupt
+    _assert_control_failure_boundary(
+        root,
+        source_before=source_before,
+        stage="source_materialization",
+        committed_paths=committed,
+    )
+    for relative in committed:
+        assert (root / relative).is_file()
+    assert not (root / _source_relative("frame_records.csv")).exists()
+    assert observed["temporary"].exists()
+    assert (root / "runs" / ".active_run.lock").is_file()
+
+
 def test_keyboard_interrupt_after_first_source_commit_preserves_exact_commit_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -993,6 +1429,85 @@ def test_system_exit_during_source_replace_does_not_claim_uncertain_target(
     assert not (root / "logs").exists()
 
 
+@pytest.mark.parametrize(
+    ("target_name", "operation", "control_error", "state_exists", "anchor_exists"),
+    [
+        ("state.json", "write_before", KeyboardInterrupt("state write not started"), False, False),
+        ("state.json", "write_during", KeyboardInterrupt("state write interrupted"), False, False),
+        ("state.json", "flush", SystemExit(51), False, False),
+        ("state.json", "fsync", KeyboardInterrupt("state fsync interrupted"), False, False),
+        ("state.json", "replace_before", SystemExit(52), False, False),
+        ("state.json", "replace_after", KeyboardInterrupt("state replace returned late"), True, False),
+        ("state.json", "directory_sync", SystemExit(53), True, False),
+        ("state.json", "persisted_reread", KeyboardInterrupt("state persisted reread interrupted"), True, False),
+        ("state_journal_tail.json", "write_before", KeyboardInterrupt("anchor write not started"), True, False),
+        ("state_journal_tail.json", "write_during", KeyboardInterrupt("anchor write interrupted"), True, False),
+        ("state_journal_tail.json", "flush", SystemExit(54), True, False),
+        ("state_journal_tail.json", "fsync", KeyboardInterrupt("anchor fsync interrupted"), True, False),
+        ("state_journal_tail.json", "replace_before", SystemExit(55), True, False),
+        ("state_journal_tail.json", "replace_after", KeyboardInterrupt("anchor replace returned late"), True, True),
+        ("state_journal_tail.json", "directory_sync", SystemExit(56), True, True),
+        ("state_journal_tail.json", "persisted_reread", KeyboardInterrupt("anchor persisted reread interrupted"), True, True),
+        ("state.json", "final_read_state", KeyboardInterrupt("state final consistency reread interrupted"), True, True),
+        ("state_journal_tail.json", "final_read_anchor", SystemExit(57), True, True),
+    ],
+)
+def test_process_control_in_state_initialization_io_window_preserves_exact_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_name: str,
+    operation: str,
+    control_error: BaseException,
+    state_exists: bool,
+    anchor_exists: bool,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    observed = _patch_state_io_window(
+        monkeypatch,
+        target_name=target_name,
+        operation=operation,
+        control_error=control_error,
+    )
+
+    with pytest.raises(type(control_error)) as captured:
+        _run_controller(module, root, task)
+
+    run_dir = root / "runs" / RUN_ID
+    assert captured.value is control_error
+    assert observed["target_fd"] is not None
+    assert observed["replace_called"] is (
+        operation
+        not in {"write_before", "write_during", "flush", "fsync"}
+    )
+    _assert_control_failure_boundary(
+        root,
+        source_before=source_before,
+        stage="state_initialization",
+        committed_paths=[
+            _source_relative("preparation_manifest.json"),
+            _source_relative("observation_records.csv"),
+            _source_relative("frame_records.csv"),
+        ],
+    )
+    assert (run_dir / "state.json").is_file() is state_exists
+    assert (run_dir / "state_journal_tail.json").is_file() is anchor_exists
+    assert not (run_dir / "state_journal.jsonl").exists()
+    assert not (run_dir / ".state.lock").exists()
+    assert (root / "runs" / ".active_run.lock").is_file()
+    if operation not in {"final_read_state", "final_read_anchor"}:
+        target = run_dir / target_name
+        if target.exists():
+            assert target.read_bytes() == observed["data"]
+        temporary = observed.get("temporary")
+        assert temporary is not None
+        # StateStore owns this temporary file and cleanly removes it for every
+        # deterministic control-interrupt path. A separate test covers the
+        # cleanup-failure branch where the temporary must remain as evidence.
+        assert not temporary.exists()
+
+
 @pytest.mark.parametrize("commit_mode", ["none", "state_only", "complete"])
 def test_keyboard_interrupt_during_state_initialization_preserves_state_evidence(
     tmp_path: Path,
@@ -1041,6 +1556,114 @@ def test_keyboard_interrupt_during_state_initialization_preserves_state_evidence
     assert _snapshot(root / "data") == source_before
     assert not (root / "outputs").exists()
     assert not (root / "logs").exists()
+
+
+@pytest.mark.parametrize(
+    ("operation", "control_error", "expected_phase"),
+    [
+        ("write_before", KeyboardInterrupt("running lock write not started"), "allocating"),
+        ("write_during", KeyboardInterrupt("running lock write interrupted"), "allocating"),
+        ("flush", SystemExit(61), "allocating"),
+        ("fsync", KeyboardInterrupt("running lock fsync interrupted"), "allocating"),
+        ("replace_before", SystemExit(62), "allocating"),
+        ("replace_after", KeyboardInterrupt("running lock replace returned late"), "running"),
+        ("directory_sync", SystemExit(63), "running"),
+        ("final_reread", KeyboardInterrupt("running lock final reread interrupted"), "running"),
+    ],
+)
+def test_process_control_in_running_lock_io_window_preserves_exact_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    control_error: BaseException,
+    expected_phase: str,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    observed = _patch_running_lock_io_window(
+        monkeypatch,
+        operation=operation,
+        control_error=control_error,
+    )
+
+    with pytest.raises(type(control_error)) as captured:
+        _run_controller(module, root, task)
+
+    run_dir = root / "runs" / RUN_ID
+    lock_path = root / "runs" / ".active_run.lock"
+    lock_bytes = lock_path.read_bytes()
+    lock = json.loads(lock_bytes)
+    assert captured.value is control_error
+    assert observed["activation_started"] is True
+    assert observed["target_fd"] is not None
+    assert observed["replaced"] is (
+        operation
+        not in {"write_before", "write_during", "flush", "fsync", "replace_before"}
+    )
+    _assert_control_failure_boundary(
+        root,
+        source_before=source_before,
+        stage="run_activation",
+        committed_paths=[
+            _source_relative("preparation_manifest.json"),
+            _source_relative("observation_records.csv"),
+            _source_relative("frame_records.csv"),
+        ],
+    )
+    assert lock["phase"] == expected_phase
+    assert lock_bytes == (
+        observed["data"] if expected_phase == "running" else observed["lock_before"]
+    )
+    assert (run_dir / "state.json").is_file()
+    assert (run_dir / "state_journal_tail.json").is_file()
+    assert not (run_dir / "state_journal.jsonl").exists()
+    assert not (run_dir / ".state.lock").exists()
+    temporary = observed.get("temporary")
+    assert temporary is not None
+    # The lock writer also cleans a deterministic temporary-file failure. The
+    # dedicated cleanup-failure test below verifies retained evidence instead.
+    assert not temporary.exists()
+
+
+def test_running_lock_control_interrupt_and_temporary_cleanup_failure_preserve_primary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, task = _sandbox(tmp_path)
+    module = _load_cli_module()
+    source_before = _snapshot(root / "data")
+    interrupt = KeyboardInterrupt("running lock write interrupted")
+    cleanup_error = OSError("injected running lock temporary cleanup failure")
+    observed = _patch_running_lock_io_window(
+        monkeypatch,
+        operation="write_during",
+        control_error=interrupt,
+        cleanup_error=cleanup_error,
+    )
+
+    with pytest.raises(KeyboardInterrupt) as captured:
+        _run_controller(module, root, task)
+
+    assert captured.value is interrupt
+    _assert_control_failure_boundary(
+        root,
+        source_before=source_before,
+        stage="run_activation",
+        committed_paths=[
+            _source_relative("preparation_manifest.json"),
+            _source_relative("observation_records.csv"),
+            _source_relative("frame_records.csv"),
+        ],
+    )
+    assert observed["temporary"].exists()
+    assert any(
+        "Active Run Lock update temporary cleanup failed" in note
+        and "injected running lock temporary cleanup failure" in note
+        for note in interrupt.__notes__
+    )
+    lock = json.loads((root / "runs" / ".active_run.lock").read_text(encoding="utf-8"))
+    assert lock["phase"] == "allocating"
 
 
 @pytest.mark.parametrize("activation_mode", ["before", "after", "after_replace"])
