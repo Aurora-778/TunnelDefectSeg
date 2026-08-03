@@ -204,6 +204,19 @@ def _source_relative(name: str) -> str:
     return f"runs/{RUN_ID}/work/raw_prepared/{name}"
 
 
+def _assert_materialized_source_bytes(
+    root: Path,
+    source_before: Mapping[str, bytes | None],
+    names: list[str],
+) -> None:
+    for name in names:
+        expected = source_before[
+            f"prepared_inspections/pilot_001/{name}"
+        ]
+        assert isinstance(expected, bytes)
+        assert (root / _source_relative(name)).read_bytes() == expected
+
+
 def _patch_source_io_window(
     module: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -292,6 +305,7 @@ def _patch_state_io_window(
         "target_fd": None,
         "replace_called": False,
         "replaced": False,
+        "replacement_bytes": {},
     }
     target_label = "canonical state" if target_name == "state.json" else "state journal tail"
 
@@ -300,6 +314,9 @@ def _patch_state_io_window(
         if kwargs.get("prefix") == f".{target_name}.":
             observed["target_fd"] = descriptor
             observed["temporary"] = Path(name)
+            observed["allocating_lock_bytes"] = (
+                Path(kwargs["dir"]).parent / ".active_run.lock"
+            ).read_bytes()
         return descriptor, name
 
     def fdopen(descriptor: int, *args: Any, **kwargs: Any) -> Any:
@@ -331,7 +348,10 @@ def _patch_state_io_window(
         original_fsync(descriptor)
 
     def replace(source: Any, destination: Any) -> None:
-        if Path(destination).name == target_name:
+        destination_name = Path(destination).name
+        if destination_name in {"state.json", "state_journal_tail.json"}:
+            observed["replacement_bytes"][destination_name] = Path(source).read_bytes()
+        if destination_name == target_name:
             observed["replace_called"] = True
             observed["data"] = Path(source).read_bytes()
             if operation == "replace_before":
@@ -411,8 +431,12 @@ def _patch_running_lock_io_window(
                 observed["activation_started"] = True
                 observed["target_fd"] = descriptor
                 observed["temporary"] = Path(name)
-                observed["lock_before"] = (
-                    Path(kwargs["dir"]) / ".active_run.lock"
+                runs_dir = Path(kwargs["dir"])
+                observed["lock_before"] = (runs_dir / ".active_run.lock").read_bytes()
+                run_dir = runs_dir / RUN_ID
+                observed["state_before_activation"] = (run_dir / "state.json").read_bytes()
+                observed["anchor_before_activation"] = (
+                    run_dir / "state_journal_tail.json"
                 ).read_bytes()
         return descriptor, name
 
@@ -1300,6 +1324,11 @@ def test_keyboard_interrupt_during_third_source_write_preserves_first_two_commit
     )
     for relative in committed:
         assert (root / relative).is_file()
+    _assert_materialized_source_bytes(
+        root,
+        source_before,
+        ["preparation_manifest.json", "observation_records.csv"],
+    )
     assert not (root / _source_relative("frame_records.csv")).exists()
     assert observed["temporary"].exists()
     assert (root / "runs" / ".active_run.lock").is_file()
@@ -1337,36 +1366,56 @@ def test_keyboard_interrupt_after_first_source_commit_preserves_exact_commit_evi
     assert marker["stage"] == "source_materialization"
     assert marker["committed_paths"] == [first_relative]
     assert (root / first_relative).is_file()
+    _assert_materialized_source_bytes(
+        root,
+        source_before,
+        ["preparation_manifest.json"],
+    )
     assert (root / "runs" / ".active_run.lock").is_file()
     assert _snapshot(root / "data") == source_before
     assert not (root / "outputs").exists()
     assert not (root / "logs").exists()
 
 
-@pytest.mark.parametrize("recheck_scope", [1, 3])
-def test_keyboard_interrupt_during_source_recheck_preserves_commit_evidence(
+@pytest.mark.parametrize(
+    ("target_name", "target_read_number", "committed_names"),
+    [
+        ("preparation_manifest.json", 2, ["preparation_manifest.json"]),
+        (
+            "frame_records.csv",
+            3,
+            [
+                "preparation_manifest.json",
+                "observation_records.csv",
+                "frame_records.csv",
+            ],
+        ),
+    ],
+)
+def test_keyboard_interrupt_during_source_recheck_preserves_exact_commit_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    recheck_scope: int,
+    target_name: str,
+    target_read_number: int,
+    committed_names: list[str],
 ) -> None:
     root, task = _sandbox(tmp_path)
     module = _load_cli_module()
     source_before = _snapshot(root / "data")
-    original_recheck = module.lifecycle._recheck_source_capture
     interrupt = KeyboardInterrupt("source recheck interrupted")
+    original_read_bytes = Path.read_bytes
+    target_path = root / "data" / "prepared_inspections" / "pilot_001" / target_name
+    observed = {"target_reads": 0, "injected": False}
 
-    def interrupt_selected_recheck(
-        project_root: Path, sources: list[Mapping[str, Any]]
-    ) -> None:
-        if len(sources) == recheck_scope:
-            raise interrupt
-        original_recheck(project_root, sources)
+    def interrupt_target_source_read(path: Path) -> bytes:
+        if path == target_path:
+            observed["target_reads"] += 1
+            if observed["target_reads"] == target_read_number:
+                observed["injected"] = True
+                raise interrupt
+        return original_read_bytes(path)
 
-    monkeypatch.setattr(
-        module.lifecycle,
-        "_recheck_source_capture",
-        interrupt_selected_recheck,
-    )
+    monkeypatch.setattr(Path, "read_bytes", interrupt_target_source_read)
     with pytest.raises(KeyboardInterrupt) as captured:
         _run_controller(module, root, task)
 
@@ -1380,8 +1429,11 @@ def test_keyboard_interrupt_during_source_recheck_preserves_commit_evidence(
         ).read_text(encoding="utf-8")
     )
     assert captured.value is interrupt
+    assert observed == {"target_reads": target_read_number, "injected": True}
     assert marker["stage"] == "source_materialization"
-    assert len(marker["committed_paths"]) == recheck_scope
+    expected_paths = sorted(_source_relative(name) for name in committed_names)
+    assert marker["committed_paths"] == expected_paths
+    _assert_materialized_source_bytes(root, source_before, committed_names)
     assert (root / "runs" / ".active_run.lock").is_file()
     assert _snapshot(root / "data") == source_before
     assert not (root / "outputs").exists()
@@ -1496,10 +1548,15 @@ def test_process_control_in_state_initialization_io_window_preserves_exact_evide
     assert not (run_dir / "state_journal.jsonl").exists()
     assert not (run_dir / ".state.lock").exists()
     assert (root / "runs" / ".active_run.lock").is_file()
+    for name, exists in (
+        ("state.json", state_exists),
+        ("state_journal_tail.json", anchor_exists),
+    ):
+        if exists:
+            assert (run_dir / name).read_bytes() == observed["replacement_bytes"][name]
+    lock_path = root / "runs" / ".active_run.lock"
+    assert lock_path.read_bytes() == observed["allocating_lock_bytes"]
     if operation not in {"final_read_state", "final_read_anchor"}:
-        target = run_dir / target_name
-        if target.exists():
-            assert target.read_bytes() == observed["data"]
         temporary = observed.get("temporary")
         assert temporary is not None
         # StateStore owns this temporary file and cleanly removes it for every
@@ -1615,8 +1672,10 @@ def test_process_control_in_running_lock_io_window_preserves_exact_evidence(
     assert lock_bytes == (
         observed["data"] if expected_phase == "running" else observed["lock_before"]
     )
-    assert (run_dir / "state.json").is_file()
-    assert (run_dir / "state_journal_tail.json").is_file()
+    assert (run_dir / "state.json").read_bytes() == observed["state_before_activation"]
+    assert (run_dir / "state_journal_tail.json").read_bytes() == observed[
+        "anchor_before_activation"
+    ]
     assert not (run_dir / "state_journal.jsonl").exists()
     assert not (run_dir / ".state.lock").exists()
     temporary = observed.get("temporary")
