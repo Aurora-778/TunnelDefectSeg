@@ -3,45 +3,70 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>隧道病害可信评估展示台</title>
+  <title>机器人隧道巡检病害监测系统</title>
   <style>
+    /* ============================================================
+       Theme: Liquid Glass (single source of truth)
+       Merged from the original report-paper base and the later
+       glass override layer. Every selector is defined exactly once;
+       layout and visual rules live in the same rule.
+       ============================================================ */
     :root {
-      --ink: #f4f7fb;
-      --paper: #0b1118;
-      --panel: rgba(249, 252, 255, 0.94);
-      --line: #17212b;
-      --muted: #8ea0b2;
-      --amber: #f4b942;
-      --cyan: #00a6a6;
-      --red: #d94a38;
-      --green: #1c8b5f;
-      --blue: #2f64b2;
-      --shadow: rgba(23, 33, 43, 0.16);
-      --glow: rgba(0, 166, 166, 0.26);
+      --text-light: #eef8ff;
+      --bg-dark: #071018;
+      --line: rgba(9, 24, 38, .22);
+      --muted: #5a7089;
+      --cyan: #00b6c7;
+      --amber: #f0b84f;
+      --red: #d85b52;
+      --green: #2e9a72;
+      --blue: #3578d4;
+      --glass: rgba(244, 250, 255, .70);
+      --glass-strong: rgba(250, 253, 255, .84);
+      --glass-dark: rgba(8, 18, 28, .58);
+      --glass-edge: rgba(88, 116, 139, .26);
+      --glass-line: rgba(88, 116, 139, .24);
+      --glass-shadow: 0 30px 100px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255,255,255,.58);
+      --glass-glow: 0 0 0 1px rgba(0, 182, 199, .24), 0 14px 46px rgba(0, 182, 199, .16);
     }
 
     * { box-sizing: border-box; }
 
+    /* Defensive overflow guard: some wide grids (DAG, tables) can push
+       past the viewport on small screens; clip horizontally rather than
+       letting the whole page scroll sideways. */
     html, body { overflow-x: hidden; }
 
     body {
       margin: 0;
-      color: #eaf1f8;
+      color: var(--text-light);
       background:
-        radial-gradient(circle at 8% 6%, rgba(0,166,166,.24), transparent 31%),
-        radial-gradient(circle at 86% 18%, rgba(244,185,66,.18), transparent 28%),
-        linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px) 0 0 / 28px 28px,
-        linear-gradient(0deg, rgba(255,255,255,0.03) 1px, transparent 1px) 0 0 / 28px 28px,
-        var(--paper);
-      font-family: "Geist", "Aptos", "Microsoft YaHei UI", sans-serif;
+        linear-gradient(135deg, rgba(4, 12, 19, .92), rgba(9, 24, 34, .78) 42%, rgba(23, 39, 52, .82)),
+        url("assets/t1_1_original.jpg") center top / cover,
+        var(--bg-dark);
+      font-family: "Aptos", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px) 0 0 / 36px 36px,
+        linear-gradient(0deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 36px 36px,
+        linear-gradient(180deg, rgba(255,255,255,.06), transparent 26%, rgba(0,0,0,.26));
+      mask-image: linear-gradient(180deg, rgba(0,0,0,.82), rgba(0,0,0,.2));
     }
 
     .shell {
-      width: min(1480px, calc(100% - 32px));
+      width: min(1520px, calc(100% - 40px));
       margin: 0 auto;
-      padding: 22px 0 42px;
+      padding: 20px 0 42px;
     }
 
+    /* ---------- top navigation (keeps backdrop blur by design) ---------- */
     .premium-nav {
       position: sticky;
       top: 14px;
@@ -50,14 +75,15 @@
       align-items: center;
       justify-content: space-between;
       gap: 20px;
-      width: min(1180px, 100%);
+      width: min(1240px, 100%);
       margin: 0 auto 36px;
-      padding: 10px 12px 10px 18px;
-      border: 1px solid rgba(255,255,255,.18);
+      padding: 10px 12px 10px 16px;
+      border: 1px solid rgba(255,255,255,.34);
       border-radius: 999px;
-      background: rgba(11,17,24,.72);
-      box-shadow: 0 24px 80px rgba(0,0,0,.32);
-      backdrop-filter: blur(18px);
+      background: linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,.08));
+      box-shadow: 0 22px 80px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.42);
+      backdrop-filter: blur(26px) saturate(1.65);
+      -webkit-backdrop-filter: blur(26px) saturate(1.65);
     }
 
     .nav-brand {
@@ -65,17 +91,21 @@
       align-items: center;
       gap: 10px;
       min-width: 0;
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       color: #fff;
       font-weight: 800;
+      letter-spacing: .01em;
+      text-shadow: 0 1px 16px rgba(0,0,0,.38);
     }
 
     .nav-mark {
       width: 28px;
       height: 28px;
       border-radius: 50%;
-      background: conic-gradient(from 120deg, var(--cyan), #fff, var(--amber), var(--cyan));
-      box-shadow: 0 0 24px rgba(0,166,166,.42);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.9), rgba(255,255,255,.18)),
+        conic-gradient(from 140deg, #9ff4ff, #fff2b0, #6ee1d1, #9ff4ff);
+      box-shadow: inset 0 1px 2px rgba(255,255,255,.78), 0 10px 30px rgba(0,182,199,.34);
       flex: none;
     }
 
@@ -85,36 +115,39 @@
       gap: 8px;
       flex-wrap: wrap;
       justify-content: flex-end;
+      padding: 3px;
+      border-radius: 999px;
+      background: rgba(6, 16, 25, .22);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
     }
 
     .nav-links a {
-      color: rgba(234,241,248,.78);
+      color: rgba(240, 248, 255, .78);
       text-decoration: none;
       font-size: 12px;
-      padding: 7px 10px;
+      padding: 8px 12px;
       border-radius: 999px;
+      transition: background .24s ease, color .24s ease, box-shadow .24s ease, transform .24s ease;
     }
 
     .nav-links a:hover {
-      background: rgba(255,255,255,.1);
+      background: rgba(255,255,255,.16);
       color: #fff;
+      transform: translateY(-1px);
     }
 
     .nav-links a.active {
-      background: rgba(0,166,166,.22);
       color: #fff;
-      box-shadow: inset 0 0 0 1px rgba(0,166,166,.55);
+      background: linear-gradient(135deg, rgba(255,255,255,.24), rgba(0,182,199,.26));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.42), 0 12px 34px rgba(0,182,199,.22);
     }
 
-    .app-view {
-      display: none;
-    }
+    /* ---------- view switching ---------- */
+    .app-view { display: none; }
 
-    .app-view.active-view {
-      display: block;
-    }
+    .app-view.active-view { display: block; }
 
-    header.app-view.active-view,
+    .quick-stats.app-view.active-view,
     .dashboard.app-view.active-view,
     .lower.app-view.active-view,
     .experiment-grid.app-view.active-view {
@@ -126,158 +159,79 @@
       display: none;
     }
 
-    .hero-chapter {
-      position: relative;
-      min-height: 560px;
-      display: grid;
-      grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr);
-      gap: 54px;
-      align-items: center;
-      margin-bottom: 34px;
-      padding: 56px;
-      border: 1px solid rgba(255,255,255,.16);
-      border-radius: 34px;
-      background:
-        linear-gradient(115deg, rgba(11,17,24,.92), rgba(11,17,24,.68)),
-        url("assets/t1_1_original.jpg") center / cover;
-      overflow: hidden;
-      box-shadow: 0 34px 120px rgba(0,0,0,.34);
-    }
-
-    .hero-chapter::before {
-      content: "";
-      position: absolute;
-      inset: auto -10% -32% 12%;
-      height: 340px;
-      background: radial-gradient(closest-side, rgba(0,166,166,.42), transparent 70%);
-      filter: blur(20px);
-      pointer-events: none;
-    }
-
-    .hero-copy,
-    .hero-media {
-      position: relative;
-      z-index: 1;
-      min-width: 0;
-    }
-
-    .hero-copy h1 {
-      width: min(100%, 1060px);
-      margin: 0;
-      font-size: clamp(3rem, 5vw, 5.75rem);
-      line-height: .98;
-      letter-spacing: 0;
-      color: #fff;
-      text-wrap: balance;
-    }
-
-    .inline-image {
-      display: inline-block;
-      width: clamp(74px, 9vw, 126px);
-      height: .54em;
-      margin: 0 .12em;
-      border-radius: 999px;
-      vertical-align: .02em;
-      background: url("assets/segformer_t1_1_selected_overlay.png") center / cover;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,.28);
-    }
-
-    .hero-copy p {
-      width: min(720px, 100%);
-      margin: 28px 0 0;
-      color: rgba(234,241,248,.78);
-      font-size: 18px;
-      line-height: 1.72;
-    }
-
-    .hero-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-top: 34px;
-    }
-
-    .hero-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 46px;
-      padding: 0 18px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,.24);
-      text-decoration: none;
-      font-weight: 800;
-    }
-
-    .hero-btn.primary {
-      background: #fff;
-      color: #101820;
-    }
-
-    .hero-btn.secondary {
-      background: rgba(255,255,255,.08);
-      color: #fff;
-    }
-
-    .hero-media {
-      align-self: stretch;
-      display: grid;
-      grid-template-rows: 1fr auto;
-      gap: 16px;
-    }
-
-    .media-card {
-      overflow: hidden;
-      border: 1px solid rgba(255,255,255,.18);
+    /* ---------- glass surfaces (no backdrop-filter: near-opaque fills
+       keep the frosted look without the repaint cost) ---------- */
+    .panel,
+    .brand,
+    .stat,
+    .robot-chart-panel,
+    .recheck-panel,
+    .defect-detail,
+    .distribution-card,
+    .data-card,
+    .metric,
+    .glossary-item,
+    .advantage-card,
+    .queue-panel,
+    .evidence-source,
+    .report-export {
+      border: 1px solid var(--glass-edge);
       border-radius: 26px;
-      background: rgba(255,255,255,.08);
-      box-shadow: 0 28px 90px rgba(0,0,0,.36);
+      background:
+        linear-gradient(145deg, rgba(255,255,255,.96), rgba(240,248,252,.94));
+      box-shadow: var(--glass-shadow);
     }
 
-    .media-card img {
-      width: 100%;
-      height: 100%;
-      min-height: 330px;
-      object-fit: cover;
-      display: block;
-      filter: contrast(1.12) saturate(.86);
-      transition: transform .7s ease;
+    .panel {
+      min-width: 0;
+      overflow: clip;
     }
 
-    .media-card:hover img {
-      transform: scale(1.055);
-    }
-
-    .hero-caption {
-      color: rgba(234,241,248,.72);
+    .panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--glass-line);
+      padding: 14px 16px;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 13px;
-      line-height: 1.55;
+      text-transform: uppercase;
+      letter-spacing: .01em;
+      color: #102032;
+      background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.22));
     }
 
+    .panel-title span {
+      color: rgba(62, 82, 101, .78);
+    }
+
+    .panel-body { padding: 16px; }
+
+    .panel-body,
+    .robot-dashboard-body,
+    .robot-workspace,
+    .robot-distribution-grid {
+      color: #102032;
+    }
+
+    /* ---------- quick stats (detect view header) ---------- */
     .quick-stats {
-      margin-bottom: 34px;
-    }
-
-    header {
       display: grid;
       grid-template-columns: minmax(240px, 1.3fr) repeat(4, minmax(118px, 0.46fr));
       gap: 10px;
       align-items: stretch;
-      margin-bottom: 12px;
+      margin-bottom: 34px;
     }
 
     .brand {
-      border: 2px solid var(--line);
-      background: var(--panel);
       color: #17212b;
       padding: 14px 16px;
       min-height: 94px;
-      box-shadow: 5px 5px 0 var(--ink);
     }
 
     .brand h1 {
       margin: 0;
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 28px;
       line-height: 1.06;
       letter-spacing: 0;
@@ -290,8 +244,6 @@
     }
 
     .stat {
-      border: 2px solid var(--line);
-      background: #f8fbfd;
       color: #17212b;
       padding: 10px;
       min-height: 94px;
@@ -301,7 +253,7 @@
     }
 
     .stat strong {
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 24px;
       line-height: 1;
     }
@@ -311,38 +263,43 @@
       font-size: 12px;
     }
 
-    .risk-medium { background: var(--amber); color: #17212b; }
-    .risk-medium span { color: rgba(23,33,43,0.72); }
-    .risk-high { background: var(--red); color: #fff; }
-    .risk-high span { color: rgba(255,255,255,0.82); }
-    .risk-low { background: #d7eadf; color: #17212b; }
-    .risk-none { background: #f8fbfd; color: #17212b; }
+    /* Risk colors must beat the glass surface rule above. */
+    .stat.risk-medium { background: var(--amber); color: #17212b; }
+    .stat.risk-medium span { color: rgba(23,33,43,0.72); }
+    .stat.risk-high { background: var(--red); color: #fff; }
+    .stat.risk-high span { color: rgba(255,255,255,0.82); }
+    .stat.risk-low { background: #d7eadf; color: #17212b; }
+    .stat.risk-none { background: rgba(248,251,253,.96); color: #17212b; }
 
+    /* ---------- robot dashboard ---------- */
     .robot-dashboard {
       margin-bottom: 34px;
+      background:
+        linear-gradient(140deg, rgba(255,255,255,.96), rgba(238,248,252,.94)),
+        linear-gradient(180deg, rgba(255,255,255,.16), transparent);
     }
 
     .robot-dashboard-body {
       display: grid;
-      grid-template-columns: minmax(520px, 1fr) minmax(420px, .78fr);
-      gap: 16px;
+      grid-template-columns: minmax(520px, 1.05fr) minmax(420px, .95fr);
+      gap: 18px;
       align-items: start;
-      padding: 16px;
-      color: #17212b;
+      padding: 22px;
     }
 
     .robot-title h1 {
       margin: 0;
-      font-size: clamp(34px, 3.55vw, 52px);
+      max-width: 820px;
+      color: #0f1e2d;
+      font-size: clamp(38px, 3.45vw, 58px);
       line-height: 1.04;
       letter-spacing: 0;
-      max-width: 820px;
     }
 
     .robot-title p {
       max-width: 720px;
       margin: 10px 0 0;
-      color: var(--muted);
+      color: #688097;
       line-height: 1.55;
       font-size: 14px;
     }
@@ -354,9 +311,18 @@
       margin-top: 16px;
     }
 
+    .robot-kpi,
+    .detail-cell,
+    .strip-row,
+    .thumb,
+    .reason-list li {
+      border: 1px solid rgba(88, 116, 139, .22);
+      border-radius: 18px;
+      background: linear-gradient(145deg, rgba(255,255,255,.94), rgba(243,249,253,.92));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 10px 26px rgba(16,32,48,.08);
+    }
+
     .robot-kpi {
-      border: 1px solid var(--line);
-      background: #fff;
       padding: 10px;
       min-height: 82px;
     }
@@ -370,9 +336,18 @@
     .robot-kpi b {
       display: block;
       margin-top: 10px;
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 24px;
       line-height: 1;
+    }
+
+    .robot-kpi b,
+    .metric b,
+    .case-id,
+    .strip-row b,
+    .recheck-main b,
+    .detail-grid b {
+      color: #061524;
     }
 
     .claim-row {
@@ -382,24 +357,29 @@
       margin-top: 12px;
     }
 
+    .claim-chip,
+    .tag,
+    .pill {
+      border: 1px solid rgba(88, 116, 139, .26);
+      background: rgba(255,255,255,.85);
+      color: #496174;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.58);
+    }
+
     .claim-chip {
-      border: 1px solid rgba(23,33,43,.26);
-      background: #f8fbfd;
       padding: 6px 9px;
       border-radius: 999px;
-      color: #425466;
       font-size: 12px;
       font-weight: 700;
     }
 
     .robot-chart-panel {
-      border: 1px solid var(--line);
-      background: #fff;
       min-height: 0;
       display: grid;
       grid-template-rows: auto 1fr;
       align-self: start;
       overflow: hidden;
+      background: linear-gradient(145deg, rgba(255,255,255,.95), rgba(243,249,253,.93));
     }
 
     .robot-chart-panel h2,
@@ -412,11 +392,14 @@
     }
 
     .robot-chart-panel img {
-      width: 100%;
+      margin: 12px;
+      width: calc(100% - 24px);
       height: clamp(220px, 20vw, 300px);
       min-height: 0;
       object-fit: contain;
-      background: #f8fbfd;
+      border-radius: 20px;
+      background: rgba(255,255,255,.48);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.72);
       display: block;
     }
 
@@ -437,37 +420,36 @@
     .robot-workspace {
       display: grid;
       grid-template-columns: minmax(360px, .82fr) minmax(520px, 1.18fr);
-      gap: 14px;
-      padding: 0 16px 16px;
-      color: #17212b;
-      align-items: stretch;
-      height: clamp(470px, 54vh, 620px);
+      gap: 16px;
+      padding: 0 22px 22px;
+      align-items: start;
       min-height: 0;
     }
 
     .recheck-panel,
     .defect-detail {
-      border: 1px solid var(--line);
-      background: #fff;
       min-width: 0;
       display: grid;
       grid-template-rows: auto 1fr;
       min-height: 0;
+      background: linear-gradient(145deg, rgba(255,255,255,.95), rgba(243,249,253,.93));
+    }
+
+    .robot-workspace .recheck-panel,
+    .robot-workspace .defect-detail {
+      grid-template-rows: auto auto;
     }
 
     .recheck-list {
       display: grid;
       align-content: start;
       gap: 8px;
-      min-height: 0;
-      overflow: auto;
-      padding: 12px;
+      padding: 14px;
+      scrollbar-color: rgba(0,182,199,.55) transparent;
     }
 
     .recheck-item {
       width: 100%;
-      border-radius: 0;
-      border: 1px solid rgba(23,33,43,.28);
       display: grid;
       grid-template-columns: auto 1fr auto;
       gap: 10px;
@@ -475,21 +457,33 @@
       padding: 10px;
       min-height: 58px;
       text-align: left;
-      box-shadow: none;
+      border: 1px solid rgba(88, 116, 139, .22);
+      border-radius: 18px;
+      background: rgba(255,255,255,.88);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.72);
+      transition: transform .22s ease, box-shadow .22s ease, background .22s ease;
     }
 
-    .recheck-item:hover { transform: none; box-shadow: inset 0 0 0 2px rgba(0,166,166,.18); }
-    .recheck-item.active { background: #e8f8f7; border-color: var(--cyan); color: #17212b; }
+    .recheck-item:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--glass-glow);
+    }
+
+    .recheck-item.active {
+      background: linear-gradient(135deg, rgba(228, 251, 253, .94), rgba(255,255,255,.9));
+      border-color: rgba(0,182,199,.58);
+      box-shadow: var(--glass-glow);
+    }
 
     .recheck-rank {
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-weight: 800;
       color: var(--cyan);
     }
 
     .recheck-main b,
     .detail-grid b {
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
     }
 
     .recheck-main span,
@@ -503,8 +497,6 @@
 
     .detail-body {
       padding: 12px;
-      min-height: 0;
-      overflow: auto;
     }
 
     .detail-grid {
@@ -515,25 +507,30 @@
     }
 
     .detail-cell {
-      border: 1px solid rgba(23,33,43,.18);
-      background: #f8fbfd;
       padding: 9px;
       min-width: 0;
     }
 
+    .detail-note,
+    .evidence-preview,
+    .advantage-note {
+      border: 1px solid rgba(88, 116, 139, .22);
+      border-left: 4px solid rgba(0,182,199,.72);
+      border-radius: 18px;
+      background: rgba(255,255,255,.9);
+      color: #445d72;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.68);
+    }
+
     .detail-note {
-      border-left: 4px solid var(--cyan);
-      background: #f8fbfd;
       padding: 10px;
-      color: #425466;
       font-size: 13px;
       line-height: 1.55;
     }
 
     .evidence-preview {
       margin-top: 10px;
-      border: 1px solid rgba(23,33,43,.18);
-      background: #f8fbfd;
+      overflow: hidden;
     }
 
     .evidence-preview img {
@@ -541,7 +538,7 @@
       width: 100%;
       max-height: 300px;
       object-fit: contain;
-      background: #0b1118;
+      background: rgba(5, 12, 19, .9);
     }
 
     .evidence-preview figcaption {
@@ -557,12 +554,9 @@
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
       padding: 0 16px 16px;
-      color: #17212b;
     }
 
     .distribution-card {
-      border: 1px solid var(--line);
-      background: #fff;
       padding: 10px;
       min-height: 92px;
     }
@@ -570,7 +564,7 @@
     .distribution-card b {
       display: block;
       margin-bottom: 6px;
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
     }
 
     .distribution-card p {
@@ -580,6 +574,7 @@
       line-height: 1.45;
     }
 
+    /* ---------- data sections ---------- */
     .data-section {
       margin-top: 34px;
     }
@@ -591,11 +586,9 @@
     }
 
     .data-card {
-      border: 1px solid var(--line);
-      background: #fff;
       padding: 12px;
       color: #17212b;
-      min-height: 164px;
+      min-height: 84px;
     }
 
     .data-card b {
@@ -609,7 +602,7 @@
       display: inline-block;
       margin-bottom: 8px;
       color: var(--green);
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
     }
 
     .data-card p {
@@ -622,11 +615,8 @@
     .tag {
       display: inline-flex;
       align-items: center;
-      border: 1px solid rgba(23,33,43,.26);
-      background: #f8fbfd;
       padding: 3px 7px;
       margin: 0 4px 6px 0;
-      color: #425466;
       font-size: 11px;
       font-weight: 700;
     }
@@ -645,11 +635,13 @@
 
     .chart-card {
       border: 1px solid var(--line);
-      background: #fff;
+      border-radius: 18px;
+      background: rgba(255,255,255,.94);
       color: #17212b;
       min-height: 320px;
       display: grid;
       grid-template-rows: auto 1fr;
+      overflow: hidden;
     }
 
     .chart-card b {
@@ -669,13 +661,15 @@
 
     .data-note-box {
       border-left: 5px solid var(--cyan);
-      background: #fff;
+      border-radius: 0 18px 18px 0;
+      background: rgba(255,255,255,.94);
       padding: 14px;
       color: #425466;
       line-height: 1.72;
       font-size: 14px;
     }
 
+    /* ---------- upload / experiment ---------- */
     .upload-panel {
       margin-bottom: 34px;
     }
@@ -693,7 +687,8 @@
 
     .score-board {
       border: 1px solid var(--line);
-      background: #fff;
+      border-radius: 18px;
+      background: rgba(255,255,255,.94);
       color: #17212b;
       padding: 12px;
       display: grid;
@@ -730,13 +725,14 @@
 
     .score-badge {
       border: 2px solid var(--line);
+      border-radius: 14px;
       background: var(--green);
       color: #fff;
       padding: 8px 10px;
       min-width: 108px;
       max-width: 100%;
       text-align: center;
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-weight: 700;
     }
 
@@ -755,7 +751,8 @@
 
     .stage-card {
       border: 1px solid var(--line);
-      background: #f8fbfd;
+      border-radius: 14px;
+      background: rgba(248,251,253,.94);
       padding: 10px;
       min-height: 86px;
     }
@@ -769,7 +766,7 @@
 
     .stage-card b {
       display: block;
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 23px;
       line-height: 1;
     }
@@ -792,7 +789,8 @@
 
     .note-tile {
       border: 1px solid var(--line);
-      background: #fff;
+      border-radius: 14px;
+      background: rgba(255,255,255,.94);
       padding: 9px;
       font-size: 12px;
       line-height: 1.45;
@@ -807,7 +805,8 @@
 
     .result-bars {
       border: 1px solid var(--line);
-      background: #fff;
+      border-radius: 18px;
+      background: rgba(255,255,255,.94);
       color: #17212b;
       padding: 12px;
       display: grid;
@@ -824,7 +823,7 @@
     }
 
     .compare-name {
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-weight: 700;
     }
 
@@ -836,6 +835,7 @@
     .compare-track {
       height: 10px;
       border: 1px solid var(--line);
+      border-radius: 999px;
       background: #dfe8ee;
       overflow: hidden;
     }
@@ -858,7 +858,7 @@
       border: 1px dashed rgba(0,166,166,.56);
       border-radius: 24px;
       background:
-        radial-gradient(circle at 10% 0%, rgba(0,166,166,0.22), transparent 38%),
+        radial-gradient(circle at 10% 0%, rgba(0,182,199,0.18), transparent 38%),
         linear-gradient(90deg, rgba(255,255,255,0.98), rgba(237,246,249,0.94));
       padding: 20px;
       cursor: pointer;
@@ -866,12 +866,12 @@
 
     .drop-zone.dragging {
       border-color: var(--cyan);
-      box-shadow: inset 0 0 0 3px rgba(0,166,166,0.22);
+      box-shadow: inset 0 0 0 3px rgba(0,182,199,0.22);
     }
 
     .drop-title {
       margin: 0;
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 24px;
       line-height: 1.1;
     }
@@ -908,36 +908,13 @@
       font-weight: 700;
     }
 
+    /* ---------- detect view ---------- */
     .dashboard {
       display: grid;
       grid-template-columns: 310px minmax(0, 1fr) 370px;
       gap: 18px;
       align-items: start;
     }
-
-    .panel {
-      border: 1px solid rgba(23,33,43,.22);
-      border-radius: 24px;
-      background: var(--panel);
-      box-shadow: 0 28px 80px rgba(0,0,0,.18);
-      min-width: 0;
-      overflow: hidden;
-    }
-
-    .panel-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      border-bottom: 1px solid rgba(23,33,43,.16);
-      padding: 14px 16px;
-      font-family: "Cascadia Mono", "Consolas", monospace;
-      font-size: 13px;
-      text-transform: uppercase;
-      color: #17212b;
-      background: rgba(255,255,255,.42);
-    }
-
-    .panel-body { padding: 16px; color: #17212b; }
 
     .report-export {
       display: flex;
@@ -946,8 +923,6 @@
       gap: 12px;
       margin: 10px 16px 0;
       padding: 10px 12px;
-      border: 1px solid rgba(23,33,43,.16);
-      background: #f8fbfd;
       color: #17212b;
       font-size: 12px;
       line-height: 1.45;
@@ -965,7 +940,7 @@
     }
 
     .case-id {
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 35px;
       margin: 0 0 8px;
     }
@@ -980,14 +955,12 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border: 1px solid var(--line);
-      background: #fff;
       padding: 8px 9px;
       font-size: 13px;
     }
 
     .strip-row b {
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-weight: 700;
     }
 
@@ -995,9 +968,7 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      border: 1px solid var(--line);
       padding: 4px 8px;
-      background: #fff;
       font-size: 12px;
       font-weight: 700;
     }
@@ -1014,6 +985,7 @@
       min-height: 680px;
       display: grid;
       grid-template-rows: auto minmax(360px, 1fr) auto;
+      background: linear-gradient(145deg, rgba(240,249,252,.94), rgba(255,255,255,.92));
     }
 
     .tabs {
@@ -1021,33 +993,46 @@
       flex-wrap: wrap;
       gap: 6px;
       padding: 14px;
-      border-bottom: 1px solid rgba(23,33,43,.16);
-      background: #ecf4f7;
+      border-bottom: 1px solid var(--glass-line);
+      background: rgba(255,255,255,.9);
     }
 
     button {
       font: inherit;
-      color: #17212b;
-      border: 1px solid rgba(23,33,43,.36);
+      color: #15283b;
+      border: 1px solid rgba(88, 116, 139, .3);
       border-radius: 999px;
-      background: #fff;
+      background: linear-gradient(135deg, rgba(255,255,255,.95), rgba(238,247,251,.9));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.76), 0 8px 22px rgba(15, 36, 54, .08);
       padding: 9px 13px;
       cursor: pointer;
       min-height: 38px;
       transition: transform .28s ease, box-shadow .28s ease, background .28s ease;
     }
 
-    button:hover { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(23,33,43,.16); }
-    button.active { background: var(--cyan); color: #fff; }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 34px rgba(15,36,54,.16), inset 0 1px 0 rgba(255,255,255,.78);
+    }
+
+    button.active {
+      background: linear-gradient(135deg, rgba(0,182,199,.88), rgba(0,126,152,.78));
+      color: #fff;
+      box-shadow: 0 14px 40px rgba(0,182,199,.28), inset 0 1px 0 rgba(255,255,255,.48);
+    }
 
     .image-stage {
       position: relative;
       display: grid;
       place-items: center;
+      margin: 0 14px 14px;
       padding: 14px;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 26px;
       background:
-        radial-gradient(circle at 18% 18%, rgba(244,185,66,0.16), transparent 32%),
-        linear-gradient(135deg, #263545, #111922);
+        linear-gradient(135deg, rgba(7, 17, 27, .96), rgba(16, 33, 48, .88)),
+        url("assets/t1_1_original.jpg") center / cover;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.1), inset 0 -80px 140px rgba(0,0,0,.32);
       overflow: hidden;
     }
 
@@ -1055,12 +1040,24 @@
       width: min(100%, 760px);
       max-height: 520px;
       object-fit: contain;
-      border: 2px solid #000;
-      background: #000;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 18px;
+      background: #050a0f;
+      box-shadow: 0 22px 70px rgba(0,0,0,.38);
       image-rendering: auto;
     }
 
     .image-stage img.hidden { display: none; }
+
+    .view-message,
+    .stage-label,
+    .stage-help {
+      border: 1px solid rgba(255,255,255,.32);
+      border-radius: 16px;
+      background: rgba(6, 15, 24, .88);
+      color: #eef8ff;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 14px 42px rgba(0,0,0,.26);
+    }
 
     .view-message {
       display: none;
@@ -1070,13 +1067,8 @@
       right: 16px;
       max-width: 680px;
       padding: 12px 14px;
-      border: 2px dashed rgba(244, 185, 66, 0.72);
-      background:
-        linear-gradient(135deg, rgba(9, 15, 21, 0.92), rgba(19, 31, 42, 0.92));
-      color: #eef7fb;
       text-align: left;
       z-index: 2;
-      box-shadow: 0 14px 42px rgba(0,0,0,.28);
     }
 
     .view-message.visible { display: block; }
@@ -1101,11 +1093,10 @@
       position: absolute;
       top: 16px;
       left: 16px;
-      background: var(--amber);
-      border: 2px solid var(--line);
       padding: 7px 10px;
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 12px;
+      color: #fff;
     }
 
     .stage-help {
@@ -1114,12 +1105,9 @@
       bottom: 16px;
       max-width: min(620px, calc(100% - 32px));
       padding: 8px 10px;
-      border: 1px solid rgba(255,255,255,0.2);
-      background: rgba(6, 10, 14, 0.76);
-      color: #d7e4ee;
       font-size: 12px;
       line-height: 1.45;
-      backdrop-filter: blur(8px);
+      color: #d7e4ee;
     }
 
     .filmstrip {
@@ -1127,21 +1115,32 @@
       grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
       gap: 8px;
       padding: 10px;
-      background: #eef4f7;
-      border-top: 2px solid var(--line);
+      background: rgba(255,255,255,.9);
+      border-top: 1px solid var(--glass-line);
     }
 
     .thumb {
       position: relative;
-      border: 2px solid transparent;
-      background: #fff;
-      padding: 4px;
+      overflow: hidden;
+      padding: 5px;
       cursor: pointer;
-      min-height: 82px;
+      min-height: 92px;
     }
 
-    .thumb.active { border-color: var(--cyan); }
-    .thumb img { width: 100%; height: 54px; object-fit: cover; display: block; border: 1px solid var(--line); }
+    .thumb.active {
+      border-color: rgba(0,182,199,.72);
+      box-shadow: var(--glass-glow);
+    }
+
+    .thumb img {
+      width: 100%;
+      height: 54px;
+      object-fit: cover;
+      display: block;
+      border: 0;
+      border-radius: 12px;
+    }
+
     .thumb-unavailable {
       position: absolute;
       top: 7px;
@@ -1153,6 +1152,7 @@
       font-size: 10px;
       font-weight: 900;
     }
+
     .thumb span { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
 
     .metric-grid {
@@ -1162,14 +1162,12 @@
     }
 
     .metric {
-      border: 1px solid var(--line);
-      background: #fff;
       padding: 9px;
-      min-height: 78px;
+      min-height: 84px;
     }
 
     .metric span { color: var(--muted); font-size: 12px; }
-    .metric b { display: block; font-family: "Cascadia Mono", "Consolas", monospace; font-size: 22px; margin-top: 6px; }
+    .metric b { display: block; font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace; font-size: 22px; margin-top: 6px; }
     .metric small {
       display: block;
       margin-top: 7px;
@@ -1185,10 +1183,8 @@
     }
 
     .glossary-item {
-      border: 1px solid var(--line);
-      background: #fff;
       padding: 9px;
-      min-height: 92px;
+      min-height: 84px;
     }
 
     .glossary-item b {
@@ -1207,34 +1203,53 @@
 
     .bar-list { display: grid; gap: 8px; }
     .bar-row { display: grid; grid-template-columns: 92px 1fr 54px; gap: 8px; align-items: center; font-size: 12px; }
-    .bar-track { height: 13px; border: 1px solid var(--line); background: #dfe8ee; overflow: hidden; }
-    .bar-fill { height: 100%; background: var(--blue); }
+
+    .bar-track {
+      height: 13px;
+      border: 1px solid rgba(88, 116, 139, .3);
+      border-radius: 999px;
+      background: rgba(219,232,239,.72);
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #54a1f4, #00b6c7);
+    }
+
     .bar-fill.bad { background: var(--red); }
     .bar-fill.good { background: var(--green); }
 
     table {
       width: 100%;
-      border-collapse: collapse;
       font-size: 12px;
-      background: #fff;
       table-layout: fixed;
+      overflow: hidden;
+      border-radius: 18px;
+      background: rgba(255,255,255,.9);
+      border-collapse: separate;
+      border-spacing: 0;
     }
 
     th, td {
-      border: 1px solid var(--line);
+      border: 1px solid rgba(82,106,128,.22);
       padding: 7px 6px;
       text-align: left;
       vertical-align: top;
       overflow-wrap: anywhere;
     }
 
-    th { background: #dfe8ee; font-family: "Cascadia Mono", "Consolas", monospace; }
+    th {
+      background: rgba(255,255,255,.7);
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+    }
 
     .lower {
       margin-top: 12px;
       display: grid;
       grid-template-columns: minmax(0, 1fr) 420px;
-      gap: 12px;
+      gap: 18px;
     }
 
     .reason-list {
@@ -1246,8 +1261,6 @@
     }
 
     .reason-list li {
-      border-left: 8px solid var(--amber);
-      background: #fff;
       padding: 8px 10px;
       font-size: 13px;
     }
@@ -1265,10 +1278,6 @@
     }
 
     .advantage-card {
-      border: 1px solid rgba(23,33,43,.18);
-      border-radius: 20px;
-      background:
-        linear-gradient(160deg, #fff, #f2f8fa);
       padding: 16px;
       min-height: 154px;
       display: grid;
@@ -1289,7 +1298,7 @@
     }
 
     .advantage-card strong {
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 26px;
       line-height: 1;
       color: var(--green);
@@ -1304,8 +1313,6 @@
 
     .advantage-note {
       margin-top: 10px;
-      border: 1px solid var(--line);
-      background: #f8fbfd;
       padding: 10px;
       font-size: 13px;
       line-height: 1.5;
@@ -1313,8 +1320,6 @@
     }
 
     .queue-panel {
-      border: 1px dashed rgba(23,33,43,.28);
-      background: #fbfdff;
       padding: 12px;
       display: grid;
       gap: 10px;
@@ -1333,8 +1338,6 @@
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      border: 1px solid var(--line);
-      background: #fff;
       padding: 8px 10px;
       font-size: 12px;
       color: var(--muted);
@@ -1347,10 +1350,12 @@
       word-break: break-word;
       max-height: 430px;
       overflow: auto;
-      background: #17212b;
+      border-radius: 20px;
+      background: rgba(7,17,27,.9);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
       color: #dce7ef;
       padding: 12px;
-      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
       font-size: 11px;
       line-height: 1.45;
     }
@@ -1358,7 +1363,7 @@
     .callout {
       border: 1px solid rgba(23,33,43,.18);
       border-radius: 18px;
-      background: #fff;
+      background: rgba(255,255,255,.94);
       padding: 14px;
       font-size: 13px;
       line-height: 1.5;
@@ -1391,463 +1396,7 @@
     #aggregateEvidenceGrid .advantage-card:nth-child(5) { grid-column: span 4; }
     #aggregateEvidenceGrid .advantage-card:nth-child(6) { grid-column: span 12; }
 
-    .motion-card {
-      will-change: transform, opacity;
-    }
-
-    .reveal-word {
-      display: inline-block;
-      will-change: opacity;
-    }
-
-    /* Liquid Glass redesign layer: keep the data logic intact, replace the hard
-       report-paper look with translucent controls, softer depth, and clearer
-       content/control separation. */
-    :root {
-      --paper: #071018;
-      --ink: #eef8ff;
-      --line: rgba(9, 24, 38, .22);
-      --muted: #6f8396;
-      --cyan: #00b6c7;
-      --amber: #f0b84f;
-      --red: #d85b52;
-      --green: #2e9a72;
-      --blue: #3578d4;
-      --glass: rgba(244, 250, 255, .70);
-      --glass-strong: rgba(250, 253, 255, .84);
-      --glass-dark: rgba(8, 18, 28, .58);
-      --glass-edge: rgba(255, 255, 255, .62);
-      --glass-line: rgba(88, 116, 139, .24);
-      --glass-shadow: 0 30px 100px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255,255,255,.58);
-      --glass-glow: 0 0 0 1px rgba(0, 182, 199, .24), 0 14px 46px rgba(0, 182, 199, .16);
-    }
-
-    body {
-      color: var(--ink);
-      background:
-        linear-gradient(135deg, rgba(4, 12, 19, .92), rgba(9, 24, 34, .78) 42%, rgba(23, 39, 52, .82)),
-        url("assets/t1_1_original.jpg") center top / cover fixed,
-        #071018;
-      font-family: "SF Pro Display", "Aptos", "Microsoft YaHei UI", sans-serif;
-    }
-
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      z-index: -1;
-      pointer-events: none;
-      background:
-        linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px) 0 0 / 36px 36px,
-        linear-gradient(0deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 36px 36px,
-        linear-gradient(180deg, rgba(255,255,255,.06), transparent 26%, rgba(0,0,0,.26));
-      mask-image: linear-gradient(180deg, rgba(0,0,0,.82), rgba(0,0,0,.2));
-    }
-
-    .shell {
-      width: min(1520px, calc(100% - 40px));
-      padding-top: 20px;
-    }
-
-    .premium-nav {
-      width: min(1240px, 100%);
-      padding: 10px 12px 10px 16px;
-      border: 1px solid rgba(255,255,255,.34);
-      background: linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,.08));
-      box-shadow: 0 22px 80px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.42);
-      backdrop-filter: blur(26px) saturate(1.65);
-      -webkit-backdrop-filter: blur(26px) saturate(1.65);
-    }
-
-    .nav-brand {
-      letter-spacing: .01em;
-      text-shadow: 0 1px 16px rgba(0,0,0,.38);
-    }
-
-    .nav-mark {
-      background:
-        linear-gradient(135deg, rgba(255,255,255,.9), rgba(255,255,255,.18)),
-        conic-gradient(from 140deg, #9ff4ff, #fff2b0, #6ee1d1, #9ff4ff);
-      box-shadow: inset 0 1px 2px rgba(255,255,255,.78), 0 10px 30px rgba(0,182,199,.34);
-    }
-
-    .nav-links {
-      padding: 3px;
-      border-radius: 999px;
-      background: rgba(6, 16, 25, .22);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
-    }
-
-    .nav-links a {
-      color: rgba(240, 248, 255, .78);
-      padding: 8px 12px;
-      transition: background .24s ease, color .24s ease, box-shadow .24s ease, transform .24s ease;
-    }
-
-    .nav-links a:hover {
-      background: rgba(255,255,255,.16);
-      transform: translateY(-1px);
-    }
-
-    .nav-links a.active {
-      color: #fff;
-      background: linear-gradient(135deg, rgba(255,255,255,.24), rgba(0,182,199,.26));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.42), 0 12px 34px rgba(0,182,199,.22);
-    }
-
-    .panel,
-    .brand,
-    .stat,
-    .robot-chart-panel,
-    .recheck-panel,
-    .defect-detail,
-    .distribution-card,
-    .data-card,
-    .metric,
-    .glossary-item,
-    .advantage-card,
-    .queue-panel,
-    .evidence-source,
-    .report-export {
-      border: 1px solid var(--glass-edge);
-      border-radius: 26px;
-      background:
-        linear-gradient(145deg, rgba(255,255,255,.82), rgba(238,248,253,.58));
-      box-shadow: var(--glass-shadow);
-      backdrop-filter: blur(24px) saturate(1.45);
-      -webkit-backdrop-filter: blur(24px) saturate(1.45);
-    }
-
-    .panel {
-      overflow: clip;
-    }
-
-    .panel-title {
-      border-bottom: 1px solid var(--glass-line);
-      background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.22));
-      color: #102032;
-      letter-spacing: .01em;
-    }
-
-    .panel-title span {
-      color: rgba(62, 82, 101, .78);
-    }
-
-    .panel-body,
-    .robot-dashboard-body,
-    .robot-workspace,
-    .robot-distribution-grid {
-      color: #102032;
-    }
-
-    .robot-dashboard {
-      background:
-        linear-gradient(140deg, rgba(255,255,255,.78), rgba(236,248,252,.52)),
-        linear-gradient(180deg, rgba(255,255,255,.16), transparent);
-    }
-
-    .robot-dashboard-body {
-      grid-template-columns: minmax(520px, 1.05fr) minmax(420px, .95fr);
-      gap: 18px;
-      padding: 22px;
-    }
-
-    .robot-title h1 {
-      color: #0f1e2d;
-      font-size: clamp(38px, 3.45vw, 58px);
-      letter-spacing: 0;
-    }
-
-    .robot-title p {
-      color: #688097;
-    }
-
-    .robot-kpi,
-    .detail-cell,
-    .strip-row,
-    .thumb,
-    .reason-list li {
-      border: 1px solid rgba(255,255,255,.62);
-      border-radius: 18px;
-      background: linear-gradient(145deg, rgba(255,255,255,.74), rgba(241,249,253,.48));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 10px 26px rgba(16,32,48,.08);
-    }
-
-    .robot-kpi b,
-    .metric b,
-    .case-id,
-    .strip-row b,
-    .recheck-main b,
-    .detail-grid b {
-      color: #061524;
-    }
-
-    .claim-chip,
-    .tag,
-    .pill {
-      border: 1px solid rgba(255,255,255,.58);
-      background: rgba(255,255,255,.44);
-      color: #496174;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.58);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-    }
-
-    .robot-chart-panel,
-    .recheck-panel,
-    .defect-detail {
-      min-height: 0;
-      background: linear-gradient(145deg, rgba(255,255,255,.76), rgba(241,249,253,.56));
-    }
-
-    .robot-chart-panel img {
-      margin: 12px;
-      width: calc(100% - 24px);
-      border-radius: 20px;
-      background: rgba(255,255,255,.48);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.72);
-    }
-
-    .robot-workspace {
-      gap: 16px;
-      padding: 0 22px 22px;
-      height: auto;
-      align-items: start;
-    }
-
-    .robot-workspace .recheck-panel,
-    .robot-workspace .defect-detail {
-      grid-template-rows: auto auto;
-    }
-
-    .recheck-list {
-      padding: 14px;
-      overflow: visible;
-      min-height: auto;
-      scrollbar-color: rgba(0,182,199,.55) transparent;
-    }
-
-    .robot-workspace .detail-body {
-      overflow: visible;
-      min-height: auto;
-    }
-
-    .recheck-item {
-      border-radius: 18px;
-      border-color: rgba(255,255,255,.62);
-      background: rgba(255,255,255,.48);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.72);
-      transition: transform .22s ease, box-shadow .22s ease, background .22s ease;
-    }
-
-    .recheck-item:hover {
-      transform: translateY(-1px);
-      box-shadow: var(--glass-glow);
-    }
-
-    .recheck-item.active {
-      background: linear-gradient(135deg, rgba(218, 253, 255, .84), rgba(255,255,255,.62));
-      border-color: rgba(0,182,199,.58);
-      box-shadow: var(--glass-glow);
-    }
-
-    .detail-note,
-    .evidence-preview,
-    .advantage-note {
-      border: 1px solid rgba(255,255,255,.62);
-      border-left: 4px solid rgba(0,182,199,.72);
-      border-radius: 18px;
-      background: rgba(255,255,255,.46);
-      color: #445d72;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.68);
-    }
-
-    .evidence-preview {
-      overflow: hidden;
-    }
-
-    .evidence-preview img {
-      background: rgba(5, 12, 19, .9);
-    }
-
-    .dashboard,
-    .lower {
-      gap: 18px;
-    }
-
-    .viewer {
-      background: linear-gradient(145deg, rgba(238,249,253,.72), rgba(255,255,255,.56));
-    }
-
-    .tabs,
-    .filmstrip {
-      border-color: var(--glass-line);
-      background: rgba(255,255,255,.34);
-      backdrop-filter: blur(18px) saturate(1.35);
-      -webkit-backdrop-filter: blur(18px) saturate(1.35);
-    }
-
-    button {
-      border: 1px solid rgba(255,255,255,.64);
-      color: #15283b;
-      background: linear-gradient(135deg, rgba(255,255,255,.76), rgba(235,247,252,.46));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.76), 0 8px 22px rgba(15, 36, 54, .08);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-    }
-
-    button:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 14px 34px rgba(15,36,54,.16), inset 0 1px 0 rgba(255,255,255,.78);
-    }
-
-    button.active {
-      background: linear-gradient(135deg, rgba(0,182,199,.88), rgba(0,126,152,.78));
-      color: #fff;
-      box-shadow: 0 14px 40px rgba(0,182,199,.28), inset 0 1px 0 rgba(255,255,255,.48);
-    }
-
-    .image-stage {
-      margin: 0 14px 14px;
-      border-radius: 26px;
-      border: 1px solid rgba(255,255,255,.18);
-      background:
-        linear-gradient(135deg, rgba(7, 17, 27, .96), rgba(16, 33, 48, .88)),
-        url("assets/t1_1_original.jpg") center / cover;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.1), inset 0 -80px 140px rgba(0,0,0,.32);
-    }
-
-    .image-stage img {
-      border: 1px solid rgba(255,255,255,.12);
-      border-radius: 18px;
-      background: #050a0f;
-      box-shadow: 0 22px 70px rgba(0,0,0,.38);
-    }
-
-    .stage-label,
-    .stage-help,
-    .view-message {
-      border: 1px solid rgba(255,255,255,.32);
-      border-radius: 16px;
-      background: rgba(6, 15, 24, .58);
-      color: #eef8ff;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 14px 42px rgba(0,0,0,.26);
-      backdrop-filter: blur(18px) saturate(1.25);
-      -webkit-backdrop-filter: blur(18px) saturate(1.25);
-    }
-
-    .stage-label {
-      color: #fff;
-    }
-
-    .thumb {
-      overflow: hidden;
-      padding: 5px;
-      min-height: 92px;
-    }
-
-    .thumb.active {
-      border-color: rgba(0,182,199,.72);
-      box-shadow: var(--glass-glow);
-    }
-
-    .thumb img {
-      border: 0;
-      border-radius: 12px;
-    }
-
-    .metric,
-    .glossary-item,
-    .data-card {
-      min-height: 84px;
-    }
-
-    .bar-track {
-      border: 1px solid rgba(255,255,255,.62);
-      border-radius: 999px;
-      background: rgba(219,232,239,.72);
-    }
-
-    .bar-fill {
-      border-radius: inherit;
-      background: linear-gradient(90deg, #54a1f4, #00b6c7);
-    }
-
-    table {
-      overflow: hidden;
-      border-radius: 18px;
-      background: rgba(255,255,255,.42);
-      border-collapse: separate;
-      border-spacing: 0;
-    }
-
-    th,
-    td {
-      border-color: rgba(82,106,128,.22);
-    }
-
-    th {
-      background: rgba(255,255,255,.48);
-    }
-
-    pre {
-      border-radius: 20px;
-      background: rgba(7,17,27,.9);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-    }
-
-    @media (max-width: 1180px) {
-      .hero-chapter { grid-template-columns: 1fr; padding: 40px; }
-      .hero-media { min-height: 380px; }
-      header { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .brand { grid-column: 1 / -1; }
-      .dashboard, .lower, .experiment-grid { grid-template-columns: 1fr; }
-      .robot-dashboard-body, .robot-workspace { grid-template-columns: 1fr; }
-      .robot-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .robot-distribution-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .data-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .stage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      #aggregateEvidenceGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      #reviewQueueGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      #aggregateEvidenceGrid .advantage-card { grid-column: span 1 !important; }
-    }
-
-    @media (max-width: 680px) {
-      .shell { width: min(100% - 18px, 1480px); padding-top: 10px; }
-      .premium-nav { position: static; align-items: flex-start; border-radius: 22px; flex-direction: column; }
-      .nav-links { justify-content: flex-start; }
-      .hero-chapter { min-height: auto; padding: 26px; border-radius: 24px; }
-      .hero-copy h1 { font-size: clamp(2.5rem, 13vw, 3.7rem); }
-      .hero-actions { display: grid; grid-template-columns: 1fr; }
-      .hero-btn { width: 100%; }
-      header { grid-template-columns: 1fr; }
-      .drop-zone { grid-template-columns: 1fr; cursor: default; }
-      .upload-actions { justify-content: flex-start; }
-      .panel-title { align-items: flex-start; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
-      .strip-row { display: grid; grid-template-columns: 1fr; gap: 4px; }
-      .strip-row b { overflow-wrap: anywhere; }
-      .tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .tabs button { width: 100%; }
-      .image-stage { padding: 8px; min-height: 310px; }
-      .image-stage img { width: 100%; }
-      .filmstrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .metric-grid { grid-template-columns: 1fr; }
-      .stage-metrics, .experiment-notes, .advantage-grid, #reviewQueueGrid { grid-template-columns: 1fr; }
-      .evidence-source { display: grid; grid-template-columns: 1fr; }
-      .score-head { display: grid; grid-template-columns: 1fr; }
-      .score-badge { width: 100%; }
-      .compare-row { grid-template-columns: 74px 1fr 44px; }
-      .compare-row span:nth-child(4),
-      .compare-row span:nth-child(5) { display: none; }
-      .robot-dashboard-body, .robot-workspace { padding: 12px; }
-      .robot-kpi-grid, .robot-distribution-grid, .detail-grid, .data-grid, .visualization-grid { grid-template-columns: 1fr; }
-      .robot-title h1 { font-size: 32px; }
-      .glossary { grid-template-columns: 1fr; }
-      .bar-row { grid-template-columns: 78px minmax(0, 1fr) 46px; }
-      .brand h1 { font-size: 23px; }
-      pre { max-height: 360px; }
-    }
-
+    /* ---------- robot route / video ---------- */
     #robotRouteGrid,
     #robotTrackGrid {
       grid-auto-flow: dense;
@@ -1881,9 +1430,9 @@
       gap: 8px;
       margin: 0 0 18px;
       padding: 14px 16px;
-      border: 1px solid rgba(0,166,166,.22);
+      border: 1px solid rgba(0,182,199,.22);
       border-radius: 18px;
-      background: rgba(0,166,166,.07);
+      background: rgba(0,182,199,.07);
       color: #2c485e;
       line-height: 1.65;
     }
@@ -1898,34 +1447,735 @@
       width: 100%;
     }
 
-    @media (max-width: 920px) {
+    /* ---------- reduced motion: honor the OS setting ---------- */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+      .agent-node.running { animation: none; }
+      button:hover,
+      .nav-links a:hover,
+      .recheck-item:hover,
+      .agent-node:hover,
+      .advantage-card:hover { transform: none; }
+    }
+
+    /* ---------- responsive ---------- */
+    @media (max-width: 1180px) {
+      .quick-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .brand { grid-column: 1 / -1; }
+      .dashboard, .lower, .experiment-grid { grid-template-columns: 1fr; }
+      .robot-dashboard-body, .robot-workspace { grid-template-columns: 1fr; }
+      .robot-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .robot-distribution-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .data-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #aggregateEvidenceGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #aggregateEvidenceGrid .advantage-card { grid-column: span 1 !important; }
+      #reviewQueueGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       #robotRouteGrid,
       #robotTrackGrid,
-      .video-grid {
-        grid-template-columns: 1fr;
+      .video-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 680px) {
+      .shell { width: min(100% - 18px, 1480px); padding-top: 10px; }
+      .quick-stats { grid-template-columns: 1fr; }
+      .drop-zone { grid-template-columns: 1fr; cursor: default; }
+      .upload-actions { justify-content: flex-start; }
+      .panel-title { align-items: flex-start; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+      .strip-row { display: grid; grid-template-columns: 1fr; gap: 4px; }
+      .strip-row b { overflow-wrap: anywhere; }
+      .tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .tabs button { width: 100%; }
+      .image-stage { padding: 8px; min-height: 310px; }
+      .image-stage img { width: 100%; }
+      .filmstrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric-grid { grid-template-columns: 1fr; }
+      .stage-metrics, .experiment-notes, .advantage-grid, #reviewQueueGrid { grid-template-columns: 1fr; }
+      .evidence-source { display: grid; grid-template-columns: 1fr; }
+      .score-head { display: grid; grid-template-columns: 1fr; }
+      .score-badge { width: 100%; }
+      .compare-row { grid-template-columns: 74px 1fr 44px; }
+      .compare-row span:nth-child(4),
+      .compare-row span:nth-child(5) { display: none; }
+      .robot-dashboard-body, .robot-workspace { padding: 12px; }
+      .robot-kpi-grid, .robot-distribution-grid, .detail-grid, .data-grid, .visualization-grid { grid-template-columns: 1fr; }
+      .robot-title h1 { font-size: 32px; }
+      .glossary { grid-template-columns: 1fr; }
+      .bar-row { grid-template-columns: 78px minmax(0, 1fr) 46px; }
+      .brand h1 { font-size: 23px; }
+      pre { max-height: 360px; }
+    }
+
+    /* Agent control-room navigation and workspace. */
+    .nav-menu-shell {
+      position: relative;
+      flex: none;
+    }
+
+    .nav-menu-trigger {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 14px 8px 10px;
+      border: 1px solid rgba(255,255,255,.28);
+      border-radius: 999px;
+      color: rgba(245,251,255,.96);
+      background: linear-gradient(135deg, rgba(255,255,255,.18), rgba(0,182,199,.16));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.34), 0 10px 30px rgba(0,0,0,.18);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: .01em;
+    }
+
+    .nav-menu-trigger:hover,
+    .nav-menu-trigger:focus-visible,
+    .nav-menu-shell.is-open .nav-menu-trigger {
+      border-color: rgba(159,244,255,.68);
+      background: linear-gradient(135deg, rgba(255,255,255,.24), rgba(0,182,199,.28));
+      outline: none;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.44), 0 0 0 3px rgba(0,182,199,.12), 0 14px 36px rgba(0,0,0,.24);
+    }
+
+    .nav-list-icon {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      align-content: center;
+      gap: 4px;
+      padding: 5px;
+      border-radius: 50%;
+      background: rgba(5,18,28,.30);
+    }
+
+    .nav-list-icon i {
+      display: block;
+      height: 2px;
+      border-radius: 999px;
+      background: #eafcff;
+      transform-origin: center;
+      transition: transform .22s ease, opacity .22s ease;
+    }
+
+    .nav-menu-shell.is-open .nav-list-icon i:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+    .nav-menu-shell.is-open .nav-list-icon i:nth-child(2) { opacity: 0; }
+    .nav-menu-shell.is-open .nav-list-icon i:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+    .nav-menu-panel {
+      position: absolute;
+      top: calc(100% + 12px);
+      right: 0;
+      width: min(580px, calc(100vw - 36px));
+      padding: 12px;
+      border: 1px solid rgba(255,255,255,.52);
+      border-radius: 24px;
+      color: #102032;
+      background:
+        linear-gradient(145deg, rgba(252,254,255,.94), rgba(226,244,249,.86)),
+        rgba(245,251,255,.92);
+      box-shadow: 0 32px 90px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.88);
+      backdrop-filter: blur(30px) saturate(1.5);
+      -webkit-backdrop-filter: blur(30px) saturate(1.5);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(-8px) scale(.98);
+      transform-origin: top right;
+      transition: opacity .18s ease, visibility .18s ease, transform .18s ease;
+    }
+
+    .nav-menu-panel::before {
+      content: "";
+      position: absolute;
+      right: 0;
+      bottom: 100%;
+      left: 0;
+      height: 14px;
+    }
+
+    .nav-menu-shell.is-open .nav-menu-panel {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
+    }
+
+    .nav-menu-groups {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .nav-menu-group {
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid rgba(82,106,128,.14);
+      border-radius: 17px;
+      background: rgba(255,255,255,.42);
+    }
+
+    .nav-menu-group h2 {
+      margin: 2px 8px 7px;
+      color: #718497;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+
+    .nav-menu-links {
+      display: grid;
+      gap: 3px;
+    }
+
+    .nav-menu-links a {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 11px;
+      border-radius: 13px;
+      color: #31475a;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      transition: color .18s ease, background .18s ease, transform .18s ease;
+    }
+
+    .nav-menu-links a::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      flex: none;
+      border: 2px solid rgba(71,100,123,.42);
+      border-radius: 50%;
+      background: transparent;
+    }
+
+    .nav-menu-links a:hover,
+    .nav-menu-links a:focus-visible {
+      color: #071828;
+      background: rgba(0,182,199,.11);
+      outline: none;
+      transform: translateX(2px);
+    }
+
+    .nav-menu-links a.active {
+      color: #041824;
+      background: linear-gradient(135deg, rgba(159,244,255,.50), rgba(255,242,176,.40));
+      box-shadow: inset 0 0 0 1px rgba(0,151,168,.25);
+    }
+
+    .nav-menu-links a.active::before {
+      border-color: #058b9b;
+      background: #08adbd;
+      box-shadow: 0 0 0 4px rgba(0,182,199,.13);
+    }
+
+    .agent-workbench {
+      position: relative;
+      color: #102032;
+      overflow: clip;
+      background:
+        radial-gradient(circle at 88% 8%, rgba(0,182,199,.13), transparent 24%),
+        linear-gradient(145deg, rgba(255,255,255,.84), rgba(229,244,249,.64));
+    }
+
+    .agent-workbench::after {
+      content: "";
+      position: absolute;
+      inset: 46px 0 auto;
+      height: 180px;
+      pointer-events: none;
+      background: linear-gradient(90deg, transparent, rgba(0,182,199,.08), transparent);
+      mask-image: linear-gradient(180deg, #000, transparent);
+    }
+
+    .agent-workbench-body {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 18px;
+      padding: 22px;
+    }
+
+    .agent-command-bar {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(310px, .7fr);
+      gap: 18px;
+      align-items: end;
+    }
+
+    .agent-command-copy .eyebrow {
+      display: block;
+      margin-bottom: 8px;
+      color: #188a98;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    .agent-command-copy h1 {
+      margin: 0;
+      max-width: 840px;
+      color: #081a29;
+      font-size: clamp(36px, 4vw, 62px);
+      line-height: .98;
+      letter-spacing: -.045em;
+    }
+
+    .agent-command-copy p {
+      max-width: 780px;
+      margin: 13px 0 0;
+      color: #668096;
+      line-height: 1.7;
+    }
+
+    .agent-run-controls {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 9px;
+      padding: 11px;
+      border: 1px solid rgba(255,255,255,.72);
+      border-radius: 20px;
+      background: rgba(255,255,255,.45);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.75);
+    }
+
+    .agent-run-controls label {
+      grid-column: 1 / -1;
+      color: #6d8295;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .agent-run-controls select,
+    .agent-run-controls button {
+      min-height: 44px;
+      border: 1px solid rgba(58,87,109,.20);
+      border-radius: 13px;
+      color: #12283a;
+      background: rgba(255,255,255,.72);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .agent-run-controls select { min-width: 0; padding: 0 12px; }
+    .agent-run-controls button { padding: 0 15px; cursor: pointer; }
+    .agent-run-controls button:hover { background: #fff; }
+
+    .agent-stale-note {
+      grid-column: 1 / -1;
+      min-height: 20px;
+      color: #a24b35;
+      font-size: 12px;
+    }
+
+    .agent-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .agent-kpi {
+      min-width: 0;
+      padding: 14px;
+      border: 1px solid rgba(255,255,255,.72);
+      border-radius: 18px;
+      background: linear-gradient(145deg, rgba(255,255,255,.75), rgba(234,246,250,.52));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.78), 0 12px 30px rgba(15,38,56,.08);
+    }
+
+    .agent-kpi span {
+      display: block;
+      color: #71879a;
+      font-size: 11px;
+      font-weight: 750;
+    }
+
+    .agent-kpi b {
+      display: block;
+      margin-top: 7px;
+      color: #061724;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: clamp(20px, 2.1vw, 31px);
+      overflow-wrap: anywhere;
+    }
+
+    .agent-work-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.42fr) minmax(300px, .58fr);
+      gap: 14px;
+    }
+
+    .agent-surface {
+      min-width: 0;
+      border: 1px solid rgba(255,255,255,.72);
+      border-radius: 22px;
+      background: rgba(255,255,255,.48);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.78), 0 16px 38px rgba(15,38,56,.08);
+    }
+
+    .agent-surface-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 15px 17px;
+      border-bottom: 1px solid rgba(70,99,122,.14);
+    }
+
+    .agent-surface-head h2 {
+      margin: 0;
+      color: #0d2232;
+      font-size: 15px;
+    }
+
+    .agent-status-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      color: #4e6579;
+      background: rgba(255,255,255,.62);
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .04em;
+    }
+
+    .agent-status-badge.success { color: #126746; background: rgba(46,154,114,.13); }
+    .agent-status-badge.running { color: #096c7c; background: rgba(0,182,199,.14); }
+    .agent-status-badge.failed { color: #9b3029; background: rgba(216,91,82,.14); }
+    .agent-status-badge.execution-only { color: #765b1e; background: rgba(240,184,79,.17); }
+
+    .agent-dag-shell {
+      position: relative;
+      min-height: 340px;
+      overflow: auto;
+      padding: 20px;
+    }
+
+    .agent-dag-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .agent-dag-layers {
+      position: relative;
+      z-index: 1;
+      min-width: 680px;
+      min-height: 300px;
+      display: grid;
+      align-items: stretch;
+      gap: 28px;
+    }
+
+    .agent-dag-layer {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-evenly;
+      gap: 12px;
+    }
+
+    .agent-node {
+      position: relative;
+      width: 100%;
+      min-height: 92px;
+      display: grid;
+      gap: 5px;
+      padding: 14px;
+      border: 1px solid rgba(74,104,126,.20);
+      border-left: 4px solid #8799a8;
+      border-radius: 17px;
+      color: #142c3e;
+      text-align: left;
+      background: rgba(255,255,255,.79);
+      box-shadow: 0 12px 28px rgba(17,42,59,.09);
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .agent-node:hover,
+    .agent-node:focus-visible,
+    .agent-node.active {
+      z-index: 2;
+      outline: none;
+      transform: translateY(-2px);
+      border-color: rgba(0,151,168,.42);
+      box-shadow: 0 16px 34px rgba(0,126,143,.16), inset 0 0 0 1px rgba(255,255,255,.72);
+    }
+
+    .agent-node.success { border-left-color: #2e9a72; }
+    .agent-node.running { border-left-color: #00a9ba; animation: agentPulse 1.6s ease-in-out infinite; }
+    .agent-node.failed { border-left-color: #d85b52; }
+
+    @keyframes agentPulse {
+      50% { box-shadow: 0 16px 38px rgba(0,182,199,.24); }
+    }
+
+    .agent-node strong { font-size: 13px; }
+    .agent-node span { color: #6f8497; font-size: 11px; line-height: 1.45; }
+    .agent-node small { color: #18818f; font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace; }
+
+    .agent-detail {
+      min-height: 340px;
+      padding: 18px;
+    }
+
+    .agent-detail h3 {
+      margin: 0 0 7px;
+      color: #071a29;
+      font-size: 23px;
+    }
+
+    .agent-detail > p {
+      margin: 0;
+      color: #6a8093;
+      line-height: 1.65;
+    }
+
+    .agent-metric-list {
+      display: grid;
+      gap: 7px;
+      margin-top: 16px;
+    }
+
+    .agent-metric-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 9px 10px;
+      border-radius: 12px;
+      color: #526a7d;
+      background: rgba(255,255,255,.58);
+      font-size: 12px;
+    }
+
+    .agent-metric-row b {
+      color: #102638;
+      overflow-wrap: anywhere;
+      text-align: right;
+    }
+
+    .agent-timeline {
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+    }
+
+    .agent-timeline-row {
+      display: grid;
+      grid-template-columns: minmax(150px, .7fr) minmax(180px, 1.3fr) 86px;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 11px;
+      border-radius: 14px;
+      background: rgba(255,255,255,.54);
+      font-size: 12px;
+    }
+
+    .agent-timeline-row b { color: #163047; }
+    .agent-timeline-track {
+      position: relative;
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(44,75,98,.12);
+    }
+
+    .agent-timeline-track i {
+      display: block;
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      height: 100%;
+      min-width: 8px;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #17a5b6, #71dccb);
+    }
+
+    .agent-results-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, .55fr);
+      gap: 14px;
+    }
+
+    .agent-result-kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      padding: 14px;
+    }
+
+    .agent-result-kpis .agent-kpi { padding: 11px; }
+    .agent-result-kpis .agent-kpi b { font-size: 22px; }
+
+    .agent-result-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 14px 14px;
+    }
+
+    .agent-result-links button {
+      min-height: 40px;
+      padding: 8px 12px;
+      border: 1px solid rgba(0,151,168,.23);
+      border-radius: 12px;
+      color: #0e6170;
+      background: rgba(0,182,199,.09);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .agent-truth-boundary {
+      display: grid;
+      align-content: start;
+      gap: 9px;
+      padding: 16px;
+      color: #4d6578;
+      line-height: 1.55;
+      font-size: 12px;
+    }
+
+    .agent-truth-boundary strong {
+      color: #0a2436;
+      font-size: 14px;
+    }
+
+    .agent-growth-zero {
+      padding: 10px 12px;
+      border: 1px solid rgba(240,184,79,.34);
+      border-radius: 13px;
+      color: #7b5d16;
+      background: rgba(240,184,79,.14);
+      font-weight: 800;
+    }
+
+    @media (max-width: 1180px) {
+      .agent-command-bar,
+      .agent-work-grid,
+      .agent-results-grid { grid-template-columns: 1fr; }
+      .agent-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 680px) {
+      .premium-nav {
+        position: sticky;
+        top: 8px;
+        align-items: center;
+        flex-direction: row;
+        gap: 8px;
+        padding: 8px;
+        border-radius: 20px;
       }
+      .nav-brand {
+        gap: 7px;
+        font-size: 11px;
+        line-height: 1.12;
+      }
+      .nav-brand > span:last-child {
+        max-width: 118px;
+        overflow: hidden;
+      }
+      .nav-mark {
+        width: 26px;
+        height: 26px;
+      }
+      .nav-menu-trigger {
+        gap: 8px;
+        padding: 8px 10px 8px 8px;
+      }
+      .nav-menu-trigger > span:last-child { max-width: 88px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .nav-menu-panel {
+        position: absolute;
+        top: calc(100% + 12px);
+        right: -8px;
+        width: calc(100vw - 36px);
+        max-height: calc(100vh - 96px);
+        overflow: auto;
+        border-radius: 22px;
+      }
+      .nav-menu-groups { grid-template-columns: 1fr; }
+      .agent-workbench-body { padding: 12px; }
+      .agent-command-copy h1 { font-size: 36px; }
+      .agent-run-controls { grid-template-columns: 1fr; }
+      .agent-run-controls label { grid-column: auto; }
+      .agent-kpi-grid,
+      .agent-result-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .agent-dag-shell { padding: 12px; }
+      .agent-timeline-row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <main class="shell">
-    <nav class="premium-nav">
-      <div class="nav-brand"><span class="nav-mark"></span><span>tunnel defect studio</span></div>
-      <div class="nav-links">
-        <a href="#dashboard" data-view-link="dashboard">系统总览</a>
-        <a href="#engineering-report" data-view-link="engineering-report">工程报告</a>
-        <a href="#growth-analysis" data-view-link="growth-analysis">增长分析</a>
-        <a href="#recheck-list" data-view-link="recheck-list">复检清单</a>
-        <a href="#visualizations" data-view-link="visualizations">可视化图表</a>
-        <a href="#video-analysis" data-view-link="video-analysis">视频分析</a>
-        <a href="#algorithm-flow" data-view-link="algorithm-flow">算法展示</a>
-        <a href="#detect" data-view-link="detect">单图检测</a>
-        <a href="#data-note" data-view-link="data-note">数据说明</a>
+    <nav class="premium-nav" aria-label="主导航">
+      <div class="nav-brand"><span class="nav-mark"></span><span>机器人隧道巡检病害监测系统</span></div>
+      <div class="nav-menu-shell" id="navMenuShell">
+        <button class="nav-menu-trigger" id="navMenuTrigger" type="button" aria-expanded="false" aria-controls="navMenuPanel">
+          <span class="nav-list-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span id="navCurrentLabel">系统总览</span>
+        </button>
+        <div class="nav-menu-panel" id="navMenuPanel" aria-hidden="true">
+          <div class="nav-menu-groups">
+            <section class="nav-menu-group" aria-labelledby="navMonitorTitle">
+              <h2 id="navMonitorTitle">监测 Monitor</h2>
+              <div class="nav-menu-links">
+                <a href="#dashboard" data-view-link="dashboard">系统总览</a>
+                <a href="#agent-workbench" data-view-link="agent-workbench">Agent 工作台</a>
+                <a href="#engineering-report" data-view-link="engineering-report">工程报告</a>
+              </div>
+            </section>
+            <section class="nav-menu-group" aria-labelledby="navAnalysisTitle">
+              <h2 id="navAnalysisTitle">分析 Analysis</h2>
+              <div class="nav-menu-links">
+                <a href="#growth-analysis" data-view-link="growth-analysis">增长分析</a>
+                <a href="#recheck-list" data-view-link="recheck-list">复检清单</a>
+                <a href="#visualizations" data-view-link="visualizations">可视化图表</a>
+              </div>
+            </section>
+            <section class="nav-menu-group" aria-labelledby="navDemoTitle">
+              <h2 id="navDemoTitle">演示 Demo</h2>
+              <div class="nav-menu-links">
+                <a href="#video-analysis" data-view-link="video-analysis">视频分析</a>
+                <a href="#algorithm-flow" data-view-link="algorithm-flow">算法展示</a>
+                <a href="#detect" data-view-link="detect">单图检测</a>
+              </div>
+            </section>
+            <section class="nav-menu-group" aria-labelledby="navNotesTitle">
+              <h2 id="navNotesTitle">说明 Notes</h2>
+              <div class="nav-menu-links">
+                <a href="#data-note" data-view-link="data-note">数据说明</a>
+              </div>
+            </section>
+          </div>
+        </div>
       </div>
     </nav>
 
     <section class="panel robot-dashboard app-view" id="dashboard" data-app-view="dashboard">
-      <div class="panel-title">机器人隧道巡检病害监测系统 <span id="robotDashboardSource">loading /api/project-summary</span></div>
+      <div class="panel-title">机器人隧道巡检病害监测系统 <span id="robotDashboardSource">数据加载中</span></div>
       <div class="robot-dashboard-body">
         <div>
           <div class="robot-title">
@@ -1933,11 +2183,11 @@
             <p>融合 KICT 裂缝 mask 几何特征与仿真巡检元数据，实现病害工程化定位、跨巡检增长分析和重点复检清单生成。</p>
           </div>
           <div class="robot-kpi-grid" id="robotKpiGrid">
-            <div class="robot-kpi"><span>Inspection</span><b>-</b></div>
-            <div class="robot-kpi"><span>Frames</span><b>-</b></div>
-            <div class="robot-kpi"><span>Defects</span><b>-</b></div>
-            <div class="robot-kpi"><span>Recheck</span><b>-</b></div>
-            <div class="robot-kpi"><span>High risk</span><b>-</b></div>
+            <div class="robot-kpi" title="Inspection"><span>巡检次数</span><b>-</b></div>
+            <div class="robot-kpi" title="Frames"><span>帧数</span><b>-</b></div>
+            <div class="robot-kpi" title="Defects"><span>病害数</span><b>-</b></div>
+            <div class="robot-kpi" title="Recheck"><span>待复检</span><b>-</b></div>
+            <div class="robot-kpi" title="High risk"><span>高风险</span><b>-</b></div>
           </div>
           <div class="claim-row" id="claimChips">
             <span class="claim-chip">rule evidence</span>
@@ -1966,6 +2216,86 @@
         </section>
       </div>
       <div class="robot-distribution-grid" id="robotDistributionGrid"></div>
+    </section>
+
+    <section class="panel agent-workbench app-view" id="agent-workbench" data-app-view="agent-workbench">
+      <div class="panel-title">
+        Agent 编排与证据工作台
+        <span id="agentWorkbenchSource">数据加载中</span>
+      </div>
+      <div class="agent-workbench-body">
+        <div class="agent-command-bar">
+          <div class="agent-command-copy">
+            <span class="eyebrow">编排控制室</span>
+            <h1>让每一步判断<br />都有运行证据。</h1>
+            <p>选择一次真实运行，查看 Agent 依赖、并行执行、耗时、重试和结构化产物。历史回放只展示当次执行快照，不把当前图片冒充为历史证据。</p>
+          </div>
+          <div class="agent-run-controls">
+            <label for="agentRunSelect">运行记录</label>
+            <select id="agentRunSelect" aria-label="选择 Agent 运行记录">
+              <option value="">等待运行数据</option>
+            </select>
+            <button type="button" id="agentRefreshButton">刷新</button>
+            <div class="agent-stale-note" id="agentStaleNote" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="agent-kpi-grid" id="agentRunKpis">
+          <div class="agent-kpi" title="Run"><span>运行编号</span><b>-</b></div>
+          <div class="agent-kpi" title="Status"><span>状态</span><b>-</b></div>
+          <div class="agent-kpi" title="Progress"><span>进度</span><b>-</b></div>
+          <div class="agent-kpi" title="Agents"><span>Agent 数</span><b>-</b></div>
+          <div class="agent-kpi" title="Runtime"><span>耗时</span><b>-</b></div>
+          <div class="agent-kpi" title="Failed"><span>失败数</span><b>-</b></div>
+        </div>
+
+        <div class="agent-work-grid">
+          <section class="agent-surface" aria-labelledby="agentDagTitle">
+            <div class="agent-surface-head">
+              <h2 id="agentDagTitle">Agent 依赖图</h2>
+              <span class="agent-status-badge" id="agentReplayBadge">等待数据</span>
+            </div>
+            <div class="agent-dag-shell" id="agentDagShell">
+              <svg class="agent-dag-svg" id="agentDagSvg" aria-hidden="true"></svg>
+              <div class="agent-dag-layers" id="agentDagLayers">
+                <div class="robot-empty">等待 DAG 数据。</div>
+              </div>
+            </div>
+          </section>
+          <aside class="agent-surface agent-detail" id="agentNodeDetail" aria-live="polite">
+            <h3>选择一个 Agent</h3>
+            <p>点击 DAG 节点查看职责、执行状态、耗时、重试次数和真实输出指标。</p>
+          </aside>
+        </div>
+
+        <section class="agent-surface" aria-labelledby="agentTimelineTitle">
+          <div class="agent-surface-head">
+            <h2 id="agentTimelineTitle">执行时间线</h2>
+            <span class="agent-status-badge" id="agentTimelineSummary">0 events</span>
+          </div>
+          <div class="agent-timeline" id="agentTimeline">
+            <div class="robot-empty">等待运行时间线。</div>
+          </div>
+        </section>
+
+        <div class="agent-results-grid">
+          <section class="agent-surface" aria-labelledby="agentResultsTitle">
+            <div class="agent-surface-head">
+              <h2 id="agentResultsTitle">当前可展示结果</h2>
+              <span class="agent-status-badge" id="agentResultBinding">未绑定</span>
+            </div>
+            <div class="agent-result-kpis" id="agentResultKpis">
+              <div class="robot-empty">等待当前结果摘要。</div>
+            </div>
+            <div class="agent-result-links" id="agentResultLinks"></div>
+          </section>
+          <aside class="agent-surface agent-truth-boundary" id="agentTruthBoundary">
+            <strong>真实性边界</strong>
+            <span>KICT 图像和 mask 为真实数据；路线与跨巡检关系包含仿真元数据。</span>
+            <span>所有工程结论仍需人工或传感器复核。</span>
+          </aside>
+        </div>
+      </div>
     </section>
 
     <section class="panel data-section app-view" id="engineering-report" data-app-view="engineering-report">
@@ -2005,7 +2335,7 @@
     </section>
 
     <section class="panel data-section app-view" id="video-analysis" data-app-view="video-analysis">
-      <div class="panel-title">视频分析结果 <span id="videoDashboardSource">/api/video-dashboard</span></div>
+      <div class="panel-title">视频分析结果 <span id="videoDashboardSource">数据加载中</span></div>
       <div class="panel-body">
         <div class="video-boundary" id="videoBoundaryNotes">
           <span>tunnel_demo.mp4 是由 KICT 静态裂缝图像和 mask 合成的 demo video。</span>
@@ -2019,7 +2349,7 @@
     </section>
 
     <section class="panel data-section app-view" id="algorithm-flow" data-app-view="algorithm-flow">
-      <div class="panel-title">算法展示 / Algorithm Flow <span id="algorithmEventsSource">/api/algorithm-events</span></div>
+      <div class="panel-title">算法展示 <span id="algorithmEventsSource">数据加载中</span></div>
       <div class="panel-body">
         <div class="video-boundary" id="algorithmBoundaryNotes">
           <span>这是基于已生成 artifacts 的算法事件流展示。</span>
@@ -2066,7 +2396,7 @@
           <input type="file" id="fileInput" accept="image/*" hidden />
         </div>
       </div>
-      <div class="upload-status" id="uploadStatus">实时检测服务：等待上传。</div>
+      <div class="upload-status" id="uploadStatus">当前展示内置样例 t1_1；上传图片后将替换为实时检测结果。</div>
     </section>
 
     <section class="panel experiment-panel app-view" data-app-view="detect">
@@ -2104,7 +2434,7 @@
 
     <section class="dashboard app-view" data-app-view="detect">
       <aside class="panel">
-        <div class="panel-title">Case file <span class="pill"><i class="dot"></i> 当前样本</span></div>
+        <div class="panel-title">样本档案 <span class="pill"><i class="dot"></i> 当前样本</span></div>
         <div class="panel-body">
           <h2 class="case-id" id="caseId">t1_1</h2>
           <div class="status-strip" id="statusStrip">
@@ -2132,7 +2462,7 @@
       </section>
 
       <aside class="panel">
-        <div class="panel-title">Risk evidence <span>JSON-backed</span></div>
+        <div class="panel-title">风险证据 <span>JSON-backed</span></div>
         <div class="panel-body">
           <div class="metric-grid" id="riskMetrics">
             <div class="metric"><span>Mean uncertainty</span><b>0.0046</b><small>整张图预测分布的平均不确定程度，越高表示模型越不确定。</small></div>
@@ -2164,7 +2494,7 @@
 
     <section class="lower app-view" data-app-view="detect">
       <section class="panel">
-        <div class="panel-title">Metrics summary <span>Single / Fused / Selected</span></div>
+        <div class="panel-title">指标汇总 <span>Single / Fused / Selected</span></div>
         <div class="panel-body">
           <div class="metric-grid" id="summaryMetrics">
             <div class="metric"><span>Single mIoU</span><b>0.2221</b><small>单次预测与人工标注 GT 的重叠度，1 表示完全一致。</small></div>
@@ -2194,7 +2524,7 @@
       </section>
 
       <section class="panel">
-        <div class="panel-title">Structured report <span>JSON excerpt</span></div>
+        <div class="panel-title">结构化报告 <span>JSON excerpt</span></div>
         <div class="report-export" id="reportExport" hidden>
           <span id="reportExportHint">结构化报告会在本地输出目录生成。</span>
           <a id="reportExportLink" href="#" target="_blank" rel="noopener">下载结构化报告</a>
@@ -2203,7 +2533,7 @@
       </section>
 
       <section class="panel" id="multidomainPanel" style="margin-top:34px;" hidden>
-        <div class="panel-title">Multidomain summary <span>civil / track / equipment</span></div>
+        <div class="panel-title">多领域汇总 <span>civil / track / equipment</span></div>
         <div class="panel-body">
           <div class="metric-grid" id="multidomainCards"></div>
           <div class="advantage-note" id="multidomainNote" style="margin-top:12px;"></div>
@@ -2251,8 +2581,8 @@
     </section>
   </main>
 
-  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/ScrollTrigger.min.js"></script>
   <script>
     const sampleViews = [
       { label: "Original", url: "assets/t1_1_original.jpg" },
@@ -2704,14 +3034,14 @@
       document.querySelector("#robotDashboardSource").textContent = payload.source || "fallback";
 
       const kpis = [
-        ["Inspection", summary.inspection_count ?? "-"],
-        ["Frames", summary.frame_count ?? "-"],
-        ["Defects", summary.growth_object_count ?? summary.track_count ?? "-"],
-        ["Recheck", summary.priority_recheck_count ?? summary.review_count ?? "-"],
-        ["High risk", summary.high_risk_count ?? "-"],
+        ["巡检次数", summary.inspection_count ?? "-", "Inspection"],
+        ["帧数", summary.frame_count ?? "-", "Frames"],
+        ["病害数", summary.growth_object_count ?? summary.track_count ?? "-", "Defects"],
+        ["待复检", summary.priority_recheck_count ?? summary.review_count ?? "-", "Recheck"],
+        ["高风险", summary.high_risk_count ?? "-", "High risk"],
       ];
       document.querySelector("#robotKpiGrid").innerHTML = kpis
-        .map(([label, value]) => `<div class="robot-kpi"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`)
+        .map(([label, value, en]) => `<div class="robot-kpi" title="${escapeHtml(en)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`)
         .join("");
 
       const limitations = (payload.limitations || []).slice(0, 5);
@@ -2767,7 +3097,7 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         renderRobotDashboard(await response.json());
       } catch (error) {
-        document.querySelector("#robotDashboardSource").textContent = "dashboard unavailable";
+        document.querySelector("#robotDashboardSource").textContent = "Dashboard 暂不可用";
         document.querySelector("#recheckList").innerHTML = `<div class="robot-empty">Dashboard 暂不可用：${escapeHtml(error.message)}</div>`;
       }
     }
@@ -2790,7 +3120,7 @@
           .map(([label, value]) => `<div class="robot-kpi"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`)
           .join("");
       } catch (error) {
-        document.querySelector("#robotDashboardSource").textContent = `summary unavailable: ${error.message}`;
+        document.querySelector("#robotDashboardSource").textContent = `摘要暂不可用：${error.message}`;
       }
     }
 
@@ -2898,8 +3228,13 @@
       const videos = payload.videos || [];
       document.querySelector("#videoCards").innerHTML = videos.length ? videos.map((video) => {
         const poster = video.poster_url ? ` poster="${escapeHtml(video.poster_url)}"` : "";
+        const sources = (video.sources && video.sources.length ? video.sources : [{ url: video.url, type: "video/mp4" }])
+          .filter((source) => source.url)
+          .map((source) => `<source src="${escapeHtml(source.url)}" type="${escapeHtml(source.type || "")}">`)
+          .join("");
         const body = video.exists
-          ? `<video controls preload="metadata"${poster} src="${escapeHtml(video.url)}"></video>`
+          ? `<video controls preload="metadata"${poster}>${sources}当前浏览器无法播放该视频，请下载后查看。</video>
+             <small>${escapeHtml(video.compatibility_note || "未找到浏览器兼容 WebM 副本，当前回退使用 MP4。")}</small>`
           : `<div class="robot-empty">${escapeHtml(video.missing_message || payload.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>`;
         return `<article class="data-card video-card">
           <b>${escapeHtml(video.title || video.key || "video")}</b>
@@ -2914,7 +3249,7 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         renderVideoDashboard(await response.json());
       } catch (error) {
-        document.querySelector("#videoDashboardSource").textContent = "video dashboard unavailable";
+        document.querySelector("#videoDashboardSource").textContent = "视频分析暂不可用";
         document.querySelector("#videoCards").innerHTML = `<div class="robot-empty">视频分析结果不可用：${escapeHtml(error.message)}</div>`;
       }
     }
@@ -2995,7 +3330,7 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         renderAlgorithmEvents(await response.json());
       } catch (error) {
-        document.querySelector("#algorithmEventsSource").textContent = "algorithm events unavailable";
+        document.querySelector("#algorithmEventsSource").textContent = "算法事件流暂不可用";
         document.querySelector("#algorithmTimeline").innerHTML = `<div class="robot-empty">算法展示事件流不可用：${escapeHtml(error.message)}</div>`;
       }
     }
@@ -3217,12 +3552,434 @@
         .replace("changes dominant direction for", "改变主方向类别：");
     }
 
+    let navMenuPinned = false;
+    let navMenuCloseTimer = null;
+    let agentWorkbenchPayload = null;
+    let agentWorkbenchController = null;
+    let agentWorkbenchRequestSequence = 0;
+    let agentWorkbenchPollTimer = null;
+    let selectedAgentNodeId = "";
+
+    function setNavMenuOpen(open, options = {}) {
+      const shell = document.querySelector("#navMenuShell");
+      const trigger = document.querySelector("#navMenuTrigger");
+      const panel = document.querySelector("#navMenuPanel");
+      if (!shell || !trigger || !panel) return;
+      shell.classList.toggle("is-open", open);
+      trigger.setAttribute("aria-expanded", String(open));
+      panel.setAttribute("aria-hidden", String(!open));
+      if (options.pin !== undefined) navMenuPinned = Boolean(options.pin);
+      if (options.focusFirst && open) {
+        document.querySelector("[data-view-link]")?.focus();
+      }
+    }
+
+    function closeNavMenu(resetPin = true) {
+      if (navMenuCloseTimer) window.clearTimeout(navMenuCloseTimer);
+      navMenuCloseTimer = null;
+      setNavMenuOpen(false, { pin: resetPin ? false : navMenuPinned });
+    }
+
+    function cancelNavHoverClose() {
+      if (navMenuCloseTimer) window.clearTimeout(navMenuCloseTimer);
+      navMenuCloseTimer = null;
+    }
+
+    function scheduleNavHoverClose() {
+      cancelNavHoverClose();
+      navMenuCloseTimer = window.setTimeout(() => {
+        navMenuCloseTimer = null;
+        const shell = document.querySelector("#navMenuShell");
+        if (!navMenuPinned && !shell?.matches(":hover")) closeNavMenu(false);
+      }, 240);
+    }
+
+    function initCollapsibleNavigation() {
+      const shell = document.querySelector("#navMenuShell");
+      const trigger = document.querySelector("#navMenuTrigger");
+      const panel = document.querySelector("#navMenuPanel");
+      if (!shell || !trigger || !panel) return;
+      const supportsHover = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+
+      trigger.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const willOpen = !shell.classList.contains("is-open") || !navMenuPinned;
+        setNavMenuOpen(willOpen, { pin: willOpen });
+      });
+      trigger.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setNavMenuOpen(true, { pin: true, focusFirst: true });
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeNavMenu();
+        }
+      });
+
+      if (supportsHover) {
+        shell.addEventListener("mouseenter", () => {
+          cancelNavHoverClose();
+          setNavMenuOpen(true);
+        });
+        shell.addEventListener("mouseleave", () => {
+          if (!navMenuPinned) scheduleNavHoverClose();
+        });
+        panel.addEventListener("mouseenter", cancelNavHoverClose);
+      }
+
+      shell.addEventListener("focusout", () => {
+        window.setTimeout(() => {
+          if (!shell.contains(document.activeElement) && !navMenuPinned) closeNavMenu(false);
+        }, 0);
+      });
+      panel.addEventListener("keydown", (event) => {
+        const links = Array.from(panel.querySelectorAll("[data-view-link]"));
+        const currentIndex = links.indexOf(document.activeElement);
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeNavMenu();
+          trigger.focus();
+          return;
+        }
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        let nextIndex = currentIndex;
+        if (event.key === "Home") nextIndex = 0;
+        if (event.key === "End") nextIndex = links.length - 1;
+        if (event.key === "ArrowDown") nextIndex = (currentIndex + 1 + links.length) % links.length;
+        if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + links.length) % links.length;
+        links[nextIndex]?.focus();
+      });
+      document.addEventListener("pointerdown", (event) => {
+        if (!shell.contains(event.target)) closeNavMenu();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && shell.classList.contains("is-open")) {
+          closeNavMenu();
+          trigger.focus();
+        }
+      });
+    }
+
+    function agentStatusTone(status) {
+      const normalized = String(status || "pending").toLowerCase();
+      if (["success", "running", "failed"].includes(normalized)) return normalized;
+      return "pending";
+    }
+
+    function agentMetricLabel(key) {
+      return String(key || "")
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }
+
+    function topologicalAgentLayers(nodes = [], edges = []) {
+      const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+      const incoming = new Map(nodes.map((node) => [node.id, 0]));
+      const outgoing = new Map(nodes.map((node) => [node.id, []]));
+      edges.forEach((edge) => {
+        if (!nodeMap.has(edge.source) || !nodeMap.has(edge.target)) return;
+        incoming.set(edge.target, (incoming.get(edge.target) || 0) + 1);
+        outgoing.get(edge.source).push(edge.target);
+      });
+      let frontier = nodes.filter((node) => incoming.get(node.id) === 0).map((node) => node.id);
+      const layers = [];
+      let visited = 0;
+      while (frontier.length) {
+        const current = frontier;
+        frontier = [];
+        layers.push(current.map((id) => nodeMap.get(id)));
+        current.forEach((id) => {
+          visited += 1;
+          outgoing.get(id).forEach((target) => {
+            incoming.set(target, incoming.get(target) - 1);
+            if (incoming.get(target) === 0) frontier.push(target);
+          });
+        });
+      }
+      return visited === nodes.length
+        ? { layers, cycle: false }
+        : { layers: [nodes], cycle: true };
+    }
+
+    function drawAgentDagEdges(edges = []) {
+      const shell = document.querySelector("#agentDagShell");
+      const svg = document.querySelector("#agentDagSvg");
+      const layers = document.querySelector("#agentDagLayers");
+      if (!shell || !svg || !layers) return;
+      const width = Math.max(shell.clientWidth, layers.scrollWidth);
+      const height = Math.max(shell.clientHeight, layers.scrollHeight);
+      const shellRect = shell.getBoundingClientRect();
+      const buttons = Array.from(layers.querySelectorAll("[data-agent-node-id]"));
+      const byId = new Map(buttons.map((button) => [button.dataset.agentNodeId, button]));
+      const paths = edges.map((edge) => {
+        const source = byId.get(edge.source);
+        const target = byId.get(edge.target);
+        if (!source || !target) return "";
+        const sourceRect = source.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const x1 = sourceRect.right - shellRect.left + shell.scrollLeft;
+        const y1 = sourceRect.top + sourceRect.height / 2 - shellRect.top + shell.scrollTop;
+        const x2 = targetRect.left - shellRect.left + shell.scrollLeft;
+        const y2 = targetRect.top + targetRect.height / 2 - shellRect.top + shell.scrollTop;
+        const bend = Math.max(32, Math.abs(x2 - x1) * .42);
+        return `<path d="M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}" fill="none" stroke="rgba(0,130,147,.43)" stroke-width="2" marker-end="url(#agentArrow)" />`;
+      }).join("");
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      svg.style.width = `${width}px`;
+      svg.style.height = `${height}px`;
+      svg.innerHTML = `<defs><marker id="agentArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(0,130,147,.58)"></path></marker></defs>${paths}`;
+    }
+
+    function renderAgentNodeDetail(node = {}) {
+      selectedAgentNodeId = node.id || "";
+      document.querySelectorAll("[data-agent-node-id]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.agentNodeId === selectedAgentNodeId);
+      });
+      const metrics = Object.entries(node.metrics || {});
+      document.querySelector("#agentNodeDetail").innerHTML = `
+        <span class="agent-status-badge ${agentStatusTone(node.status)}">${escapeHtml(node.status || "pending")}</span>
+        <h3>${escapeHtml(node.title || node.agent || node.id || "Agent")}</h3>
+        <p>${escapeHtml(node.description || "暂无职责说明。")}</p>
+        <div class="agent-metric-list">
+          <div class="agent-metric-row"><span>Task ID</span><b>${escapeHtml(node.id || "-")}</b></div>
+          <div class="agent-metric-row"><span>Runtime</span><b>${node.duration_seconds === null || node.duration_seconds === undefined ? "N/A" : `${fmt(node.duration_seconds, 4)} s`}</b></div>
+          <div class="agent-metric-row"><span>Retry</span><b>${intFmt(node.retry_count || 0)}</b></div>
+          ${metrics.length
+            ? metrics.map(([key, value]) => `<div class="agent-metric-row"><span>${escapeHtml(agentMetricLabel(key))}</span><b>${escapeHtml(String(value))}</b></div>`).join("")
+            : `<div class="agent-metric-row"><span>Output metrics</span><b>N/A</b></div>`}
+        </div>
+      `;
+    }
+
+    function renderAgentDag(payload = {}) {
+      const nodes = payload.dag?.nodes || [];
+      const edges = payload.dag?.edges || [];
+      const container = document.querySelector("#agentDagLayers");
+      const topology = topologicalAgentLayers(nodes, edges);
+      if (!nodes.length) {
+        container.innerHTML = `<div class="robot-empty">当前运行没有可展示的 DAG 节点。</div>`;
+        document.querySelector("#agentDagSvg").replaceChildren();
+        document.querySelector("#agentNodeDetail").innerHTML = `<h3>暂无 Agent</h3><p>运行记录存在，但 DAG 数据缺失或不可用。</p>`;
+        return;
+      }
+      container.style.gridTemplateColumns = `repeat(${Math.max(1, topology.layers.length)}, minmax(150px, 1fr))`;
+      container.innerHTML = topology.layers.map((layer, layerIndex) => `
+        <div class="agent-dag-layer" data-agent-layer="${layerIndex}">
+          ${layer.map((node) => `
+            <button type="button" class="agent-node ${agentStatusTone(node.status)}" data-agent-node-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(`${node.title || node.id}，状态 ${node.status || "pending"}`)}">
+              <small>${escapeHtml(node.status || "pending")} · ${node.duration_seconds === null || node.duration_seconds === undefined ? "N/A" : `${fmt(node.duration_seconds, 3)}s`}</small>
+              <strong>${escapeHtml(node.title || node.agent || node.id)}</strong>
+              <span>${escapeHtml(node.description || "")}</span>
+            </button>
+          `).join("")}
+        </div>
+      `).join("");
+      if (topology.cycle) {
+        document.querySelector("#agentStaleNote").textContent = "DAG 存在循环或无效依赖，已降级为任务列表。";
+      }
+      container.querySelectorAll("[data-agent-node-id]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const node = nodes.find((item) => item.id === button.dataset.agentNodeId);
+          if (node) renderAgentNodeDetail(node);
+        });
+      });
+      const selected = nodes.find((node) => node.id === selectedAgentNodeId) || nodes[0];
+      renderAgentNodeDetail(selected);
+      window.requestAnimationFrame(() => drawAgentDagEdges(topology.cycle ? [] : edges));
+    }
+
+    function renderAgentTimeline(timeline = []) {
+      const container = document.querySelector("#agentTimeline");
+      document.querySelector("#agentTimelineSummary").textContent = `${timeline.length} tasks`;
+      const durations = timeline.map((item) => Number(item.duration_seconds) || 0);
+      const maxDuration = Math.max(...durations, 0.001);
+      const timing = timeline.map((item) => {
+        const start = Date.parse(item.start_time || "");
+        const explicitEnd = Date.parse(item.end_time || "");
+        const duration = Number(item.duration_seconds);
+        const end = Number.isFinite(explicitEnd)
+          ? explicitEnd
+          : Number.isFinite(start) && Number.isFinite(duration)
+            ? start + duration * 1000
+            : start;
+        return { start, end };
+      });
+      const validStarts = timing.map((item) => item.start).filter(Number.isFinite);
+      const validEnds = timing.map((item) => item.end).filter(Number.isFinite);
+      const timelineStart = validStarts.length ? Math.min(...validStarts) : NaN;
+      const timelineEnd = validEnds.length ? Math.max(...validEnds) : NaN;
+      const timelineSpan = Number.isFinite(timelineStart) && Number.isFinite(timelineEnd)
+        ? Math.max(1, timelineEnd - timelineStart)
+        : NaN;
+      container.innerHTML = timeline.length ? timeline.map((item, index) => {
+        const duration = Number(item.duration_seconds);
+        const hasAbsoluteTiming = Number.isFinite(timing[index].start) && Number.isFinite(timelineSpan);
+        const left = hasAbsoluteTiming
+          ? Math.max(0, (timing[index].start - timelineStart) / timelineSpan * 100)
+          : 0;
+        const rawWidth = hasAbsoluteTiming
+          ? Math.max(0, timing[index].end - timing[index].start) / timelineSpan * 100
+          : Number.isFinite(duration) ? duration / maxDuration * 100 : 0;
+        const width = Math.min(100 - left, Math.max(3, rawWidth));
+        return `<div class="agent-timeline-row">
+          <b>${escapeHtml(item.task || "-")}</b>
+          <div class="agent-timeline-track" aria-label="${escapeHtml(`${item.task || "task"} timeline position and duration`)}"><i style="left:${left}%;width:${width}%"></i></div>
+          <span class="agent-status-badge ${agentStatusTone(item.status)}">${escapeHtml(item.status || "pending")}${Number.isFinite(duration) ? ` · ${fmt(duration, 3)}s` : ""}</span>
+        </div>`;
+      }).join("") : `<div class="robot-empty">当前运行没有可回放的时间线。</div>`;
+    }
+
+    function renderAgentResults(currentResults = {}) {
+      const summary = currentResults.summary || {};
+      const binding = currentResults.binding_status || "unavailable";
+      const bindingNode = document.querySelector("#agentResultBinding");
+      bindingNode.textContent = binding === "matched_latest" ? `latest · ${currentResults.bound_run_id || "-"}` : "execution only";
+      bindingNode.className = `agent-status-badge ${binding === "matched_latest" ? "success" : "execution-only"}`;
+      const metrics = [
+        ["巡检次数", summary.inspection_count],
+        ["病害对象", summary.disease_count],
+        ["工程记录", summary.engineering_record_count],
+        ["重点复检", summary.priority_recheck_count],
+        ["高风险", summary.high_risk_count],
+        ["可验证增长", summary.obvious_growth_count],
+        ["图表", summary.visualization_count],
+      ];
+      document.querySelector("#agentResultKpis").innerHTML = binding === "matched_latest"
+        ? metrics.map(([label, value]) => `<div class="agent-kpi"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value ?? "-"))}</b></div>`).join("")
+        : `<div class="robot-empty" style="grid-column:1/-1;">历史运行仅回放执行快照；当前图片和 CSV 不绑定到该 run。</div>`;
+      const links = currentResults.links || [];
+      const linkContainer = document.querySelector("#agentResultLinks");
+      linkContainer.innerHTML = links.map((link) => `<button type="button" data-workbench-view="${escapeHtml(link.view)}">${escapeHtml(link.label)}</button>`).join("");
+      linkContainer.querySelectorAll("[data-workbench-view]").forEach((button) => {
+        button.addEventListener("click", () => {
+          showAppView(button.dataset.workbenchView, { updateHash: true, scrollTop: true });
+        });
+      });
+      const limitations = currentResults.limitations || [];
+      const zeroGrowth = binding === "matched_latest" && Number(summary.obvious_growth_count) === 0
+        ? `<div class="agent-growth-zero">当前没有形成可验证纵向增长结论。</div>`
+        : "";
+      document.querySelector("#agentTruthBoundary").innerHTML = `
+        <strong>真实性边界</strong>
+        ${limitations.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+        ${zeroGrowth}
+      `;
+    }
+
+    function clearAgentWorkbenchPolling() {
+      if (agentWorkbenchPollTimer) window.clearTimeout(agentWorkbenchPollTimer);
+      agentWorkbenchPollTimer = null;
+    }
+
+    function scheduleAgentWorkbenchPolling(payload = {}) {
+      clearAgentWorkbenchPolling();
+      const interval = Number(payload.poll_interval_ms);
+      if (!interval || document.hidden || currentAppViewFromHash() !== "agent-workbench") return;
+      agentWorkbenchPollTimer = window.setTimeout(() => {
+        loadAgentWorkbench(payload.selected_run?.run_id, { silent: true });
+      }, interval);
+    }
+
+    function renderAgentWorkbench(payload = {}) {
+      agentWorkbenchPayload = payload;
+      const run = payload.selected_run;
+      const source = document.querySelector("#agentWorkbenchSource");
+      if (!run) {
+        source.textContent = payload.source || "fallback";
+        document.querySelector("#agentRunKpis").innerHTML = `<div class="robot-empty" style="grid-column:1/-1;">尚无可展示的 Agent 运行记录。</div>`;
+        renderAgentDag(payload);
+        renderAgentTimeline([]);
+        renderAgentResults(payload.current_results || {});
+        return;
+      }
+      source.textContent = `${payload.source || "run-artifacts"} / ${run.run_id}`;
+      const select = document.querySelector("#agentRunSelect");
+      select.innerHTML = (payload.runs || []).map((item) => {
+        const selected = item.run_id === run.run_id ? " selected" : "";
+        return `<option value="${escapeHtml(item.run_id)}"${selected}>${escapeHtml(item.run_id)} · ${escapeHtml(item.status || "unknown")} · ${escapeHtml((item.updated_at || "").replace("T", " "))}</option>`;
+      }).join("");
+      const kpis = [
+        ["运行编号", run.run_id, "Run"],
+        ["状态", run.status, "Status"],
+        ["进度", `${Math.round(Number(run.progress || 0) * 100)}%`, "Progress"],
+        ["Agent 数", `${intFmt(run.completed_count || 0)} / ${intFmt(run.agent_count || 0)}`, "Agents"],
+        ["耗时", `${fmt(run.total_runtime_seconds || 0, 3)}s`, "Runtime"],
+        ["失败数", intFmt(run.failed_count || 0), "Failed"],
+      ];
+      document.querySelector("#agentRunKpis").innerHTML = kpis.map(([label, value, en]) => `
+        <div class="agent-kpi" title="${escapeHtml(en)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>
+      `).join("");
+      const replayBadge = document.querySelector("#agentReplayBadge");
+      replayBadge.textContent = run.is_latest ? `${run.status} · live source` : "历史执行回放";
+      replayBadge.className = `agent-status-badge ${run.is_latest ? agentStatusTone(run.status) : "execution-only"}`;
+      const dataWarnings = [
+        ...(payload.missing || []).map((item) => `缺失 ${item}`),
+        ...Object.keys(payload.errors || {}).map((item) => `${item} 不可用`),
+      ];
+      document.querySelector("#agentStaleNote").textContent = dataWarnings.join("；");
+      renderAgentDag(payload);
+      renderAgentTimeline(payload.timeline || []);
+      renderAgentResults(payload.current_results || {});
+      scheduleAgentWorkbenchPolling(payload);
+    }
+
+    async function loadAgentWorkbench(runId = "", options = {}) {
+      clearAgentWorkbenchPolling();
+      if (agentWorkbenchController) agentWorkbenchController.abort();
+      const controller = new AbortController();
+      agentWorkbenchController = controller;
+      const sequence = ++agentWorkbenchRequestSequence;
+      const suffix = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+      if (!options.silent) document.querySelector("#agentStaleNote").textContent = "正在同步真实运行数据…";
+      try {
+        const response = await fetch(`/api/agent-workbench${suffix}`, { signal: controller.signal });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        if (sequence !== agentWorkbenchRequestSequence) return;
+        renderAgentWorkbench(payload);
+      } catch (error) {
+        if (error.name === "AbortError" || sequence !== agentWorkbenchRequestSequence) return;
+        document.querySelector("#agentStaleNote").textContent = `工作台数据可能已过期：${error.message}`;
+        if (!agentWorkbenchPayload) {
+          document.querySelector("#agentRunKpis").innerHTML = `<div class="robot-empty" style="grid-column:1/-1;">Agent 工作台不可用：${escapeHtml(error.message)}</div>`;
+        } else if (agentWorkbenchPayload.selected_run?.run_id === runId) {
+          scheduleAgentWorkbenchPolling(agentWorkbenchPayload);
+        }
+      }
+    }
+
+    function initAgentWorkbench() {
+      document.querySelector("#agentRunSelect")?.addEventListener("change", (event) => {
+        loadAgentWorkbench(event.target.value);
+      });
+      document.querySelector("#agentRefreshButton")?.addEventListener("click", () => {
+        loadAgentWorkbench(document.querySelector("#agentRunSelect")?.value || "");
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          clearAgentWorkbenchPolling();
+        } else if (currentAppViewFromHash() === "agent-workbench") {
+          loadAgentWorkbench(document.querySelector("#agentRunSelect")?.value || "");
+        }
+      });
+      window.addEventListener("resize", () => {
+        if (!agentWorkbenchPayload) return;
+        const nodes = agentWorkbenchPayload.dag?.nodes || [];
+        const edges = agentWorkbenchPayload.dag?.edges || [];
+        const topology = topologicalAgentLayers(nodes, edges);
+        drawAgentDagEdges(topology.cycle ? [] : edges);
+      });
+      loadAgentWorkbench();
+    }
+
     function setStatus(text, type = "") {
       uploadStatus.textContent = text;
       uploadStatus.className = `upload-status ${type}`.trim();
     }
 
-    const appViewIds = ["dashboard", "engineering-report", "growth-analysis", "recheck-list", "visualizations", "video-analysis", "algorithm-flow", "detect", "data-note"];
+    const appViewIds = ["dashboard", "agent-workbench", "engineering-report", "growth-analysis", "recheck-list", "visualizations", "video-analysis", "algorithm-flow", "detect", "data-note"];
 
     function currentAppViewFromHash() {
       const hash = window.location.hash.replace("#", "");
@@ -3235,8 +3992,21 @@
         node.classList.toggle("active-view", node.dataset.appView === nextView);
       });
       document.querySelectorAll("[data-view-link]").forEach((link) => {
-        link.classList.toggle("active", link.dataset.viewLink === nextView);
+        const active = link.dataset.viewLink === nextView;
+        link.classList.toggle("active", active);
+        if (active) {
+          link.setAttribute("aria-current", "page");
+          document.querySelector("#navCurrentLabel").textContent = link.textContent.trim();
+        } else {
+          link.removeAttribute("aria-current");
+        }
       });
+      closeNavMenu();
+      if (nextView === "agent-workbench") {
+        if (agentWorkbenchPayload) scheduleAgentWorkbenchPolling(agentWorkbenchPayload);
+      } else {
+        clearAgentWorkbenchPolling();
+      }
       if (options.updateHash && window.location.hash !== `#${nextView}`) {
         history.pushState(null, "", `#${nextView}`);
       }
@@ -3249,6 +4019,7 @@
     }
 
     function initAppNavigation() {
+      initCollapsibleNavigation();
       document.querySelectorAll("[data-view-link]").forEach((link) => {
         link.addEventListener("click", (event) => {
           event.preventDefault();
@@ -3261,35 +4032,10 @@
 
     function initTasteMotion() {
       if (!window.gsap || !window.ScrollTrigger) return;
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
       gsap.registerPlugin(ScrollTrigger);
 
-      document.querySelectorAll(".scrub-text").forEach((node) => {
-        if (!node.dataset.split) {
-          const parts = node.textContent.trim().split(/(\s+)/);
-          node.innerHTML = parts.map((part) => {
-            if (!part.trim()) return part;
-            return `<span class="reveal-word">${part}</span>`;
-          }).join("");
-          node.dataset.split = "true";
-        }
-        gsap.fromTo(
-          node.querySelectorAll(".reveal-word"),
-          { opacity: 0.18 },
-          {
-            opacity: 1,
-            stagger: 0.035,
-            ease: "none",
-            scrollTrigger: {
-              trigger: node,
-              start: "top 72%",
-              end: "bottom 46%",
-              scrub: true
-            }
-          }
-        );
-      });
-
-      gsap.utils.toArray(".motion-image img, .image-stage img").forEach((img) => {
+      gsap.utils.toArray(".image-stage img").forEach((img) => {
         gsap.fromTo(
           img,
           { scale: 0.88, opacity: 0.82 },
@@ -3733,6 +4479,7 @@
     loadVideoDashboard();
     loadAlgorithmEvents();
     loadRobotRouteReport();
+    initAgentWorkbench();
     renderReport(sampleReport, sampleViews);
     initAppNavigation();
     initTasteMotion();
