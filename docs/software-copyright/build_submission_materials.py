@@ -4,8 +4,8 @@ The builder intentionally creates two separate artifacts:
 
 * ``程序鉴别材料.pdf``: 60 visual source-code pages (front/back 30 pages)
   from self-developed core files only.
-* ``文档鉴别材料.pdf``: the complete functional specification, when it is
-  shorter than 60 pages, as permitted by the registration rules.
+* ``文档鉴别材料.pdf``: the complete user manual, with a boundary-safe
+  process figure, when it is shorter than 60 pages.
 
 This is a material-preparation helper, not part of the registered software.
 It never copies datasets, model weights, logs, caches, third-party source, or
@@ -14,7 +14,9 @@ machine-specific absolute paths into the generated PDFs.
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Iterable
@@ -32,7 +34,9 @@ from reportlab.pdfgen import canvas
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
+    Image as ReportLabImage,
     PageTemplate,
+    PageBreak,
     Paragraph,
     Preformatted,
     Spacer,
@@ -73,7 +77,8 @@ SOURCE_FILES = [
     "web_app.py",
 ]
 
-DOCUMENT_SOURCE = ROOT / "docs/software-copyright/software-functional-specification.md"
+DOCUMENT_SOURCE = ROOT / "docs/software-copyright/user-manual-draft.md"
+DOCUMENT_LABEL = "用户使用说明书"
 
 
 def register_fonts() -> tuple[str, str]:
@@ -285,7 +290,54 @@ def parse_table(lines: list[str], start: int) -> tuple[Table, int]:
     return table, index
 
 
-def build_document_story() -> list[object]:
+def build_manual_figure() -> Path:
+    """Create a non-deceptive local/offline process diagram for the manual."""
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    file_descriptor, file_name = tempfile.mkstemp(prefix="softcopyright-figure-", suffix=".png")
+    os.close(file_descriptor)
+    figure_path = Path(file_name)
+    width, height = 1800, 900
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    font_path = Path("C:/Windows/Fonts/simhei.ttf")
+    if font_path.exists():
+        title_font = ImageFont.truetype(str(font_path), 42)
+        box_font = ImageFont.truetype(str(font_path), 30)
+        note_font = ImageFont.truetype(str(font_path), 25)
+    else:
+        title_font = box_font = note_font = ImageFont.load_default()
+
+    draw.text((width // 2, 45), "本地离线工程原型处理流程示意", font=title_font, fill="#163A5F", anchor="ma")
+    boxes = [
+        ("单 sequence\n已有 mask\n工程元数据", "#EAF1F7"),
+        ("离线数据合同\n完整性与就绪性校验", "#F4F0E6"),
+        ("病害特征、报告\n复检清单与图表", "#EAF1F7"),
+        ("已生成 JSON/demo\n路线级结果", "#F4F0E6"),
+        ("本地 Web\n结果展示", "#EAF1F7"),
+    ]
+    box_w, box_h, gap = 300, 170, 42
+    start_x = (width - (box_w * len(boxes) + gap * (len(boxes) - 1))) // 2
+    y = 250
+    for index, (label, fill) in enumerate(boxes):
+        x = start_x + index * (box_w + gap)
+        draw.rounded_rectangle((x, y, x + box_w, y + box_h), radius=18, fill=fill, outline="#5B7890", width=3)
+        draw.multiline_text((x + box_w // 2, y + box_h // 2), label, font=box_font, fill="#1F2933", anchor="mm", align="center", spacing=8)
+        if index < len(boxes) - 1:
+            x1 = x + box_w + 8
+            x2 = x + box_w + gap - 8
+            mid = y + box_h // 2
+            draw.line((x1, mid, x2, mid), fill="#5B7890", width=5)
+            draw.polygon([(x2, mid), (x2 - 15, mid - 11), (x2 - 15, mid + 11)], fill="#5B7890")
+    note = "异常即阻断并交由受控维护流程处理；不提供在线推理或生产调度服务。"
+    draw.rounded_rectangle((180, 565, width - 180, 700), radius=16, fill="#FFF8ED", outline="#C79A55", width=3)
+    draw.multiline_text((width // 2, 632), note, font=note_font, fill="#5B2C06", anchor="mm", align="center")
+    image.save(figure_path)
+    return figure_path
+
+
+def build_document_story() -> tuple[list[object], Path | None]:
     lines = DOCUMENT_SOURCE.read_text(encoding="utf-8").splitlines()
     styles = getSampleStyleSheet()
     body = ParagraphStyle(
@@ -379,6 +431,22 @@ def build_document_story() -> list[object]:
     )
 
     story: list[object] = []
+    figure_path: Path | None = None
+    # Follow the supplied school flow: the cover has the software name plus
+    # “用户使用说明书”, without a version number or running header.
+    story.append(Spacer(1, 72 * mm))
+    story.append(Paragraph(escape(f"{SOFTWARE_NAME} {DOCUMENT_LABEL}"), title))
+    story.append(Paragraph("本地、离线工程原型用户材料", ParagraphStyle(
+        "CoverSubtitle",
+        parent=body,
+        fontName=BODY_FONT,
+        fontSize=11.5,
+        leading=18,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#52606D"),
+        spaceAfter=8,
+    )))
+    story.append(PageBreak())
     boundary = (
         "提交版边界提示：本说明书描述本地、离线工程原型。真实输入适配限于单 sequence、"
         "已有 mask 的离线数据合同；Web 仅展示已生成 JSON/demo 结果；单图推理需模型环境；"
@@ -386,10 +454,33 @@ def build_document_story() -> list[object]:
     )
     story.append(Paragraph(escape(boundary), note))
 
+    # The flow sheet requires at least one image/flowchart in the user manual.
+    if DOCUMENT_SOURCE.name == "user-manual-draft.md":
+        figure_path = build_manual_figure()
+        story.append(ReportLabImage(str(figure_path), width=165 * mm, height=82.5 * mm))
+        story.append(Paragraph("图 2.1  本地离线工程原型处理流程示意", ParagraphStyle(
+            "FigureCaption",
+            parent=body,
+            fontName=BODY_FONT,
+            fontSize=8.8,
+            leading=13,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#52606D"),
+            spaceBefore=2,
+            spaceAfter=10,
+        )))
+
     in_code = False
     code_lines: list[str] = []
     bullet_number = 0
     index = 0
+    # The draft contains internal formatting notes in section 0 and a draft
+    # title/metadata block. The uploadable manual starts at section 1.
+    if DOCUMENT_SOURCE.name == "user-manual-draft.md":
+        for candidate, value in enumerate(lines):
+            if value.startswith("## 1. 软件安装准备"):
+                index = candidate
+                break
     while index < len(lines):
         raw = lines[index].rstrip()
         if raw.startswith("```"):
@@ -421,7 +512,10 @@ def build_document_story() -> list[object]:
         if heading:
             bullet_number = 0
             level = len(heading.group(1))
-            style = title if level == 1 and not story else {1: h1, 2: h2, 3: h3}[level]
+            if DOCUMENT_SOURCE.name == "user-manual-draft.md":
+                style = {1: h1, 2: h1, 3: h2}.get(level, h3)
+            else:
+                style = title if level == 1 and not story else {1: h1, 2: h2, 3: h3}[level]
             story.append(Paragraph(escape(heading.group(2).strip()), style))
             index += 1
             continue
@@ -447,13 +541,16 @@ def build_document_story() -> list[object]:
         bullet_number = 0
         story.append(Paragraph(escape(raw), body))
         index += 1
-    return story
+    return story, figure_path
 
 
 def draw_document_header_footer(pdf: canvas.Canvas, doc: BaseDocTemplate) -> None:
     width, height = A4
     margin_x = 14 * mm
     pdf.saveState()
+    if doc.page == 1:
+        pdf.restoreState()
+        return
     pdf.setFillColor(colors.HexColor("#163A5F"))
     pdf.setFont(BODY_FONT, 8.2)
     pdf.drawString(margin_x, height - 13 * mm, SOFTWARE_NAME)
@@ -486,11 +583,16 @@ def build_document_pdf() -> int:
         rightMargin=14 * mm,
         topMargin=17 * mm,
         bottomMargin=16 * mm,
-        title=f"{SOFTWARE_NAME} 软件功能说明书",
+        title=f"{SOFTWARE_NAME} {DOCUMENT_LABEL}",
         author="software-copyright material preparation",
     )
     doc.addPageTemplates([template])
-    doc.build(build_document_story())
+    story, figure_path = build_document_story()
+    try:
+        doc.build(story)
+    finally:
+        if figure_path is not None:
+            figure_path.unlink(missing_ok=True)
     from pypdf import PdfReader
 
     return len(PdfReader(str(DOCUMENT_PDF)).pages)
@@ -507,7 +609,9 @@ def write_manifest(program_pages: int, document_pages: int, counts: dict[str, in
         "## 直接上传",
         "",
         f"1. `程序鉴别材料.pdf`：{program_pages} 页，源程序前 30 页 + 后 30 页。",
-        f"2. `文档鉴别材料.pdf`：{document_pages} 页，《软件功能说明书》全文（不足 60 页时提交全文）。",
+        f"2. `文档鉴别材料.pdf`：{document_pages} 页，《用户使用说明书》全文，含图 2.1 流程图（不足 60 页时提交全文）。",
+        "",
+        "`办理流程对照清单.md` 仅供办理时核对，不上传到 R11。",
         "",
         "## 程序材料范围",
         "",
