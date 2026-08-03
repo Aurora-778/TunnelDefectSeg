@@ -84,6 +84,15 @@ the deferred explicit recovery protocol is available.
   durable recovery marker. Ordinary Active-Lock contention remains exit 4.
 - Phase 0 validation does not acquire a lock, create a Run, execute the DAG, or write business artifacts.
 
+Phase B.1 additionally exposes `ArtifactResolver` as a Run-local, read-only
+integrity/freshness projection. It accepts only a controlled temporary sandbox
+and canonical `run_NNN`; it derives inventory from canonical State/Journal,
+resolved-input descriptor, A1 V4, and A2 Publication authorities. It does not
+perform Safe Reuse, Resume, recovery, task skipping, State/Journal repair, or
+publication cleanup. Its result is local completeness and stale detection, not
+source authentication or a hostile-tamper defense. The detailed contract is
+in `docs/inspection_artifact_resolver_contract.md`.
+
 The prepared task object contains exactly `schema_version`, `task_id`, `task_type`, `input`, and `requested_outputs`. Its input contains exactly `input_mode=prepared_dataset` and a safe `dataset_id`; paths, URIs, GT labels, split fields, review fields, and audit fields are not accepted.
 
 `config/inspection_workflow.yaml` is intentionally JSON-compatible YAML so the Phase 0 contract can be parsed deterministically with the Python standard library. It contains output mapping and validation/path/lock/publication policy only. It must not copy DAG dependencies or retry settings from `config/dag.yaml`.

@@ -91,6 +91,13 @@ from .source_references import (
     validate_frame_observation_references,
     validate_source_reference_contract,
 )
+from .artifact_resolver import (
+    ArtifactResolution,
+    ArtifactResolutionError,
+    ArtifactResolver,
+    ArtifactResolverInputError,
+    resolve_run_artifacts,
+)
 
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
@@ -165,4 +172,9 @@ __all__ = [
     "write_gated_growth_reports",
     "write_gated_memory_reports",
     "recover_publication",
+    "ArtifactResolution",
+    "ArtifactResolutionError",
+    "ArtifactResolver",
+    "ArtifactResolverInputError",
+    "resolve_run_artifacts",
 ]
