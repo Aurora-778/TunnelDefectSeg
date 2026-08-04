@@ -2300,7 +2300,7 @@
     </section>
 
     <section class="panel data-section app-view" id="engineering-report" data-app-view="engineering-report">
-      <div class="panel-title">工程化病害报告 <span>/api/engineering-report</span></div>
+      <div class="panel-title">工程化病害报告</div>
       <div class="panel-body">
         <div class="data-grid" id="engineeringReportGrid">
           <div class="robot-empty">等待工程报告。</div>
@@ -2309,7 +2309,7 @@
     </section>
 
     <section class="panel data-section app-view" id="growth-analysis" data-app-view="growth-analysis">
-      <div class="panel-title">跨巡检增长分析 <span>/api/growth-analysis</span></div>
+      <div class="panel-title">跨巡检增长分析</div>
       <div class="panel-body">
         <div class="data-grid" id="growthAnalysisGrid">
           <div class="robot-empty">等待增长分析。</div>
@@ -2318,7 +2318,7 @@
     </section>
 
     <section class="panel data-section app-view" id="recheck-list" data-app-view="recheck-list">
-      <div class="panel-title">重点复检清单 <span>/api/recheck-list</span></div>
+      <div class="panel-title">重点复检清单</div>
       <div class="panel-body">
         <div class="data-grid" id="fullRecheckGrid">
           <div class="robot-empty">等待复检清单。</div>
@@ -2327,7 +2327,7 @@
     </section>
 
     <section class="panel data-section app-view" id="visualizations" data-app-view="visualizations">
-      <div class="panel-title">可视化图表 <span>/api/visualization-assets</span></div>
+      <div class="panel-title">可视化图表</div>
       <div class="panel-body">
         <div class="visualization-grid" id="visualizationGrid">
           <div class="robot-empty">等待图表。</div>
@@ -2350,7 +2350,7 @@
     </section>
 
     <section class="panel data-section app-view" id="algorithm-flow" data-app-view="algorithm-flow">
-      <div class="panel-title">算法展示 <span id="algorithmEventsSource">数据加载中</span></div>
+      <div class="panel-title">算法展示 / Algorithm Flow <span id="algorithmEventsSource">数据加载中</span></div>
       <div class="panel-body">
         <div class="video-boundary" id="algorithmBoundaryNotes">
           <span>这是基于已生成 artifacts 的算法事件流展示。</span>
@@ -2376,7 +2376,6 @@
     <header class="quick-stats app-view" data-app-view="detect">
       <section class="brand">
         <h1>单图检测 / 现场复核</h1>
-        <p>mask / GT / uncertainty / Self IoU</p>
       </section>
       <section class="stat risk-medium" id="riskLevelCard"><span>Risk level</span><strong id="riskLevel">Medium</strong></section>
       <section class="stat"><span>Risk score</span><strong id="riskScore">3.25</strong></section>
@@ -2401,7 +2400,7 @@
     </section>
 
     <section class="panel experiment-panel app-view" data-app-view="detect">
-      <div class="panel-title">SegFormer B1 阶段结果 <span>160000 iter / val set</span></div>
+      <div class="panel-title">SegFormer B1 阶段结果</div>
       <div class="panel-body">
         <div class="experiment-grid">
           <div class="score-board">
@@ -2463,7 +2462,7 @@
       </section>
 
       <aside class="panel">
-        <div class="panel-title">风险证据 <span>JSON-backed</span></div>
+        <div class="panel-title">风险证据</div>
         <div class="panel-body">
           <div class="metric-grid" id="riskMetrics">
             <div class="metric"><span>Mean uncertainty</span><b>0.0046</b><small>整张图预测分布的平均不确定程度，越高表示模型越不确定。</small></div>
@@ -2495,7 +2494,7 @@
 
     <section class="lower app-view" data-app-view="detect">
       <section class="panel">
-        <div class="panel-title">指标汇总 <span>Single / Fused / Selected</span></div>
+        <div class="panel-title">指标汇总</div>
         <div class="panel-body">
           <div class="metric-grid" id="summaryMetrics">
             <div class="metric"><span>Single mIoU</span><b>0.2221</b><small>单次预测与人工标注 GT 的重叠度，1 表示完全一致。</small></div>
@@ -2525,7 +2524,7 @@
       </section>
 
       <section class="panel">
-        <div class="panel-title">结构化报告 <span>JSON excerpt</span></div>
+        <div class="panel-title">结构化报告</div>
         <div class="report-export" id="reportExport" hidden>
           <span id="reportExportHint">结构化报告会在本地输出目录生成。</span>
           <a id="reportExportLink" href="#" target="_blank" rel="noopener">下载结构化报告</a>
@@ -2534,7 +2533,7 @@
       </section>
 
       <section class="panel" id="multidomainPanel" style="margin-top:34px;" hidden>
-        <div class="panel-title">多领域汇总 <span>civil / track / equipment</span></div>
+        <div class="panel-title">多领域汇总</div>
         <div class="panel-body">
           <div class="metric-grid" id="multidomainCards"></div>
           <div class="advantage-note" id="multidomainNote" style="margin-top:12px;"></div>
@@ -2549,7 +2548,7 @@
     </section>
 
     <section class="panel interest-bento" id="robot-route" hidden style="margin-top:34px;">
-      <div class="panel-title">机器人时空巡检报告 <span>FrameRecord / defect tracks / claim guard</span></div>
+      <div class="panel-title">机器人时空巡检报告</div>
       <div class="panel-body">
         <div class="aggregate-evidence">
           <div class="evidence-source">
@@ -2573,7 +2572,7 @@
     </section>
 
     <section class="panel data-section app-view" id="data-note" data-app-view="data-note">
-      <div class="panel-title">数据说明与仿真边界 <span>KICT + simulation metadata</span></div>
+      <div class="panel-title">数据说明与仿真边界</div>
       <div class="panel-body">
         <div class="data-note-box">
           本系统使用 KICT Tunnel Crack Segmentation Dataset 中的真实隧道裂缝图像和 mask 几何特征；机器人巡检过程中的时间、里程、环号、方位、disease_id 以及跨巡检增长关系为仿真元数据。本系统当前用于验证机器人巡检场景下病害工程化描述、时空聚合、增长分析和复检清单生成流程，不代表真实隧道病害长期演化规律。
