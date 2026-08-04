@@ -47,6 +47,11 @@ are `invalid`. A structurally valid Run whose workflow policy or fixed plan no
 longer matches is `stale`. A
 non-terminal Run with required work not yet committed is `incomplete`.
 
+The fixed A2 `runs/<run_id>/final_summary.md` is publication-owned. Its
+inventory producer is always `publication`; a committed task checkpoint that
+declares that path is a producer-provenance contradiction and is `invalid`,
+even when Canonical State, Journal, and tail anchor are mutually consistent.
+
 For `complete`, StateStore must load successfully, every required task must be
 committed successful or explicitly skipped by the existing contract, A1 must
 validate, A2 `validate_publication()` must validate, the transaction must be

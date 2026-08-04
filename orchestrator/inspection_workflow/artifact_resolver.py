@@ -716,6 +716,12 @@ class _ResolverPass:
                 self.add(self.invalid, "duplicate_task_success")
             self.task_operations[task_id] = operation
             for path in operation["paths"]:
+                if self._is_publication_owned_path(path):
+                    # The fixed A2 final summary is produced by publication,
+                    # never by a committed task checkpoint.  Do not let a
+                    # self-consistent State/Journal declaration override it.
+                    self.add(self.invalid, "checkpoint_producer_invalid")
+                    continue
                 fixed_task_id = self._fixed_producer_task(path)
                 if fixed_task_id is not None and task_id != fixed_task_id:
                     self.add(self.invalid, "checkpoint_producer_invalid")
@@ -1029,14 +1035,17 @@ class _ResolverPass:
             }.get(name)
         return None
 
+    def _is_publication_owned_path(self, path: str) -> bool:
+        return path == publication.FINAL_SUMMARY_PATH_TEMPLATE.format(run_id=self.run_id)
+
     def _infer_producer(self, path: str) -> tuple[str, str, int] | None:
         if path in self.declared_paths:
             return self.declared_paths[path]
-        name = PurePosixPath(path).name
-        if name == "final_summary.md":
+        if self._is_publication_owned_path(path):
             tx = self.transaction or {}
             transaction_id = tx.get("transaction_id", "unknown")
             return ("publication", f"publication:{transaction_id}", int(self.state.get("state_version", 0)))
+        name = PurePosixPath(path).name
         if "/raw_prepared/" in path:
             if self.descriptor_sha256 and self.descriptor:
                 return (

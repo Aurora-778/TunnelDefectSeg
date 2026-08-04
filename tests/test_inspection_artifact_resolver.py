@@ -208,7 +208,7 @@ def _append_unresolved_pending(root: Path) -> None:
     (run_dir / "state_journal.jsonl").write_bytes(journal + line)
 
 
-def _transfer_checkpoint_producer(root: Path) -> None:
+def _rebind_checkpoint_report_paths(root: Path, replacements: dict[str, str]) -> None:
     """Keep State, Journal, and tail anchor consistent for a provenance probe."""
 
     run_dir = root / "runs" / RUN_ID
@@ -216,23 +216,11 @@ def _transfer_checkpoint_producer(root: Path) -> None:
     journal_path = run_dir / "state_journal.jsonl"
     anchor_path = run_dir / "state_journal_tail.json"
     state = _read_json(state_path)
-    growth_operation = f"run:{RUN_ID}:task:phase_a_growth_report:attempt:1:succeeded"
-    engineering_operation = (
-        f"run:{RUN_ID}:task:phase_a_engineering_claim_report:attempt:1:succeeded"
-    )
     events = state["context"]["phase_a3_checkpoint_events"]
-    events[growth_operation]["controlled_context_delta"]["task_output"]["result"]["report_paths"][0] = (
-        f"runs/{RUN_ID}/staging/disease_engineering_report.md"
-    )
-    events[engineering_operation]["controlled_context_delta"]["task_output"]["result"]["report_paths"][0] = (
-        f"runs/{RUN_ID}/staging/disease_engineering_report_summary.md"
-    )
+    for operation_id, replacement in replacements.items():
+        events[operation_id]["controlled_context_delta"]["task_output"]["result"]["report_paths"][0] = replacement
 
     rows = [json.loads(line) for line in journal_path.read_bytes().splitlines()]
-    replacements = {
-        growth_operation: f"runs/{RUN_ID}/staging/disease_engineering_report.md",
-        engineering_operation: f"runs/{RUN_ID}/staging/disease_engineering_report_summary.md",
-    }
     for operation_id, replacement in replacements.items():
         pending = next(
             row for row in rows if row["operation_id"] == operation_id and row["phase"] == "pending"
@@ -267,6 +255,20 @@ def _transfer_checkpoint_producer(root: Path) -> None:
     state_path.write_bytes(state_bytes)
     journal_path.write_bytes(journal_bytes)
     anchor_path.write_bytes(_canonical_json_bytes(anchor))
+
+
+def _transfer_checkpoint_producer(root: Path) -> None:
+    _rebind_checkpoint_report_paths(
+        root,
+        {
+            f"run:{RUN_ID}:task:phase_a_growth_report:attempt:1:succeeded": (
+                f"runs/{RUN_ID}/staging/disease_engineering_report.md"
+            ),
+            f"run:{RUN_ID}:task:phase_a_engineering_claim_report:attempt:1:succeeded": (
+                f"runs/{RUN_ID}/staging/disease_engineering_report_summary.md"
+            ),
+        },
+    )
 
 
 def _make_incomplete_run(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,6 +404,14 @@ def test_completed_prepared_cli_run_resolves_complete_and_binds_inventory(comple
         result.inventory[0]["path"] = "runs/run_701/forged.json"  # type: ignore[index]
     assert all(item["path"].startswith(f"runs/{RUN_ID}/") for item in result.inventory)
     assert all("\\" not in item["path"] and not item["path"].startswith("/") for item in result.inventory)
+    final_summary = next(
+        item
+        for item in result.inventory
+        if item["path"] == f"runs/{RUN_ID}/final_summary.md"
+    )
+    transaction = _read_json(_transaction_path(completed_run))
+    assert final_summary["task_id"] == "publication"
+    assert final_summary["producer_operation"] == f"publication:{transaction['transaction_id']}"
     for item in result.inventory:
         assert set(item) == {
             "task_id",
@@ -664,6 +674,23 @@ def test_manifest_and_artifact_mutations_fail_closed(completed_run: Path, mutati
 
 def test_wrong_checkpoint_producer_is_invalid(completed_run: Path) -> None:
     _transfer_checkpoint_producer(completed_run)
+    StateStore(completed_run).load(run_id=RUN_ID)
+
+    result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+
+    assert result.status == "invalid"
+    assert "checkpoint_producer_invalid" in result.issue_codes
+
+
+def test_checkpoint_cannot_claim_fixed_publication_final_summary(completed_run: Path) -> None:
+    _rebind_checkpoint_report_paths(
+        completed_run,
+        {
+            f"run:{RUN_ID}:task:phase_a_growth_report:attempt:1:succeeded": (
+                f"runs/{RUN_ID}/final_summary.md"
+            )
+        },
+    )
     StateStore(completed_run).load(run_id=RUN_ID)
 
     result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
