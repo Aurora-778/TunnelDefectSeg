@@ -123,7 +123,14 @@ def _require_exact_fields(
 def _single_source_hash(records: list[dict[str, Any]], field: str) -> str | None:
     values = {record[field] for record in records}
     if len(values) > 1:
-        label = field.removeprefix("source_").removesuffix("_sha256").replace("_", " ")
+        # Python 3.8 compatible equivalent of
+        # field.removeprefix("source_").removesuffix("_sha256")
+        label = field
+        if label.startswith("source_"):
+            label = label[len("source_"):]
+        if label.endswith("_sha256"):
+            label = label[: -len("_sha256")]
+        label = label.replace("_", " ")
         raise ClaimDecisionContractError(
             f"claim decision records must reference a single {label}"
         )
@@ -311,8 +318,10 @@ def build_claim_decision_document(
     capability_names = tuple(policy["capability_order"])
     expected_provenance = get_claim_policy_provenance()
     evaluated = [evaluate_claim_evidence(record) for record in evidence]
+    if len(evidence) != len(evaluated):  # Python 3.8 zip() has no strict=
+        raise ClaimDecisionContractError("evidence and evaluated lists must have equal length")
     for row_number, (record, decision) in enumerate(
-        zip(evidence, evaluated, strict=True),
+        zip(evidence, evaluated),
         start=1,
     ):
         _validate_evaluator_decision(
@@ -325,7 +334,7 @@ def build_claim_decision_document(
         )
     record_decisions = [
         _decision_record(record, decision)
-        for record, decision in zip(evidence, evaluated, strict=True)
+        for record, decision in zip(evidence, evaluated)  # len already checked above
     ]
     first_decision = evaluated[0]
     if any(

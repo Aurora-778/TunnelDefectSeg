@@ -12,7 +12,11 @@ from pathlib import PurePosixPath
 import re
 import unicodedata
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ModuleNotFoundError:  # Python 3.8 (segformer-phase2 web env)
+    from backports.zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .source_references import SOURCE_REFERENCE_SCHEMA_VERSION
 

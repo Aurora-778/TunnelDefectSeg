@@ -398,7 +398,8 @@ class AssociationAgent(BaseAgent):
             return None
         try:
             if value.upper().startswith("K") and "+" in value:
-                km_text, meter_text = value.upper().removeprefix("K").split("+", 1)
+                # Python 3.8 compatible equivalent of .removeprefix("K")
+                km_text, meter_text = value.upper()[1:].split("+", 1)
                 return float(km_text) * 1000 + float(meter_text)
             return float(value)
         except ValueError:

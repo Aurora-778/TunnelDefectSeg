@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, TypeAlias
+from typing import Any, Mapping
+
+try:  # Python 3.10+ ships TypeAlias in typing; 3.8/3.9 fall back to typing_extensions
+    from typing import TypeAlias
+except ImportError:
+    from typing_extensions import TypeAlias
 
 
 StateSnapshot: TypeAlias = Mapping[str, Any]

@@ -252,7 +252,9 @@ def test_legacy_projection_adds_full_fingerprint_based_ids_without_mutating_inpu
     )[0]
 
     assert source == original
-    assert projected["source_record_fingerprint"] == projected["local_observation_id"].removeprefix("legacy::")
+    local_id = projected["local_observation_id"]
+    assert local_id.startswith("legacy::")
+    assert projected["source_record_fingerprint"] == local_id[len("legacy::"):]
     assert projected["current_observation_id"] == f"I001::{projected['local_observation_id']}"
     assert projected["disease_id"] == "D001"
     assert projected["timestamp"] == "2026-06-01T02:00:39.000000Z"

@@ -48,7 +48,7 @@ def _parse_memory_csv(data: bytes, *, path: str) -> tuple[list[str], list[dict[s
             raise PhaseA1ArtifactError(
                 f"Memory Snapshot row {row_number} has the wrong column count: {path}"
             )
-        records.append(dict(zip(fieldnames, values, strict=True)))
+        records.append(dict(zip(fieldnames, values)))  # length checked above; zip(strict=) is 3.10+
     return fieldnames, records
 
 
