@@ -20,14 +20,22 @@ reduced ClaimDecision, Memory Snapshot, Manifest, or Publication schema.
 
 ## Result
 
+The result is created only by the resolver's internal factory; callers cannot
+construct or assert a forged `complete` result. Inventory mappings and nested
+containers are deeply frozen, and construction verifies that the canonical
+inventory bytes, their SHA-256, the inventory value, status, and issue codes
+agree.
+
 The result is an immutable deterministic projection with status:
 
 `recovery_required > invalid > stale > incomplete > complete`.
 
 `recovery_required` is returned for unresolved Journal work, recovery markers,
 Active-Run recovery/tombstone residue, publication transaction middle phases,
-cleanup residue, or lock/state contradictions. Hash, schema, path, ownership,
-producer, or provenance contradictions are `invalid`. A structurally valid
+cleanup residue, a `RUNNING` State without its current Active Lock, or a
+State/lock allocation-token contradiction. A valid lock owned by another Run
+is unrelated to the historical Run being resolved. Hash, schema, path,
+ownership, producer, or provenance contradictions are `invalid`. A structurally valid
 Run whose descriptor, policy, or plan no longer matches is `stale`. A
 non-terminal Run with required work not yet committed is `incomplete`.
 

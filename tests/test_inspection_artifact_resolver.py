@@ -5,6 +5,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+from types import MappingProxyType
 import uuid
 
 from PIL import Image
@@ -377,6 +378,46 @@ def test_descriptor_drift_does_not_mask_independent_artifact_corruption(complete
     assert "descriptor_source_stale" in result.issue_codes
 
 
+@pytest.mark.parametrize("mutation", ["manifest_field", "source_set_delete"])
+def test_source_drift_does_not_mask_a1_manifest_authority_failure(
+    completed_run: Path, mutation: str
+) -> None:
+    source = completed_run / "runs" / RUN_ID / "work" / "raw_prepared" / "frame_records.csv"
+    source.write_bytes(source.read_bytes() + b"\n")
+    manifest_path = completed_run / "runs" / RUN_ID / "artifacts" / "comparison_evidence_manifest.json"
+    manifest = _read_json(manifest_path)
+    if mutation == "manifest_field":
+        manifest["record_count"] += 1
+    else:
+        manifest["source_artifacts"] = manifest["source_artifacts"][:-1]
+    _write_json(manifest_path, manifest)
+
+    result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+
+    assert result.status == "invalid"
+    assert "a1_invalid" in result.issue_codes
+
+
+def test_source_drift_does_not_mask_publication_transaction_rebinding(completed_run: Path) -> None:
+    source = completed_run / "runs" / RUN_ID / "work" / "raw_prepared" / "frame_records.csv"
+    source.write_bytes(source.read_bytes() + b"\n")
+    manifest_path = _a2_manifest_path(completed_run)
+    transaction_path = _transaction_path(completed_run)
+    manifest = _read_json(manifest_path)
+    transaction = _read_json(transaction_path)
+    rebound = "f" * 64
+    manifest["transaction_id"] = rebound
+    _write_json(manifest_path, manifest)
+    transaction["transaction_id"] = rebound
+    transaction["manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    _write_json(transaction_path, transaction)
+
+    result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+
+    assert result.status == "invalid"
+    assert "publication_invalid" in result.issue_codes
+
+
 def test_workflow_policy_drift_is_stale(completed_run: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     original = artifact_resolver.load_workflow_policy
 
@@ -489,6 +530,106 @@ def test_unlisted_formal_output_is_invalid(completed_run: Path) -> None:
 
     assert result.status == "invalid"
     assert "unlisted_committed_artifact" in result.issue_codes
+
+
+def test_running_state_without_current_active_lock_requires_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "running-no-lock"
+    root.mkdir()
+    _make_incomplete_run(root, monkeypatch)
+    (root / "runs" / ".active_run.lock").unlink()
+
+    result = ArtifactResolver(root).resolve(run_id="run_001")
+
+    assert result.status == "recovery_required"
+    assert "active_lock_missing" in result.issue_codes
+
+
+def test_running_state_and_active_lock_allocation_token_split_brain_requires_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "running-split-brain"
+    root.mkdir()
+    _make_incomplete_run(root, monkeypatch)
+    lock_path = root / "runs" / ".active_run.lock"
+    original_read_lock = artifact_resolver._read_lock
+
+    def split_brain(path: Path) -> tuple[dict[str, object], bytes]:
+        lock, data = original_read_lock(path)
+        if path.name == ".active_run.lock":
+            lock = dict(lock)
+            lock["allocation_token"] = str(uuid.uuid4())
+        return lock, data
+
+    monkeypatch.setattr(artifact_resolver, "_read_lock", split_brain)
+    result = ArtifactResolver(root).resolve(run_id="run_001")
+
+    assert result.status == "recovery_required"
+    assert "active_lock_allocation_token_mismatch" in result.issue_codes
+
+
+def test_other_run_active_lock_does_not_invalidate_historical_run(completed_run: Path) -> None:
+    allocation_token = str(uuid.uuid4())
+    lock_token = str(uuid.uuid4())
+    acquire_active_run_lock(
+        completed_run,
+        task_id="task_other",
+        allocation_token=allocation_token,
+        lock_token=lock_token,
+        created_at="2026-08-03T00:00:00.000000Z",
+        pid=1,
+        hostname="other",
+    )
+    result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+
+    assert result.status == "complete"
+
+
+def test_running_state_with_unreserved_allocating_lock_requires_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A RUNNING state with a lock that has reserved_run_id=None and
+    phase='allocating' must be recovery_required, not silently pass."""
+    root = tmp_path / "running-unreserved"
+    root.mkdir()
+    _make_incomplete_run(root, monkeypatch)
+    original_read_lock = artifact_resolver._read_lock
+
+    def unreserved_allocating(path: Path) -> tuple[dict[str, object], bytes]:
+        lock, data = original_read_lock(path)
+        if path.name == ".active_run.lock":
+            lock = dict(lock)
+            lock["reserved_run_id"] = None
+            lock["phase"] = "allocating"
+        return lock, data
+
+    monkeypatch.setattr(artifact_resolver, "_read_lock", unreserved_allocating)
+    result = ArtifactResolver(root).resolve(run_id="run_001")
+
+    assert result.status == "recovery_required"
+    assert "active_lock_recovery" in result.issue_codes
+
+
+def test_public_artifact_resolution_constructor_cannot_forge_complete() -> None:
+    with pytest.raises(TypeError):
+        artifact_resolver.ArtifactResolution(  # type: ignore[call-arg]
+            run_id=RUN_ID,
+            status="complete",
+            inventory=(),
+            inventory_bytes=b"{}",
+            inventory_sha256=hashlib.sha256(b"{}").hexdigest(),
+            state_version=None,
+            plan_fingerprint=None,
+            input_descriptor_sha256=None,
+            issue_codes=(),
+        )
+
+
+def test_inventory_nested_values_are_deeply_frozen() -> None:
+    frozen = artifact_resolver._freeze_item({"nested": {"items": [1, 2]}})
+
+    assert isinstance(frozen, MappingProxyType)
+    assert isinstance(frozen["nested"], MappingProxyType)
+    assert frozen["nested"]["items"] == (1, 2)
+    with pytest.raises(TypeError):
+        frozen["nested"]["forged"] = True  # type: ignore[index]
 
 
 def test_release_tombstone_is_recovery_required(completed_run: Path) -> None:
