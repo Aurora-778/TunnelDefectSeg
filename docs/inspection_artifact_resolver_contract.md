@@ -16,7 +16,11 @@ formal output.
 The resolver reads the canonical StateStore snapshot and Journal/tail anchor,
 the resolved-input descriptor, the A1 V4 contract, and the A2 Publication
 contract. Those modules remain authoritative; this module does not duplicate a
-reduced ClaimDecision, Memory Snapshot, Manifest, or Publication schema.
+reduced ClaimDecision, Memory Snapshot, Manifest, or Publication schema. Any
+A1/A2 authority-validator failure is `invalid` by default. A source-byte drift
+may be called `stale` only when an authority-level mechanism explicitly proves
+that classification; resolver-local schema or descriptor-binding checks never
+provide that proof.
 
 ## Result
 
@@ -32,9 +36,11 @@ The result is an immutable deterministic projection with status:
 
 `recovery_required` is returned for unresolved Journal work, recovery markers,
 Active-Run recovery/tombstone residue, publication transaction middle phases,
-cleanup residue, a `RUNNING` State without its current Active Lock, or a
-State/lock allocation-token contradiction. A valid lock owned by another Run
-is unrelated to the historical Run being resolved. Hash, schema, path,
+cleanup residue, a `RUNNING` State without its current Active Lock, a
+`RUNNING` State paired with an unreserved (`reserved_run_id=None`) lock, or a
+State/lock allocation-token contradiction. A valid lock reserved for another
+Run, including a true reservation rather than merely an unreserved allocating
+lock, is unrelated to the historical Run being resolved. Hash, schema, path,
 ownership, producer, or provenance contradictions are `invalid`. A structurally valid
 Run whose descriptor, policy, or plan no longer matches is `stale`. A
 non-terminal Run with required work not yet committed is `incomplete`.
@@ -60,12 +66,15 @@ artifact/publication scopes are checked for unlisted regular files; arbitrary
 work, video, model, cache, and Web-WIP trees are not scanned.
 
 Files are guarded with a point-in-time regular-file check and chunked SHA-256;
-the resolver does not use mtime. The returned canonical inventory bytes and
-their SHA-256 are stable for unchanged inputs. A consumer must still treat
-this as a local integrity/freshness check, not as origin authentication or an
-anti-malicious-tamper mechanism. A hostile concurrent filesystem actor can
-replace multiple local files between independent authority reads; the resolver
-therefore never authorizes reuse by itself.
+each guarded read hashes the bytes from its single open and rechecks the file
+identity afterward. The resolver does not use mtime and has no A2 fallback
+that rereads a Manifest or fixed publication file after an authority failure.
+The returned canonical inventory bytes and their SHA-256 are stable for
+unchanged inputs. A consumer must still treat this as a local
+integrity/freshness check, not as origin authentication or an anti-malicious-
+tamper mechanism. A hostile concurrent filesystem actor can replace multiple
+local files between independent authority reads; the resolver therefore never
+authorizes reuse by itself.
 
 ## Explicit non-goals
 

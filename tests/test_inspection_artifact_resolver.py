@@ -13,6 +13,7 @@ import pytest
 
 from orchestrator.inspection_workflow import a1_artifacts
 from orchestrator.inspection_workflow import artifact_resolver
+from orchestrator.inspection_workflow import locking
 from orchestrator.inspection_workflow.artifact_resolver import (
     ArtifactResolver,
     ArtifactResolverInputError,
@@ -110,7 +111,29 @@ def _write_json(path: Path, value: object) -> None:
             separators=(",", ":"),
             allow_nan=False,
         ).encode("utf-8")
+        + b"\n"
     )
+
+
+def _rebind_a1_manifest_in_publication(root: Path, manifest_path: Path) -> None:
+    publication_path = _a2_manifest_path(root)
+    publication_manifest = _read_json(publication_path)
+    entry = next(
+        item
+        for item in publication_manifest["source_artifacts"]
+        if item["path"] == f"runs/{RUN_ID}/artifacts/comparison_evidence_manifest.json"
+    )
+    data = manifest_path.read_bytes()
+    entry["size_bytes"] = len(data)
+    entry["sha256"] = hashlib.sha256(data).hexdigest()
+    _write_json(publication_path, publication_manifest)
+
+    transaction_path = _transaction_path(root)
+    transaction = _read_json(transaction_path)
+    transaction["manifest_sha256"] = hashlib.sha256(
+        publication_path.read_bytes()
+    ).hexdigest()
+    _write_json(transaction_path, transaction)
 
 
 def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
@@ -356,13 +379,13 @@ def test_unresolved_journal_is_recovery_required(completed_run: Path) -> None:
     assert "state_recovery" in result.issue_codes
 
 
-def test_source_descriptor_drift_is_stale(completed_run: Path) -> None:
+def test_source_descriptor_drift_is_invalid_without_authority_proof(completed_run: Path) -> None:
     source = completed_run / "runs" / RUN_ID / "work" / "raw_prepared" / "frame_records.csv"
     source.write_bytes(source.read_bytes() + b"\n")
 
     result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
 
-    assert result.status == "stale"
+    assert result.status == "invalid"
     assert "descriptor_source_stale" in result.issue_codes
 
 
@@ -391,6 +414,7 @@ def test_source_drift_does_not_mask_a1_manifest_authority_failure(
     else:
         manifest["source_artifacts"] = manifest["source_artifacts"][:-1]
     _write_json(manifest_path, manifest)
+    _rebind_a1_manifest_in_publication(completed_run, manifest_path)
 
     result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
 
@@ -405,11 +429,43 @@ def test_source_drift_does_not_mask_publication_transaction_rebinding(completed_
     transaction_path = _transaction_path(completed_run)
     manifest = _read_json(manifest_path)
     transaction = _read_json(transaction_path)
-    rebound = "f" * 64
+    rebound = "pub_" + "f" * 24
     manifest["transaction_id"] = rebound
     _write_json(manifest_path, manifest)
     transaction["transaction_id"] = rebound
     transaction["manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    _write_json(transaction_path, transaction)
+
+    result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+
+    assert result.status == "invalid"
+    assert "publication_invalid" in result.issue_codes
+
+
+def test_source_drift_does_not_mask_publication_source_set_rebinding(
+    completed_run: Path,
+) -> None:
+    source = completed_run / "runs" / RUN_ID / "work" / "raw_prepared" / "frame_records.csv"
+    source.write_bytes(source.read_bytes() + b"\n")
+    manifest_path = _a2_manifest_path(completed_run)
+    manifest = _read_json(manifest_path)
+    removed_path = next(
+        item
+        for item in manifest["source_artifacts"]
+        if item["path"].endswith("/artifacts/claim_decision.json")
+    )["path"]
+    manifest["source_artifacts"] = [
+        item for item in manifest["source_artifacts"] if item["path"] != removed_path
+    ]
+    manifest["expected_source_artifact_paths"] = [
+        item["path"] for item in manifest["source_artifacts"]
+    ]
+    _write_json(manifest_path, manifest)
+    transaction_path = _transaction_path(completed_run)
+    transaction = _read_json(transaction_path)
+    transaction["manifest_sha256"] = hashlib.sha256(
+        manifest_path.read_bytes()
+    ).hexdigest()
     _write_json(transaction_path, transaction)
 
     result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
@@ -549,16 +605,9 @@ def test_running_state_and_active_lock_allocation_token_split_brain_requires_rec
     root.mkdir()
     _make_incomplete_run(root, monkeypatch)
     lock_path = root / "runs" / ".active_run.lock"
-    original_read_lock = artifact_resolver._read_lock
-
-    def split_brain(path: Path) -> tuple[dict[str, object], bytes]:
-        lock, data = original_read_lock(path)
-        if path.name == ".active_run.lock":
-            lock = dict(lock)
-            lock["allocation_token"] = str(uuid.uuid4())
-        return lock, data
-
-    monkeypatch.setattr(artifact_resolver, "_read_lock", split_brain)
+    lock = _read_json(lock_path)
+    lock["allocation_token"] = str(uuid.uuid4())
+    lock_path.write_bytes(locking._canonical_json_bytes(lock))
     result = ArtifactResolver(root).resolve(run_id="run_001")
 
     assert result.status == "recovery_required"
@@ -577,6 +626,12 @@ def test_other_run_active_lock_does_not_invalidate_historical_run(completed_run:
         pid=1,
         hostname="other",
     )
+    reserve_active_run_id(
+        completed_run,
+        run_id="run_999",
+        expected_allocation_token=allocation_token,
+        expected_lock_token=lock_token,
+    )
     result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
 
     assert result.status == "complete"
@@ -590,24 +645,40 @@ def test_running_state_with_unreserved_allocating_lock_requires_recovery(
     root = tmp_path / "running-unreserved"
     root.mkdir()
     _make_incomplete_run(root, monkeypatch)
-    original_read_lock = artifact_resolver._read_lock
-
-    def unreserved_allocating(path: Path) -> tuple[dict[str, object], bytes]:
-        lock, data = original_read_lock(path)
-        if path.name == ".active_run.lock":
-            lock = dict(lock)
-            lock["reserved_run_id"] = None
-            lock["phase"] = "allocating"
-        return lock, data
-
-    monkeypatch.setattr(artifact_resolver, "_read_lock", unreserved_allocating)
+    lock_path = root / "runs" / ".active_run.lock"
+    lock = _read_json(lock_path)
+    lock["reserved_run_id"] = None
+    lock["run_id"] = None
+    lock["phase"] = "allocating"
+    lock_path.write_bytes(locking._canonical_json_bytes(lock))
     result = ArtifactResolver(root).resolve(run_id="run_001")
 
     assert result.status == "recovery_required"
-    assert "active_lock_recovery" in result.issue_codes
+    assert "active_lock_unreserved" in result.issue_codes
+
+
+def test_running_state_with_unreserved_running_lock_requires_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "running-unreserved-running"
+    root.mkdir()
+    _make_incomplete_run(root, monkeypatch)
+    lock_path = root / "runs" / ".active_run.lock"
+    lock = _read_json(lock_path)
+    lock["reserved_run_id"] = None
+    lock["run_id"] = None
+    lock["phase"] = "running"
+    lock_path.write_bytes(locking._canonical_json_bytes(lock))
+
+    result = ArtifactResolver(root).resolve(run_id="run_001")
+
+    assert result.status == "recovery_required"
+    assert "active_lock_unreserved" in result.issue_codes
 
 
 def test_public_artifact_resolution_constructor_cannot_forge_complete() -> None:
+    assert not hasattr(artifact_resolver.ArtifactResolution, "_from_factory")
+    assert not hasattr(artifact_resolver, "_RESOLUTION_FACTORY_TOKEN")
     with pytest.raises(TypeError):
         artifact_resolver.ArtifactResolution(  # type: ignore[call-arg]
             run_id=RUN_ID,
@@ -622,14 +693,75 @@ def test_public_artifact_resolution_constructor_cannot_forge_complete() -> None:
         )
 
 
-def test_inventory_nested_values_are_deeply_frozen() -> None:
-    frozen = artifact_resolver._freeze_item({"nested": {"items": [1, 2]}})
+def test_inventory_nested_values_are_deeply_frozen(tmp_path: Path) -> None:
+    resolver_pass = artifact_resolver._ResolverPass(tmp_path, RUN_ID)
+    resolver_pass.inventory_candidates[f"runs/{RUN_ID}/nested.json"] = {
+        "task_id": "task_701",
+        "artifact_role": "test",
+        "path": f"runs/{RUN_ID}/nested.json",
+        "size_bytes": 0,
+        "sha256": "0" * 64,
+        "producer_operation": "test:operation",
+        "resulting_state_version": 0,
+        "plan_fingerprint": None,
+        "input_descriptor_sha256": None,
+        "nested": {"items": [1, 2]},
+    }
+    result = resolver_pass.result()
+    frozen = result.inventory[0]
 
     assert isinstance(frozen, MappingProxyType)
     assert isinstance(frozen["nested"], MappingProxyType)
     assert frozen["nested"]["items"] == (1, 2)
     with pytest.raises(TypeError):
         frozen["nested"]["forged"] = True  # type: ignore[index]
+
+
+def test_artifact_resolution_post_init_rejects_status_without_issues() -> None:
+    data = artifact_resolver._canonical_json_bytes(
+        {
+            "schema_version": artifact_resolver.INVENTORY_SCHEMA_VERSION,
+            "run_id": RUN_ID,
+            "artifacts": [],
+        }
+    )
+
+    for status in ("invalid", "stale"):
+        forged = object.__new__(artifact_resolver.ArtifactResolution)
+        object.__setattr__(forged, "run_id", RUN_ID)
+        object.__setattr__(forged, "status", status)
+        object.__setattr__(forged, "inventory", ())
+        object.__setattr__(forged, "inventory_bytes", data)
+        object.__setattr__(forged, "inventory_sha256", hashlib.sha256(data).hexdigest())
+        object.__setattr__(forged, "state_version", None)
+        object.__setattr__(forged, "plan_fingerprint", None)
+        object.__setattr__(forged, "input_descriptor_sha256", None)
+        object.__setattr__(forged, "issue_codes", ())
+        with pytest.raises(ValueError, match="status does not match issue codes"):
+            forged.__post_init__()
+
+
+def test_guarded_read_uses_one_open_for_fixed_publication_file(
+    completed_run: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = completed_run / "outputs" / "current_publication_manifest.json"
+    opens = 0
+    original_open = Path.open
+
+    def counted_open(path: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal opens
+        if path == target:
+            opens += 1
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counted_open)
+    data, snapshot = artifact_resolver._read_guarded_file(
+        completed_run, "outputs/current_publication_manifest.json"
+    )
+
+    assert opens == 1
+    assert snapshot["size_bytes"] == len(data)
+    assert snapshot["sha256"] == hashlib.sha256(data).hexdigest()
 
 
 def test_release_tombstone_is_recovery_required(completed_run: Path) -> None:

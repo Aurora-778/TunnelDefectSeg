@@ -218,13 +218,6 @@ def _snapshot_file(root: Path, relative: str) -> dict[str, Any]:
     return snapshot
 
 
-def _snapshot_controlled_file(root: Path, relative: str) -> dict[str, Any]:
-    """Snapshot one fixed project-root-relative file with path guards."""
-
-    _, snapshot = _read_guarded_file(root, relative)
-    return snapshot
-
-
 def _current_plan_fingerprint(descriptor: Mapping[str, Any]) -> str:
     """Rebuild the fixed lifecycle plan from repository authorities."""
 
@@ -262,6 +255,56 @@ def _status_priority(
     return "complete"
 
 
+_RECOVERY_ISSUE_CODES = frozenset(
+    {
+        "recovery_marker",
+        "release_tombstone",
+        "active_lock_recovery",
+        "active_lock_missing",
+        "active_lock_unreserved",
+        "active_lock_allocation_token_mismatch",
+        "active_lock_state_conflict",
+        "state_lock_recovery",
+        "state_recovery",
+        "publication_cleanup_residue",
+        "transaction_recovery",
+    }
+)
+_STALE_ISSUE_CODES = frozenset(
+    {
+        "descriptor_source_stale",
+        "workflow_policy_stale",
+        "plan_fingerprint_stale",
+        "task_plan_stale",
+    }
+)
+_INCOMPLETE_ISSUE_CODES = frozenset(
+    {
+        "a1_incomplete",
+        "publication_incomplete",
+        "required_task_incomplete",
+    }
+)
+
+
+def _status_from_issue_codes(issue_codes: tuple[str, ...]) -> str:
+    """Derive the public status from the resolver's issue taxonomy.
+
+    Issue codes not explicitly classified as recovery, stale, or incomplete
+    are integrity failures.  This keeps a newly introduced or forged issue
+    from silently producing a weaker status.
+    """
+
+    codes = set(issue_codes)
+    recovery = codes & _RECOVERY_ISSUE_CODES
+    invalid = codes - (
+        _RECOVERY_ISSUE_CODES | _STALE_ISSUE_CODES | _INCOMPLETE_ISSUE_CODES
+    )
+    stale = codes & _STALE_ISSUE_CODES
+    incomplete = codes & _INCOMPLETE_ISSUE_CODES
+    return _status_priority(recovery, invalid, stale, incomplete)
+
+
 def _freeze_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         return MappingProxyType({key: _freeze_value(value[key]) for key in sorted(value)})
@@ -274,9 +317,6 @@ def _freeze_value(value: Any) -> Any:
 
 def _freeze_item(item: Mapping[str, Any]) -> Mapping[str, Any]:
     return _freeze_value(item)
-
-
-_RESOLUTION_FACTORY_TOKEN = object()
 
 
 @dataclass(frozen=True, init=False)
@@ -292,38 +332,6 @@ class ArtifactResolution:
     plan_fingerprint: str | None
     input_descriptor_sha256: str | None
     issue_codes: tuple[str, ...]
-
-    def __init__(
-        self,
-        *,
-        _factory_token: object | None = None,
-        run_id: str,
-        status: str,
-        inventory: tuple[Mapping[str, Any], ...],
-        inventory_bytes: bytes,
-        inventory_sha256: str,
-        state_version: int | None,
-        plan_fingerprint: str | None,
-        input_descriptor_sha256: str | None,
-        issue_codes: tuple[str, ...],
-    ) -> None:
-        if _factory_token is not _RESOLUTION_FACTORY_TOKEN:
-            raise TypeError("ArtifactResolution must be created by ArtifactResolver")
-        object.__setattr__(self, "run_id", run_id)
-        object.__setattr__(self, "status", status)
-        object.__setattr__(self, "inventory", tuple(_freeze_item(item) for item in inventory))
-        object.__setattr__(self, "inventory_bytes", bytes(inventory_bytes))
-        object.__setattr__(self, "inventory_sha256", inventory_sha256)
-        object.__setattr__(self, "state_version", state_version)
-        object.__setattr__(self, "plan_fingerprint", plan_fingerprint)
-        object.__setattr__(self, "input_descriptor_sha256", input_descriptor_sha256)
-        object.__setattr__(self, "issue_codes", tuple(sorted(issue_codes)))
-        self.__post_init__()
-
-    @classmethod
-    def _from_factory(cls, **values: Any) -> "ArtifactResolution":
-        values["_factory_token"] = _RESOLUTION_FACTORY_TOKEN
-        return cls(**values)
 
     def __post_init__(self) -> None:
         if self.status not in {
@@ -345,11 +353,14 @@ class ArtifactResolution:
         )
         if canonical != self.inventory_bytes:
             raise ValueError("inventory bytes do not match inventory")
-        expected_codes = set(self.issue_codes)
-        if self.status == "complete" and expected_codes:
-            raise ValueError("complete resolution cannot contain issue codes")
-        if self.status == "recovery_required" and not expected_codes:
-            raise ValueError("recovery resolution requires issue codes")
+        if not isinstance(self.issue_codes, tuple) or any(
+            not isinstance(code, str) or not code for code in self.issue_codes
+        ):
+            raise ValueError("issue_codes must be a tuple of non-empty strings")
+        if tuple(sorted(set(self.issue_codes))) != self.issue_codes:
+            raise ValueError("issue_codes must be unique and canonically ordered")
+        if _status_from_issue_codes(self.issue_codes) != self.status:
+            raise ValueError("ArtifactResolution status does not match issue codes")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -386,7 +397,6 @@ class _ResolverPass:
         self.state: Mapping[str, Any] | None = None
         self.descriptor: Mapping[str, Any] | None = None
         self.descriptor_sha256: str | None = None
-        self.descriptor_bindings: dict[str, tuple[int, str]] = {}
         self.plan_fingerprint: str | None = None
         self.task_operations: dict[str, dict[str, Any]] = {}
         self.declared_paths: dict[str, tuple[str, str, int]] = {}
@@ -413,17 +423,26 @@ class _ResolverPass:
             }
         )
         status = _status_priority(self.recovery, self.invalid, self.stale, self.incomplete)
-        return ArtifactResolution._from_factory(
-            run_id=self.run_id,
-            status=status,
-            inventory=inventory,
-            inventory_bytes=data,
-            inventory_sha256=_sha256(data),
-            state_version=(self.state.get("state_version") if self.state else None),
-            plan_fingerprint=(self.state.get("plan_fingerprint") if self.state else self.plan_fingerprint),
-            input_descriptor_sha256=self.descriptor_sha256,
-            issue_codes=tuple(sorted(self.recovery | self.invalid | self.stale | self.incomplete)),
+        result = object.__new__(ArtifactResolution)
+        object.__setattr__(result, "run_id", self.run_id)
+        object.__setattr__(result, "status", status)
+        object.__setattr__(result, "inventory", inventory)
+        object.__setattr__(result, "inventory_bytes", data)
+        object.__setattr__(result, "inventory_sha256", _sha256(data))
+        object.__setattr__(result, "state_version", self.state.get("state_version") if self.state else None)
+        object.__setattr__(
+            result,
+            "plan_fingerprint",
+            self.state.get("plan_fingerprint") if self.state else self.plan_fingerprint,
         )
+        object.__setattr__(result, "input_descriptor_sha256", self.descriptor_sha256)
+        object.__setattr__(
+            result,
+            "issue_codes",
+            tuple(sorted(self.recovery | self.invalid | self.stale | self.incomplete)),
+        )
+        result.__post_init__()
+        return result
 
     def _known(self, relative: str) -> bool:
         try:
@@ -564,15 +583,18 @@ class _ResolverPass:
             return
         phase = self.active_lock.get("phase")
         # A lock reserved for a different Run is not evidence against this Run.
-        # A lock with no reservation (None) may still be allocating for this
-        # Run and must continue to the allocation_token and phase checks.
+        # An unreserved lock is only tolerated for a non-RUNNING historical
+        # State; a RUNNING State must have a concrete Run reservation.
         reserved = self.active_lock.get("reserved_run_id")
         if reserved is not None and reserved != self.run_id:
             return
-        # An unreserved lock held by an incomplete/non-RUNNING run is not
-        # evidence against a COMPLETED historical run — the lock belongs to a
-        # different or newly starting Run.
-        if reserved is None and state_status != "RUNNING":
+        if reserved is None:
+            # A RUNNING State must always be paired with a lock reservation for
+            # this Run.  Treat both allocating and running unreserved locks as
+            # recovery residue; only non-RUNNING historical States may ignore
+            # an unreserved lock belonging to another/new Run.
+            if state_status == "RUNNING":
+                self.add(self.recovery, "active_lock_unreserved")
             return
         if self.active_lock.get("allocation_token") != self.state.get("allocation_token"):
             self.add(self.recovery, "active_lock_allocation_token_mismatch")
@@ -759,7 +781,6 @@ class _ResolverPass:
             if type(item["size_bytes"]) is not int or item["size_bytes"] < 0 or not isinstance(item["sha256"], str) or not SHA256_RE.fullmatch(item["sha256"]):
                 self.add(self.invalid, "descriptor_source_binding_invalid")
                 continue
-            self.descriptor_bindings[path] = (item["size_bytes"], item["sha256"])
             try:
                 snapshot = _snapshot_file(self.root, path)
             except Exception:
@@ -869,11 +890,10 @@ class _ResolverPass:
                 plan_fingerprint=self.state["plan_fingerprint"],
             )
         except Exception:
-            # The authoritative A1 validator owns every structural, manifest,
-            # provenance, and source-set rule. Only a separately proven pure
-            # byte drift may be classified as freshness/stale.
-            if not self._a1_failure_is_pure_source_drift():
-                self.add(self.invalid, "a1_invalid")
+            # A1 is the authority for its complete schema, source set, and
+            # provenance.  Resolver-local fallback validation must never turn
+            # an authoritative failure into the weaker stale classification.
+            self.add(self.invalid, "a1_invalid")
             return
         requires_claim = bool(
             {"phase_a_claim_gate", "phase_a_growth_report", "phase_a_memory_report",
@@ -889,8 +909,7 @@ class _ResolverPass:
                     plan_fingerprint=self.state["plan_fingerprint"],
                 )
             except Exception:
-                if "descriptor_source_stale" not in self.stale:
-                    self.add(self.invalid, "claim_decision_invalid")
+                self.add(self.invalid, "claim_decision_invalid")
                 return
         manifest = self.a1_result.get("manifest") if isinstance(self.a1_result, Mapping) else None
         if isinstance(manifest, Mapping):
@@ -902,145 +921,6 @@ class _ResolverPass:
                         self._add_manifest_item(path, item, snapshot, "a1")
                     except Exception:
                         self.add(self.invalid, "a1_source_invalid")
-
-    def _binding_mismatch(
-        self,
-        path_value: Any,
-        expected_size: Any,
-        expected_sha: Any,
-    ) -> str:
-        """Classify one declared Run-local binding without trusting its hash."""
-
-        if not isinstance(path_value, str):
-            return "other"
-        descriptor_binding = self.descriptor_bindings.get(path_value)
-        try:
-            path = _safe_run_path(self.root, self.run_id, path_value)
-        except Exception:
-            return "descriptor" if descriptor_binding is not None else "other"
-        try:
-            snapshot = _snapshot_file(self.root, path)
-        except ArtifactResolutionError:
-            # A missing/replaced source is an integrity failure, not byte drift.
-            if not _lstat(_path_for(self.root, path), label=path):
-                return "other"
-            return "descriptor" if descriptor_binding is not None else "other"
-        except Exception:
-            return "other"
-        if snapshot["size_bytes"] == expected_size and snapshot["sha256"] == expected_sha:
-            return "ok"
-        if (
-            descriptor_binding is not None
-            and descriptor_binding == (expected_size, expected_sha)
-        ):
-            return "descriptor"
-        return "other"
-
-    def _read_loose_object(self, relative: str) -> dict[str, Any] | None:
-        try:
-            if relative.startswith(f"runs/{self.run_id}/"):
-                normalized = _safe_run_path(self.root, self.run_id, relative)
-                path = _path_for(self.root, normalized)
-                _assert_plain(path, label="diagnostic manifest", directory=False)
-                chunks: list[bytes] = []
-                with path.open("rb") as handle:
-                    while True:
-                        chunk = handle.read(CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        chunks.append(chunk)
-                data = b"".join(chunks)
-            else:
-                data, _snap = _read_guarded_file(self.root, relative)
-            value = json.loads(data.decode("utf-8"))
-            if not isinstance(value, Mapping) or data != _canonical_json_bytes(dict(value)) + b"\n":
-                return None
-        except Exception:
-            return None
-        return dict(value) if isinstance(value, Mapping) else None
-
-    def _claim_contract_intact(self, manifest: Mapping[str, Any]) -> bool:
-        """Recheck ClaimDecision independently when A1 source bytes drift."""
-
-        try:
-            evidence_path = _path_for(self.root, manifest["comparison_evidence_path"])
-            decision_path = _path_for(
-                self.root, f"runs/{self.run_id}/artifacts/claim_decision.json"
-            )
-            _assert_plain(evidence_path, label="comparison evidence", directory=False)
-            _assert_plain(decision_path, label="ClaimDecision", directory=False)
-            evidence_bytes, _ = _read_guarded_file(
-                self.root, manifest["comparison_evidence_path"], run_id=self.run_id
-            )
-            decision_bytes, _ = _read_guarded_file(
-                self.root, f"runs/{self.run_id}/artifacts/claim_decision.json", run_id=self.run_id
-            )
-            records = a1_artifacts.parse_comparison_evidence_csv(evidence_bytes)
-            decision = json.loads(decision_bytes.decode("utf-8"))
-            if not isinstance(decision, Mapping):
-                return False
-            if a1_artifacts._canonical_json_bytes(dict(decision)) != decision_bytes:
-                return False
-            from orchestrator.inspection_workflow.claim_decision import validate_claim_decision_document
-
-            validate_claim_decision_document(
-                decision,
-                records,
-                expected_run_id=self.run_id,
-                expected_plan_fingerprint=self.state["plan_fingerprint"],
-                expected_source_comparison_evidence_sha256=hashlib.sha256(evidence_bytes).hexdigest(),
-            )
-        except Exception:
-            return False
-        return True
-
-    def _a1_failure_is_pure_source_drift(self) -> bool:
-        manifest = self._read_loose_object(
-            f"runs/{self.run_id}/artifacts/comparison_evidence_manifest.json"
-        )
-        if manifest is None or self.state is None:
-            return False
-        if set(manifest) != getattr(a1_artifacts, "_MANIFEST_FIELDS", set()):
-            return False
-        if (
-            manifest.get("run_id") != self.run_id
-            or manifest.get("plan_fingerprint") != self.state.get("plan_fingerprint")
-            or manifest.get("execution_profile") != a1_artifacts.PHASE_A1_EXECUTION_PROFILE
-            or manifest.get("schema_version") != a1_artifacts.COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION
-        ):
-            return False
-        mismatch = self._binding_mismatch(
-            manifest.get("comparison_evidence_path"),
-            manifest.get("comparison_evidence_size_bytes"),
-            manifest.get("comparison_evidence_sha256"),
-        )
-        if mismatch == "other":
-            return False
-        source_entries = manifest.get("source_artifacts")
-        if not isinstance(source_entries, list):
-            return False
-        seen: set[str] = set()
-        descriptor_mismatch = mismatch == "descriptor"
-        for item in source_entries:
-            if not isinstance(item, Mapping):
-                return False
-            path_value = item.get("path")
-            if not isinstance(path_value, str) or path_value in seen:
-                return False
-            seen.add(path_value)
-            item_mismatch = self._binding_mismatch(
-                path_value, item.get("size_bytes"), item.get("sha256")
-            )
-            if item_mismatch == "other":
-                return False
-            descriptor_mismatch = descriptor_mismatch or item_mismatch == "descriptor"
-        requires_claim = bool(
-            self.state.get("status") == "COMPLETED"
-            or {"phase_a_claim_gate", "phase_a_growth_report", "phase_a_memory_report",
-                "phase_a_engineering_claim_report", "phase_a_claim_visualization"}
-            & set(self.task_operations)
-        )
-        return descriptor_mismatch and (not requires_claim or self._claim_contract_intact(manifest))
 
     def _add_manifest_item(self, path: str, item: Mapping[str, Any], snapshot: Mapping[str, Any], source: str) -> None:
         expected_size = item.get("size_bytes")
@@ -1156,8 +1036,10 @@ class _ResolverPass:
                 plan_fingerprint=self.state["plan_fingerprint"],
             )
         except Exception:
-            if not self._a2_failure_is_pure_source_drift():
-                self.add(self.invalid, "publication_invalid")
+            # Publication owns its complete Manifest, transaction, source-set,
+            # final-summary, and publication-file contract.  No resolver-local
+            # fallback may downgrade an authority failure to stale.
+            self.add(self.invalid, "publication_invalid")
             return
         self.a2_manifest = self.a2_result.get("manifest") if isinstance(self.a2_result, Mapping) else None
         if not isinstance(self.a2_manifest, Mapping):
@@ -1195,102 +1077,6 @@ class _ResolverPass:
             self.add(self.invalid, "nonterminal_publication_committed")
         if self.a2_manifest is not None and not self.invalid:
             self._check_committed_scope_closure()
-
-    def _a2_failure_is_pure_source_drift(self) -> bool:
-        manifest = self._read_loose_object(publication.PUBLICATION_MANIFEST_PATH)
-        if manifest is None or self.state is None or self.transaction is None:
-            return False
-        if (
-            manifest.get("run_id") != self.run_id
-            or manifest.get("plan_fingerprint") != self.state.get("plan_fingerprint")
-            or manifest.get("execution_profile") != publication.PUBLICATION_EXECUTION_PROFILE
-            or manifest.get("schema_version") != publication.PUBLICATION_MANIFEST_SCHEMA_VERSION
-            or manifest.get("publication_manifest_path") != publication.PUBLICATION_MANIFEST_PATH
-            or manifest.get("publication_transaction_path")
-            != publication.PUBLICATION_TRANSACTION_PATH_TEMPLATE.format(run_id=self.run_id)
-            or manifest.get("final_summary_path")
-            != publication.FINAL_SUMMARY_PATH_TEMPLATE.format(run_id=self.run_id)
-        ):
-            return False
-        if set(manifest) != getattr(publication, "_MANIFEST_FIELDS", set()):
-            return False
-        if (
-            self.transaction.get("run_id") != self.run_id
-            or self.transaction.get("plan_fingerprint") != self.state.get("plan_fingerprint")
-            or self.transaction.get("execution_profile") != publication.PUBLICATION_EXECUTION_PROFILE
-            or self.transaction.get("manifest_path") != publication.PUBLICATION_MANIFEST_PATH
-        ):
-            return False
-        try:
-            manifest_bytes, _manifest_snapshot = _read_guarded_file(
-                self.root, publication.PUBLICATION_MANIFEST_PATH
-            )
-        except (OSError, ValueError, ArtifactResolutionError):
-            return False
-        if self.transaction.get("manifest_sha256") != _sha256(manifest_bytes):
-            return False
-        source_entries = manifest.get("source_artifacts")
-        publication_files = manifest.get("publication_files")
-        if not isinstance(source_entries, list) or not isinstance(publication_files, list):
-            return False
-        if not all(isinstance(item, Mapping) for item in source_entries):
-            return False
-        expected_source_paths = [item.get("path") for item in source_entries]
-        expected_publication_paths = sorted(
-            [
-                *getattr(publication, "_FINAL_PATHS", ()),
-                publication.FINAL_SUMMARY_PATH_TEMPLATE.format(run_id=self.run_id),
-            ]
-        )
-        actual_publication_paths = [
-            item.get("path") if isinstance(item, Mapping) else None
-            for item in publication_files
-        ]
-        if (
-            manifest.get("expected_source_artifact_paths") != expected_source_paths
-            or expected_source_paths != sorted(expected_source_paths)
-            or actual_publication_paths != expected_publication_paths
-        ):
-            return False
-        try:
-            for path_text in expected_source_paths:
-                _safe_run_path(self.root, self.run_id, path_text)
-            for path_text in actual_publication_paths:
-                if path_text.startswith(f"runs/{self.run_id}/"):
-                    _safe_run_path(self.root, self.run_id, path_text)
-                else:
-                    _read_guarded_file(self.root, path_text)
-        except Exception:
-            return False
-        seen: set[str] = set()
-        descriptor_mismatch = False
-        for item in source_entries:
-            if not isinstance(item, Mapping) or not isinstance(item.get("path"), str):
-                return False
-            if item["path"] in seen:
-                return False
-            seen.add(item["path"])
-            mismatch = self._binding_mismatch(
-                item["path"], item.get("size_bytes"), item.get("sha256")
-            )
-            if mismatch == "other":
-                return False
-            descriptor_mismatch = descriptor_mismatch or mismatch == "descriptor"
-        for item in publication_files:
-            if not isinstance(item, Mapping) or not isinstance(item.get("path"), str):
-                return False
-            try:
-                path_text = item["path"]
-                if path_text.startswith(f"runs/{self.run_id}/"):
-                    snapshot = _snapshot_file(self.root, path_text)
-                else:
-                    snapshot = _snapshot_controlled_file(self.root, path_text)
-                size, digest = snapshot["size_bytes"], snapshot["sha256"]
-                if size != item.get("size_bytes") or digest != item.get("sha256"):
-                    return False
-            except Exception:
-                return False
-        return descriptor_mismatch
 
     def _check_committed_scope_closure(self) -> None:
         """Reject extra files in committed artifact/publication scopes.
