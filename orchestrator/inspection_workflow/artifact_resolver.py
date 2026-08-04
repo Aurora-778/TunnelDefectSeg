@@ -129,10 +129,9 @@ def _lstat(path: Path, *, label: str) -> os.stat_result | None:
         raise ArtifactResolutionError(f"unable to inspect {label}") from exc
 
 
-def _assert_plain(path: Path, *, label: str, directory: bool | None = None) -> os.stat_result:
-    entry = _lstat(path, label=label)
-    if entry is None:
-        raise ArtifactResolutionError(f"{label} is missing")
+def _assert_plain_stat(
+    entry: os.stat_result, *, label: str, directory: bool | None = None
+) -> os.stat_result:
     if stat.S_ISLNK(entry.st_mode) or _is_reparse(entry):
         raise ArtifactResolutionError(f"{label} must not be a symlink or reparse point")
     if directory is True and not stat.S_ISDIR(entry.st_mode):
@@ -142,6 +141,17 @@ def _assert_plain(path: Path, *, label: str, directory: bool | None = None) -> o
     if directory is None and not (stat.S_ISDIR(entry.st_mode) or stat.S_ISREG(entry.st_mode)):
         raise ArtifactResolutionError(f"{label} must be a directory or regular file")
     return entry
+
+
+def _assert_plain(path: Path, *, label: str, directory: bool | None = None) -> os.stat_result:
+    entry = _lstat(path, label=label)
+    if entry is None:
+        raise ArtifactResolutionError(f"{label} is missing")
+    return _assert_plain_stat(entry, label=label, directory=directory)
+
+
+def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_ino == right.st_ino and left.st_dev == right.st_dev
 
 
 def _safe_run_path(root: Path, run_id: str, relative: Any, *, require_run: bool = True) -> str:
@@ -193,18 +203,42 @@ def _read_guarded_file(
     before = _assert_plain(path, label=f"artifact {normalized}", directory=False)
     digest = hashlib.sha256()
     chunks: list[bytes] = []
+    descriptor: int | None = None
     try:
-        with path.open("rb") as handle:
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        handle = os.fdopen(descriptor, "rb")
+        descriptor = None
+        with handle:
+            opened = _assert_plain_stat(
+                os.fstat(handle.fileno()),
+                label=f"opened artifact {normalized}",
+                directory=False,
+            )
+            if not _same_file_identity(before, opened):
+                raise ArtifactResolutionError(
+                    f"artifact {normalized} opened object does not match checked path"
+                )
             while True:
                 chunk = handle.read(CHUNK_SIZE)
                 if not chunk:
                     break
                 chunks.append(chunk)
                 digest.update(chunk)
+            after_read = _assert_plain_stat(
+                os.fstat(handle.fileno()),
+                label=f"opened artifact {normalized}",
+                directory=False,
+            )
+            if not _same_file_identity(opened, after_read):
+                raise ArtifactResolutionError(f"artifact {normalized} changed during guarded read")
     except (OSError, ValueError) as exc:
         raise ArtifactResolutionError(f"unable to read artifact {normalized}") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     after = _assert_plain(path, label=f"artifact {normalized}", directory=False)
-    if before.st_ino != after.st_ino or before.st_dev != after.st_dev:
+    if not _same_file_identity(before, after) or not _same_file_identity(opened, after):
         raise ArtifactResolutionError(f"artifact {normalized} changed during snapshot")
     data = b"".join(chunks)
     return data, {"path": normalized, "size_bytes": len(data), "sha256": digest.hexdigest()}
@@ -272,7 +306,6 @@ _RECOVERY_ISSUE_CODES = frozenset(
 )
 _STALE_ISSUE_CODES = frozenset(
     {
-        "descriptor_source_stale",
         "workflow_policy_stale",
         "plan_fingerprint_stale",
         "task_plan_stale",
@@ -319,6 +352,16 @@ def _freeze_item(item: Mapping[str, Any]) -> Mapping[str, Any]:
     return _freeze_value(item)
 
 
+def _is_deeply_frozen(value: Any) -> bool:
+    if isinstance(value, MappingProxyType):
+        return all(_is_deeply_frozen(item) for item in value.values())
+    if isinstance(value, tuple):
+        return all(_is_deeply_frozen(item) for item in value)
+    if isinstance(value, frozenset):
+        return all(_is_deeply_frozen(item) for item in value)
+    return not isinstance(value, (Mapping, list, set, bytearray))
+
+
 @dataclass(frozen=True, init=False)
 class ArtifactResolution:
     """Deterministic result returned by :class:`ArtifactResolver`."""
@@ -333,6 +376,9 @@ class ArtifactResolution:
     input_descriptor_sha256: str | None
     issue_codes: tuple[str, ...]
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("ArtifactResolution is created only by ArtifactResolver")
+
     def __post_init__(self) -> None:
         if self.status not in {
             "complete",
@@ -344,6 +390,11 @@ class ArtifactResolution:
             raise ValueError("unknown ArtifactResolution status")
         if _sha256(self.inventory_bytes) != self.inventory_sha256:
             raise ValueError("inventory SHA-256 does not match inventory bytes")
+        if not isinstance(self.inventory, tuple) or not all(
+            isinstance(item, MappingProxyType) and _is_deeply_frozen(item)
+            for item in self.inventory
+        ):
+            raise ValueError("inventory must be deeply frozen before validation")
         canonical = _canonical_json_bytes(
             {
                 "schema_version": INVENTORY_SCHEMA_VERSION,
@@ -422,7 +473,8 @@ class _ResolverPass:
                 "artifacts": [dict(item) for item in inventory],
             }
         )
-        status = _status_priority(self.recovery, self.invalid, self.stale, self.incomplete)
+        issue_codes = tuple(sorted(self.recovery | self.invalid | self.stale | self.incomplete))
+        status = _status_from_issue_codes(issue_codes)
         result = object.__new__(ArtifactResolution)
         object.__setattr__(result, "run_id", self.run_id)
         object.__setattr__(result, "status", status)
@@ -439,7 +491,7 @@ class _ResolverPass:
         object.__setattr__(
             result,
             "issue_codes",
-            tuple(sorted(self.recovery | self.invalid | self.stale | self.incomplete)),
+            issue_codes,
         )
         result.__post_init__()
         return result
@@ -664,6 +716,10 @@ class _ResolverPass:
                 self.add(self.invalid, "duplicate_task_success")
             self.task_operations[task_id] = operation
             for path in operation["paths"]:
+                fixed_task_id = self._fixed_producer_task(path)
+                if fixed_task_id is not None and task_id != fixed_task_id:
+                    self.add(self.invalid, "checkpoint_producer_invalid")
+                    continue
                 previous = self.declared_paths.get(path)
                 if previous is not None and previous[0] != task_id:
                     self.add(self.invalid, "duplicate_producer_path")
@@ -787,7 +843,7 @@ class _ResolverPass:
                 self.add(self.invalid, "descriptor_source_unreadable")
                 continue
             if snapshot["size_bytes"] != item["size_bytes"] or snapshot["sha256"] != item["sha256"]:
-                self.add(self.stale, "descriptor_source_stale")
+                self.add(self.invalid, "descriptor_source_stale")
             self.inventory_candidates[path] = self._inventory_item(
                 path=path,
                 role="resolved_input",
@@ -948,6 +1004,31 @@ class _ResolverPass:
             self.add(self.invalid, "inventory_binding_conflict")
         self.inventory_candidates[path] = candidate
 
+    def _fixed_producer_task(self, path: str) -> str | None:
+        """Return the contract-fixed task for named A1 artifacts, if any."""
+
+        name = PurePosixPath(path).name
+        if "/artifacts/" in path:
+            return {
+                "comparison_evidence.csv": "phase_a_comparison_evidence",
+                "comparison_evidence_manifest.json": "phase_a_comparison_evidence",
+                "claim_decision.json": "phase_a_claim_gate",
+            }.get(name)
+        if "/staging/" in path:
+            return {
+                "disease_growth_analysis_report.md": "phase_a_growth_report",
+                "disease_growth_analysis_summary.md": "phase_a_growth_report",
+                "memory_agent_report.md": "phase_a_memory_report",
+                "disease_memory_bank_summary.md": "phase_a_memory_report",
+                "disease_engineering_report.md": "phase_a_engineering_claim_report",
+                "disease_engineering_report_summary.md": "phase_a_engineering_claim_report",
+                "priority_recheck_list.csv": "phase_a_claim_visualization",
+                "visualization_report.md": "phase_a_claim_visualization",
+                "visualization_summary.md": "phase_a_claim_visualization",
+                "recheck_list_report.md": "phase_a_claim_visualization",
+            }.get(name)
+        return None
+
     def _infer_producer(self, path: str) -> tuple[str, str, int] | None:
         if path in self.declared_paths:
             return self.declared_paths[path]
@@ -963,35 +1044,13 @@ class _ResolverPass:
                     f"resolved_input_descriptor:{self.descriptor_sha256}",
                     0,
                 )
-        if "/artifacts/" in path:
-            mapping = {
-                "comparison_evidence.csv": "phase_a_comparison_evidence",
-                "comparison_evidence_manifest.json": "phase_a_comparison_evidence",
-                "claim_decision.json": "phase_a_claim_gate",
-            }
-            task_id = mapping.get(name)
-            if task_id and task_id in self.task_operations:
-                row = self.task_operations[task_id]
-                return task_id, row["operation_id"], row["state_version"]
-        if "/staging/" in path:
-            for suffix, task_id in (
-                ("disease_growth_analysis_report.md", "phase_a_growth_report"),
-                ("disease_growth_analysis_summary.md", "phase_a_growth_report"),
-                ("memory_agent_report.md", "phase_a_memory_report"),
-                ("disease_memory_bank_summary.md", "phase_a_memory_report"),
-                ("disease_engineering_report.md", "phase_a_engineering_claim_report"),
-                ("disease_engineering_report_summary.md", "phase_a_engineering_claim_report"),
-                ("priority_recheck_list.csv", "phase_a_claim_visualization"),
-                ("visualization_report.md", "phase_a_claim_visualization"),
-                ("visualization_summary.md", "phase_a_claim_visualization"),
-                ("recheck_list_report.md", "phase_a_claim_visualization"),
-            ):
-                if name == suffix and task_id in self.task_operations:
-                    row = self.task_operations[task_id]
-                    return task_id, row["operation_id"], row["state_version"]
-            if "/visualizations/" in path and "phase_a_claim_visualization" in self.task_operations:
-                row = self.task_operations["phase_a_claim_visualization"]
-                return "phase_a_claim_visualization", row["operation_id"], row["state_version"]
+        fixed_task_id = self._fixed_producer_task(path)
+        if fixed_task_id and fixed_task_id in self.task_operations:
+            row = self.task_operations[fixed_task_id]
+            return fixed_task_id, row["operation_id"], row["state_version"]
+        if "/visualizations/" in path and "phase_a_claim_visualization" in self.task_operations:
+            row = self.task_operations["phase_a_claim_visualization"]
+            return "phase_a_claim_visualization", row["operation_id"], row["state_version"]
         if "phase_a_association" in self.task_operations and (
             "/raw_history/" in path
             or "/main_progressive/" in path

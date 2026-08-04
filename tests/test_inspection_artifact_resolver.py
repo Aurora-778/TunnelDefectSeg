@@ -4,8 +4,10 @@ import csv
 from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
-from types import MappingProxyType
+import stat
+from types import MappingProxyType, SimpleNamespace
 import uuid
 
 from PIL import Image
@@ -103,7 +105,11 @@ def _read_json(path: Path) -> dict[str, object]:
 
 
 def _write_json(path: Path, value: object) -> None:
-    path.write_bytes(
+    path.write_bytes(_canonical_json_bytes(value))
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return (
         json.dumps(
             value,
             ensure_ascii=False,
@@ -113,6 +119,26 @@ def _write_json(path: Path, value: object) -> None:
         ).encode("utf-8")
         + b"\n"
     )
+
+
+class _RestoringHandle:
+    def __init__(self, handle: object, restore: object) -> None:
+        self.handle = handle
+        self.restore = restore
+
+    def __enter__(self) -> "_RestoringHandle":
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        self.handle.close()  # type: ignore[union-attr]
+        self.restore()  # type: ignore[operator]
+        return False
+
+    def fileno(self) -> int:
+        return self.handle.fileno()  # type: ignore[union-attr]
+
+    def read(self, size: int) -> bytes:
+        return self.handle.read(size)  # type: ignore[union-attr]
 
 
 def _rebind_a1_manifest_in_publication(root: Path, manifest_path: Path) -> None:
@@ -180,6 +206,67 @@ def _append_unresolved_pending(root: Path) -> None:
         + b"\n"
     )
     (run_dir / "state_journal.jsonl").write_bytes(journal + line)
+
+
+def _transfer_checkpoint_producer(root: Path) -> None:
+    """Keep State, Journal, and tail anchor consistent for a provenance probe."""
+
+    run_dir = root / "runs" / RUN_ID
+    state_path = run_dir / "state.json"
+    journal_path = run_dir / "state_journal.jsonl"
+    anchor_path = run_dir / "state_journal_tail.json"
+    state = _read_json(state_path)
+    growth_operation = f"run:{RUN_ID}:task:phase_a_growth_report:attempt:1:succeeded"
+    engineering_operation = (
+        f"run:{RUN_ID}:task:phase_a_engineering_claim_report:attempt:1:succeeded"
+    )
+    events = state["context"]["phase_a3_checkpoint_events"]
+    events[growth_operation]["controlled_context_delta"]["task_output"]["result"]["report_paths"][0] = (
+        f"runs/{RUN_ID}/staging/disease_engineering_report.md"
+    )
+    events[engineering_operation]["controlled_context_delta"]["task_output"]["result"]["report_paths"][0] = (
+        f"runs/{RUN_ID}/staging/disease_engineering_report_summary.md"
+    )
+
+    rows = [json.loads(line) for line in journal_path.read_bytes().splitlines()]
+    replacements = {
+        growth_operation: f"runs/{RUN_ID}/staging/disease_engineering_report.md",
+        engineering_operation: f"runs/{RUN_ID}/staging/disease_engineering_report_summary.md",
+    }
+    for operation_id, replacement in replacements.items():
+        pending = next(
+            row for row in rows if row["operation_id"] == operation_id and row["phase"] == "pending"
+        )
+        pending["payload"]["controlled_context_delta"]["task_output"]["result"]["report_paths"][0] = replacement
+        payload_sha256 = hashlib.sha256(_canonical_json_bytes(pending["payload"])).hexdigest()
+        for row in rows:
+            if row["operation_id"] == operation_id:
+                row["payload_sha256"] = payload_sha256
+
+    state_bytes = _canonical_json_bytes(state)
+    last_committed = next(row for row in reversed(rows) if row["phase"] == "committed")
+    for row in rows:
+        if row["operation_id"] == last_committed["operation_id"]:
+            row["resulting_state_sha256"] = hashlib.sha256(state_bytes).hexdigest()
+
+    store = StateStore(root)
+    previous_checksum: str | None = None
+    for row in rows:
+        row["previous_record_checksum"] = previous_checksum
+        row["record_checksum"] = None
+        row["record_checksum"] = store._record_checksum(row)  # type: ignore[attr-defined]
+        previous_checksum = row["record_checksum"]
+    journal_bytes = b"".join(_canonical_json_bytes(row) for row in rows)
+    anchor = store._anchor_document(  # type: ignore[attr-defined]
+        run_id=RUN_ID,
+        allocation_token=state["allocation_token"],
+        tail_record_index=rows[-1]["record_index"],
+        tail_record_checksum=rows[-1]["record_checksum"],
+        tail_file_size_bytes=len(journal_bytes),
+    )
+    state_path.write_bytes(state_bytes)
+    journal_path.write_bytes(journal_bytes)
+    anchor_path.write_bytes(_canonical_json_bytes(anchor))
 
 
 def _make_incomplete_run(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -349,6 +436,20 @@ def test_unfinished_required_task_is_incomplete(tmp_path: Path, monkeypatch: pyt
     assert result.status == "incomplete"
 
 
+def test_unfinished_descriptor_source_drift_is_invalid_without_authority_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "incomplete-source-drift"
+    root.mkdir()
+    _make_incomplete_run(root, monkeypatch)
+    (root / "runs" / "run_001" / "work" / "input.csv").write_bytes(b"changed\n")
+
+    result = ArtifactResolver(root).resolve(run_id="run_001")
+
+    assert result.status == "invalid"
+    assert "descriptor_source_stale" in result.issue_codes
+
+
 def test_recovery_residue_wins_over_every_other_state(completed_run: Path) -> None:
     marker = completed_run / "runs" / RUN_ID / "work" / ".a1_recovery_required.json"
     marker.write_bytes(b"recovery")
@@ -389,16 +490,31 @@ def test_source_descriptor_drift_is_invalid_without_authority_proof(completed_ru
     assert "descriptor_source_stale" in result.issue_codes
 
 
-def test_descriptor_drift_does_not_mask_independent_artifact_corruption(completed_run: Path) -> None:
+def test_claim_only_corruption_is_invalid(completed_run: Path) -> None:
+    claim = completed_run / "runs" / RUN_ID / "artifacts" / "claim_decision.json"
+    changed = claim.read_bytes().replace(b"allowed_with_limits", b"blocked_invalid", 1)
+    assert changed != claim.read_bytes()
+    claim.write_bytes(changed)
+
+    result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+
+    assert result.status == "invalid"
+    assert "claim_decision_invalid" in result.issue_codes
+
+
+def test_source_drift_and_claim_corruption_fail_closed(completed_run: Path) -> None:
     source = completed_run / "runs" / RUN_ID / "work" / "raw_prepared" / "frame_records.csv"
     source.write_bytes(source.read_bytes() + b"\n")
     claim = completed_run / "runs" / RUN_ID / "artifacts" / "claim_decision.json"
-    claim.write_bytes(claim.read_bytes().replace(b"allowed_with_limits", b"blocked_invalid", 1))
+    changed = claim.read_bytes().replace(b"allowed_with_limits", b"blocked_invalid", 1)
+    assert changed != claim.read_bytes()
+    claim.write_bytes(changed)
 
     result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
 
     assert result.status == "invalid"
     assert "descriptor_source_stale" in result.issue_codes
+    assert "a1_invalid" in result.issue_codes
 
 
 @pytest.mark.parametrize("mutation", ["manifest_field", "source_set_delete"])
@@ -547,17 +663,25 @@ def test_manifest_and_artifact_mutations_fail_closed(completed_run: Path, mutati
 
 
 def test_wrong_checkpoint_producer_is_invalid(completed_run: Path) -> None:
-    state = _read_json(completed_run / "runs" / RUN_ID / "state.json")
-    events = state["context"]["phase_a3_checkpoint_events"]
-    event = events["run:run_701:task:phase_a_growth_report:attempt:1:succeeded"]
-    event["controlled_context_delta"]["task_output"]["result"]["report_paths"][0] = (
-        f"runs/{RUN_ID}/staging/disease_engineering_report.md"
-    )
-    _write_json(completed_run / "runs" / RUN_ID / "state.json", state)
+    _transfer_checkpoint_producer(completed_run)
+    StateStore(completed_run).load(run_id=RUN_ID)
 
     result = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
 
     assert result.status == "invalid"
+    assert "checkpoint_producer_invalid" in result.issue_codes
+
+
+def test_visualization_path_keeps_claim_visualization_producer(tmp_path: Path) -> None:
+    resolver_pass = artifact_resolver._ResolverPass(tmp_path, RUN_ID)
+    resolver_pass.task_operations["phase_a_claim_visualization"] = {
+        "operation_id": "operation-visualization",
+        "state_version": 7,
+    }
+
+    assert resolver_pass._infer_producer(
+        f"runs/{RUN_ID}/staging/visualizations/recheck.png"
+    ) == ("phase_a_claim_visualization", "operation-visualization", 7)
 
 
 def test_completed_state_without_publication_is_invalid(completed_run: Path) -> None:
@@ -680,6 +804,8 @@ def test_public_artifact_resolution_constructor_cannot_forge_complete() -> None:
     assert not hasattr(artifact_resolver.ArtifactResolution, "_from_factory")
     assert not hasattr(artifact_resolver, "_RESOLUTION_FACTORY_TOKEN")
     with pytest.raises(TypeError):
+        artifact_resolver.ArtifactResolution()
+    with pytest.raises(TypeError):
         artifact_resolver.ArtifactResolution(  # type: ignore[call-arg]
             run_id=RUN_ID,
             status="complete",
@@ -741,20 +867,47 @@ def test_artifact_resolution_post_init_rejects_status_without_issues() -> None:
             forged.__post_init__()
 
 
+def test_artifact_resolution_post_init_rejects_mutable_inventory() -> None:
+    mutable_inventory = ({"path": f"runs/{RUN_ID}/nested.json", "nested": {"items": [1]}},)
+    data = artifact_resolver._canonical_json_bytes(
+        {
+            "schema_version": artifact_resolver.INVENTORY_SCHEMA_VERSION,
+            "run_id": RUN_ID,
+            "artifacts": list(mutable_inventory),
+        }
+    )
+    forged = object.__new__(artifact_resolver.ArtifactResolution)
+    for field, value in {
+        "run_id": RUN_ID,
+        "status": "complete",
+        "inventory": mutable_inventory,
+        "inventory_bytes": data,
+        "inventory_sha256": hashlib.sha256(data).hexdigest(),
+        "state_version": None,
+        "plan_fingerprint": None,
+        "input_descriptor_sha256": None,
+        "issue_codes": (),
+    }.items():
+        object.__setattr__(forged, field, value)
+
+    with pytest.raises(ValueError, match="deeply frozen"):
+        forged.__post_init__()
+
+
 def test_guarded_read_uses_one_open_for_fixed_publication_file(
     completed_run: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = completed_run / "outputs" / "current_publication_manifest.json"
     opens = 0
-    original_open = Path.open
+    original_open = os.open
 
-    def counted_open(path: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+    def counted_open(path: str | os.PathLike[str], *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
         nonlocal opens
-        if path == target:
+        if Path(path) == target:
             opens += 1
         return original_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", counted_open)
+    monkeypatch.setattr(artifact_resolver.os, "open", counted_open)
     data, snapshot = artifact_resolver._read_guarded_file(
         completed_run, "outputs/current_publication_manifest.json"
     )
@@ -762,6 +915,139 @@ def test_guarded_read_uses_one_open_for_fixed_publication_file(
     assert opens == 1
     assert snapshot["size_bytes"] == len(data)
     assert snapshot["sha256"] == hashlib.sha256(data).hexdigest()
+
+
+def test_guarded_read_rejects_aba_leaf_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "aba-leaf"
+    target = root / "runs" / RUN_ID / "artifacts" / "sample.bin"
+    target.parent.mkdir(parents=True)
+    original = b"original"
+    replacement = b"replacement"
+    target.write_bytes(original)
+    backup = target.with_suffix(".backup")
+    original_open = os.open
+    original_fdopen = os.fdopen
+    swapped = False
+
+    def restore() -> None:
+        target.unlink()
+        backup.replace(target)
+
+    def swapping_open(path: str | os.PathLike[str], *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal swapped
+        if Path(path) == target:
+            target.replace(backup)
+            target.write_bytes(replacement)
+            swapped = True
+        return original_open(path, *args, **kwargs)
+
+    def restoring_fdopen(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        handle = original_fdopen(*args, **kwargs)
+        return _RestoringHandle(handle, restore) if swapped else handle
+
+    monkeypatch.setattr(artifact_resolver.os, "open", swapping_open)
+    monkeypatch.setattr(artifact_resolver.os, "fdopen", restoring_fdopen)
+
+    with pytest.raises(artifact_resolver.ArtifactResolutionError, match="opened object"):
+        artifact_resolver._read_guarded_file(root, f"runs/{RUN_ID}/artifacts/sample.bin", run_id=RUN_ID)
+    assert target.read_bytes() == original
+
+
+def test_guarded_read_rejects_parent_directory_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "aba-parent"
+    target = root / "runs" / RUN_ID / "artifacts" / "sample.bin"
+    parent = target.parent
+    parent.mkdir(parents=True)
+    original = b"original"
+    replacement = b"replacement"
+    target.write_bytes(original)
+    backup_parent = parent.with_name("artifacts-backup")
+    original_open = os.open
+    original_fdopen = os.fdopen
+    swapped = False
+
+    def restore() -> None:
+        target.unlink()
+        parent.rmdir()
+        backup_parent.replace(parent)
+
+    def swapping_open(path: str | os.PathLike[str], *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        nonlocal swapped
+        if Path(path) == target:
+            parent.replace(backup_parent)
+            parent.mkdir()
+            target.write_bytes(replacement)
+            swapped = True
+        return original_open(path, *args, **kwargs)
+
+    def restoring_fdopen(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        handle = original_fdopen(*args, **kwargs)
+        return _RestoringHandle(handle, restore) if swapped else handle
+
+    monkeypatch.setattr(artifact_resolver.os, "open", swapping_open)
+    monkeypatch.setattr(artifact_resolver.os, "fdopen", restoring_fdopen)
+
+    with pytest.raises(artifact_resolver.ArtifactResolutionError, match="opened object"):
+        artifact_resolver._read_guarded_file(root, f"runs/{RUN_ID}/artifacts/sample.bin", run_id=RUN_ID)
+    assert target.read_bytes() == original
+
+
+def test_guarded_read_rejects_opened_reparse_handle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "reparse-handle"
+    target = root / "runs" / RUN_ID / "artifacts" / "sample.bin"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"contents")
+    original_fstat = os.fstat
+
+    def reparse_fstat(fd: int) -> SimpleNamespace:
+        entry = original_fstat(fd)
+        return SimpleNamespace(
+            st_mode=entry.st_mode,
+            st_ino=entry.st_ino,
+            st_dev=entry.st_dev,
+            st_file_attributes=getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400),
+        )
+
+    monkeypatch.setattr(artifact_resolver.os, "fstat", reparse_fstat)
+
+    with pytest.raises(artifact_resolver.ArtifactResolutionError, match="reparse"):
+        artifact_resolver._read_guarded_file(root, f"runs/{RUN_ID}/artifacts/sample.bin", run_id=RUN_ID)
+
+
+def test_guarded_read_rejects_temporary_symlink_when_supported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "temporary-symlink"
+    target = root / "runs" / RUN_ID / "artifacts" / "sample.bin"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"original")
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"outside")
+    backup = target.with_suffix(".backup")
+    original_open = os.open
+
+    def swapping_open(path: str | os.PathLike[str], *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        if Path(path) != target:
+            return original_open(path, *args, **kwargs)
+        target.replace(backup)
+        try:
+            target.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            backup.replace(target)
+            pytest.skip("symlink creation is unavailable")
+        try:
+            return original_open(path, *args, **kwargs)
+        finally:
+            target.unlink()
+            backup.replace(target)
+
+    monkeypatch.setattr(artifact_resolver.os, "open", swapping_open)
+
+    with pytest.raises(artifact_resolver.ArtifactResolutionError):
+        artifact_resolver._read_guarded_file(root, f"runs/{RUN_ID}/artifacts/sample.bin", run_id=RUN_ID)
+    assert target.read_bytes() == b"original"
 
 
 def test_release_tombstone_is_recovery_required(completed_run: Path) -> None:
