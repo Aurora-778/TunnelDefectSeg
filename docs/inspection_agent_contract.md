@@ -88,10 +88,22 @@ Phase B.1 additionally exposes `ArtifactResolver` as a Run-local, read-only
 integrity/freshness projection. It accepts only a controlled temporary sandbox
 and canonical `run_NNN`; it derives inventory from canonical State/Journal,
 resolved-input descriptor, A1 V4, and A2 Publication authorities. It does not
-perform Safe Reuse, Resume, recovery, task skipping, State/Journal repair, or
-publication cleanup. Its result is local completeness and stale detection, not
-source authentication or a hostile-tamper defense. The detailed contract is
-in `docs/inspection_artifact_resolver_contract.md`.
+perform Safe Reuse execution, Resume, recovery, task skipping, State/Journal
+repair, or publication cleanup. Its result is local completeness and stale
+detection, not source authentication or a hostile-tamper defense. The detailed
+contract is in `docs/inspection_artifact_resolver_contract.md`.
+
+Phase B.2 exposes `SafeReuseAuthorizer` as a second read-only boundary. It calls
+`ArtifactResolver` internally and authorizes only a non-empty, issue-free
+`complete` resolution whose canonical inventory, authority bindings, and
+producer provenance remain self-consistent. Every other status, unknown status,
+resolver error, empty inventory, cross-Run result, or bytes/hash/binding
+contradiction fails closed as `reuse_denied`; a denial exposes no reusable
+inventory or authority binding. This decision is a current-snapshot local check,
+not a permanent capability. Phase B.2 does not consume artifacts, skip tasks,
+write State/Journal, acquire locks, recover, resume, publish, or connect to the
+CLI, Web, Executor, or Controller. The detailed contract is in
+`docs/inspection_safe_reuse_contract.md`.
 
 The prepared task object contains exactly `schema_version`, `task_id`, `task_type`, `input`, and `requested_outputs`. Its input contains exactly `input_mode=prepared_dataset` and a safe `dataset_id`; paths, URIs, GT labels, split fields, review fields, and audit fields are not accepted.
 

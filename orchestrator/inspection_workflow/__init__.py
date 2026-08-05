@@ -98,6 +98,12 @@ from .artifact_resolver import (
     ArtifactResolverInputError,
     resolve_run_artifacts,
 )
+from .safe_reuse import (
+    SAFE_REUSE_DECISION_SCHEMA_VERSION,
+    SafeReuseAuthorizer,
+    SafeReuseDecision,
+    authorize_safe_reuse,
+)
 
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
@@ -177,4 +183,8 @@ __all__ = [
     "ArtifactResolver",
     "ArtifactResolverInputError",
     "resolve_run_artifacts",
+    "SAFE_REUSE_DECISION_SCHEMA_VERSION",
+    "SafeReuseAuthorizer",
+    "SafeReuseDecision",
+    "authorize_safe_reuse",
 ]
