@@ -27,9 +27,17 @@ exactly one decision:
 - `reuse_allowed`: the resolver returned `complete`, returned no issue codes,
   and supplied a non-empty canonical inventory whose bytes, SHA-256, Run,
   State version, plan fingerprint, input-descriptor SHA-256, item bindings,
-  paths, ordering, and producer provenance remain self-consistent. The fixed
-  `runs/<run_id>/final_summary.md` must occur exactly once and must be produced
-  by the exact `publication:pub_[0-9a-f]{24}` operation format.
+  paths, ordering, and producer provenance remain self-consistent. Paths must
+  retain the resolver's relative POSIX value domain, including rejection of
+  backslashes and colon/NTFS-ADS forms. Contract-fixed A1 artifact paths must
+  retain their assigned artifact role and producer task, and fixed singleton
+  roles must not be relocated. Resolved-input artifacts must remain
+  `projection_input` entries under `work/raw_prepared/`, bind the current
+  descriptor SHA-256, and use State version zero; ordinary task artifacts must
+  use the exact Run/task/positive-attempt success operation form. The fixed
+  `runs/<run_id>/final_summary.md` must occur exactly once, remain the
+  `final_summary` role, bind the top-level State version, and be produced by the
+  exact `publication:pub_[0-9a-f]{24}` operation format.
 - `reuse_denied`: every other condition, including `recovery_required`,
   `invalid`, `stale`, `incomplete`, an unknown resolver status, resolver
   exception, empty inventory, cross-Run result, malformed item, producer

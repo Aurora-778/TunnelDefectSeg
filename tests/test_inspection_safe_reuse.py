@@ -172,6 +172,32 @@ def _resolution_variant(resolution: object, **changes: object) -> object:
     return type("ResolutionProbe", (), values)()
 
 
+def _resolution_with_recomputed_inventory(
+    resolution: object,
+    inventory: list[dict[str, object]],
+    **changes: object,
+) -> object:
+    inventory.sort(key=lambda item: str(item["path"]))
+    inventory_bytes = json.dumps(
+        {
+            "schema_version": artifact_resolver.INVENTORY_SCHEMA_VERSION,
+            "run_id": RUN_ID,
+            "artifacts": inventory,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return _resolution_variant(
+        resolution,
+        inventory=tuple(inventory),
+        inventory_bytes=inventory_bytes,
+        inventory_sha256=hashlib.sha256(inventory_bytes).hexdigest(),
+        **changes,
+    )
+
+
 def test_real_incomplete_run_is_denied(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -359,6 +385,242 @@ def test_future_producer_state_version_with_recomputed_inventory_is_denied(
     assert decision.denial_codes == ("resolution_producer_binding_invalid",)
 
 
+def test_forged_top_level_state_version_with_recomputed_inventory_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    probe = _resolution_with_recomputed_inventory(
+        resolution,
+        inventory,
+        state_version=resolution.state_version + 1,
+    )
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == ("resolution_state_binding_invalid",)
+
+
+@pytest.mark.parametrize("artifact_role", ["claim_decision", "association_artifact"])
+def test_forged_fixed_role_producer_with_recomputed_inventory_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_role: str,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    artifact = next(
+        item for item in inventory if item["artifact_role"] == artifact_role
+    )
+    forged_task = (
+        "phase_a_association"
+        if artifact_role == "claim_decision"
+        else "phase_a_claim_gate"
+    )
+    artifact["task_id"] = forged_task
+    artifact["producer_operation"] = (
+        f"run:{RUN_ID}:task:{forged_task}:attempt:1:succeeded"
+    )
+    probe = _resolution_with_recomputed_inventory(resolution, inventory)
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == ("resolution_producer_binding_invalid",)
+
+
+def test_fixed_role_relocated_to_unknown_path_with_recomputed_inventory_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    claim_decision = next(
+        item for item in inventory if item["artifact_role"] == "claim_decision"
+    )
+    claim_decision["path"] = f"runs/{RUN_ID}/artifacts/claim_decision-copy.json"
+    probe = _resolution_with_recomputed_inventory(resolution, inventory)
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == ("resolution_producer_binding_invalid",)
+
+
+def test_unknown_producer_operation_with_recomputed_inventory_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    inventory[0]["producer_operation"] = "opaque:forged"
+    probe = _resolution_with_recomputed_inventory(resolution, inventory)
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == ("resolution_producer_binding_invalid",)
+
+
+def test_forged_task_operation_with_recomputed_inventory_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    claim_decision = next(
+        item for item in inventory if item["artifact_role"] == "claim_decision"
+    )
+    claim_decision["producer_operation"] = (
+        f"run:{RUN_ID}:task:phase_a_claim_gate:attempt:99:succeeded:forged"
+    )
+    probe = _resolution_with_recomputed_inventory(resolution, inventory)
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == ("resolution_producer_binding_invalid",)
+
+
+@pytest.mark.parametrize(
+    ("path_selector", "forged_role", "expected_code"),
+    [
+        ("raw_prepared", "claim_decision", "resolution_inventory_item_invalid"),
+        ("final_summary", "staging_report", "resolution_publication_binding_invalid"),
+        ("claim_decision", "staging_report", "resolution_producer_binding_invalid"),
+    ],
+)
+def test_forged_path_role_binding_with_recomputed_inventory_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path_selector: str,
+    forged_role: str,
+    expected_code: str,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    if path_selector == "raw_prepared":
+        artifact = next(
+            item for item in inventory if "/raw_prepared/" in str(item["path"])
+        )
+    elif path_selector == "final_summary":
+        artifact = next(
+            item
+            for item in inventory
+            if item["path"] == f"runs/{RUN_ID}/final_summary.md"
+        )
+    else:
+        artifact = next(
+            item for item in inventory if item["artifact_role"] == path_selector
+        )
+    artifact["artifact_role"] = forged_role
+    probe = _resolution_with_recomputed_inventory(resolution, inventory)
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == (expected_code,)
+
+
+def test_forged_resolved_input_operation_with_recomputed_inventory_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    resolved_input = next(
+        item for item in inventory if "/raw_prepared/" in str(item["path"])
+    )
+    resolved_input["producer_operation"] = "resolved_input_descriptor:" + "0" * 64
+    probe = _resolution_with_recomputed_inventory(resolution, inventory)
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == ("resolution_producer_binding_invalid",)
+
+
+def test_resolved_input_outside_fixed_prefix_with_recomputed_inventory_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    resolved_input = next(
+        item for item in inventory if "/raw_prepared/" in str(item["path"])
+    )
+    name = str(resolved_input["path"]).rsplit("/", 1)[-1]
+    resolved_input["path"] = f"runs/{RUN_ID}/work/forged/raw_prepared/{name}"
+    probe = _resolution_with_recomputed_inventory(resolution, inventory)
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == ("resolution_inventory_path_invalid",)
+
+
+def test_windows_ads_path_with_recomputed_inventory_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    inventory[0]["path"] = str(inventory[0]["path"]) + ":stream"
+    probe = _resolution_with_recomputed_inventory(resolution, inventory)
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == ("resolution_inventory_path_invalid",)
+
+
 def test_forged_publication_operation_with_recomputed_inventory_is_denied(
     completed_run: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -449,6 +711,7 @@ def test_allowed_decision_construction_failure_is_denied(
     ("field", "value", "expected_code"),
     [
         ("artifact_role", None, "resolution_inventory_item_invalid"),
+        ("artifact_role", "future_role", "resolution_inventory_item_invalid"),
         ("task_id", "", "resolution_producer_binding_invalid"),
         ("producer_operation", "", "resolution_producer_binding_invalid"),
     ],

@@ -36,6 +36,83 @@ _INVENTORY_FIELDS = {
     "plan_fingerprint",
     "input_descriptor_sha256",
 }
+_FIXED_ARTIFACT_BINDINGS = {
+    "artifacts/claim_decision.json": ("claim_decision", "phase_a_claim_gate"),
+    "artifacts/comparison_evidence.csv": (
+        "comparison_evidence",
+        "phase_a_comparison_evidence",
+    ),
+    "artifacts/comparison_evidence_manifest.json": (
+        "comparison_evidence_manifest",
+        "phase_a_comparison_evidence",
+    ),
+    "staging/disease_growth_analysis_report.md": (
+        "staging_report",
+        "phase_a_growth_report",
+    ),
+    "staging/disease_growth_analysis_summary.md": (
+        "staging_report",
+        "phase_a_growth_report",
+    ),
+    "staging/memory_agent_report.md": ("staging_report", "phase_a_memory_report"),
+    "staging/disease_memory_bank_summary.md": (
+        "staging_report",
+        "phase_a_memory_report",
+    ),
+    "staging/disease_engineering_report.md": (
+        "staging_report",
+        "phase_a_engineering_claim_report",
+    ),
+    "staging/disease_engineering_report_summary.md": (
+        "staging_report",
+        "phase_a_engineering_claim_report",
+    ),
+    "staging/priority_recheck_list.csv": (
+        "staging_report",
+        "phase_a_claim_visualization",
+    ),
+    "staging/visualization_report.md": (
+        "staging_report",
+        "phase_a_claim_visualization",
+    ),
+    "staging/visualization_summary.md": (
+        "staging_report",
+        "phase_a_claim_visualization",
+    ),
+    "staging/recheck_list_report.md": (
+        "staging_report",
+        "phase_a_claim_visualization",
+    ),
+}
+_FIXED_ROLE_PATHS = {
+    role: path
+    for path, (role, _) in _FIXED_ARTIFACT_BINDINGS.items()
+    if role != "staging_report"
+}
+_STAGING_REPORT_PATHS = {
+    path
+    for path, (role, _) in _FIXED_ARTIFACT_BINDINGS.items()
+    if role == "staging_report"
+}
+_ROLE_PRODUCER_TASKS = {
+    "association_artifact": "phase_a_association",
+    "association_manifest": "phase_a_association",
+    "association_round_artifact": "phase_a_association",
+    "claim_decision": "phase_a_claim_gate",
+    "comparison_evidence": "phase_a_comparison_evidence",
+    "comparison_evidence_manifest": "phase_a_comparison_evidence",
+    "engineering_artifact": "phase_a_comparison_evidence",
+    "frame_artifact": "phase_a_comparison_evidence",
+    "history_memory_context": "phase_a_association",
+    "history_round_context": "phase_a_association",
+    "projection_receipt": "phase_a_comparison_evidence",
+    "staging_visualization": "phase_a_claim_visualization",
+}
+_ALLOWED_ARTIFACT_ROLES = set(_ROLE_PRODUCER_TASKS) | {
+    "final_summary",
+    "projection_input",
+    "staging_report",
+}
 
 
 def _sha256(data: bytes) -> str:
@@ -329,13 +406,14 @@ def _validate_complete_resolution(resolution: Any, run_id: str) -> Optional[str]
             not isinstance(path, str)
             or not path.startswith("runs/" + run_id + "/")
             or "\\" in path
+            or ":" in path
             or any(part in {"", ".", ".."} for part in path.split("/"))
         ):
             return "resolution_inventory_path_invalid"
         if path in paths:
             return "resolution_inventory_path_invalid"
         paths.append(path)
-        if not isinstance(item.get("artifact_role"), str) or not item.get("artifact_role"):
+        if item.get("artifact_role") not in _ALLOWED_ARTIFACT_ROLES:
             return "resolution_inventory_item_invalid"
         if item.get("plan_fingerprint") != plan_fingerprint:
             return "resolution_plan_binding_invalid"
@@ -348,10 +426,56 @@ def _validate_complete_resolution(resolution: Any, run_id: str) -> Optional[str]
             or item_state_version > state_version
         ):
             return "resolution_producer_binding_invalid"
-        if not isinstance(item.get("task_id"), str) or not item.get("task_id"):
+        task_id = item.get("task_id")
+        producer_operation = item.get("producer_operation")
+        if not isinstance(task_id, str) or not task_id:
             return "resolution_producer_binding_invalid"
-        if not isinstance(item.get("producer_operation"), str) or not item.get("producer_operation"):
+        if not isinstance(producer_operation, str) or not producer_operation:
             return "resolution_producer_binding_invalid"
+        run_prefix = "runs/" + run_id + "/"
+        run_relative_path = path[len(run_prefix) :]
+        artifact_role = item.get("artifact_role")
+        final_summary_path = "runs/" + run_id + "/final_summary.md"
+        if path == final_summary_path or artifact_role == "final_summary":
+            if path != final_summary_path or artifact_role != "final_summary":
+                return "resolution_publication_binding_invalid"
+        raw_prepared_prefix = run_prefix + "work/raw_prepared/"
+        is_raw_prepared = path.startswith(raw_prepared_prefix)
+        if "/raw_prepared/" in path and not is_raw_prepared:
+            return "resolution_inventory_path_invalid"
+        if is_raw_prepared and artifact_role != "projection_input":
+            return "resolution_inventory_item_invalid"
+        fixed_binding = _FIXED_ARTIFACT_BINDINGS.get(run_relative_path)
+        fixed_role_path = _FIXED_ROLE_PATHS.get(artifact_role)
+        role_task_id = _ROLE_PRODUCER_TASKS.get(artifact_role)
+        if artifact_role == "projection_input" and not is_raw_prepared:
+            role_task_id = "phase_a_association"
+        if (
+            (fixed_binding is not None and (artifact_role, task_id) != fixed_binding)
+            or (fixed_role_path is not None and run_relative_path != fixed_role_path)
+            or (
+                artifact_role == "staging_report"
+                and run_relative_path not in _STAGING_REPORT_PATHS
+            )
+            or (role_task_id is not None and task_id != role_task_id)
+        ):
+            return "resolution_producer_binding_invalid"
+        if is_raw_prepared:
+            if (
+                producer_operation != "resolved_input_descriptor:" + descriptor_sha256
+                or item_state_version != 0
+            ):
+                return "resolution_producer_binding_invalid"
+        elif path != final_summary_path:
+            operation_re = re.compile(
+                r"run:"
+                + re.escape(run_id)
+                + r":task:"
+                + re.escape(task_id)
+                + r":attempt:[1-9][0-9]*:succeeded"
+            )
+            if operation_re.fullmatch(producer_operation) is None:
+                return "resolution_producer_binding_invalid"
         size_bytes = item.get("size_bytes")
         if (
             not _valid_sha256(item.get("sha256"))
@@ -366,6 +490,8 @@ def _validate_complete_resolution(resolution: Any, run_id: str) -> Optional[str]
     if len(final_summaries) != 1:
         return "resolution_publication_binding_invalid"
     final_summary = final_summaries[0]
+    if final_summary.get("resulting_state_version") != state_version:
+        return "resolution_state_binding_invalid"
     if (
         final_summary.get("task_id") != "publication"
         or not isinstance(final_summary.get("producer_operation"), str)
