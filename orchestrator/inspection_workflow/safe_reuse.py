@@ -84,6 +84,7 @@ _FIXED_ARTIFACT_BINDINGS = {
         "phase_a_claim_visualization",
     ),
 }
+_REQUIRED_FIXED_ARTIFACT_PATHS = frozenset(_FIXED_ARTIFACT_BINDINGS)
 _FIXED_ROLE_PATHS = {
     role: path
     for path, (role, _) in _FIXED_ARTIFACT_BINDINGS.items()
@@ -398,6 +399,7 @@ def _validate_complete_resolution(resolution: Any, run_id: str) -> Optional[str]
     if inventory_bytes != expected_inventory_bytes:
         return "resolution_inventory_binding_invalid"
     paths: list[str] = []
+    fixed_artifact_paths: set[str] = set()
     for item in inventory:
         if not isinstance(item, Mapping) or set(item) != _INVENTORY_FIELDS:
             return "resolution_inventory_item_invalid"
@@ -446,6 +448,8 @@ def _validate_complete_resolution(resolution: Any, run_id: str) -> Optional[str]
         if is_raw_prepared and artifact_role != "projection_input":
             return "resolution_inventory_item_invalid"
         fixed_binding = _FIXED_ARTIFACT_BINDINGS.get(run_relative_path)
+        if fixed_binding is not None:
+            fixed_artifact_paths.add(run_relative_path)
         fixed_role_path = _FIXED_ROLE_PATHS.get(artifact_role)
         role_task_id = _ROLE_PRODUCER_TASKS.get(artifact_role)
         if artifact_role == "projection_input" and not is_raw_prepared:
@@ -485,6 +489,10 @@ def _validate_complete_resolution(resolution: Any, run_id: str) -> Optional[str]
             return "resolution_inventory_item_invalid"
     if paths != sorted(paths):
         return "resolution_inventory_order_invalid"
+    # `paths` is duplicate-checked above, so exact set equality also requires
+    # every contract-fixed path to occur exactly once.
+    if fixed_artifact_paths != _REQUIRED_FIXED_ARTIFACT_PATHS:
+        return "resolution_fixed_artifact_set_invalid"
     final_summary_path = "runs/" + run_id + "/final_summary.md"
     final_summaries = [item for item in inventory if item.get("path") == final_summary_path]
     if len(final_summaries) != 1:

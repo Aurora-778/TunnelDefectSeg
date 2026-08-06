@@ -29,11 +29,15 @@ exactly one decision:
   State version, plan fingerprint, input-descriptor SHA-256, item bindings,
   paths, ordering, and producer provenance remain self-consistent. Paths must
   retain the resolver's relative POSIX value domain, including rejection of
-  backslashes and colon/NTFS-ADS forms. Contract-fixed A1 artifact paths must
-  retain their assigned artifact role and producer task, and fixed singleton
-  roles must not be relocated. Resolved-input artifacts must remain
-  `projection_input` entries under `work/raw_prepared/`, bind the current
-  descriptor SHA-256, and use State version zero; ordinary task artifacts must
+  backslashes and colon/NTFS-ADS forms. The complete contract-fixed A1 artifact
+  path set must occur exactly once: no fixed entry may be missing, duplicated,
+  or replaced by renaming another same-role/same-task artifact onto its path.
+  Each fixed path must retain its assigned artifact role and producer task, and
+  fixed singleton roles must not be relocated. Descriptor-resolved input artifacts
+  must remain `projection_input` entries under `work/raw_prepared/`, bind the
+  current descriptor SHA-256, and use State version zero. This does not reclassify
+  separately authority-validated A1 history projection sources, which retain their
+  association-task provenance as ordinary task artifacts; ordinary task artifacts must
   use the exact Run/task/positive-attempt success operation form. The fixed
   `runs/<run_id>/final_summary.md` must occur exactly once, remain the
   `final_summary` role, bind the top-level State version, and be produced by the

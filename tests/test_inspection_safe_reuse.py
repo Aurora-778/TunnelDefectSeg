@@ -26,6 +26,44 @@ from orchestrator.inspection_workflow.safe_reuse import (
 )
 
 
+_EXPECTED_FIXED_A1_ARTIFACT_PATHS = frozenset(
+    {
+        "artifacts/claim_decision.json",
+        "artifacts/comparison_evidence.csv",
+        "artifacts/comparison_evidence_manifest.json",
+        "staging/disease_growth_analysis_report.md",
+        "staging/disease_growth_analysis_summary.md",
+        "staging/memory_agent_report.md",
+        "staging/disease_memory_bank_summary.md",
+        "staging/disease_engineering_report.md",
+        "staging/disease_engineering_report_summary.md",
+        "staging/priority_recheck_list.csv",
+        "staging/visualization_report.md",
+        "staging/visualization_summary.md",
+        "staging/recheck_list_report.md",
+    }
+)
+_EXPECTED_FIXED_STAGING_PATH_GROUPS = (
+    (
+        "staging/disease_growth_analysis_report.md",
+        "staging/disease_growth_analysis_summary.md",
+    ),
+    (
+        "staging/memory_agent_report.md",
+        "staging/disease_memory_bank_summary.md",
+    ),
+    (
+        "staging/disease_engineering_report.md",
+        "staging/disease_engineering_report_summary.md",
+    ),
+    (
+        "staging/priority_recheck_list.csv",
+        "staging/visualization_report.md",
+        "staging/visualization_summary.md",
+        "staging/recheck_list_report.md",
+    ),
+)
+
 def test_completed_run_is_allowed_with_exact_resolver_inventory(completed_run: Path) -> None:
     resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
 
@@ -41,6 +79,10 @@ def test_completed_run_is_allowed_with_exact_resolver_inventory(completed_run: P
     assert decision.inventory_bytes == resolution.inventory_bytes
     assert decision.inventory_sha256 == resolution.inventory_sha256
     assert decision.decision_sha256 == hashlib.sha256(decision.decision_bytes).hexdigest()
+    assert _EXPECTED_FIXED_A1_ARTIFACT_PATHS <= {
+        str(item["path"])[len(f"runs/{RUN_ID}/") :]
+        for item in decision.inventory
+    }
 
 
 def test_completed_run_final_summary_keeps_publication_transaction_producer(
@@ -296,6 +338,15 @@ def test_path_injection_and_noncanonical_run_ids_are_denied(run_id: object, tmp_
 
     assert decision.decision == "reuse_denied"
     assert decision.denial_codes == ("invalid_run_id",)
+    assert decision.run_id == ""
+    assert decision.inventory == ()
+    assert decision.inventory_bytes is None
+    assert decision.inventory_sha256 is None
+    assert decision.state_version is None
+    assert decision.plan_fingerprint is None
+    assert decision.input_descriptor_sha256 is None
+    if isinstance(run_id, str) and run_id:
+        assert run_id.encode("utf-8", "surrogatepass") not in decision.decision_bytes
     assert _tree_snapshot(root) == before
 
 
@@ -464,6 +515,106 @@ def test_fixed_role_relocated_to_unknown_path_with_recomputed_inventory_is_denie
     assert decision.denial_codes == ("resolution_producer_binding_invalid",)
 
 
+def test_every_required_fixed_a1_path_must_be_present_exactly_once(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+
+    for relative_path in sorted(_EXPECTED_FIXED_A1_ARTIFACT_PATHS):
+        path = f"runs/{RUN_ID}/{relative_path}"
+        assert any(item["path"] == path for item in resolution.inventory)
+        inventory = [
+            deepcopy(dict(item))
+            for item in resolution.inventory
+            if item["path"] != path
+        ]
+        probe = _resolution_with_recomputed_inventory(resolution, inventory)
+        monkeypatch.setattr(
+            safe_reuse.ArtifactResolver,
+            "resolve",
+            lambda self, *, run_id, probe=probe: probe,
+        )
+
+        decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+        assert decision.decision == "reuse_denied", relative_path
+        assert decision.denial_codes == ("resolution_fixed_artifact_set_invalid",)
+        assert decision.inventory == ()
+        assert decision.inventory_bytes is None
+        assert decision.inventory_sha256 is None
+        assert decision.state_version is None
+        assert decision.plan_fingerprint is None
+        assert decision.input_descriptor_sha256 is None
+
+
+def test_fixed_staging_artifacts_cannot_migrate_between_same_role_and_task(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    for paths in _EXPECTED_FIXED_STAGING_PATH_GROUPS:
+        for source_path in paths:
+            for target_path in paths:
+                if source_path == target_path:
+                    continue
+                inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+                source = next(
+                    item
+                    for item in inventory
+                    if item["path"] == f"runs/{RUN_ID}/{source_path}"
+                )
+                source["path"] = f"runs/{RUN_ID}/{target_path}"
+                inventory = [
+                    item
+                    for item in inventory
+                    if not (
+                        item["path"] == f"runs/{RUN_ID}/{target_path}"
+                        and item is not source
+                    )
+                ]
+                probe = _resolution_with_recomputed_inventory(resolution, inventory)
+                monkeypatch.setattr(
+                    safe_reuse.ArtifactResolver,
+                    "resolve",
+                    lambda self, *, run_id, probe=probe: probe,
+                )
+
+                decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+                assert decision.decision == "reuse_denied", (source_path, target_path)
+                assert decision.denial_codes == (
+                    "resolution_fixed_artifact_set_invalid",
+                )
+                assert decision.inventory == ()
+
+
+def test_duplicate_required_fixed_a1_path_is_denied(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
+    inventory = [deepcopy(dict(item)) for item in resolution.inventory]
+    fixed_item = next(
+        item
+        for item in inventory
+        if item["path"] == f"runs/{RUN_ID}/artifacts/claim_decision.json"
+    )
+    inventory.append(deepcopy(fixed_item))
+    probe = _resolution_with_recomputed_inventory(resolution, inventory)
+    monkeypatch.setattr(
+        safe_reuse.ArtifactResolver,
+        "resolve",
+        lambda self, *, run_id: probe,
+    )
+
+    decision = SafeReuseAuthorizer(completed_run).authorize(run_id=RUN_ID)
+
+    assert decision.decision == "reuse_denied"
+    assert decision.denial_codes == ("resolution_inventory_path_invalid",)
+    assert decision.inventory == ()
+
+
 def test_unknown_producer_operation_with_recomputed_inventory_is_denied(
     completed_run: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -601,13 +752,25 @@ def test_resolved_input_outside_fixed_prefix_with_recomputed_inventory_is_denied
     assert decision.denial_codes == ("resolution_inventory_path_invalid",)
 
 
-def test_windows_ads_path_with_recomputed_inventory_is_denied(
+@pytest.mark.parametrize(
+    "forged_path",
+    [
+        f"runs\\{RUN_ID}\\artifacts\\claim_decision.json",
+        f"runs/{RUN_ID}//artifacts/claim_decision.json",
+        f"runs/{RUN_ID}/artifacts/./claim_decision.json",
+        f"runs/{RUN_ID}/artifacts/../artifacts/claim_decision.json",
+        f"runs/{RUN_ID}/artifacts/claim_decision.json:stream",
+        f"runs/{RUN_ID}/artifacts/claim_decision.json::$DATA",
+    ],
+)
+def test_dangerous_inventory_paths_with_recomputed_inventory_are_denied(
     completed_run: Path,
     monkeypatch: pytest.MonkeyPatch,
+    forged_path: str,
 ) -> None:
     resolution = ArtifactResolver(completed_run).resolve(run_id=RUN_ID)
     inventory = [deepcopy(dict(item)) for item in resolution.inventory]
-    inventory[0]["path"] = str(inventory[0]["path"]) + ":stream"
+    inventory[0]["path"] = forged_path
     probe = _resolution_with_recomputed_inventory(resolution, inventory)
     monkeypatch.setattr(
         safe_reuse.ArtifactResolver,
