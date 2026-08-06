@@ -104,6 +104,7 @@ from .safe_reuse import (
     SafeReuseDecision,
     authorize_safe_reuse,
 )
+from .safe_reuse_consumer import SafeReuseConsumer, SafeReuseConsumption
 
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
@@ -187,4 +188,6 @@ __all__ = [
     "SafeReuseAuthorizer",
     "SafeReuseDecision",
     "authorize_safe_reuse",
+    "SafeReuseConsumer",
+    "SafeReuseConsumption",
 ]
