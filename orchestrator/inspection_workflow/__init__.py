@@ -105,6 +105,11 @@ from .safe_reuse import (
     authorize_safe_reuse,
 )
 from .safe_reuse_consumer import SafeReuseConsumer, SafeReuseConsumption
+from .safe_reuse_staleness import (
+    SAFE_REUSE_STALENESS_OBSERVATION_SCHEMA_VERSION,
+    SafeReuseStalenessObservation,
+    SafeReuseStalenessObserver,
+)
 
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
@@ -190,4 +195,7 @@ __all__ = [
     "authorize_safe_reuse",
     "SafeReuseConsumer",
     "SafeReuseConsumption",
+    "SAFE_REUSE_STALENESS_OBSERVATION_SCHEMA_VERSION",
+    "SafeReuseStalenessObservation",
+    "SafeReuseStalenessObserver",
 ]
