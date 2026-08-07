@@ -110,6 +110,7 @@ from .safe_reuse_staleness import (
     SafeReuseStalenessObservation,
     SafeReuseStalenessObserver,
 )
+from .explicit_resume_admission import ExplicitResumeAdmission, ExplicitResumeAdmissionResult
 
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
@@ -198,4 +199,6 @@ __all__ = [
     "SAFE_REUSE_STALENESS_OBSERVATION_SCHEMA_VERSION",
     "SafeReuseStalenessObservation",
     "SafeReuseStalenessObserver",
+    "ExplicitResumeAdmission",
+    "ExplicitResumeAdmissionResult",
 ]
