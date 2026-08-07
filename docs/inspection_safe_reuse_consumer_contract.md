@@ -29,7 +29,7 @@
 
 ## 3. 输出与零泄漏
 
-成功结果 `SafeReuseConsumption` 只能由 Consumer 创建，公开构造器拒绝调用；其内容只包含：
+成功结果 `SafeReuseConsumption` 只能在 `SafeReuseConsumer.consume()` 完成重新授权、authority 全绑定与字节校验后就地创建；模块不暴露通用成功结果工厂，公开构造器拒绝调用。其内容只包含：
 
 - `status == "reuse_consumed"`；
 - immutable `bytes`；

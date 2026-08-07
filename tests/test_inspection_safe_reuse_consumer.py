@@ -72,6 +72,10 @@ def test_consumer_api_accepts_only_decision_and_inventory_path(completed_run: Pa
     }
 
 
+def test_module_does_not_expose_a_success_consumption_factory() -> None:
+    assert not hasattr(safe_reuse_consumer, "_make_consumption")
+
+
 def test_public_consumption_constructor_cannot_forge_success() -> None:
     with pytest.raises(TypeError):
         SafeReuseConsumption(

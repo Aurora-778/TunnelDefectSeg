@@ -118,40 +118,17 @@ class SafeReuseConsumption:
         }
 
 
-def _make_consumption(
-    *,
-    status: str,
-    denial_codes: tuple[str, ...],
-    content: Optional[bytes],
-    artifact: Optional[Mapping[str, Any]],
-    inventory_sha256: Optional[str],
-    state_version: Optional[int],
-    plan_fingerprint: Optional[str],
-    input_descriptor_sha256: Optional[str],
-) -> SafeReuseConsumption:
-    result = object.__new__(SafeReuseConsumption)
-    object.__setattr__(result, "status", status)
-    object.__setattr__(result, "denial_codes", denial_codes)
-    object.__setattr__(result, "content", content)
-    object.__setattr__(result, "artifact", artifact)
-    object.__setattr__(result, "inventory_sha256", inventory_sha256)
-    object.__setattr__(result, "state_version", state_version)
-    object.__setattr__(result, "plan_fingerprint", plan_fingerprint)
-    object.__setattr__(result, "input_descriptor_sha256", input_descriptor_sha256)
-    return result
-
-
 def _denied() -> SafeReuseConsumption:
-    return _make_consumption(
-        status="reuse_denied",
-        denial_codes=("reuse_consumption_denied",),
-        content=None,
-        artifact=None,
-        inventory_sha256=None,
-        state_version=None,
-        plan_fingerprint=None,
-        input_descriptor_sha256=None,
-    )
+    result = object.__new__(SafeReuseConsumption)
+    object.__setattr__(result, "status", "reuse_denied")
+    object.__setattr__(result, "denial_codes", ("reuse_consumption_denied",))
+    object.__setattr__(result, "content", None)
+    object.__setattr__(result, "artifact", None)
+    object.__setattr__(result, "inventory_sha256", None)
+    object.__setattr__(result, "state_version", None)
+    object.__setattr__(result, "plan_fingerprint", None)
+    object.__setattr__(result, "input_descriptor_sha256", None)
+    return result
 
 
 class SafeReuseConsumer:
@@ -229,16 +206,20 @@ class SafeReuseConsumer:
             item = current_matches[0]
             if len(content) != item.get("size_bytes") or digest.hexdigest() != item.get("sha256"):
                 return _denied()
-            return _make_consumption(
-                status="reuse_consumed",
-                denial_codes=(),
-                content=content,
-                artifact=_freeze(dict(item)),
-                inventory_sha256=current.inventory_sha256,
-                state_version=current.state_version,
-                plan_fingerprint=current.plan_fingerprint,
-                input_descriptor_sha256=current.input_descriptor_sha256,
+            result = object.__new__(SafeReuseConsumption)
+            object.__setattr__(result, "status", "reuse_consumed")
+            object.__setattr__(result, "denial_codes", ())
+            object.__setattr__(result, "content", content)
+            object.__setattr__(result, "artifact", _freeze(dict(item)))
+            object.__setattr__(result, "inventory_sha256", current.inventory_sha256)
+            object.__setattr__(result, "state_version", current.state_version)
+            object.__setattr__(result, "plan_fingerprint", current.plan_fingerprint)
+            object.__setattr__(
+                result,
+                "input_descriptor_sha256",
+                current.input_descriptor_sha256,
             )
+            return result
         except Exception:
             return _denied()
         finally:
