@@ -8,7 +8,7 @@
 
 ## 观察流程
 
-每一次观察都先以原始 `decision` 与 `artifact_path` 调用 B.3 `SafeReuseConsumer.consume()`；B.4 不自行打开 artifact、不复制 B.2 授权、路径验证或受控读取逻辑。随后它 fail-closed 地要求：
+每一次观察都先以原始 `decision` 与 `artifact_path` 调用导入时捕获的 B.3 `SafeReuseConsumer.consume()`；公开模块属性替换不能伪造该调用。B.4 不自行打开 artifact、不复制 B.2 授权、路径验证或受控读取逻辑。随后它 fail-closed 地要求：
 
 1. decision 和旧/新 consumption 均为精确官方类型，path 与所有 authority/content bytes 均为精确内建 `str`/`bytes`，处于 allowed/consumed 状态，且内部 decision bytes/SHA/冻结契约仍有效；
 2. path 在 decision canonical inventory 中恰好出现一次；

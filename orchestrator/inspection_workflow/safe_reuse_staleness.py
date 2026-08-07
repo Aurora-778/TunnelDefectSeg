@@ -9,8 +9,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from . import safe_reuse_consumer as _safe_reuse_consumer
 from .safe_reuse import SafeReuseDecision
-from .safe_reuse_consumer import SafeReuseConsumer, SafeReuseConsumption
+from .safe_reuse_consumer import SafeReuseConsumption
 
 
 SAFE_REUSE_STALENESS_OBSERVATION_SCHEMA_VERSION = (
@@ -18,6 +19,8 @@ SAFE_REUSE_STALENESS_OBSERVATION_SCHEMA_VERSION = (
 )
 _NOT_CURRENT = "reuse_not_current"
 _CURRENT = "reuse_current"
+_B3_CONSUMER_TYPE = _safe_reuse_consumer.SafeReuseConsumer
+_B3_CONSUME = _B3_CONSUMER_TYPE.consume
 
 
 def _canonical_json_bytes(value: Mapping[str, str]) -> bytes:
@@ -185,7 +188,8 @@ class SafeReuseStalenessObserver:
     ) -> SafeReuseStalenessObservation:
         try:
             # Re-consume first. B.4 deliberately owns neither authorization nor file IO.
-            current = SafeReuseConsumer(self.project_root).consume(
+            current = _B3_CONSUME(
+                _B3_CONSUMER_TYPE(self.project_root),
                 decision=decision,
                 artifact_path=artifact_path,
             )

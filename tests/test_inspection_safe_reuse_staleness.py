@@ -115,7 +115,13 @@ def test_observer_delegates_every_read_to_b3(completed_run: Path, monkeypatch: p
             calls.append((decision, artifact_path))
             return consumed
 
-    monkeypatch.setattr(safe_reuse_staleness, "SafeReuseConsumer", RecordingConsumer)
+    assert not hasattr(safe_reuse_staleness, "SafeReuseConsumer")
+    monkeypatch.setattr(
+        safe_reuse_staleness,
+        "SafeReuseConsumer",
+        RecordingConsumer,
+        raising=False,
+    )
     result = SafeReuseStalenessObserver(completed_run).observe(
         decision=decision,
         consumption=consumed,
@@ -123,7 +129,7 @@ def test_observer_delegates_every_read_to_b3(completed_run: Path, monkeypatch: p
     )
 
     assert result.status == "reuse_current"
-    assert calls == [(decision, path)]
+    assert calls == []
     source = inspect.getsource(safe_reuse_staleness)
     assert "SafeReuseAuthorizer" not in source
     assert ".open(" not in source
@@ -337,6 +343,37 @@ def test_artifact_drift_after_old_consumption_is_not_current(
     _assert_not_current(result)
 
 
+def test_public_consumer_replacement_cannot_hide_artifact_drift(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decision, path, consumed = _allowed_snapshot(completed_run)
+    target = completed_run.joinpath(*path.split("/"))
+    payload = target.read_bytes()
+    target.write_bytes(bytes([payload[0] ^ 1]) + payload[1:])
+
+    class ForgedConsumer:
+        def __init__(self, project_root: Path) -> None:
+            pass
+
+        def consume(self, **kwargs: object) -> SafeReuseConsumption:
+            return consumed
+
+    monkeypatch.setattr(
+        safe_reuse_staleness,
+        "SafeReuseConsumer",
+        ForgedConsumer,
+        raising=False,
+    )
+    result = SafeReuseStalenessObserver(completed_run).observe(
+        decision=decision,
+        consumption=consumed,
+        artifact_path=path,
+    )
+
+    _assert_not_current(result)
+
+
 @pytest.mark.parametrize("status", ["invalid", "stale", "incomplete", "recovery_required"])
 def test_all_b3_denials_have_one_observation_shape(
     completed_run: Path,
@@ -505,7 +542,7 @@ def test_simulated_reparse_is_not_current(
 
 
 @pytest.mark.parametrize("mode", ["exception", "non_exact", "incomplete_exact"])
-def test_consumer_exception_or_forged_return_fails_closed(
+def test_public_consumer_replacement_cannot_control_observation(
     completed_run: Path,
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
@@ -523,10 +560,15 @@ def test_consumer_exception_or_forged_return_fails_closed(
                 return object.__new__(SafeReuseConsumption)
             return object()
 
-    monkeypatch.setattr(safe_reuse_staleness, "SafeReuseConsumer", FailingConsumer)
+    monkeypatch.setattr(
+        safe_reuse_staleness,
+        "SafeReuseConsumer",
+        FailingConsumer,
+        raising=False,
+    )
     result = SafeReuseStalenessObserver(completed_run).observe(
         decision=decision,
         consumption=consumed,
         artifact_path=path,
     )
-    _assert_not_current(result)
+    assert result.status == "reuse_current"
