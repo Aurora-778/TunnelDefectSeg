@@ -21,6 +21,7 @@ from . import a1_artifacts, artifact_resolver, explicit_resume_admission
 from .explicit_resume_admission import ExplicitResumeAdmissionResult
 from .locking import (
     ActiveRunLockError,
+    _sync_directory,
     acquire_active_run_lock,
     mark_active_run_running,
     read_existing_active_run_lock,
@@ -252,7 +253,21 @@ class ExplicitResumeActivation:
                 return _not_activated()
             source_state = self._source_state(root, run_id=run_id, admission=current)
             self._complete_activation(root, intent=intent, source_state=source_state)
-            return self._activated_result(root, intent=intent, intent_bytes=intent_bytes)
+            result = self._activated_result(
+                root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
+            )
+            # The result is intentionally built before the final B.5 observation:
+            # a mutation injected during any activation/result seam is therefore
+            # observed before a success can escape this boundary.
+            final = self._fresh_admission(root, run_id=run_id)
+            if not self._same_admission(run_id=run_id, supplied=current, fresh=final):
+                return _not_activated()
+            source_state = self._source_state(root, run_id=run_id, admission=final)
+            self._assert_result_is_current(
+                root, intent=intent, intent_bytes=intent_bytes,
+                source_state=source_state, result=result,
+            )
+            return result
         except Exception:
             return _not_activated()
 
@@ -322,13 +337,77 @@ class ExplicitResumeActivation:
         return source / "resume_activation"
 
     @staticmethod
+    def _directory_identity(path: Path, *, label: str) -> tuple[int, int]:
+        if not _is_plain_directory(path):
+            raise ValueError(f"{label} is not a plain controlled directory")
+        try:
+            entry = path.lstat()
+        except OSError as exc:
+            raise ValueError(f"unable to inspect {label}") from exc
+        return (entry.st_dev, entry.st_ino)
+
+    @classmethod
+    def _directory_chain(cls, root: Path, directory: Path, *, label: str) -> tuple[tuple[Path, int, int], ...]:
+        try:
+            relative = directory.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"{label} escapes controlled root") from exc
+        current = root
+        result: list[tuple[Path, int, int]] = []
+        for index, part in enumerate((".", *relative.parts)):
+            if index:
+                if part in {"", ".", ".."} or "\\" in part or ":" in part:
+                    raise ValueError(f"{label} has unsafe path component")
+                current = current / part
+            device, inode = cls._directory_identity(
+                current, label=f"{label} directory component"
+            )
+            result.append((current, device, inode))
+        return tuple(result)
+
+    @classmethod
+    def _assert_directory_chain(
+        cls, chain: tuple[tuple[Path, int, int], ...], *, label: str
+    ) -> None:
+        for path, device, inode in chain:
+            current = cls._directory_identity(path, label=label)
+            if current != (device, inode):
+                raise ValueError(f"{label} directory identity changed")
+
+    @classmethod
+    def _ensure_controlled_directory(cls, root: Path, directory: Path, *, label: str) -> tuple[tuple[Path, int, int], ...]:
+        parent_chain = cls._directory_chain(root, directory.parent, label=label)
+        try:
+            directory.lstat()
+            exists = True
+        except FileNotFoundError:
+            exists = False
+        except OSError as exc:
+            raise ValueError(f"unable to inspect {label}") from exc
+        if not exists:
+            cls._assert_directory_chain(parent_chain, label=label)
+            try:
+                directory.mkdir(mode=0o700)
+                _sync_directory(directory.parent, label=f"{label} parent")
+            except OSError as exc:
+                raise ValueError(f"unable to create {label}") from exc
+            cls._assert_directory_chain(parent_chain, label=label)
+        if not _is_plain_directory(directory):
+            raise ValueError(f"{label} is unsafe")
+        return cls._directory_chain(root, directory, label=label)
+
+    @staticmethod
     def _successor_run_id(admission: ExplicitResumeAdmissionResult) -> str:
         # The successor id is derived from B.5's immutable proof, avoiding a
         # caller-selected id and cross-source allocation races.
         return f"run_{int(admission.admission_sha256[:16], 16):020d}"
 
     def _intent_path(self, root: Path, admission: ExplicitResumeAdmissionResult) -> Path:
-        return self._intent_directory(root, admission.run_id or "") / f"{admission.admission_sha256}.intent.json"
+        return self._intent_path_for(root, admission.run_id or "", admission.admission_sha256)
+
+    @staticmethod
+    def _intent_path_for(root: Path, source_run_id: str, admission_sha256: str) -> Path:
+        return ExplicitResumeActivation._intent_directory(root, source_run_id) / f"{admission_sha256}.intent.json"
 
     @staticmethod
     def _intent_document(
@@ -379,11 +458,22 @@ class ExplicitResumeActivation:
             raise ValueError("activation intent checksum is invalid")
         return intent
 
-    @staticmethod
-    def _write_exclusive(path: Path, data: bytes) -> None:
+    @classmethod
+    def _write_exclusive(
+        cls, root: Path, path: Path, data: bytes, *, directory_chain: tuple[tuple[Path, int, int], ...]
+    ) -> None:
         descriptor: int | None = None
         try:
-            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600)
+            cls._assert_directory_chain(directory_chain, label="activation intent")
+            descriptor = os.open(
+                path,
+                os.O_CREAT
+                | os.O_EXCL
+                | os.O_WRONLY
+                | getattr(os, "O_BINARY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
             view = memoryview(data)
             while view:
                 written = os.write(descriptor, view)
@@ -393,8 +483,14 @@ class ExplicitResumeActivation:
             os.fsync(descriptor)
             os.close(descriptor)
             descriptor = None
+            _sync_directory(path.parent, label="activation intent parent")
+            cls._assert_directory_chain(directory_chain, label="activation intent")
             if not _is_plain_regular(path):
                 raise OSError("activation intent changed after persistence")
+            relative = path.relative_to(root).as_posix()
+            persisted, _ = _B1_READ_GUARDED(root, relative)
+            if persisted != data:
+                raise OSError("activation intent bytes changed after persistence")
         finally:
             if descriptor is not None:
                 os.close(descriptor)
@@ -403,25 +499,30 @@ class ExplicitResumeActivation:
         self, root: Path, *, source_state: Mapping[str, Any], admission: ExplicitResumeAdmissionResult
     ) -> tuple[dict[str, Any], bytes]:
         directory = self._intent_directory(root, admission.run_id or "")
-        if directory.exists():
-            if not _is_plain_directory(directory):
-                raise ValueError("activation intent directory is unsafe")
-        else:
-            directory.mkdir(mode=0o700)
-            if not _is_plain_directory(directory):
-                raise ValueError("activation intent directory changed during creation")
+        directory_chain = self._ensure_controlled_directory(
+            root, directory, label="activation intent directory"
+        )
         path = self._intent_path(root, admission)
         entries = list(directory.iterdir())
         if any(not _is_plain_regular(entry) for entry in entries) or any(entry != path for entry in entries):
             raise ValueError("activation intent directory is not unique")
-        if not path.exists():
+        self._assert_directory_chain(directory_chain, label="activation intent directory")
+        try:
+            path.lstat()
+            exists = True
+        except FileNotFoundError:
+            exists = False
+        if not exists:
             intent = self._intent_document(
                 source_state=source_state,
                 admission=admission,
                 allocation_token=str(uuid.uuid4()),
                 lock_token=str(uuid.uuid4()),
             )
-            self._write_exclusive(path, _canonical_json_bytes(intent))
+            self._write_exclusive(
+                root, path, _canonical_json_bytes(intent), directory_chain=directory_chain
+            )
+        self._assert_directory_chain(directory_chain, label="activation intent directory")
         if not _is_plain_regular(path):
             raise ValueError("activation intent is unsafe")
         data, _ = _B1_READ_GUARDED(
@@ -485,18 +586,13 @@ class ExplicitResumeActivation:
                     expected_allocation_token=intent["allocation_token"],
                     expected_lock_token=intent["lock_token"],
                 )
-            if successor_dir.exists():
-                if not _is_plain_directory(successor_dir):
-                    raise ValueError("successor Run directory is unsafe")
-            else:
-                successor_dir.mkdir(mode=0o700)
-                if not _is_plain_directory(successor_dir):
-                    raise ValueError("successor Run directory changed during creation")
+            self._ensure_controlled_directory(
+                root, successor_dir, label="successor Run directory"
+            )
             store = StateStore(root)
-            try:
-                state = store.load(run_id=intent["successor_run_id"])["canonical_state"]
-            except StateStoreError:
-                state = None
+            state = self._load_or_repair_successor_state(
+                store, intent=intent, source_state=source_state
+            )
             if state is None:
                 store.initialize_run(
                     run_id=intent["successor_run_id"],
@@ -504,25 +600,16 @@ class ExplicitResumeActivation:
                     plan_fingerprint=intent["plan_fingerprint"],
                     task_plan=_thaw_json(source_state["task_plan"]),
                     expected_lock_token=intent["lock_token"],
-                    initial_context={
-                        "resume_activation": {
-                            "source_run_id": intent["source_run_id"],
-                            "source_admission_sha256": intent["source_admission_sha256"],
-                            "source_state_version": intent["source_state_version"],
-                            "plan_fingerprint": intent["plan_fingerprint"],
-                            "input_descriptor_sha256": intent["input_descriptor_sha256"],
-                            "intent_sha256": _sha256(_canonical_json_bytes(intent)),
-                        }
-                    },
+                    initial_context=self._resume_context(intent),
                 )
-            self._validate_successor_state(root, intent=intent)
+            self._validate_successor_state(root, intent=intent, source_state=source_state)
             _MARK_ACTIVE_RUN_RUNNING(
                 root,
                 run_id=intent["successor_run_id"],
                 expected_allocation_token=intent["allocation_token"],
                 expected_lock_token=intent["lock_token"],
             )
-        self._validate_successor_state(root, intent=intent)
+        self._validate_successor_state(root, intent=intent, source_state=source_state)
         final = self._existing_lock(root)
         if (
             not isinstance(final, Mapping)
@@ -535,63 +622,175 @@ class ExplicitResumeActivation:
             raise ActiveRunLockError("activation did not reach a bound running lock")
 
     @staticmethod
-    def _validate_successor_state(root: Path, *, intent: Mapping[str, Any]) -> Mapping[str, Any]:
-        state = StateStore(root).load(run_id=intent["successor_run_id"])["canonical_state"]
+    def _resume_context(intent: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "resume_activation": {
+                "source_run_id": intent["source_run_id"],
+                "source_admission_sha256": intent["source_admission_sha256"],
+                "source_state_version": intent["source_state_version"],
+                "plan_fingerprint": intent["plan_fingerprint"],
+                "input_descriptor_sha256": intent["input_descriptor_sha256"],
+                "intent_sha256": _sha256(_canonical_json_bytes(intent)),
+            }
+        }
+
+    @classmethod
+    def _load_or_repair_successor_state(
+        cls, store: StateStore, *, intent: Mapping[str, Any], source_state: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        """Accept only absence, a valid state, or the one exact state-only crash seam."""
+
+        paths = store._paths(intent["successor_run_id"])
+        entries: dict[str, os.stat_result | None] = {}
+        for name in ("state", "anchor", "journal", "recovery", "lock_recovery", "lock"):
+            try:
+                entries[name] = paths[name].lstat()
+            except FileNotFoundError:
+                entries[name] = None
+            except OSError as exc:
+                raise StateStoreError("unable to inspect successor State evidence") from exc
+        if any(entries[name] is not None for name in ("recovery", "lock_recovery", "lock")):
+            raise StateStoreError("successor State recovery residue blocks activation")
+        if entries["state"] is None:
+            if any(entries[name] is not None for name in ("anchor", "journal")):
+                raise StateStoreError("successor has partial State evidence")
+            return None
+        if not _is_plain_regular(paths["state"]):
+            raise StateStoreError("successor State is unsafe")
+        if entries["anchor"] is not None:
+            if not _is_plain_regular(paths["anchor"]):
+                raise StateStoreError("successor Journal anchor is unsafe")
+            return store.load(run_id=intent["successor_run_id"])["canonical_state"]
+        # StateStore.initialize_run commits State before its genesis anchor.  A
+        # retry may complete only this precise, authenticated state-only seam.
+        if entries["journal"] is not None:
+            raise StateStoreError("successor State-only recovery evidence conflicts")
+        state, _ = store._read_state(intent["successor_run_id"])
+        cls._validate_successor_mapping(state, intent=intent, source_state=source_state)
+        anchor = store._anchor_document(
+            run_id=intent["successor_run_id"],
+            allocation_token=intent["allocation_token"],
+            tail_record_index=None,
+            tail_record_checksum=None,
+            tail_file_size_bytes=0,
+        )
+        store._write_anchor(intent["successor_run_id"], anchor)
+        return store.load(run_id=intent["successor_run_id"])["canonical_state"]
+
+    @classmethod
+    def _validate_successor_mapping(
+        cls, state: Mapping[str, Any], *, intent: Mapping[str, Any], source_state: Mapping[str, Any]
+    ) -> None:
         context = state.get("context")
-        binding = context.get("resume_activation") if isinstance(context, Mapping) else None
+        expected_context = cls._resume_context(intent)
         if (
             state.get("status") != "CREATED"
             or state.get("state_version") != 0
             or state.get("allocation_token") != intent["allocation_token"]
             or state.get("plan_fingerprint") != intent["plan_fingerprint"]
-            or not isinstance(binding, Mapping)
-            or any(
-                binding.get(name) != intent_value
-                for name, intent_value in (
-                    ("source_run_id", intent["source_run_id"]),
-                    ("source_admission_sha256", intent["source_admission_sha256"]),
-                    ("source_state_version", intent["source_state_version"]),
-                    ("plan_fingerprint", intent["plan_fingerprint"]),
-                    ("input_descriptor_sha256", intent["input_descriptor_sha256"]),
-                    ("intent_sha256", _sha256(_canonical_json_bytes(intent))),
-                )
-            )
+            or _thaw_json(state.get("task_plan")) != _thaw_json(source_state.get("task_plan"))
+            or state.get("task_status") != {}
+            or state.get("task_attempts") != {}
+            or tuple(state.get("completed_tasks", ())) != ()
+            or tuple(state.get("failed_tasks", ())) != ()
+            or state.get("last_operation_kind") is not None
+            or state.get("last_operation_id") is not None
+            or state.get("last_operation_payload_sha256") is not None
+            or _thaw_json(context) != expected_context
         ):
             raise StateStoreError("successor State does not bind activation intent")
+
+    @classmethod
+    def _validate_successor_state(
+        cls, root: Path, *, intent: Mapping[str, Any], source_state: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        state = StateStore(root).load(run_id=intent["successor_run_id"])["canonical_state"]
+        cls._validate_successor_mapping(state, intent=intent, source_state=source_state)
         return state
 
-    def _activated_result(
-        self, root: Path, *, intent: Mapping[str, Any], intent_bytes: bytes
-    ) -> ExplicitResumeActivationResult:
-        state = self._validate_successor_state(root, intent=intent)
-        # The Store's public load validates the complete Journal/anchor chain;
-        # these canonical hashes make that validated snapshot auditable in the
-        # immutable result without introducing another State or Journal schema.
+    def _activation_evidence(
+        self, root: Path, *, intent: Mapping[str, Any], intent_bytes: bytes,
+        source_state: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Read every activation authority through one guarded, stable snapshot."""
+
+        intent_path = self._intent_path_for(
+            root, intent["source_run_id"], intent["source_admission_sha256"]
+        )
+        intent_data, _ = _B1_READ_GUARDED(root, intent_path.relative_to(root).as_posix())
+        if intent_data != intent_bytes:
+            raise ValueError("activation intent changed after persistence")
+        try:
+            parsed_intent = self._validate_intent(json.loads(intent_data.decode("utf-8")))
+        except (UnicodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            raise ValueError("activation intent is invalid at result") from exc
+        if parsed_intent != dict(intent) or _canonical_json_bytes(parsed_intent) != intent_data:
+            raise ValueError("activation intent does not match result binding")
         store = StateStore(root)
-        _, state_bytes = store._read_state(intent["successor_run_id"])
+        state, state_bytes = store._read_state(intent["successor_run_id"])
+        guarded_state, _ = _B1_READ_GUARDED(
+            root, f"runs/{intent['successor_run_id']}/state.json"
+        )
+        if guarded_state != state_bytes:
+            raise StateStoreError("successor State changed during result")
+        self._validate_successor_mapping(state, intent=intent, source_state=source_state)
         _, anchor_bytes = store._read_anchor(
             intent["successor_run_id"], intent["allocation_token"]
         )
+        guarded_anchor, _ = _B1_READ_GUARDED(
+            root, f"runs/{intent['successor_run_id']}/state_journal_tail.json"
+        )
+        if guarded_anchor != anchor_bytes:
+            raise StateStoreError("successor Journal anchor changed during result")
         lock = self._existing_lock(root)
         if not isinstance(lock, Mapping):
             raise ActiveRunLockError("active lock disappeared after activation")
         lock_bytes, _ = _B1_READ_GUARDED(root, "runs/.active_run.lock")
         if self._existing_lock(root) != lock:
             raise ActiveRunLockError("Active Run Lock changed during activation result")
-        self._validate_successor_state(root, intent=intent)
+        if (
+            lock.get("phase") != "running"
+            or lock.get("run_id") != intent["successor_run_id"]
+            or lock.get("reserved_run_id") != intent["successor_run_id"]
+            or lock.get("allocation_token") != intent["allocation_token"]
+            or lock.get("lock_token") != intent["lock_token"]
+            or lock.get("task_id") != "explicit_resume_activation"
+        ):
+            raise ActiveRunLockError("activation result lock does not bind intent")
+        return {
+            "intent_sha256": _sha256(intent_data),
+            "state": state,
+            "state_sha256": _sha256(state_bytes),
+            "journal_anchor_sha256": _sha256(anchor_bytes),
+            "lock_sha256": _sha256(lock_bytes),
+        }
+
+    def _activated_result(
+        self, root: Path, *, intent: Mapping[str, Any], intent_bytes: bytes,
+        source_state: Mapping[str, Any],
+    ) -> ExplicitResumeActivationResult:
+        first = self._activation_evidence(
+            root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
+        )
+        second = self._activation_evidence(
+            root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
+        )
+        if first != second:
+            raise ValueError("activation evidence changed during result")
+        state = second["state"]
         bindings = {
             "source_run_id": intent["source_run_id"],
             "successor_run_id": intent["successor_run_id"],
-            "intent_sha256": _sha256(intent_bytes),
+            "intent_sha256": second["intent_sha256"],
             "allocation_token": intent["allocation_token"],
             "lock_token": intent["lock_token"],
             "source_admission_sha256": intent["source_admission_sha256"],
             "state_version": state["state_version"],
             "plan_fingerprint": intent["plan_fingerprint"],
             "input_descriptor_sha256": intent["input_descriptor_sha256"],
-            "state_sha256": _sha256(state_bytes),
-            "journal_anchor_sha256": _sha256(anchor_bytes),
-            "lock_sha256": _sha256(lock_bytes),
+            "state_sha256": second["state_sha256"],
+            "journal_anchor_sha256": second["journal_anchor_sha256"],
+            "lock_sha256": second["lock_sha256"],
         }
         data = _canonical_bytes(_ACTIVATED, bindings)
         result = object.__new__(ExplicitResumeActivationResult)
@@ -602,6 +801,21 @@ class ExplicitResumeActivation:
             object.__setattr__(result, name, value)
         result.__post_init__()
         return result
+
+    def _assert_result_is_current(
+        self, root: Path, *, intent: Mapping[str, Any], intent_bytes: bytes,
+        source_state: Mapping[str, Any], result: ExplicitResumeActivationResult,
+    ) -> None:
+        evidence = self._activation_evidence(
+            root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
+        )
+        if (
+            result.intent_sha256 != evidence["intent_sha256"]
+            or result.state_sha256 != evidence["state_sha256"]
+            or result.journal_anchor_sha256 != evidence["journal_anchor_sha256"]
+            or result.lock_sha256 != evidence["lock_sha256"]
+        ):
+            raise ValueError("activation result no longer matches authority evidence")
 
 
 __all__ = ["ExplicitResumeActivation", "ExplicitResumeActivationResult"]

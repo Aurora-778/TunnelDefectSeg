@@ -21,10 +21,25 @@ graph, task selection, or restore-point input.
 Every call invokes the import-time-bound B.5 `ExplicitResumeAdmission.admit()`
 before any activation mutation and compares every admission field plus its
 canonical bytes and SHA with the supplied result.  After the intent is durable,
-it invokes B.5 again before acquiring or changing the Active Run Lock.  Any
-non-exact type, malformed/forged result, denied or changed admission, State or
-Journal conflict, recovery residue, unsafe path, exception, lock conflict, or
-post-intent inconsistency returns the one canonical `resume_not_activated`
+it invokes B.5 again before acquiring or changing the Active Run Lock **and a
+third, final time after the complete successor evidence snapshot has been
+constructed**.  Success is possible only when all three observations agree.
+Thus a source artifact, Manifest, State, plan or descriptor change at any Lock,
+State-initialization or result-construction seam fails closed.
+
+Intent, successor State, genesis tail anchor and Active Run Lock are each read
+through the existing guarded reader and are required to remain byte-identical
+across a second authority read.  The intent file's canonical bytes must still
+equal the bytes persisted before Lock acquisition.  Their parent chains are
+checked as plain, controlled directories by identity before and after create,
+write and read; absolute escape, symlink, junction/reparse point, leaf swap and
+parent ABA evidence are rejected.  Intent persistence fsyncs its file and then
+uses the existing same-directory durability barrier before any Lock or State
+write.
+
+Any non-exact type, malformed/forged result, denied or changed admission, State
+or Journal conflict, recovery residue, unsafe path, exception, lock conflict,
+or post-intent inconsistency returns the one canonical `resume_not_activated`
 result.  That result contains no run id, path, binding, inventory, authority
 data, or error classification.
 
@@ -57,11 +72,12 @@ it never allocates a second Run.
 | Durable point | Retry action |
 | --- | --- |
 | No intent | Re-run B.5; write the one intent. |
-| Intent only | Re-run B.5; acquire the intent-bound lock. |
+| Durable intent only | Re-run B.5; acquire the intent-bound lock. |
 | Allocating/reserved lock | Re-run B.5; reserve/create only missing successor evidence. |
+| Exact `state.json` only, with no Journal/anchor/State recovery evidence | Re-run B.5; validate every immutable successor field against the same intent and source plan, write only the existing StateStore genesis anchor, then continue. |
 | `CREATED` State/anchor | Re-run B.5; validate State/anchor and mark the same lock running. |
 | Running lock | Re-run B.5; validate all bindings and return the same activation result. |
-| Any conflicting or malformed residue | Stop fail-closed; use the existing Active Run recovery procedures. |
+| Any other partial, conflicting or malformed residue | Stop fail-closed; use the existing Active Run recovery procedures. |
 
 No automatic cleanup, lock takeover, State migration, Journal append, task
 checkpoint, artifact copy, publication, controller construction, DAG run, or
