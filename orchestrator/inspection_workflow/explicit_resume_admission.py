@@ -35,6 +35,7 @@ def _canonical_bytes(status: str, bindings: Mapping[str, Any] | None = None) -> 
             raise ValueError("admissible results require bindings")
         document["bindings"] = {
             "run_id": bindings.get("run_id"),
+            "decision_bytes_hex": bytes(bindings.get("decision_bytes", b"")).hex(),
             "decision_sha256": bindings.get("decision_sha256"),
             "inventory_sha256": bindings.get("inventory_sha256"),
             "state_version": bindings.get("state_version"),
@@ -106,6 +107,7 @@ class ExplicitResumeAdmissionResult:
             raise ValueError("admission SHA does not match bytes")
         bindings = {
             "run_id": self.run_id,
+            "decision_bytes": self.decision_bytes,
             "decision_sha256": self.decision_sha256,
             "inventory_sha256": self.inventory_sha256,
             "state_version": self.state_version,
@@ -170,12 +172,12 @@ class ExplicitResumeAdmission:
 
     def admit(self, *, run_id: str) -> ExplicitResumeAdmissionResult:
         try:
-            if type(run_id) is not str or _RUN_ID_RE.fullmatch(run_id) is None:
-                return _not_admissible()
             decision = _B2_AUTHORIZE(
                 _B2_AUTHORIZER_TYPE(self.project_root),
                 run_id=run_id,
             )
+            if type(run_id) is not str or _RUN_ID_RE.fullmatch(run_id) is None:
+                return _not_admissible()
             if (
                 type(decision) is not SafeReuseDecision
                 or not decision.reuse_allowed
@@ -188,6 +190,8 @@ class ExplicitResumeAdmission:
             if not inventory or any(type(path) is not str for path in paths):
                 return _not_admissible()
             if len(set(paths)) != len(paths):
+                return _not_admissible()
+            if paths != tuple(sorted(paths)):
                 return _not_admissible()
             consumer = _B3_CONSUMER_TYPE(self.project_root)
             observer = _B4_OBSERVER_TYPE(self.project_root)
@@ -208,6 +212,7 @@ class ExplicitResumeAdmission:
                 )
                 if type(observed) is not SafeReuseStalenessObservation or observed.status != "reuse_current":
                     return _not_admissible()
+                observed.__post_init__()
                 observations.append((path, observed.status, observed.observation_sha256))
             if len(observations) != len(inventory):
                 return _not_admissible()

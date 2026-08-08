@@ -61,8 +61,40 @@ def test_admission_api_is_narrow_and_result_constructor_is_closed() -> None:
         )
 
 
-def test_completed_run_requires_every_inventory_artifact_and_returns_bound_result(completed_run: Path) -> None:
+def test_completed_run_requires_every_inventory_artifact_and_returns_bound_result(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     decision = _allowed(completed_run)
+    events: list[tuple[str, str]] = []
+    consumed_by_path: dict[str, object] = {}
+    original_consume = explicit_resume_admission._B3_CONSUME
+    original_observe = explicit_resume_admission._B4_OBSERVE
+
+    def consume(consumer: object, *, decision: SafeReuseDecision, artifact_path: str) -> object:
+        result = original_consume(consumer, decision=decision, artifact_path=artifact_path)
+        events.append(("consume", artifact_path))
+        consumed_by_path[artifact_path] = result
+        return result
+
+    def observe(
+        observer: object,
+        *,
+        decision: SafeReuseDecision,
+        consumption: object,
+        artifact_path: str,
+    ) -> object:
+        assert consumption is consumed_by_path[artifact_path]
+        events.append(("observe", artifact_path))
+        return original_observe(
+            observer,
+            decision=decision,
+            consumption=consumption,
+            artifact_path=artifact_path,
+        )
+
+    monkeypatch.setattr(explicit_resume_admission, "_B3_CONSUME", consume)
+    monkeypatch.setattr(explicit_resume_admission, "_B4_OBSERVE", observe)
     result = ExplicitResumeAdmission(completed_run).admit(run_id=RUN_ID)
     assert result.status == "resume_admissible", result.admission_bytes
     assert result.run_id == RUN_ID
@@ -74,14 +106,32 @@ def test_completed_run_requires_every_inventory_artifact_and_returns_bound_resul
     assert result.input_descriptor_sha256 == decision.input_descriptor_sha256
     assert isinstance(result.observations_sha256, str)
     assert result.to_dict()["status"] == "resume_admissible"
+    expected_events = [
+        event
+        for item in decision.inventory
+        for event in (("consume", str(item["path"])), ("observe", str(item["path"])))
+    ]
+    assert events == expected_events
 
 
-def test_repeated_admission_is_byte_stable_and_read_only(completed_run: Path) -> None:
+def test_repeated_admission_is_byte_stable_and_read_only(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     before = _tree_snapshot(completed_run)
+    calls: list[str] = []
+    original_authorize = explicit_resume_admission._B2_AUTHORIZE
+
+    def authorize(authorizer: object, *, run_id: str) -> SafeReuseDecision:
+        calls.append(run_id)
+        return original_authorize(authorizer, run_id=run_id)
+
+    monkeypatch.setattr(explicit_resume_admission, "_B2_AUTHORIZE", authorize)
     observer = ExplicitResumeAdmission(completed_run)
     first = observer.admit(run_id=RUN_ID)
     second = observer.admit(run_id=RUN_ID)
     assert first.to_dict() == second.to_dict()
+    assert calls == [RUN_ID, RUN_ID]
     assert _tree_snapshot(completed_run) == before
 
 
@@ -91,6 +141,7 @@ def test_admission_bytes_bind_every_success_field(completed_run: Path) -> None:
     document = json.loads(result.admission_bytes)
     assert document["bindings"] == {
         "run_id": result.run_id,
+        "decision_bytes_hex": result.decision_bytes.hex(),
         "decision_sha256": result.decision_sha256,
         "inventory_sha256": result.inventory_sha256,
         "state_version": result.state_version,
@@ -104,6 +155,22 @@ def test_admission_bytes_bind_every_success_field(completed_run: Path) -> None:
 @pytest.mark.parametrize("run_id", ["run_1", "", "runs/run_001", "run_001\\x", "run_001:ads", 1, None])
 def test_noncanonical_run_id_is_zero_leak_not_admissible(completed_run: Path, run_id: object) -> None:
     _assert_not_admissible(ExplicitResumeAdmission(completed_run).admit(run_id=run_id))
+
+
+def test_noncanonical_run_id_still_invokes_fixed_b2_authorizer(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    original_authorize = explicit_resume_admission._B2_AUTHORIZE
+
+    def authorize(authorizer: object, *, run_id: object) -> SafeReuseDecision:
+        calls.append(run_id)
+        return original_authorize(authorizer, run_id=run_id)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(explicit_resume_admission, "_B2_AUTHORIZE", authorize)
+    _assert_not_admissible(ExplicitResumeAdmission(completed_run).admit(run_id="run_1"))
+    assert calls == ["run_1"]
 
 
 def test_denied_authorization_is_zero_leak_not_admissible(completed_run: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,6 +237,81 @@ def test_partial_or_reordered_inventory_is_not_admissible(completed_run: Path, m
         )
 
 
+def test_self_consistent_reordered_inventory_is_rejected_before_consumption(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = _allowed(completed_run)
+    items = tuple(reversed(current.inventory))
+    inventory_bytes = json.dumps(
+        {
+            "schema_version": safe_reuse.INVENTORY_SCHEMA_VERSION,
+            "run_id": current.run_id,
+            "artifacts": [dict(item) for item in items],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    reordered = safe_reuse._make_decision(  # type: ignore[attr-defined]
+        run_id=current.run_id,
+        decision="reuse_allowed",
+        denial_codes=(),
+        inventory=items,
+        inventory_bytes=inventory_bytes,
+        inventory_sha256=hashlib.sha256(inventory_bytes).hexdigest(),
+        state_version=current.state_version,
+        plan_fingerprint=current.plan_fingerprint,
+        input_descriptor_sha256=current.input_descriptor_sha256,
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        explicit_resume_admission,
+        "_B2_AUTHORIZE",
+        lambda *args, **kwargs: reordered,
+    )
+    monkeypatch.setattr(
+        explicit_resume_admission,
+        "_B3_CONSUME",
+        lambda *args, **kwargs: calls.append("consume"),
+    )
+    _assert_not_admissible(ExplicitResumeAdmission(completed_run).admit(run_id=RUN_ID))
+    assert calls == []
+
+
+def test_forged_exact_current_observation_is_not_admissible(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forged = object.__new__(safe_reuse_staleness.SafeReuseStalenessObservation)
+    object.__setattr__(forged, "status", "reuse_current")
+    object.__setattr__(forged, "observation_bytes", b"forged")
+    object.__setattr__(forged, "observation_sha256", "0" * 64)
+    monkeypatch.setattr(
+        explicit_resume_admission,
+        "_B4_OBSERVE",
+        lambda *args, **kwargs: forged,
+    )
+    _assert_not_admissible(ExplicitResumeAdmission(completed_run).admit(run_id=RUN_ID))
+
+
+def test_forged_exact_consumption_is_not_admissible(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forged = object.__new__(safe_reuse_consumer.SafeReuseConsumption)
+    object.__setattr__(forged, "status", "reuse_consumed")
+    object.__setattr__(forged, "denial_codes", ())
+    object.__setattr__(forged, "content", b"forged")
+    object.__setattr__(forged, "artifact", None)
+    object.__setattr__(forged, "inventory_sha256", "0" * 64)
+    object.__setattr__(forged, "state_version", 0)
+    object.__setattr__(forged, "plan_fingerprint", "1" * 64)
+    object.__setattr__(forged, "input_descriptor_sha256", "2" * 64)
+    monkeypatch.setattr(explicit_resume_admission, "_B3_CONSUME", lambda *args, **kwargs: forged)
+    _assert_not_admissible(ExplicitResumeAdmission(completed_run).admit(run_id=RUN_ID))
+
+
 @pytest.mark.parametrize("boundary", ["consume", "observe"])
 def test_consumer_or_observer_denial_is_zero_leak_not_admissible(
     completed_run: Path,
@@ -189,6 +331,26 @@ def test_consumer_or_observer_denial_is_zero_leak_not_admissible(
             lambda *args, **kwargs: object(),
         )
     _assert_not_admissible(ExplicitResumeAdmission(completed_run).admit(run_id=RUN_ID))
+
+
+@pytest.mark.parametrize("boundary", ["authorize", "consume", "observe"])
+def test_boundary_exceptions_collapse_without_leaking_details(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("secret runs/run_701/state.json producer detail")
+
+    monkeypatch.setattr(
+        explicit_resume_admission,
+        {"authorize": "_B2_AUTHORIZE", "consume": "_B3_CONSUME", "observe": "_B4_OBSERVE"}[boundary],
+        fail,
+    )
+    result = ExplicitResumeAdmission(completed_run).admit(run_id=RUN_ID)
+    _assert_not_admissible(result)
+    assert b"secret" not in result.admission_bytes
+    assert b"state.json" not in result.admission_bytes
 
 
 def test_replacing_public_boundary_modules_cannot_forge_admission(
