@@ -36,7 +36,10 @@ acquisition, retention, reservation or successor State initialization, B.6
 re-reads the one persisted intent through the guarded-read boundary.  Its
 directory identity chain, unique entry set, canonical bytes, schema, source
 admission, source State version, plan fingerprint, descriptor SHA and both
-tokens must exactly equal the durable intent already observed.  A mismatch
+tokens must exactly equal the durable intent already observed.  The initial
+root-to-intent-directory chain is retained as immutable transaction evidence;
+the pre-Lock chain is compared to that original chain rather than accepted as a
+new baseline.  A mismatch
 returns the zero-leak denial before any Lock, successor State, Journal or anchor
 mutation.
 

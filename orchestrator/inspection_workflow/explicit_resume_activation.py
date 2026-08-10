@@ -257,7 +257,7 @@ class ExplicitResumeActivation:
         if not self._same_admission(run_id=run_id, supplied=admission, fresh=fresh):
             return _not_activated()
         source_state = self._source_state(root, run_id=run_id, admission=fresh)
-        intent, intent_bytes = self._load_or_persist_intent(
+        intent, intent_bytes, intent_directory_chain = self._load_or_persist_intent(
             root, source_state=source_state, admission=fresh
         )
         # Intent is the durable boundary.  Re-observe afterward so a source
@@ -270,6 +270,7 @@ class ExplicitResumeActivation:
             root,
             intent=intent,
             intent_bytes=intent_bytes,
+            durable_directory_chain=intent_directory_chain,
             source_state=source_state,
             admission=current,
         )
@@ -531,7 +532,7 @@ class ExplicitResumeActivation:
 
     def _load_or_persist_intent(
         self, root: Path, *, source_state: Mapping[str, Any], admission: ExplicitResumeAdmissionResult
-    ) -> tuple[dict[str, Any], bytes]:
+    ) -> tuple[dict[str, Any], bytes, tuple[tuple[Path, int, int], ...]]:
         directory = self._intent_directory(root, admission.run_id or "")
         directory_chain = self._ensure_controlled_directory(
             root, directory, label="activation intent directory"
@@ -590,7 +591,7 @@ class ExplicitResumeActivation:
         confirmed, _ = _B1_READ_GUARDED(root, relative)
         if confirmed != data:
             raise ValueError("activation intent changed during durability fence")
-        return intent, confirmed
+        return intent, confirmed, directory_chain
 
     def _revalidate_durable_intent(
         self,
@@ -598,6 +599,7 @@ class ExplicitResumeActivation:
         *,
         intent: Mapping[str, Any],
         intent_bytes: bytes,
+        durable_directory_chain: tuple[tuple[Path, int, int], ...],
         source_state: Mapping[str, Any],
         admission: ExplicitResumeAdmissionResult,
     ) -> tuple[dict[str, Any], bytes]:
@@ -607,8 +609,13 @@ class ExplicitResumeActivation:
         directory_chain = self._directory_chain(
             root, path.parent, label="pre-lock activation intent"
         )
+        if directory_chain != durable_directory_chain:
+            raise ValueError("activation intent directory changed before Lock acquisition")
+        self._assert_directory_chain(
+            durable_directory_chain, label="durable activation intent"
+        )
         self._assert_unique_intent_entry(path.parent, path)
-        self._assert_directory_chain(directory_chain, label="pre-lock activation intent")
+        self._assert_directory_chain(durable_directory_chain, label="pre-lock activation intent")
         data, _ = _B1_READ_GUARDED(root, path.relative_to(root).as_posix())
         try:
             persisted = self._validate_intent(json.loads(data.decode("utf-8")))
@@ -628,7 +635,11 @@ class ExplicitResumeActivation:
         )
         if persisted != expected:
             raise ValueError("activation intent does not bind current source before Lock acquisition")
-        self._assert_directory_chain(directory_chain, label="pre-lock activation intent")
+        if self._directory_chain(
+            root, path.parent, label="pre-lock activation intent"
+        ) != durable_directory_chain:
+            raise ValueError("activation intent directory changed before Lock acquisition")
+        self._assert_directory_chain(durable_directory_chain, label="pre-lock activation intent")
         self._assert_unique_intent_entry(path.parent, path)
         return persisted, data
 
