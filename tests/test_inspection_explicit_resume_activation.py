@@ -147,6 +147,18 @@ def _flip_one_byte(path: Path) -> None:
     path.write_bytes(bytes([data[0] ^ 1]) + data[1:])
 
 
+def _replace_same_byte_intent_directory(root: Path, tmp_path: Path, *, label: str) -> None:
+    """Replace the durable intent parent without changing the intent bytes."""
+
+    intent_dir = root / "runs" / RUN_ID / "resume_activation"
+    saved = tmp_path / label
+    name = next(intent_dir.glob("*.intent.json")).name
+    intent_bytes = (intent_dir / name).read_bytes()
+    intent_dir.rename(saved)
+    intent_dir.mkdir()
+    (intent_dir / name).write_bytes(intent_bytes)
+
+
 def _write_canonical_json(path: Path, value: object) -> None:
     path.write_bytes(
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -765,6 +777,98 @@ def test_bound_intent_chain_preflight_rejects_before_controlled_lock_write(
     assert _tree_snapshot(completed_run) == before
 
 
+def test_acquire_rechecks_bound_intent_after_parent_preflight_before_lock_write(
+    completed_run: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replacement after parent preflight cannot publish the Active Run Lock."""
+
+    admission = _admission(completed_run)
+    activator = ExplicitResumeActivation(completed_run)
+    source_state = activator._source_state(  # type: ignore[attr-defined]
+        completed_run, run_id=RUN_ID, admission=admission
+    )
+    activator._load_or_persist_intent(  # type: ignore[attr-defined]
+        completed_run, source_state=source_state, admission=admission
+    )
+    original = controlled_fs._preflight_bound_directory_identities
+    injected = False
+    before: dict[str, bytes | None] | None = None
+
+    def replace_after_parent_preflight() -> None:
+        nonlocal before, injected
+        original()
+        if not injected:
+            _replace_same_byte_intent_directory(
+                completed_run, tmp_path, label="acquire-after-parent-preflight"
+            )
+            before = _tree_snapshot(completed_run)
+            injected = True
+
+    monkeypatch.setattr(
+        controlled_fs, "_preflight_bound_directory_identities", replace_after_parent_preflight
+    )
+    _assert_not_activated(activator.activate(run_id=RUN_ID, admission=admission))
+    assert injected
+    assert before is not None
+    assert _tree_snapshot(completed_run) == before
+
+
+@pytest.mark.parametrize("seam", ["reserve", "initialize", "mark_running"])
+def test_transition_rechecks_bound_intent_before_each_official_mutation(
+    completed_run: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seam: str,
+) -> None:
+    """Later B.6 transitions cannot write after the intent parent changes."""
+
+    admission = _admission(completed_run)
+    module = __import__("orchestrator.inspection_workflow.explicit_resume_activation", fromlist=["x"])
+    before: dict[str, bytes | None] | None = None
+    injected = False
+
+    def replace_before_official_mutation() -> None:
+        nonlocal before, injected
+        assert not injected
+        _replace_same_byte_intent_directory(
+            completed_run, tmp_path, label=f"{seam}-before-official-mutation"
+        )
+        before = _tree_snapshot(completed_run)
+        injected = True
+
+    if seam == "reserve":
+        original = module._RESERVE_ACTIVE_RUN_ID
+
+        def wrapped(*args: object, **kwargs: object) -> object:
+            replace_before_official_mutation()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, "_RESERVE_ACTIVE_RUN_ID", wrapped)
+    elif seam == "initialize":
+        original = StateStore.initialize_run
+
+        def wrapped(self: StateStore, *args: object, **kwargs: object) -> object:
+            replace_before_official_mutation()
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(StateStore, "initialize_run", wrapped)
+    else:
+        original = module._MARK_ACTIVE_RUN_RUNNING
+
+        def wrapped(*args: object, **kwargs: object) -> object:
+            replace_before_official_mutation()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, "_MARK_ACTIVE_RUN_RUNNING", wrapped)
+
+    _assert_not_activated(ExplicitResumeActivation(completed_run).activate(run_id=RUN_ID, admission=admission))
+    assert injected
+    assert before is not None
+    assert _tree_snapshot(completed_run) == before
+
+
 def test_final_authority_rejects_unanchored_successor_journal(
     completed_run: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1116,7 +1220,7 @@ def test_preopen_plain_parent_aba_fails_closed_without_substitute_write(
     assert not tuple(substitute.iterdir())
 
 
-def test_parent_handle_keeps_intent_write_inside_original_directory(
+def test_parent_handle_replacement_rejects_before_intent_write(
     completed_run: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     admission = _admission(completed_run)
@@ -1149,7 +1253,7 @@ def test_parent_handle_keeps_intent_write_inside_original_directory(
         )
         assert replaced
         assert _tree_snapshot(outside) == before
-        assert len(tuple(saved.glob("*.intent.json"))) == 1
+        assert not tuple(saved.glob("*.intent.json"))
     finally:
         if intent_dir.exists():
             _remove_directory_link(intent_dir)

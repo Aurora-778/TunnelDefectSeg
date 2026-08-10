@@ -577,6 +577,7 @@ def write_exclusive(root: Path, relative: str, data: bytes) -> tuple[int, int]:
         raise ControlledFilesystemError("controlled write requires immutable bytes")
     if os.name == "nt":
         with _win_parent(root, parts[:-1]) as parent:
+            _preflight_bound_directory_identities()
             handle = _nt_open(
                 parent, temporary, disposition=_FILE_CREATE, directory=False,
                 access=_GENERIC_READ | _GENERIC_WRITE | _DELETE,
@@ -591,6 +592,7 @@ def write_exclusive(root: Path, relative: str, data: bytes) -> tuple[int, int]:
                     msvcrt.get_osfhandle(descriptor)
                 )
                 try:
+                    _preflight_bound_directory_identities()
                     _win_rename(
                         msvcrt.get_osfhandle(descriptor),
                         parent,
@@ -635,6 +637,7 @@ def write_exclusive(root: Path, relative: str, data: bytes) -> tuple[int, int]:
             raise ControlledFilesystemError("controlled publication identity is missing")
         return published_identity
     with _posix_parent(root, parts[:-1]) as parent:
+        _preflight_bound_directory_identities()
         descriptor = os.open(
             temporary,
             os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
@@ -664,6 +667,7 @@ def write_exclusive(root: Path, relative: str, data: bytes) -> tuple[int, int]:
                     errors,
                     label="controlled temporary descriptor cleanup failed",
                 )
+            _preflight_bound_directory_identities()
             os.link(
                 temporary,
                 parts[-1],
@@ -699,6 +703,7 @@ def atomic_replace(root: Path, relative: str, data: bytes) -> tuple[int, int]:
     temporary = f".{parts[-1]}.{uuid.uuid4().hex}.tmp"
     if os.name == "nt":
         with _win_parent(root, parts[:-1]) as parent:
+            _preflight_bound_directory_identities()
             handle = _nt_open(
                 parent, temporary, disposition=_FILE_CREATE, directory=False,
                 access=_GENERIC_READ | _GENERIC_WRITE | _DELETE,
@@ -711,6 +716,7 @@ def atomic_replace(root: Path, relative: str, data: bytes) -> tuple[int, int]:
                 _write_all(descriptor, data)
                 identity = _win_handle_identity(msvcrt.get_osfhandle(descriptor))
                 try:
+                    _preflight_bound_directory_identities()
                     _win_rename(msvcrt.get_osfhandle(descriptor), parent, parts[-1], replace=True)
                     renamed = True
                 except BaseException as exc:
@@ -751,6 +757,7 @@ def atomic_replace(root: Path, relative: str, data: bytes) -> tuple[int, int]:
         primary: BaseException | None = None
         identity: tuple[int, int] | None = None
         try:
+            _preflight_bound_directory_identities()
             descriptor = os.open(
                 temporary,
                 os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
@@ -777,6 +784,7 @@ def atomic_replace(root: Path, relative: str, data: bytes) -> tuple[int, int]:
                     errors,
                     label="controlled replacement descriptor cleanup failed",
                 )
+            _preflight_bound_directory_identities()
             os.replace(temporary, parts[-1], src_dir_fd=parent, dst_dir_fd=parent)
             created = False
             os.fsync(parent)
@@ -801,6 +809,7 @@ def make_directory(root: Path, relative: str) -> tuple[int, int]:
     parts = _parts(relative)
     if os.name == "nt":
         with _win_parent(root, parts[:-1]) as parent:
+            _preflight_bound_directory_identities()
             handle = _nt_open(
                 parent, parts[-1], disposition=_FILE_CREATE, directory=True,
                 access=_FILE_LIST_DIRECTORY | _FILE_READ_ATTRIBUTES,
@@ -832,6 +841,7 @@ def make_directory(root: Path, relative: str) -> tuple[int, int]:
             raise ControlledFilesystemError("controlled directory identity is missing")
         return identity
     with _posix_parent(root, parts[:-1]) as parent:
+        _preflight_bound_directory_identities()
         os.mkdir(parts[-1], mode=0o700, dir_fd=parent)
         descriptor = os.open(
             parts[-1],
@@ -877,6 +887,7 @@ def unlink(
     parts = _parts(relative)
     if os.name == "nt":
         with _win_parent(root, parts[:-1]) as parent:
+            _preflight_bound_directory_identities()
             handle = _nt_open(
                 parent, parts[-1], disposition=_FILE_OPEN, directory=False,
                 access=_DELETE | _FILE_READ_ATTRIBUTES,
@@ -884,6 +895,7 @@ def unlink(
             primary: BaseException | None = None
             try:
                 _assert_expected_identity(_win_handle_identity(handle), expected_identity)
+                _preflight_bound_directory_identities()
                 _win_dispose(handle)
             except BaseException as exc:
                 primary = exc
@@ -914,6 +926,7 @@ def unlink(
                 _assert_expected_identity(
                     (state.st_dev, state.st_ino), expected_identity
                 )
+            _preflight_bound_directory_identities()
             os.unlink(parts[-1], dir_fd=parent)
             os.fsync(parent)
         except BaseException as exc:

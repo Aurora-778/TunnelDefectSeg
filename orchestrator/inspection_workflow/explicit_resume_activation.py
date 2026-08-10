@@ -750,13 +750,14 @@ class ExplicitResumeActivation:
                     durable_intent_chain=durable_intent_chain,
                     label="activation intent before successor reservation",
                 )
-                with controlled_fs.bind_directory_identities(runs_chain):
-                    _RESERVE_ACTIVE_RUN_ID(
-                        root,
-                        run_id=intent["successor_run_id"],
-                        expected_allocation_token=intent["allocation_token"],
-                        expected_lock_token=intent["lock_token"],
-                    )
+                with controlled_fs.bind_directory_identities(durable_intent_chain):
+                    with controlled_fs.bind_directory_identities(runs_chain):
+                        _RESERVE_ACTIVE_RUN_ID(
+                            root,
+                            run_id=intent["successor_run_id"],
+                            expected_allocation_token=intent["allocation_token"],
+                            expected_lock_token=intent["lock_token"],
+                        )
                 self._assert_durable_intent_chain(
                     root,
                     intent=intent,
@@ -769,55 +770,56 @@ class ExplicitResumeActivation:
                 durable_intent_chain=durable_intent_chain,
                 label="activation intent before successor State initialization",
             )
-            successor_chain = self._ensure_controlled_directory(
-                root, successor_dir, label="successor Run directory"
-            )
-            with controlled_fs.bind_directory_identities(successor_chain):
-                store = StateStore(root)
-                state = self._load_or_repair_successor_state(
-                    store, intent=intent, source_state=source_state
+            with controlled_fs.bind_directory_identities(durable_intent_chain):
+                successor_chain = self._ensure_controlled_directory(
+                    root, successor_dir, label="successor Run directory"
                 )
-                if state is None:
+                with controlled_fs.bind_directory_identities(successor_chain):
+                    store = StateStore(root)
+                    state = self._load_or_repair_successor_state(
+                        store, intent=intent, source_state=source_state
+                    )
+                    if state is None:
+                        self._assert_durable_intent_chain(
+                            root,
+                            intent=intent,
+                            durable_intent_chain=durable_intent_chain,
+                            label="activation intent before State initialization",
+                        )
+                        store.initialize_run(
+                            run_id=intent["successor_run_id"],
+                            allocation_token=intent["allocation_token"],
+                            plan_fingerprint=intent["plan_fingerprint"],
+                            task_plan=_thaw_json(source_state["task_plan"]),
+                            expected_lock_token=intent["lock_token"],
+                            initial_context=self._resume_context(intent),
+                        )
+                        self._assert_durable_intent_chain(
+                            root,
+                            intent=intent,
+                            durable_intent_chain=durable_intent_chain,
+                            label="activation intent after State initialization",
+                        )
+                    self._assert_directory_chain(successor_chain, label="successor Run directory")
+                    self._validate_successor_state(root, intent=intent, source_state=source_state)
                     self._assert_durable_intent_chain(
                         root,
                         intent=intent,
                         durable_intent_chain=durable_intent_chain,
-                        label="activation intent before State initialization",
+                        label="activation intent before Lock running transition",
                     )
-                    store.initialize_run(
+                    _MARK_ACTIVE_RUN_RUNNING(
+                        root,
                         run_id=intent["successor_run_id"],
-                        allocation_token=intent["allocation_token"],
-                        plan_fingerprint=intent["plan_fingerprint"],
-                        task_plan=_thaw_json(source_state["task_plan"]),
+                        expected_allocation_token=intent["allocation_token"],
                         expected_lock_token=intent["lock_token"],
-                        initial_context=self._resume_context(intent),
                     )
                     self._assert_durable_intent_chain(
                         root,
                         intent=intent,
                         durable_intent_chain=durable_intent_chain,
-                        label="activation intent after State initialization",
+                        label="activation intent after Lock running transition",
                     )
-                self._assert_directory_chain(successor_chain, label="successor Run directory")
-                self._validate_successor_state(root, intent=intent, source_state=source_state)
-                self._assert_durable_intent_chain(
-                    root,
-                    intent=intent,
-                    durable_intent_chain=durable_intent_chain,
-                    label="activation intent before Lock running transition",
-                )
-                _MARK_ACTIVE_RUN_RUNNING(
-                    root,
-                    run_id=intent["successor_run_id"],
-                    expected_allocation_token=intent["allocation_token"],
-                    expected_lock_token=intent["lock_token"],
-                )
-                self._assert_durable_intent_chain(
-                    root,
-                    intent=intent,
-                    durable_intent_chain=durable_intent_chain,
-                    label="activation intent after Lock running transition",
-                )
         self._assert_durable_intent_chain(
             root,
             intent=intent,

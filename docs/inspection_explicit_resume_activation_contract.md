@@ -50,10 +50,19 @@ result-evidence read; later reads cannot establish a replacement directory as a
 new baseline.  A changed chain therefore cannot authorize a further transition
 or a successful result.
 
-Every controlled mutation additionally preflights every active bound directory
-identity before it opens its target parent.  This prevents a source intent
-directory that is not an ancestor of `runs/.active_run.lock` from being omitted
-merely because the target write traverses only the `runs` branch.
+Every controlled mutation validates every active bound directory identity both
+before opening its target parent and again immediately before its leaf create,
+publish, replace or delete syscall.  This makes the durable source intent chain
+an explicit last-observed precondition even where the target write traverses
+only `runs/.active_run.lock`.
+
+This is a fail-closed point-in-time integrity boundary, not a cross-directory
+kernel compare-and-swap or hostile-source-authentication guarantee.  A separate
+namespace writer can still race after the final observation and before a
+filesystem syscall on platforms without a cross-directory identity transaction;
+the implementation must reject every replacement it observes, preserve normal
+durable recovery evidence for an already-published mutation, and never claim
+that it prevented an unobservable concurrent replacement before write.
 
 Intent, successor State, complete Journal, genesis tail anchor and Active Run
 Lock are validated by their owning authority paths and must remain
