@@ -43,6 +43,13 @@ new baseline.  A mismatch
 returns the zero-leak denial before any Lock, successor State, Journal or anchor
 mutation.
 
+The same original identity chain remains bound through every Lock acquisition,
+successor reservation, State initialization and running transition.  It is
+checked immediately before and after each such boundary and again at every
+result-evidence read; later reads cannot establish a replacement directory as a
+new baseline.  A changed chain therefore cannot authorize a further transition
+or a successful result.
+
 Intent, successor State, complete Journal, genesis tail anchor and Active Run
 Lock are validated by their owning authority paths and must remain
 byte-identical across the final repeated evidence reads.  The Lock's JSON

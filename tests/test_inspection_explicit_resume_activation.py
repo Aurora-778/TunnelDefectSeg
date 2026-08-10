@@ -697,6 +697,46 @@ def test_prelock_same_byte_intent_directory_aba_rejects_before_lock_write(
     assert not (completed_run / "runs" / successor).exists()
 
 
+def test_post_revalidation_same_byte_intent_directory_aba_rejects_without_writes(
+    completed_run: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admission = _admission(completed_run)
+    activator = ExplicitResumeActivation(completed_run)
+    source_state = activator._source_state(  # type: ignore[attr-defined]
+        completed_run, run_id=RUN_ID, admission=admission
+    )
+    _, _, _ = activator._load_or_persist_intent(  # type: ignore[attr-defined]
+        completed_run, source_state=source_state, admission=admission
+    )
+    before = _tree_snapshot(completed_run)
+    original = ExplicitResumeActivation._complete_activation
+    replaced = False
+
+    def replace_directory_before_complete(
+        self: ExplicitResumeActivation, *args: object, **kwargs: object
+    ) -> None:
+        nonlocal replaced
+        if not replaced:
+            intent_dir = completed_run / "runs" / RUN_ID / "resume_activation"
+            saved = tmp_path / "post-revalidation-same-byte-intent-directory"
+            name = next(intent_dir.glob("*.intent.json")).name
+            intent_bytes = (intent_dir / name).read_bytes()
+            intent_dir.rename(saved)
+            intent_dir.mkdir()
+            (intent_dir / name).write_bytes(intent_bytes)
+            replaced = True
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        ExplicitResumeActivation, "_complete_activation", replace_directory_before_complete
+    )
+    _assert_not_activated(activator.activate(run_id=RUN_ID, admission=admission))
+    assert replaced
+    assert _tree_snapshot(completed_run) == before
+
+
 def test_final_authority_rejects_unanchored_successor_journal(
     completed_run: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -730,9 +770,16 @@ def test_transient_unanchored_journal_bytes_cannot_bind_success_sha(
     swapped = False
 
     def complete_with_empty_journal(
-        self: ExplicitResumeActivation, root: Path, *, intent: object, source_state: object
+        self: ExplicitResumeActivation,
+        root: Path,
+        *,
+        intent: object,
+        source_state: object,
+        **kwargs: object,
     ) -> None:
-        original_complete(self, root, intent=intent, source_state=source_state)  # type: ignore[arg-type]
+        original_complete(  # type: ignore[arg-type]
+            self, root, intent=intent, source_state=source_state, **kwargs
+        )
         successor = str(intent["successor_run_id"])  # type: ignore[index]
         (root / "runs" / successor / "state_journal.jsonl").write_bytes(b"")
 

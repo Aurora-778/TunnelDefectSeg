@@ -274,9 +274,18 @@ class ExplicitResumeActivation:
             source_state=source_state,
             admission=current,
         )
-        self._complete_activation(root, intent=intent, source_state=source_state)
+        self._complete_activation(
+            root,
+            intent=intent,
+            source_state=source_state,
+            durable_intent_chain=intent_directory_chain,
+        )
         result = self._activated_result(
-            root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
+            root,
+            intent=intent,
+            intent_bytes=intent_bytes,
+            source_state=source_state,
+            durable_intent_chain=intent_directory_chain,
         )
         # The result is intentionally built before the final B.5 observation:
         # a mutation injected during any activation/result seam is therefore
@@ -291,6 +300,7 @@ class ExplicitResumeActivation:
             intent_bytes=intent_bytes,
             source_state=source_state,
             result=result,
+            durable_intent_chain=intent_directory_chain,
         )
         return_fence = self._fresh_admission(root, run_id=run_id)
         if not self._same_admission(run_id=run_id, supplied=final, fresh=return_fence):
@@ -305,6 +315,7 @@ class ExplicitResumeActivation:
             intent_bytes=intent_bytes,
             source_state=source_state,
             result=result,
+            durable_intent_chain=intent_directory_chain,
         )
         return result
 
@@ -643,6 +654,25 @@ class ExplicitResumeActivation:
         self._assert_unique_intent_entry(path.parent, path)
         return persisted, data
 
+    @classmethod
+    def _assert_durable_intent_chain(
+        cls,
+        root: Path,
+        *,
+        intent: Mapping[str, Any],
+        durable_intent_chain: tuple[tuple[Path, int, int], ...],
+        label: str,
+    ) -> None:
+        """Require the originally durable intent directory chain at every boundary."""
+
+        path = cls._intent_path_for(
+            root, intent["source_run_id"], intent["source_admission_sha256"]
+        )
+        if cls._directory_chain(root, path.parent, label=label) != durable_intent_chain:
+            raise ValueError("activation intent directory changed during activation")
+        cls._assert_directory_chain(durable_intent_chain, label=label)
+        cls._assert_unique_intent_entry(path.parent, path)
+
     @staticmethod
     def _existing_lock(root: Path) -> Mapping[str, Any] | None:
         path = root / "runs" / ".active_run.lock"
@@ -661,22 +691,46 @@ class ExplicitResumeActivation:
         validate_active_run_control_entries(root)
 
     def _complete_activation(
-        self, root: Path, *, intent: Mapping[str, Any], source_state: Mapping[str, Any]
+        self,
+        root: Path,
+        *,
+        intent: Mapping[str, Any],
+        source_state: Mapping[str, Any],
+        durable_intent_chain: tuple[tuple[Path, int, int], ...],
     ) -> None:
+        self._assert_durable_intent_chain(
+            root,
+            intent=intent,
+            durable_intent_chain=durable_intent_chain,
+            label="activation intent before Lock acquisition",
+        )
         runs_chain = self._directory_chain(
             root, root / "runs", label="Active Run control directory"
         )
-        with controlled_fs.bind_directory_identities(runs_chain):
-            self._assert_active_lock_control_entries(root)
-            lock = self._existing_lock(root)
-            if lock is None:
-                _ACQUIRE_ACTIVE_RUN_LOCK(
-                    root,
-                    task_id="explicit_resume_activation",
-                    allocation_token=intent["allocation_token"],
-                    lock_token=intent["lock_token"],
-                )
+        with controlled_fs.bind_directory_identities(durable_intent_chain):
+            with controlled_fs.bind_directory_identities(runs_chain):
+                self._assert_active_lock_control_entries(root)
                 lock = self._existing_lock(root)
+                if lock is None:
+                    self._assert_durable_intent_chain(
+                        root,
+                        intent=intent,
+                        durable_intent_chain=durable_intent_chain,
+                        label="activation intent before Lock acquisition",
+                    )
+                    _ACQUIRE_ACTIVE_RUN_LOCK(
+                        root,
+                        task_id="explicit_resume_activation",
+                        allocation_token=intent["allocation_token"],
+                        lock_token=intent["lock_token"],
+                    )
+                    self._assert_durable_intent_chain(
+                        root,
+                        intent=intent,
+                        durable_intent_chain=durable_intent_chain,
+                        label="activation intent after Lock acquisition",
+                    )
+                    lock = self._existing_lock(root)
         if (
             not isinstance(lock, Mapping)
             or lock.get("allocation_token") != intent["allocation_token"]
@@ -690,6 +744,12 @@ class ExplicitResumeActivation:
         successor_dir = root / "runs" / intent["successor_run_id"]
         if lock["phase"] == "allocating":
             if lock["reserved_run_id"] is None:
+                self._assert_durable_intent_chain(
+                    root,
+                    intent=intent,
+                    durable_intent_chain=durable_intent_chain,
+                    label="activation intent before successor reservation",
+                )
                 with controlled_fs.bind_directory_identities(runs_chain):
                     _RESERVE_ACTIVE_RUN_ID(
                         root,
@@ -697,6 +757,18 @@ class ExplicitResumeActivation:
                         expected_allocation_token=intent["allocation_token"],
                         expected_lock_token=intent["lock_token"],
                     )
+                self._assert_durable_intent_chain(
+                    root,
+                    intent=intent,
+                    durable_intent_chain=durable_intent_chain,
+                    label="activation intent after successor reservation",
+                )
+            self._assert_durable_intent_chain(
+                root,
+                intent=intent,
+                durable_intent_chain=durable_intent_chain,
+                label="activation intent before successor State initialization",
+            )
             successor_chain = self._ensure_controlled_directory(
                 root, successor_dir, label="successor Run directory"
             )
@@ -706,6 +778,12 @@ class ExplicitResumeActivation:
                     store, intent=intent, source_state=source_state
                 )
                 if state is None:
+                    self._assert_durable_intent_chain(
+                        root,
+                        intent=intent,
+                        durable_intent_chain=durable_intent_chain,
+                        label="activation intent before State initialization",
+                    )
                     store.initialize_run(
                         run_id=intent["successor_run_id"],
                         allocation_token=intent["allocation_token"],
@@ -714,14 +792,38 @@ class ExplicitResumeActivation:
                         expected_lock_token=intent["lock_token"],
                         initial_context=self._resume_context(intent),
                     )
+                    self._assert_durable_intent_chain(
+                        root,
+                        intent=intent,
+                        durable_intent_chain=durable_intent_chain,
+                        label="activation intent after State initialization",
+                    )
                 self._assert_directory_chain(successor_chain, label="successor Run directory")
                 self._validate_successor_state(root, intent=intent, source_state=source_state)
+                self._assert_durable_intent_chain(
+                    root,
+                    intent=intent,
+                    durable_intent_chain=durable_intent_chain,
+                    label="activation intent before Lock running transition",
+                )
                 _MARK_ACTIVE_RUN_RUNNING(
                     root,
                     run_id=intent["successor_run_id"],
                     expected_allocation_token=intent["allocation_token"],
                     expected_lock_token=intent["lock_token"],
                 )
+                self._assert_durable_intent_chain(
+                    root,
+                    intent=intent,
+                    durable_intent_chain=durable_intent_chain,
+                    label="activation intent after Lock running transition",
+                )
+        self._assert_durable_intent_chain(
+            root,
+            intent=intent,
+            durable_intent_chain=durable_intent_chain,
+            label="activation intent after activation transitions",
+        )
         self._assert_active_lock_control_entries(root)
         self._validate_successor_state(root, intent=intent, source_state=source_state)
         final = self._existing_lock(root)
@@ -830,6 +932,7 @@ class ExplicitResumeActivation:
     def _activation_evidence(
         self, root: Path, *, intent: Mapping[str, Any], intent_bytes: bytes,
         source_state: Mapping[str, Any],
+        durable_intent_chain: tuple[tuple[Path, int, int], ...],
     ) -> dict[str, Any]:
         """Read every activation authority through one guarded, stable snapshot."""
 
@@ -839,6 +942,9 @@ class ExplicitResumeActivation:
         intent_chain = self._directory_chain(
             root, intent_path.parent, label="activation intent evidence"
         )
+        if intent_chain != durable_intent_chain:
+            raise ValueError("activation intent directory changed at result")
+        self._assert_directory_chain(durable_intent_chain, label="activation intent evidence")
         self._assert_unique_intent_entry(intent_path.parent, intent_path)
         intent_data, _ = _B1_READ_GUARDED(root, intent_path.relative_to(root).as_posix())
         if intent_data != intent_bytes:
@@ -849,7 +955,7 @@ class ExplicitResumeActivation:
             raise ValueError("activation intent is invalid at result") from exc
         if parsed_intent != dict(intent) or _canonical_json_bytes(parsed_intent) != intent_data:
             raise ValueError("activation intent does not match result binding")
-        self._assert_directory_chain(intent_chain, label="activation intent evidence")
+        self._assert_directory_chain(durable_intent_chain, label="activation intent evidence")
         active_entries_before = validate_active_run_control_entries(root)
         store = StateStore(root)
         successor_directory = root / "runs" / intent["successor_run_id"]
@@ -911,7 +1017,11 @@ class ExplicitResumeActivation:
         if successor_entries_after != successor_entries_before:
             raise StateStoreError("successor control-entry set changed during result")
         self._assert_directory_chain(successor_chain, label="successor authority evidence")
-        self._assert_directory_chain(intent_chain, label="activation intent evidence")
+        if self._directory_chain(
+            root, intent_path.parent, label="activation intent evidence"
+        ) != durable_intent_chain:
+            raise ValueError("activation intent directory changed at result")
+        self._assert_directory_chain(durable_intent_chain, label="activation intent evidence")
         self._assert_unique_intent_entry(intent_path.parent, intent_path)
         active_entries_after = validate_active_run_control_entries(root)
         if active_entries_after != active_entries_before:
@@ -928,12 +1038,21 @@ class ExplicitResumeActivation:
     def _activated_result(
         self, root: Path, *, intent: Mapping[str, Any], intent_bytes: bytes,
         source_state: Mapping[str, Any],
+        durable_intent_chain: tuple[tuple[Path, int, int], ...],
     ) -> ExplicitResumeActivationResult:
         first = self._activation_evidence(
-            root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
+            root,
+            intent=intent,
+            intent_bytes=intent_bytes,
+            source_state=source_state,
+            durable_intent_chain=durable_intent_chain,
         )
         second = self._activation_evidence(
-            root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
+            root,
+            intent=intent,
+            intent_bytes=intent_bytes,
+            source_state=source_state,
+            durable_intent_chain=durable_intent_chain,
         )
         if first != second:
             raise ValueError("activation evidence changed during result")
@@ -966,9 +1085,14 @@ class ExplicitResumeActivation:
     def _assert_result_is_current(
         self, root: Path, *, intent: Mapping[str, Any], intent_bytes: bytes,
         source_state: Mapping[str, Any], result: ExplicitResumeActivationResult,
+        durable_intent_chain: tuple[tuple[Path, int, int], ...],
     ) -> None:
         evidence = self._activation_evidence(
-            root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
+            root,
+            intent=intent,
+            intent_bytes=intent_bytes,
+            source_state=source_state,
+            durable_intent_chain=durable_intent_chain,
         )
         if (
             result.intent_sha256 != evidence["intent_sha256"]
