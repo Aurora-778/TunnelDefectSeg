@@ -631,6 +631,38 @@ def test_final_intent_replacement_collapses_without_leaking_bindings(
     )
 
 
+def test_prelock_intent_replacement_rejects_before_successor_or_lock_write(
+    completed_run: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admission = _admission(completed_run)
+    module = __import__("orchestrator.inspection_workflow.explicit_resume_activation", fromlist=["x"])
+    original = module._B5_ADMIT
+    calls = 0
+
+    def replace_after_second_b5(admitter: object, *, run_id: object) -> object:
+        nonlocal calls
+        result = original(admitter, run_id=run_id)
+        calls += 1
+        if calls == 2:
+            path = next(
+                (completed_run / "runs" / RUN_ID / "resume_activation").glob(
+                    "*.intent.json"
+                )
+            )
+            path.write_bytes(b"{}\n")
+        return result
+
+    monkeypatch.setattr(module, "_B5_ADMIT", replace_after_second_b5)
+    successor = ExplicitResumeActivation._successor_run_id(admission)
+    _assert_not_activated(
+        ExplicitResumeActivation(completed_run).activate(run_id=RUN_ID, admission=admission)
+    )
+    assert calls == 2
+    assert not (completed_run / "runs" / ".active_run.lock").exists()
+    assert not (completed_run / "runs" / successor).exists()
+
+
 def test_final_authority_rejects_unanchored_successor_journal(
     completed_run: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

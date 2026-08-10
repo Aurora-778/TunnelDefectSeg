@@ -266,6 +266,13 @@ class ExplicitResumeActivation:
         if not self._same_admission(run_id=run_id, supplied=fresh, fresh=current):
             return _not_activated()
         source_state = self._source_state(root, run_id=run_id, admission=current)
+        intent, intent_bytes = self._revalidate_durable_intent(
+            root,
+            intent=intent,
+            intent_bytes=intent_bytes,
+            source_state=source_state,
+            admission=current,
+        )
         self._complete_activation(root, intent=intent, source_state=source_state)
         result = self._activated_result(
             root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
@@ -584,6 +591,46 @@ class ExplicitResumeActivation:
         if confirmed != data:
             raise ValueError("activation intent changed during durability fence")
         return intent, confirmed
+
+    def _revalidate_durable_intent(
+        self,
+        root: Path,
+        *,
+        intent: Mapping[str, Any],
+        intent_bytes: bytes,
+        source_state: Mapping[str, Any],
+        admission: ExplicitResumeAdmissionResult,
+    ) -> tuple[dict[str, Any], bytes]:
+        """Fence the durable intent before any Active Run Lock mutation."""
+
+        path = self._intent_path(root, admission)
+        directory_chain = self._directory_chain(
+            root, path.parent, label="pre-lock activation intent"
+        )
+        self._assert_unique_intent_entry(path.parent, path)
+        self._assert_directory_chain(directory_chain, label="pre-lock activation intent")
+        data, _ = _B1_READ_GUARDED(root, path.relative_to(root).as_posix())
+        try:
+            persisted = self._validate_intent(json.loads(data.decode("utf-8")))
+        except (UnicodeError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            raise ValueError("activation intent is invalid before Lock acquisition") from exc
+        if (
+            data != intent_bytes
+            or _canonical_json_bytes(persisted) != data
+            or persisted != dict(intent)
+        ):
+            raise ValueError("activation intent changed before Lock acquisition")
+        expected = self._intent_document(
+            source_state=source_state,
+            admission=admission,
+            allocation_token=persisted["allocation_token"],
+            lock_token=persisted["lock_token"],
+        )
+        if persisted != expected:
+            raise ValueError("activation intent does not bind current source before Lock acquisition")
+        self._assert_directory_chain(directory_chain, label="pre-lock activation intent")
+        self._assert_unique_intent_entry(path.parent, path)
+        return persisted, data
 
     @staticmethod
     def _existing_lock(root: Path) -> Mapping[str, Any] | None:

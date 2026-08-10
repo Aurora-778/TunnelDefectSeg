@@ -31,6 +31,15 @@ successor evidence snapshots equal the immutable result.
 Thus a source artifact, Manifest, State, plan or descriptor change at any Lock,
 State-initialization or result-construction seam fails closed.
 
+Immediately after that second B.5 observation and before any Active Run Lock
+acquisition, retention, reservation or successor State initialization, B.6
+re-reads the one persisted intent through the guarded-read boundary.  Its
+directory identity chain, unique entry set, canonical bytes, schema, source
+admission, source State version, plan fingerprint, descriptor SHA and both
+tokens must exactly equal the durable intent already observed.  A mismatch
+returns the zero-leak denial before any Lock, successor State, Journal or anchor
+mutation.
+
 Intent, successor State, complete Journal, genesis tail anchor and Active Run
 Lock are validated by their owning authority paths and must remain
 byte-identical across the final repeated evidence reads.  The Lock's JSON
