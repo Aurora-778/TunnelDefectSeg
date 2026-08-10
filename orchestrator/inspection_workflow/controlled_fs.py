@@ -72,6 +72,17 @@ def _assert_bound_identity(path: Path, actual: tuple[int, int]) -> None:
         raise ControlledFilesystemError("controlled parent identity changed")
 
 
+def _preflight_bound_directory_identities() -> None:
+    """Reject any active directory-binding drift before a controlled mutation."""
+
+    identities = _BOUND_DIRECTORY_IDENTITIES.get()
+    if identities is None:
+        return
+    for key, expected in identities.items():
+        if directory_identity(Path(key)) != expected:
+            raise ControlledFilesystemError("controlled bound directory identity changed")
+
+
 def _assert_expected_identity(
     actual: tuple[int, int], expected: tuple[int, int] | None
 ) -> None:
@@ -330,6 +341,7 @@ if os.name == "nt":
 
     @contextmanager
     def _win_parent(root: Path, parts: tuple[str, ...]) -> Iterator[int]:
+        _preflight_bound_directory_identities()
         handles = [_open_root(root)]
         primary: BaseException | None = None
         try:
@@ -440,6 +452,7 @@ if os.name == "nt":
 
 @contextmanager
 def _posix_parent(root: Path, parts: tuple[str, ...]) -> Iterator[int]:
+    _preflight_bound_directory_identities()
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptors = [os.open(root, flags)]
     primary: BaseException | None = None

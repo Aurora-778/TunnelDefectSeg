@@ -737,6 +737,34 @@ def test_post_revalidation_same_byte_intent_directory_aba_rejects_without_writes
     assert _tree_snapshot(completed_run) == before
 
 
+def test_bound_intent_chain_preflight_rejects_before_controlled_lock_write(
+    completed_run: Path,
+    tmp_path: Path,
+) -> None:
+    admission = _admission(completed_run)
+    activator = ExplicitResumeActivation(completed_run)
+    source_state = activator._source_state(  # type: ignore[attr-defined]
+        completed_run, run_id=RUN_ID, admission=admission
+    )
+    _, _, chain = activator._load_or_persist_intent(  # type: ignore[attr-defined]
+        completed_run, source_state=source_state, admission=admission
+    )
+    intent_dir = completed_run / "runs" / RUN_ID / "resume_activation"
+    saved = tmp_path / "preflight-intent-directory"
+    name = next(intent_dir.glob("*.intent.json")).name
+    intent_bytes = (intent_dir / name).read_bytes()
+    intent_dir.rename(saved)
+    intent_dir.mkdir()
+    (intent_dir / name).write_bytes(intent_bytes)
+    before = _tree_snapshot(completed_run)
+    with controlled_fs.bind_directory_identities(chain):
+        with pytest.raises(controlled_fs.ControlledFilesystemError):
+            controlled_fs.write_exclusive(
+                completed_run, "runs/.active_run.lock", b"{}\n"
+            )
+    assert _tree_snapshot(completed_run) == before
+
+
 def test_final_authority_rejects_unanchored_successor_journal(
     completed_run: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

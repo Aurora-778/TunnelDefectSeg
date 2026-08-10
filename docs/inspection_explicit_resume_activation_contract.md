@@ -50,6 +50,11 @@ result-evidence read; later reads cannot establish a replacement directory as a
 new baseline.  A changed chain therefore cannot authorize a further transition
 or a successful result.
 
+Every controlled mutation additionally preflights every active bound directory
+identity before it opens its target parent.  This prevents a source intent
+directory that is not an ancestor of `runs/.active_run.lock` from being omitted
+merely because the target write traverses only the `runs` branch.
+
 Intent, successor State, complete Journal, genesis tail anchor and Active Run
 Lock are validated by their owning authority paths and must remain
 byte-identical across the final repeated evidence reads.  The Lock's JSON
