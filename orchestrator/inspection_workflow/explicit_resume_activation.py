@@ -14,18 +14,20 @@ import os
 from pathlib import Path
 import re
 import stat
+import threading
 import uuid
 from typing import Any, Mapping
 
-from . import a1_artifacts, artifact_resolver, explicit_resume_admission
+from . import a1_artifacts, artifact_resolver, controlled_fs, explicit_resume_admission
 from .explicit_resume_admission import ExplicitResumeAdmissionResult
 from .locking import (
     ActiveRunLockError,
-    _sync_directory,
     acquire_active_run_lock,
     mark_active_run_running,
     read_existing_active_run_lock,
     reserve_active_run_id,
+    validate_active_run_control_entries,
+    validate_active_run_lock_snapshot,
 )
 from orchestrator.state.store import StateStore, StateStoreError
 
@@ -56,6 +58,7 @@ _B1_READ_GUARDED = artifact_resolver._read_guarded_file
 _ACQUIRE_ACTIVE_RUN_LOCK = acquire_active_run_lock
 _RESERVE_ACTIVE_RUN_ID = reserve_active_run_id
 _MARK_ACTIVE_RUN_RUNNING = mark_active_run_running
+_ACTIVATION_MUTEX = threading.RLock()
 
 
 def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
@@ -152,6 +155,7 @@ _SUCCESS_FIELDS = (
     "plan_fingerprint",
     "input_descriptor_sha256",
     "state_sha256",
+    "journal_sha256",
     "journal_anchor_sha256",
     "lock_sha256",
 )
@@ -174,6 +178,7 @@ class ExplicitResumeActivationResult:
     plan_fingerprint: str | None
     input_descriptor_sha256: str | None
     state_sha256: str | None
+    journal_sha256: str | None
     journal_anchor_sha256: str | None
     lock_sha256: str | None
 
@@ -210,6 +215,7 @@ class ExplicitResumeActivationResult:
                     "plan_fingerprint",
                     "input_descriptor_sha256",
                     "state_sha256",
+                    "journal_sha256",
                     "journal_anchor_sha256",
                     "lock_sha256",
                 )
@@ -238,38 +244,61 @@ class ExplicitResumeActivation:
         admission: ExplicitResumeAdmissionResult,
     ) -> ExplicitResumeActivationResult:
         try:
-            root = a1_artifacts._controlled_temporary_root(self.project_root)
-            fresh = self._fresh_admission(root, run_id=run_id)
-            if not self._same_admission(run_id=run_id, supplied=admission, fresh=fresh):
-                return _not_activated()
-            source_state = self._source_state(root, run_id=run_id, admission=fresh)
-            intent, intent_bytes = self._load_or_persist_intent(
-                root, source_state=source_state, admission=fresh
-            )
-            # Intent is the durable boundary.  Re-observe afterward so a source
-            # mutation in the pre-intent window never acquires the Active Run Lock.
-            current = self._fresh_admission(root, run_id=run_id)
-            if not self._same_admission(run_id=run_id, supplied=fresh, fresh=current):
-                return _not_activated()
-            source_state = self._source_state(root, run_id=run_id, admission=current)
-            self._complete_activation(root, intent=intent, source_state=source_state)
-            result = self._activated_result(
-                root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
-            )
-            # The result is intentionally built before the final B.5 observation:
-            # a mutation injected during any activation/result seam is therefore
-            # observed before a success can escape this boundary.
-            final = self._fresh_admission(root, run_id=run_id)
-            if not self._same_admission(run_id=run_id, supplied=current, fresh=final):
-                return _not_activated()
-            source_state = self._source_state(root, run_id=run_id, admission=final)
-            self._assert_result_is_current(
-                root, intent=intent, intent_bytes=intent_bytes,
-                source_state=source_state, result=result,
-            )
-            return result
+            with _ACTIVATION_MUTEX:
+                return self._activate_serialized(run_id=run_id, admission=admission)
         except Exception:
             return _not_activated()
+
+    def _activate_serialized(
+        self, *, run_id: str, admission: ExplicitResumeAdmissionResult
+    ) -> ExplicitResumeActivationResult:
+        root = a1_artifacts._controlled_temporary_root(self.project_root)
+        fresh = self._fresh_admission(root, run_id=run_id)
+        if not self._same_admission(run_id=run_id, supplied=admission, fresh=fresh):
+            return _not_activated()
+        source_state = self._source_state(root, run_id=run_id, admission=fresh)
+        intent, intent_bytes = self._load_or_persist_intent(
+            root, source_state=source_state, admission=fresh
+        )
+        # Intent is the durable boundary.  Re-observe afterward so a source
+        # mutation in the pre-intent window never acquires the Active Run Lock.
+        current = self._fresh_admission(root, run_id=run_id)
+        if not self._same_admission(run_id=run_id, supplied=fresh, fresh=current):
+            return _not_activated()
+        source_state = self._source_state(root, run_id=run_id, admission=current)
+        self._complete_activation(root, intent=intent, source_state=source_state)
+        result = self._activated_result(
+            root, intent=intent, intent_bytes=intent_bytes, source_state=source_state
+        )
+        # The result is intentionally built before the final B.5 observation:
+        # a mutation injected during any activation/result seam is therefore
+        # observed before a success can escape this boundary.
+        final = self._fresh_admission(root, run_id=run_id)
+        if not self._same_admission(run_id=run_id, supplied=current, fresh=final):
+            return _not_activated()
+        source_state = self._source_state(root, run_id=run_id, admission=final)
+        self._assert_result_is_current(
+            root,
+            intent=intent,
+            intent_bytes=intent_bytes,
+            source_state=source_state,
+            result=result,
+        )
+        return_fence = self._fresh_admission(root, run_id=run_id)
+        if not self._same_admission(run_id=run_id, supplied=final, fresh=return_fence):
+            return _not_activated()
+        # Bracket the final source proof with identical successor evidence.
+        # A successor mutation performed during the last B.5 observation must
+        # not escape with hashes captured before that observation.
+        source_state = self._source_state(root, run_id=run_id, admission=return_fence)
+        self._assert_result_is_current(
+            root,
+            intent=intent,
+            intent_bytes=intent_bytes,
+            source_state=source_state,
+            result=result,
+        )
+        return result
 
     def _fresh_admission(self, root: Path, *, run_id: object) -> ExplicitResumeAdmissionResult:
         result = _B5_ADMIT(_B5_TYPE(root), run_id=run_id)  # type: ignore[arg-type]
@@ -341,10 +370,9 @@ class ExplicitResumeActivation:
         if not _is_plain_directory(path):
             raise ValueError(f"{label} is not a plain controlled directory")
         try:
-            entry = path.lstat()
-        except OSError as exc:
+            return controlled_fs.directory_identity(path)
+        except (OSError, controlled_fs.ControlledFilesystemError) as exc:
             raise ValueError(f"unable to inspect {label}") from exc
-        return (entry.st_dev, entry.st_ino)
 
     @classmethod
     def _directory_chain(cls, root: Path, directory: Path, *, label: str) -> tuple[tuple[Path, int, int], ...]:
@@ -384,17 +412,29 @@ class ExplicitResumeActivation:
             exists = False
         except OSError as exc:
             raise ValueError(f"unable to inspect {label}") from exc
+        created_identity: tuple[int, int] | None = None
         if not exists:
             cls._assert_directory_chain(parent_chain, label=label)
             try:
-                directory.mkdir(mode=0o700)
-                _sync_directory(directory.parent, label=f"{label} parent")
-            except OSError as exc:
+                with controlled_fs.bind_directory_identities(parent_chain):
+                    created_identity = controlled_fs.make_directory(
+                        root, directory.relative_to(root).as_posix()
+                    )
+            except (OSError, controlled_fs.ControlledFilesystemError) as exc:
                 raise ValueError(f"unable to create {label}") from exc
             cls._assert_directory_chain(parent_chain, label=label)
         if not _is_plain_directory(directory):
             raise ValueError(f"{label} is unsafe")
-        return cls._directory_chain(root, directory, label=label)
+        observed_identity = cls._directory_identity(directory, label=label)
+        if created_identity is not None and observed_identity != created_identity:
+            raise ValueError(f"{label} changed after creation")
+        directory_chain = parent_chain + (
+            (directory, observed_identity[0], observed_identity[1]),
+        )
+        with controlled_fs.bind_directory_identities(directory_chain):
+            controlled_fs.sync_parent(root, directory.relative_to(root).as_posix())
+        cls._assert_directory_chain(directory_chain, label=label)
+        return directory_chain
 
     @staticmethod
     def _successor_run_id(admission: ExplicitResumeAdmissionResult) -> str:
@@ -462,38 +502,25 @@ class ExplicitResumeActivation:
     def _write_exclusive(
         cls, root: Path, path: Path, data: bytes, *, directory_chain: tuple[tuple[Path, int, int], ...]
     ) -> None:
-        descriptor: int | None = None
+        cls._assert_directory_chain(directory_chain, label="activation intent")
+        relative = path.relative_to(root).as_posix()
+        with controlled_fs.bind_directory_identities(directory_chain):
+            controlled_fs.write_exclusive(root, relative, data)
+        cls._assert_directory_chain(directory_chain, label="activation intent")
+        if not _is_plain_regular(path):
+            raise OSError("activation intent changed after persistence")
+        persisted, _ = _B1_READ_GUARDED(root, relative)
+        if persisted != data:
+            raise OSError("activation intent bytes changed after persistence")
+
+    @staticmethod
+    def _assert_unique_intent_entry(directory: Path, path: Path) -> None:
         try:
-            cls._assert_directory_chain(directory_chain, label="activation intent")
-            descriptor = os.open(
-                path,
-                os.O_CREAT
-                | os.O_EXCL
-                | os.O_WRONLY
-                | getattr(os, "O_BINARY", 0)
-                | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
-            )
-            view = memoryview(data)
-            while view:
-                written = os.write(descriptor, view)
-                if written <= 0:
-                    raise OSError("short activation intent write")
-                view = view[written:]
-            os.fsync(descriptor)
-            os.close(descriptor)
-            descriptor = None
-            _sync_directory(path.parent, label="activation intent parent")
-            cls._assert_directory_chain(directory_chain, label="activation intent")
-            if not _is_plain_regular(path):
-                raise OSError("activation intent changed after persistence")
-            relative = path.relative_to(root).as_posix()
-            persisted, _ = _B1_READ_GUARDED(root, relative)
-            if persisted != data:
-                raise OSError("activation intent bytes changed after persistence")
-        finally:
-            if descriptor is not None:
-                os.close(descriptor)
+            entries = tuple(directory.iterdir())
+        except OSError as exc:
+            raise ValueError("unable to enumerate activation intent evidence") from exc
+        if len(entries) != 1 or entries[0] != path or not _is_plain_regular(path):
+            raise ValueError("activation intent directory is not a unique closed set")
 
     def _load_or_persist_intent(
         self, root: Path, *, source_state: Mapping[str, Any], admission: ExplicitResumeAdmissionResult
@@ -503,9 +530,12 @@ class ExplicitResumeActivation:
             root, directory, label="activation intent directory"
         )
         path = self._intent_path(root, admission)
-        entries = list(directory.iterdir())
-        if any(not _is_plain_regular(entry) for entry in entries) or any(entry != path for entry in entries):
-            raise ValueError("activation intent directory is not unique")
+        try:
+            entries = tuple(directory.iterdir())
+        except OSError as exc:
+            raise ValueError("unable to enumerate activation intent directory") from exc
+        if entries:
+            self._assert_unique_intent_entry(directory, path)
         self._assert_directory_chain(directory_chain, label="activation intent directory")
         try:
             path.lstat()
@@ -519,10 +549,14 @@ class ExplicitResumeActivation:
                 allocation_token=str(uuid.uuid4()),
                 lock_token=str(uuid.uuid4()),
             )
-            self._write_exclusive(
-                root, path, _canonical_json_bytes(intent), directory_chain=directory_chain
-            )
+            try:
+                self._write_exclusive(
+                    root, path, _canonical_json_bytes(intent), directory_chain=directory_chain
+                )
+            except FileExistsError:
+                pass
         self._assert_directory_chain(directory_chain, label="activation intent directory")
+        self._assert_unique_intent_entry(directory, path)
         if not _is_plain_regular(path):
             raise ValueError("activation intent is unsafe")
         data, _ = _B1_READ_GUARDED(
@@ -542,7 +576,14 @@ class ExplicitResumeActivation:
         )
         if intent != expected:
             raise ValueError("activation intent does not bind current source")
-        return intent, data
+        relative = path.relative_to(root).as_posix()
+        with controlled_fs.bind_directory_identities(directory_chain):
+            controlled_fs.sync_parent(root, relative)
+        self._assert_directory_chain(directory_chain, label="activation intent directory")
+        confirmed, _ = _B1_READ_GUARDED(root, relative)
+        if confirmed != data:
+            raise ValueError("activation intent changed during durability fence")
+        return intent, confirmed
 
     @staticmethod
     def _existing_lock(root: Path) -> Mapping[str, Any] | None:
@@ -555,18 +596,29 @@ class ExplicitResumeActivation:
             raise ActiveRunLockError("unable to inspect Active Run Lock") from exc
         return read_existing_active_run_lock(root)
 
+    @staticmethod
+    def _assert_active_lock_control_entries(root: Path) -> None:
+        """Delegate the closed control-entry set to the Lock authority."""
+
+        validate_active_run_control_entries(root)
+
     def _complete_activation(
         self, root: Path, *, intent: Mapping[str, Any], source_state: Mapping[str, Any]
     ) -> None:
-        lock = self._existing_lock(root)
-        if lock is None:
-            _ACQUIRE_ACTIVE_RUN_LOCK(
-                root,
-                task_id="explicit_resume_activation",
-                allocation_token=intent["allocation_token"],
-                lock_token=intent["lock_token"],
-            )
+        runs_chain = self._directory_chain(
+            root, root / "runs", label="Active Run control directory"
+        )
+        with controlled_fs.bind_directory_identities(runs_chain):
+            self._assert_active_lock_control_entries(root)
             lock = self._existing_lock(root)
+            if lock is None:
+                _ACQUIRE_ACTIVE_RUN_LOCK(
+                    root,
+                    task_id="explicit_resume_activation",
+                    allocation_token=intent["allocation_token"],
+                    lock_token=intent["lock_token"],
+                )
+                lock = self._existing_lock(root)
         if (
             not isinstance(lock, Mapping)
             or lock.get("allocation_token") != intent["allocation_token"]
@@ -580,35 +632,39 @@ class ExplicitResumeActivation:
         successor_dir = root / "runs" / intent["successor_run_id"]
         if lock["phase"] == "allocating":
             if lock["reserved_run_id"] is None:
-                _RESERVE_ACTIVE_RUN_ID(
+                with controlled_fs.bind_directory_identities(runs_chain):
+                    _RESERVE_ACTIVE_RUN_ID(
+                        root,
+                        run_id=intent["successor_run_id"],
+                        expected_allocation_token=intent["allocation_token"],
+                        expected_lock_token=intent["lock_token"],
+                    )
+            successor_chain = self._ensure_controlled_directory(
+                root, successor_dir, label="successor Run directory"
+            )
+            with controlled_fs.bind_directory_identities(successor_chain):
+                store = StateStore(root)
+                state = self._load_or_repair_successor_state(
+                    store, intent=intent, source_state=source_state
+                )
+                if state is None:
+                    store.initialize_run(
+                        run_id=intent["successor_run_id"],
+                        allocation_token=intent["allocation_token"],
+                        plan_fingerprint=intent["plan_fingerprint"],
+                        task_plan=_thaw_json(source_state["task_plan"]),
+                        expected_lock_token=intent["lock_token"],
+                        initial_context=self._resume_context(intent),
+                    )
+                self._assert_directory_chain(successor_chain, label="successor Run directory")
+                self._validate_successor_state(root, intent=intent, source_state=source_state)
+                _MARK_ACTIVE_RUN_RUNNING(
                     root,
                     run_id=intent["successor_run_id"],
                     expected_allocation_token=intent["allocation_token"],
                     expected_lock_token=intent["lock_token"],
                 )
-            self._ensure_controlled_directory(
-                root, successor_dir, label="successor Run directory"
-            )
-            store = StateStore(root)
-            state = self._load_or_repair_successor_state(
-                store, intent=intent, source_state=source_state
-            )
-            if state is None:
-                store.initialize_run(
-                    run_id=intent["successor_run_id"],
-                    allocation_token=intent["allocation_token"],
-                    plan_fingerprint=intent["plan_fingerprint"],
-                    task_plan=_thaw_json(source_state["task_plan"]),
-                    expected_lock_token=intent["lock_token"],
-                    initial_context=self._resume_context(intent),
-                )
-            self._validate_successor_state(root, intent=intent, source_state=source_state)
-            _MARK_ACTIVE_RUN_RUNNING(
-                root,
-                run_id=intent["successor_run_id"],
-                expected_allocation_token=intent["allocation_token"],
-                expected_lock_token=intent["lock_token"],
-            )
+        self._assert_active_lock_control_entries(root)
         self._validate_successor_state(root, intent=intent, source_state=source_state)
         final = self._existing_lock(root)
         if (
@@ -641,6 +697,13 @@ class ExplicitResumeActivation:
         """Accept only absence, a valid state, or the one exact state-only crash seam."""
 
         paths = store._paths(intent["successor_run_id"])
+        allowed_names = {path.name for name, path in paths.items() if name != "run_dir"}
+        try:
+            unknown = [entry for entry in paths["run_dir"].iterdir() if entry.name not in allowed_names]
+        except OSError as exc:
+            raise StateStoreError("unable to enumerate successor State evidence") from exc
+        if unknown:
+            raise StateStoreError("successor has unknown State transaction residue")
         entries: dict[str, os.stat_result | None] = {}
         for name in ("state", "anchor", "journal", "recovery", "lock_recovery", "lock"):
             try:
@@ -665,17 +728,15 @@ class ExplicitResumeActivation:
         # retry may complete only this precise, authenticated state-only seam.
         if entries["journal"] is not None:
             raise StateStoreError("successor State-only recovery evidence conflicts")
-        state, _ = store._read_state(intent["successor_run_id"])
+        state, state_bytes = store._read_state(intent["successor_run_id"])
         cls._validate_successor_mapping(state, intent=intent, source_state=source_state)
-        anchor = store._anchor_document(
+        repaired = store.repair_missing_genesis_anchor(
             run_id=intent["successor_run_id"],
             allocation_token=intent["allocation_token"],
-            tail_record_index=None,
-            tail_record_checksum=None,
-            tail_file_size_bytes=0,
+            expected_lock_token=intent["lock_token"],
+            expected_state_sha256=_sha256(state_bytes),
         )
-        store._write_anchor(intent["successor_run_id"], anchor)
-        return store.load(run_id=intent["successor_run_id"])["canonical_state"]
+        return repaired["canonical_state"]
 
     @classmethod
     def _validate_successor_mapping(
@@ -717,6 +778,10 @@ class ExplicitResumeActivation:
         intent_path = self._intent_path_for(
             root, intent["source_run_id"], intent["source_admission_sha256"]
         )
+        intent_chain = self._directory_chain(
+            root, intent_path.parent, label="activation intent evidence"
+        )
+        self._assert_unique_intent_entry(intent_path.parent, intent_path)
         intent_data, _ = _B1_READ_GUARDED(root, intent_path.relative_to(root).as_posix())
         if intent_data != intent_bytes:
             raise ValueError("activation intent changed after persistence")
@@ -726,28 +791,50 @@ class ExplicitResumeActivation:
             raise ValueError("activation intent is invalid at result") from exc
         if parsed_intent != dict(intent) or _canonical_json_bytes(parsed_intent) != intent_data:
             raise ValueError("activation intent does not match result binding")
+        self._assert_directory_chain(intent_chain, label="activation intent evidence")
+        active_entries_before = validate_active_run_control_entries(root)
         store = StateStore(root)
-        state, state_bytes = store._read_state(intent["successor_run_id"])
+        successor_directory = root / "runs" / intent["successor_run_id"]
+        successor_chain = self._directory_chain(
+            root, successor_directory, label="successor authority evidence"
+        )
+        successor_entries_before = store.validate_genesis_run_control_entries(
+            run_id=intent["successor_run_id"]
+        )
+        authority_before = store.load(run_id=intent["successor_run_id"])
         guarded_state, _ = _B1_READ_GUARDED(
             root, f"runs/{intent['successor_run_id']}/state.json"
-        )
-        if guarded_state != state_bytes:
-            raise StateStoreError("successor State changed during result")
-        self._validate_successor_mapping(state, intent=intent, source_state=source_state)
-        _, anchor_bytes = store._read_anchor(
-            intent["successor_run_id"], intent["allocation_token"]
         )
         guarded_anchor, _ = _B1_READ_GUARDED(
             root, f"runs/{intent['successor_run_id']}/state_journal_tail.json"
         )
-        if guarded_anchor != anchor_bytes:
-            raise StateStoreError("successor Journal anchor changed during result")
-        lock = self._existing_lock(root)
-        if not isinstance(lock, Mapping):
-            raise ActiveRunLockError("active lock disappeared after activation")
+        journal_path = root / "runs" / intent["successor_run_id"] / "state_journal.jsonl"
+        try:
+            journal_entry = journal_path.lstat()
+        except FileNotFoundError:
+            journal_bytes = b""
+        except OSError as exc:
+            raise StateStoreError("unable to inspect successor Journal") from exc
+        else:
+            if not _is_plain_regular(journal_path):
+                raise StateStoreError("successor Journal is unsafe")
+            journal_bytes, _ = _B1_READ_GUARDED(
+                root, f"runs/{intent['successor_run_id']}/state_journal.jsonl"
+            )
+        if journal_bytes:
+            raise StateStoreError("activated successor Journal must remain at genesis")
+        byte_authority = store.validate_authority_snapshot_bytes(
+            run_id=intent["successor_run_id"],
+            state_bytes=guarded_state,
+            journal_bytes=journal_bytes,
+            anchor_bytes=guarded_anchor,
+        )
+        state = byte_authority["canonical_state"]
+        self._validate_successor_mapping(state, intent=intent, source_state=source_state)
+        if byte_authority["canonical_state"] != authority_before["canonical_state"]:
+            raise StateStoreError("successor authority bytes do not match StateStore")
         lock_bytes, _ = _B1_READ_GUARDED(root, "runs/.active_run.lock")
-        if self._existing_lock(root) != lock:
-            raise ActiveRunLockError("Active Run Lock changed during activation result")
+        lock = validate_active_run_lock_snapshot(lock_bytes)
         if (
             lock.get("phase") != "running"
             or lock.get("run_id") != intent["successor_run_id"]
@@ -757,11 +844,26 @@ class ExplicitResumeActivation:
             or lock.get("task_id") != "explicit_resume_activation"
         ):
             raise ActiveRunLockError("activation result lock does not bind intent")
+        authority_after = store.load(run_id=intent["successor_run_id"])
+        if authority_after != authority_before:
+            raise StateStoreError("successor StateStore authority changed during result")
+        successor_entries_after = store.validate_genesis_run_control_entries(
+            run_id=intent["successor_run_id"]
+        )
+        if successor_entries_after != successor_entries_before:
+            raise StateStoreError("successor control-entry set changed during result")
+        self._assert_directory_chain(successor_chain, label="successor authority evidence")
+        self._assert_directory_chain(intent_chain, label="activation intent evidence")
+        self._assert_unique_intent_entry(intent_path.parent, intent_path)
+        active_entries_after = validate_active_run_control_entries(root)
+        if active_entries_after != active_entries_before:
+            raise ActiveRunLockError("Active Run control-entry set changed during result")
         return {
             "intent_sha256": _sha256(intent_data),
             "state": state,
-            "state_sha256": _sha256(state_bytes),
-            "journal_anchor_sha256": _sha256(anchor_bytes),
+            "state_sha256": _sha256(guarded_state),
+            "journal_anchor_sha256": _sha256(guarded_anchor),
+            "journal_sha256": _sha256(journal_bytes),
             "lock_sha256": _sha256(lock_bytes),
         }
 
@@ -789,6 +891,7 @@ class ExplicitResumeActivation:
             "plan_fingerprint": intent["plan_fingerprint"],
             "input_descriptor_sha256": intent["input_descriptor_sha256"],
             "state_sha256": second["state_sha256"],
+            "journal_sha256": second["journal_sha256"],
             "journal_anchor_sha256": second["journal_anchor_sha256"],
             "lock_sha256": second["lock_sha256"],
         }
@@ -812,6 +915,7 @@ class ExplicitResumeActivation:
         if (
             result.intent_sha256 != evidence["intent_sha256"]
             or result.state_sha256 != evidence["state_sha256"]
+            or result.journal_sha256 != evidence["journal_sha256"]
             or result.journal_anchor_sha256 != evidence["journal_anchor_sha256"]
             or result.lock_sha256 != evidence["lock_sha256"]
         ):

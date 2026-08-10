@@ -23,6 +23,7 @@ from orchestrator.inspection_workflow.locking import (
     recover_stale_active_run,
     release_active_run_lock,
     reserve_active_run_id,
+    validate_active_run_lock_snapshot,
     validate_active_run_lock,
 )
 from orchestrator.state import store as state_module
@@ -76,6 +77,43 @@ def _running(root: Path) -> tuple[str, str]:
         expected_lock_token=lock_token,
     )
     return allocation_token, lock_token
+
+
+def test_lock_snapshot_validator_binds_canonical_bytes_and_semantics(tmp_path: Path) -> None:
+    _acquire(tmp_path)
+    data = (tmp_path / "runs" / ".active_run.lock").read_bytes()
+    assert validate_active_run_lock_snapshot(data) == read_active_run_lock(tmp_path)
+    noncanonical = json.dumps(json.loads(data), indent=2).encode("utf-8")
+    with pytest.raises(ActiveRunLockError, match="canonical JSON"):
+        validate_active_run_lock_snapshot(noncanonical)
+    with pytest.raises(ActiveRunLockError, match="exact bytes"):
+        validate_active_run_lock_snapshot(bytearray(data))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "residue_name",
+    [".active_run.unknown.tmp", "..active_run.lock.crashed.tmp"],
+)
+def test_active_run_control_entry_authority_rejects_unknown_transaction_residue(
+    tmp_path: Path, residue_name: str,
+) -> None:
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    residue = runs / residue_name
+    residue.write_bytes(b"residue")
+    with pytest.raises(ActiveRunLockError, match="unknown Active Run transaction residue"):
+        locking.validate_active_run_control_entries(tmp_path)
+    allocation_token, lock_token = _tokens()
+    with pytest.raises(ActiveRunLockError, match="unknown Active Run transaction residue"):
+        acquire_active_run_lock(
+            tmp_path,
+            task_id="task_001",
+            allocation_token=allocation_token,
+            lock_token=lock_token,
+            created_at=TIME,
+        )
+    assert residue.read_bytes() == b"residue"
+    assert not (runs / ".active_run.lock").exists()
 
 
 def _transition_to_failed(root: Path, lock_token: str) -> None:
@@ -339,18 +377,81 @@ def test_release_is_token_scoped_and_removes_tombstone(tmp_path: Path) -> None:
     assert not list((tmp_path / "runs").glob(".active_run.release.*"))
 
 
+def test_release_paths_use_controlled_rename_and_unlink_barriers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allocation_token, lock_token = _running(tmp_path)
+    original_rename = locking.controlled_fs.rename
+    original_unlink = locking.controlled_fs.unlink
+    calls: list[tuple[str, str]] = []
+
+    def record_rename(
+        root: Path,
+        source_relative: str,
+        target_relative: str,
+        *,
+        replace: bool = False,
+        expected_source_identity: tuple[int, int] | None = None,
+    ) -> None:
+        calls.append(("rename", target_relative))
+        original_rename(
+            root,
+            source_relative,
+            target_relative,
+            replace=replace,
+            expected_source_identity=expected_source_identity,
+        )
+
+    def record_unlink(
+        root: Path,
+        relative: str,
+        *,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> None:
+        calls.append(("unlink", relative))
+        original_unlink(root, relative, expected_identity=expected_identity)
+
+    monkeypatch.setattr(locking.controlled_fs, "rename", record_rename)
+    monkeypatch.setattr(locking.controlled_fs, "unlink", record_unlink)
+    assert release_active_run_lock(
+        tmp_path,
+        run_id="run_001",
+        expected_allocation_token=allocation_token,
+        expected_lock_token=lock_token,
+    )["released"]
+    release_calls = [
+        (kind, relative)
+        for kind, relative in calls
+        if relative.startswith("runs/.active_run.release.")
+    ]
+    assert [kind for kind, _ in release_calls] == ["rename", "unlink"]
+
+    runs = tmp_path / "runs"
+    recovery = runs / ".active_run.recovery.lock"
+    recovery_bytes = b"recovery-owner"
+    recovery.write_bytes(recovery_bytes)
+    calls.clear()
+    locking._remove_owned_recovery_mutex(recovery, runs, recovery_bytes)
+    assert ("unlink", "runs/.active_run.recovery.lock") in calls
+
+
 def test_release_cleanup_failure_preserves_tombstone_and_blocks_new_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     allocation_token, lock_token = _running(tmp_path)
-    real_unlink = Path.unlink
+    real_unlink = locking.controlled_fs.unlink
 
-    def fail_tombstone(self: Path, *args: object, **kwargs: object) -> None:
-        if self.name.startswith(".active_run.release."):
+    def fail_tombstone(
+        root: Path,
+        relative: str,
+        *,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> None:
+        if Path(relative).name.startswith(".active_run.release."):
             raise OSError("injected tombstone cleanup failure")
-        real_unlink(self, *args, **kwargs)
+        real_unlink(root, relative, expected_identity=expected_identity)
 
-    monkeypatch.setattr(Path, "unlink", fail_tombstone)
+    monkeypatch.setattr(locking.controlled_fs, "unlink", fail_tombstone)
     with pytest.raises(ActiveRunLockError, match="release is incomplete"):
         release_active_run_lock(
             tmp_path,
@@ -909,38 +1010,475 @@ def test_reparse_detection_does_not_require_link_creation() -> None:
     assert locking._is_reparse(FakeStat()) is True
 
 
-def test_directory_sync_failure_does_not_publish_owned_lock(
+def test_directory_sync_failure_preserves_uncertain_owned_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = 0
+    original = locking.controlled_fs.write_exclusive
 
-    def fail_sync(path: Path, *, label: str) -> None:
+    def fail_barrier(root: Path, relative: str, data: bytes) -> None:
         nonlocal calls
+        original(root, relative, data)
         calls += 1
-        raise ActiveRunLockError("injected parent sync failure")
+        raise locking.controlled_fs.ControlledFilesystemError(
+            "injected parent durability failure"
+        )
 
-    monkeypatch.setattr(locking, "_sync_directory", fail_sync)
-    with pytest.raises(ActiveRunLockError, match="injected parent sync failure"):
+    monkeypatch.setattr(locking.controlled_fs, "write_exclusive", fail_barrier)
+    with pytest.raises(ActiveRunLockError, match="safely acquire") as exc_info:
         _acquire(tmp_path)
+    assert "injected parent durability failure" in str(exc_info.value.__cause__)
     assert calls >= 1
-    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+    assert (tmp_path / "runs" / ".active_run.lock").is_file()
+
+
+def test_failed_acquisition_delete_then_sync_error_restores_blocking_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controlled = locking.controlled_fs
+    original_unlink = controlled.unlink
+    original_read = locking._read_lock
+    verification_failed = False
+
+    def fail_after_published_verification(path: Path):
+        nonlocal verification_failed
+        value = original_read(path)
+        if path.name == ".active_run.lock" and not verification_failed:
+            verification_failed = True
+            raise ActiveRunLockError("injected post-publication verification failure")
+        return value
+
+    def report_after_tombstone_delete(
+        root: Path,
+        relative: str,
+        *,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> None:
+        original_unlink(root, relative, expected_identity=expected_identity)
+        if Path(relative).name.startswith(locking.ACTIVE_RUN_RELEASE_PREFIX):
+            raise OSError("injected post-delete directory sync report")
+
+    monkeypatch.setattr(locking, "_read_lock", fail_after_published_verification)
+    monkeypatch.setattr(controlled, "unlink", report_after_tombstone_delete)
+    with pytest.raises(ActiveRunLockError, match="post-publication verification"):
+        _acquire(tmp_path)
+    runs = tmp_path / "runs"
+    blocking = tuple(runs.glob(f"{locking.ACTIVE_RUN_RELEASE_PREFIX}*.json"))
+    recovery = runs / ".active_run.recovery.lock"
+    assert blocking or recovery.is_file()
+    assert not (runs / ".active_run.lock").exists()
+
+
+def test_failed_acquisition_identity_fence_preserves_same_byte_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_read = locking._read_lock
+    replaced = False
+
+    def replace_then_fail(path: Path):
+        nonlocal replaced
+        value = original_read(path)
+        if path.name == ".active_run.lock" and not replaced:
+            path.unlink()
+            path.write_bytes(value[1])
+            replaced = True
+            raise ActiveRunLockError("injected post-publication verification failure")
+        return value
+
+    monkeypatch.setattr(locking, "_read_lock", replace_then_fail)
+    with pytest.raises(ActiveRunLockError, match="post-publication verification") as exc_info:
+        _acquire(tmp_path)
+    path = tmp_path / "runs" / ".active_run.lock"
+    assert replaced and path.is_file()
+    assert any("cleanup was incomplete" in note for note in exc_info.value.__notes__)
 
 
 def test_failed_acquisition_preserves_replaced_lock_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     replacement = b'{"owner":"external"}\n'
+    original = locking.controlled_fs.write_exclusive
 
-    def replace_then_fail(path: Path, *, label: str) -> None:
+    def replace_then_fail(root: Path, relative: str, data: bytes) -> None:
+        original(root, relative, data)
         lock_path = tmp_path / "runs" / ".active_run.lock"
         lock_path.write_bytes(replacement)
-        raise ActiveRunLockError("injected acquisition barrier failure")
+        raise locking.controlled_fs.ControlledFilesystemError(
+            "injected acquisition barrier failure"
+        )
 
-    monkeypatch.setattr(locking, "_sync_directory", replace_then_fail)
-    with pytest.raises(ActiveRunLockError, match="acquisition barrier failure") as exc_info:
+    monkeypatch.setattr(locking.controlled_fs, "write_exclusive", replace_then_fail)
+    with pytest.raises(ActiveRunLockError, match="safely acquire") as exc_info:
         _acquire(tmp_path)
     assert (tmp_path / "runs" / ".active_run.lock").read_bytes() == replacement
-    assert any("ownership bytes changed" in note for note in exc_info.value.__notes__)
+    assert any("publication identity is uncertain" in note for note in exc_info.value.__notes__)
+
+
+def test_windows_directory_barrier_failure_is_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows directory durability regression")
+    controlled = locking.controlled_fs
+
+    ctypes_module = __import__("ctypes")
+
+    def fail_flush(handle: object) -> bool:
+        ctypes_module.set_last_error(5)
+        return False
+
+    monkeypatch.setattr(controlled._kernel32, "FlushFileBuffers", fail_flush)
+    with controlled._win_parent(tmp_path, ()) as parent:
+        with pytest.raises(controlled.ControlledFilesystemError, match="flush controlled directory"):
+            controlled._win_flush_directory(parent)
+    assert not tuple(tmp_path.glob(".controlled-sync-*.tmp"))
+
+
+def test_windows_fd_conversion_failure_removes_created_controlled_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows handle-to-fd cleanup regression")
+    controlled = locking.controlled_fs
+
+    def fail_fd(handle: int) -> int:
+        raise OSError("injected handle conversion failure")
+
+    monkeypatch.setattr(controlled, "_win_file_fd", fail_fd)
+    exclusive = tmp_path / "exclusive.bin"
+    with pytest.raises(OSError, match="handle conversion failure"):
+        controlled.write_exclusive(tmp_path, "exclusive.bin", b"new")
+    assert not exclusive.exists()
+
+    target = tmp_path / "target.bin"
+    target.write_bytes(b"old")
+    with pytest.raises(OSError, match="handle conversion failure"):
+        controlled.atomic_replace(tmp_path, "target.bin", b"new")
+    assert target.read_bytes() == b"old"
+    assert not tuple(tmp_path.glob(".target.bin.*.tmp"))
+
+
+
+def test_windows_every_controlled_mutation_invokes_parent_write_through_barrier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows write-through barrier regression")
+    controlled = locking.controlled_fs
+    original = controlled._win_flush_directory
+    calls = 0
+
+    def record(handle: int) -> None:
+        nonlocal calls
+        calls += 1
+        original(handle)
+
+    monkeypatch.setattr(controlled, "_win_flush_directory", record)
+    controlled.write_exclusive(tmp_path, "exclusive.bin", b"one")
+    controlled.atomic_replace(tmp_path, "exclusive.bin", b"two")
+    controlled.write_exclusive(tmp_path, "source.bin", b"three")
+    controlled.rename(tmp_path, "source.bin", "renamed.bin", replace=False)
+    controlled.unlink(tmp_path, "renamed.bin")
+    assert calls == 5
+
+
+def test_identity_bound_unlink_preserves_replacement_leaf(tmp_path: Path) -> None:
+    controlled = locking.controlled_fs
+    identity = controlled.write_exclusive(tmp_path, "owned.lock", b"owner-a")
+    path = tmp_path / "owned.lock"
+    path.unlink()
+    path.write_bytes(b"owner-b")
+
+    with pytest.raises(
+        controlled.ControlledFilesystemError, match="leaf identity changed"
+    ):
+        controlled.unlink(tmp_path, "owned.lock", expected_identity=identity)
+
+    assert path.read_bytes() == b"owner-b"
+
+
+def test_nested_directory_binding_rejects_identity_override(tmp_path: Path) -> None:
+    controlled = locking.controlled_fs
+    original = tmp_path / "original"
+    substitute = tmp_path / "substitute"
+    original.mkdir()
+    substitute.mkdir()
+    original_identity = controlled.directory_identity(original)
+    substitute_identity = controlled.directory_identity(substitute)
+    outer = (
+        (tmp_path, *controlled.directory_identity(tmp_path)),
+        (original, *original_identity),
+    )
+    conflicting = (
+        (tmp_path, *controlled.directory_identity(tmp_path)),
+        (original, *substitute_identity),
+    )
+
+    with controlled.bind_directory_identities(outer):
+        with pytest.raises(
+            controlled.ControlledFilesystemError, match="binding conflicts"
+        ):
+            with controlled.bind_directory_identities(conflicting):
+                pytest.fail("conflicting nested binding must not be entered")
+
+
+def test_windows_directory_creation_retries_child_handle_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows child directory handle cleanup regression")
+    controlled = locking.controlled_fs
+    original = controlled._close_handle
+    attempts = 0
+
+    def fail_first_close(handle: int) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise controlled.ControlledFilesystemError(
+                "injected first child handle close failure"
+            )
+        original(handle)
+
+    monkeypatch.setattr(controlled, "_close_handle", fail_first_close)
+    with pytest.raises(
+        controlled.ControlledFilesystemError,
+        match="first child handle close failure",
+    ):
+        controlled.make_directory(tmp_path, "created")
+    assert attempts >= 2
+    assert (tmp_path / "created").is_dir()
+
+
+def test_windows_atomic_replace_preserves_target_when_rename_reports_after_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows rename-outcome regression")
+    controlled = locking.controlled_fs
+    target = tmp_path / "target.bin"
+    target.write_bytes(b"old")
+    original = controlled._win_rename
+
+    def rename_then_report(*args: object, **kwargs: object) -> None:
+        original(*args, **kwargs)
+        raise OSError("injected post-rename report")
+
+    monkeypatch.setattr(controlled, "_win_rename", rename_then_report)
+    with pytest.raises(OSError, match="post-rename"):
+        controlled.atomic_replace(tmp_path, "target.bin", b"new")
+    assert target.read_bytes() == b"new"
+    assert not tuple(tmp_path.glob(".target.bin.*.tmp"))
+
+
+def test_exclusive_partial_write_with_cleanup_failure_never_publishes_final_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controlled = locking.controlled_fs
+    original_write_all = controlled._write_all
+
+    def partial(descriptor: int, data: bytes) -> None:
+        if data == b"authority":
+            os.write(descriptor, b"partial")
+            raise OSError("injected exclusive partial write")
+        original_write_all(descriptor, data)
+
+    monkeypatch.setattr(controlled, "_write_all", partial)
+    if os.name == "nt":
+        def reject_dispose(handle: int) -> None:
+            raise controlled.ControlledFilesystemError("injected exclusive cleanup failure")
+
+        monkeypatch.setattr(controlled, "_win_dispose", reject_dispose)
+    else:
+        original_unlink = controlled.os.unlink
+
+        def reject_unlink(path: object, *args: object, **kwargs: object) -> None:
+            if str(path).startswith(".exclusive.bin."):
+                raise OSError("injected exclusive cleanup failure")
+            original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(controlled.os, "unlink", reject_unlink)
+
+    with pytest.raises(OSError, match="exclusive partial write") as captured:
+        controlled.write_exclusive(tmp_path, "exclusive.bin", b"authority")
+    assert not (tmp_path / "exclusive.bin").exists()
+    assert tuple(tmp_path.glob(".exclusive.bin.*.tmp"))
+    assert any("exclusive publication cleanup failed" in note for note in captured.value.__notes__)
+
+
+@pytest.mark.parametrize("stage", ["partial_write", "file_fsync", "directory_sync"])
+def test_windows_atomic_replace_real_stage_failures_preserve_unambiguous_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows controlled replacement stage regression")
+    controlled = locking.controlled_fs
+    target = tmp_path / "target.bin"
+    target.write_bytes(b"old")
+
+    if stage == "partial_write":
+        original_write_all = controlled._write_all
+
+        def partial(descriptor: int, data: bytes) -> None:
+            if data == b"new":
+                os.write(descriptor, b"n")
+                raise OSError("injected partial write")
+            original_write_all(descriptor, data)
+
+        monkeypatch.setattr(controlled, "_write_all", partial)
+    elif stage == "file_fsync":
+        original_fsync = controlled.os.fsync
+        failed = False
+
+        def fail_first_fsync(descriptor: int) -> None:
+            nonlocal failed
+            if not failed:
+                failed = True
+                raise OSError("injected file fsync")
+            original_fsync(descriptor)
+
+        monkeypatch.setattr(controlled.os, "fsync", fail_first_fsync)
+    else:
+        def fail_directory_sync(handle: int) -> None:
+            raise OSError("injected directory sync")
+
+        monkeypatch.setattr(controlled, "_win_flush_directory", fail_directory_sync)
+
+    with pytest.raises(OSError):
+        controlled.atomic_replace(tmp_path, "target.bin", b"new")
+    expected = b"new" if stage == "directory_sync" else b"old"
+    assert target.read_bytes() == expected
+    assert not tuple(tmp_path.glob(".target.bin.*.tmp"))
+
+
+def test_windows_cleanup_preserves_primary_error_and_closes_all_parent_handles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows cleanup diagnostics regression")
+    controlled = locking.controlled_fs
+
+    def fail_conversion(handle: int) -> int:
+        raise OSError("primary conversion failure")
+
+    def fail_cleanup(handle: int) -> None:
+        raise controlled.ControlledFilesystemError("cleanup failure")
+
+    monkeypatch.setattr(controlled, "_win_file_fd", fail_conversion)
+    monkeypatch.setattr(controlled, "_win_dispose", fail_cleanup)
+    monkeypatch.setattr(controlled, "_close_handle", fail_cleanup)
+    with pytest.raises(OSError, match="primary conversion") as captured:
+        controlled._win_fd_or_dispose(123)
+    assert len(getattr(captured.value, "__notes__", ())) == 2
+
+    monkeypatch.undo()
+    child = tmp_path / "child"
+    child.mkdir()
+    original_close = controlled._close_handle
+    closed: list[int] = []
+
+    def close_then_report(handle: int) -> None:
+        original_close(handle)
+        closed.append(handle)
+        if len(closed) == 1:
+            raise controlled.ControlledFilesystemError("first close report")
+
+    monkeypatch.setattr(controlled, "_close_handle", close_then_report)
+    with pytest.raises(controlled.ControlledFilesystemError, match="first close"):
+        with controlled._win_parent(tmp_path, ("child",)):
+            pass
+    assert len(closed) == 2
+
+
+def test_posix_no_replace_rename_cannot_clobber_racing_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name == "nt":
+        pytest.skip("POSIX no-clobber regression")
+    controlled = locking.controlled_fs
+    source = tmp_path / "source.bin"
+    target = tmp_path / "target.bin"
+    source.write_bytes(b"source")
+    original_link = controlled.os.link
+
+    def racing_link(*args: object, **kwargs: object) -> None:
+        target.write_bytes(b"racer")
+        original_link(*args, **kwargs)
+
+    monkeypatch.setattr(controlled.os, "link", racing_link)
+    with pytest.raises(FileExistsError):
+        controlled.rename(tmp_path, "source.bin", "target.bin", replace=False)
+    assert source.read_bytes() == b"source"
+    assert target.read_bytes() == b"racer"
+
+
+def test_posix_exclusive_publication_syncs_final_name_before_temp_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name == "nt":
+        pytest.skip("POSIX exclusive publication ordering regression")
+    controlled = locking.controlled_fs
+    original_link = controlled.os.link
+    original_unlink = controlled.os.unlink
+    original_fsync = controlled.os.fsync
+    events: list[str] = []
+
+    def record_link(*args: object, **kwargs: object) -> object:
+        events.append("link")
+        return original_link(*args, **kwargs)
+
+    def record_unlink(path: object, *args: object, **kwargs: object) -> object:
+        if str(path).startswith(".exclusive.bin."):
+            events.append("unlink_temp")
+        return original_unlink(path, *args, **kwargs)
+
+    def record_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            events.append("directory_fsync")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(controlled.os, "link", record_link)
+    monkeypatch.setattr(controlled.os, "unlink", record_unlink)
+    monkeypatch.setattr(controlled.os, "fsync", record_fsync)
+    controlled.write_exclusive(tmp_path, "exclusive.bin", b"authority")
+
+    first_barrier = events.index("directory_fsync")
+    unlink_index = events.index("unlink_temp")
+    second_barrier = events.index("directory_fsync", first_barrier + 1)
+    assert events.index("link") < first_barrier < unlink_index < second_barrier
+    assert (tmp_path / "exclusive.bin").read_bytes() == b"authority"
+
+
+def test_state_transition_barrier_failure_preserves_uncertain_state_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allocation_token, lock_token = _acquire(tmp_path)
+    original = locking.controlled_fs.write_exclusive
+
+    def fail_after_write(root: Path, relative: str, data: bytes) -> None:
+        original(root, relative, data)
+        if relative.endswith("/.active_run.state.lock"):
+            raise locking.controlled_fs.ControlledFilesystemError(
+                "injected state-transition durability failure"
+            )
+
+    monkeypatch.setattr(locking.controlled_fs, "write_exclusive", fail_after_write)
+    with pytest.raises(ActiveRunLockError, match="state lock"):
+        reserve_active_run_id(
+            tmp_path,
+            run_id="run_001",
+            expected_allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+        )
+    assert (tmp_path / "runs" / ".active_run.state.lock").is_file()
+    with pytest.raises(ActiveRunLockError, match="another worker"):
+        reserve_active_run_id(
+            tmp_path,
+            run_id="run_001",
+            expected_allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+        )
+    assert read_active_run_lock(tmp_path)["reserved_run_id"] is None
 
 
 def test_lock_document_rejects_unknown_phase_and_noncanonical_uuid(tmp_path: Path) -> None:
@@ -1057,14 +1595,21 @@ def test_final_release_sync_failure_restores_blocking_tombstone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     allocation_token, lock_token = _running(tmp_path)
-    original = locking._sync_directory
+    original = locking.controlled_fs.unlink
 
-    def fail_final_sync(path: Path, *, label: str) -> None:
-        if label == "runs directory after Active Run Lock release":
-            raise ActiveRunLockError("injected final release sync failure")
-        original(path, label=label)
+    def remove_then_fail(
+        root: Path,
+        relative: str,
+        *,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> None:
+        original(root, relative, expected_identity=expected_identity)
+        if Path(relative).name.startswith(".active_run.release."):
+            raise locking.controlled_fs.ControlledFilesystemError(
+                "injected final release barrier failure"
+            )
 
-    monkeypatch.setattr(locking, "_sync_directory", fail_final_sync)
+    monkeypatch.setattr(locking.controlled_fs, "unlink", remove_then_fail)
     with pytest.raises(ActiveRunLockError, match="release is incomplete"):
         release_active_run_lock(
             tmp_path,
@@ -1103,23 +1648,26 @@ def test_tombstone_restore_failure_leaves_active_recovery_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     allocation_token, lock_token = _running(tmp_path)
-    original_sync = locking._sync_directory
-    original_open = locking.os.open
+    original_unlink = locking.controlled_fs.unlink
+    original_write = locking.controlled_fs.write_exclusive
 
-    def fail_final_sync(path: Path, *, label: str) -> None:
-        if label == "runs directory after Active Run Lock release":
-            raise OSError("injected final release sync failure")
-        original_sync(path, label=label)
+    def remove_then_fail(
+        root: Path,
+        relative: str,
+        *,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> None:
+        original_unlink(root, relative, expected_identity=expected_identity)
+        if Path(relative).name.startswith(".active_run.release."):
+            raise OSError("injected final release barrier failure")
 
-    def fail_tombstone_restore(
-        path: str | bytes | os.PathLike[str] | os.PathLike[bytes], *args: object
-    ) -> int:
-        if Path(path).name.startswith(".active_run.release."):
+    def fail_tombstone_restore(root: Path, relative: str, data: bytes) -> None:
+        if Path(relative).name.startswith(".active_run.release."):
             raise OSError("injected tombstone restoration failure")
-        return original_open(path, *args)
+        return original_write(root, relative, data)
 
-    monkeypatch.setattr(locking, "_sync_directory", fail_final_sync)
-    monkeypatch.setattr(locking.os, "open", fail_tombstone_restore)
+    monkeypatch.setattr(locking.controlled_fs, "unlink", remove_then_fail)
+    monkeypatch.setattr(locking.controlled_fs, "write_exclusive", fail_tombstone_restore)
     with pytest.raises(ActiveRunLockError, match="release is incomplete"):
         release_active_run_lock(
             tmp_path,

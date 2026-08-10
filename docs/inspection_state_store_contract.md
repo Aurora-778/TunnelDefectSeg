@@ -15,17 +15,30 @@ The local lock authority is `runs/.active_run.lock` with schema `active_run_lock
 - `reserved_run_id` is durably written before the Run directory may be created.
 - The lock may enter `running` only after `state.json` and the genesis journal anchor validate.
 - Every update and release verifies `allocation_token`, `run_id`, and `lock_token`.
+  Acquisition also retains the exact creation-time leaf identity for any
+  post-publication cleanup: a same-byte replacement, missing identity, or
+  identity mismatch preserves blocking evidence rather than renaming or
+  deleting the current pathname.
 - Reserve, update, and release share one fail-fast, token-owned local transition lock. The reservation precondition is rechecked inside that boundary; overlapping callers cannot both commit.
 - Release atomically moves the lock to a token-scoped tombstone, verifies its bytes, and then removes it.
 - If the final removal barrier is uncertain, blocking tombstone evidence is restored. If that restoration cannot be established, the existing Active Run recovery sentinel is persisted when possible; either entry blocks a new acquisition and requires explicit A3.2 recovery.
 - Unknown owners, malformed entries, symlinks, junctions, reparse points, recovery locks, and release tombstones fail closed.
+- The global `.active_run.*` control-entry set is closed: only the ordinary
+  `.active_run.lock` may remain during a stable phase; state-transition,
+  recovery, release, and unknown prefixed residue block authority validation.
 - PID, timestamp, or file age never authorizes ordinary acquisition. The explicit
   `recover_stale_active_run()` primitive may take over only when the owner lock
   names the current hostname and `os.kill(pid, 0)` conclusively reports that PID
   absent. Live, cross-host, permission-denied, or unknown-PID evidence fails
   closed; it is never a background or legacy-pipeline operation.
 
-The lock is a single-host, local-filesystem exclusion boundary. POSIX uses directory `fsync`; Windows uses a same-directory write-through rename barrier. Path, symlink, and ownership checks are point-in-time local guards, not hostile concurrent filesystem tamper authentication. This does not claim distributed locking or cross-host durability.
+The lock is a single-host, local-filesystem exclusion boundary. POSIX requires
+directory `fsync`. Windows opens each pinned mutation parent with write access
+and requires `FlushFileBuffers` on that directory handle after the mutation;
+an unsupported or denied directory barrier fails closed. Path, symlink, and
+ownership checks are point-in-time local guards, not hostile concurrent
+filesystem tamper authentication. This does not claim distributed locking or
+cross-host durability.
 
 ## Canonical State
 
@@ -44,7 +57,7 @@ The legacy `save_checkpoint()`, `load_checkpoint()`, and `make_state()` API rema
 
 ## CAS And Task Attempts
 
-All mutations are serialized by the Run-local `.state.lock` and fenced again by the Active Run Lock. Losing, replacing, changing the type of, or changing the ownership bytes of `.state.lock` prevents a successful return. If a deleted owned lock cannot be restored after an uncertain cleanup barrier, `.state_lock_recovery_required.json` is left as an independent blocking sentinel. StateStore rejects stale state versions, wrong status, wrong lock token, malformed/bool-as-int values, and reused operation IDs.
+All mutations are serialized by the Run-local `.state.lock` and fenced again by the Active Run Lock. Losing, replacing, changing the type of, changing the ownership bytes of, or changing the creation-time file identity of `.state.lock` prevents a successful return. Identity-bound release opens the actual leaf and refuses to delete a replacement; if publication identity or deletion durability is uncertain, the lock or `.state_lock_recovery_required.json` remains as blocking evidence. StateStore rejects stale state versions, wrong status, wrong lock token, malformed/bool-as-int values, and reused operation IDs.
 
 `task_attempts` is the authority for retry numbering. `task_status` and `task_attempts` must have identical task-ID sets: both are empty before `run_initialized`, then both cover the complete committed task plan. The seven checkpoint kinds are `run_initialized`, `task_skipped`, `task_cache_hit`, `task_started`, `task_succeeded`, `task_failed`, and `task_retry_scheduled`.
 
@@ -294,6 +307,36 @@ used by the lifecycle; callers of the A3.3 lifecycle cannot select a profile.
 With an empty Journal, only the canonical uncommitted `CREATED` baseline is valid: version zero, empty task/index maps, null last-operation fields, and equal creation/update timestamps. `validate_initialized_run()` applies this same binding before the Active Run Lock can enter `running`. Empty-Journal `RUNNING`, `FAILED`, or `COMPLETED` State is rejected rather than treated as initialized work.
 
 State and genesis anchor are separate atomic replacements. State-only, anchor-only, non-genesis anchor, damaged file, or non-empty Journal initialization states fail closed; A3.1 does not invent the missing peer file or start workers from a partial allocation.
+
+Phase B.6 adds one narrow public recovery primitive,
+`repair_missing_genesis_anchor()`, solely for its intent-bound successor
+activation transaction.  It acquires the ordinary per-Run State lock and uses
+the caller's previously validated canonical State SHA as a CAS.  While locked,
+it revalidates the allocating Active Run Lock token, allocation token, exact
+`CREATED` version-zero State, absent anchor, absent-or-empty Journal and absent
+recovery markers.  The complete uncommitted baseline, including empty
+task/result sets and equal creation/update timestamps, is validated before any
+anchor bytes are published; only then may it write the canonical genesis
+anchor.  A surviving
+`.state.lock`, unknown residue, nonempty Journal or any binding mismatch remains
+blocking evidence; this API never removes a lock or performs general recovery.
+
+`validate_genesis_run_control_entries()` is the paired closed-set check for a
+B.6 successor.  It requires canonical State and tail-anchor entries, permits
+only an optional empty regular Journal, and rejects every State lock, recovery
+marker, unknown entry, directory, symlink or reparse point.  It performs no
+repair or cleanup.
+
+`validate_authority_snapshot_bytes()` is the paired read-only authority
+primitive for B.6 final evidence.  It accepts exact immutable State, Journal
+and tail-anchor bytes, then applies the existing canonical State, record-chain,
+anchor-tail, recovery-audit and committed-State validators to that one byte
+snapshot.  It does not re-read those three authority files and performs no
+write, repair or lock operation.  If the supplied Journal contains a
+recovery-authored terminal row, the existing recovery-audit validator may read
+that row's immutable referenced intent; the ordinary genesis snapshot used by
+B.6 has no such reference.  Journal length must equal the anchored byte length
+exactly; an unconfirmed suffix is rejected rather than normalized or repaired.
 
 ## A3.4 Prepared Workflow CLI Boundary
 

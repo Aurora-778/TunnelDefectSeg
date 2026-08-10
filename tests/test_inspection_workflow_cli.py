@@ -14,6 +14,7 @@ from PIL import Image
 import pytest
 
 from scripts import prepare_real_inspection_pilot as preparation
+from orchestrator.inspection_workflow import locking
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -293,11 +294,13 @@ def _patch_state_io_window(
 ) -> dict[str, Any]:
     from orchestrator.state import store
 
-    original_mkstemp = store.tempfile.mkstemp
-    original_fdopen = store.os.fdopen
-    original_fsync = store.os.fsync
-    original_replace = store.os.replace
-    original_sync = store._sync_directory
+    controlled = store.controlled_fs
+    original_atomic_replace = controlled.atomic_replace
+    original_write_all = controlled._write_all
+    original_fsync = controlled.os.fsync
+    original_replace = controlled.os.replace
+    original_win_rename = getattr(controlled, "_win_rename", None)
+    original_win_sync = getattr(controlled, "_win_flush_directory", None)
     original_read_regular = store.StateStore._read_regular
     original_read_state = store.StateStore._read_state
     original_read_anchor = store.StateStore._read_anchor
@@ -307,66 +310,87 @@ def _patch_state_io_window(
         "replaced": False,
         "replacement_bytes": {},
     }
+    active = {"enabled": False}
     target_label = "canonical state" if target_name == "state.json" else "state journal tail"
 
-    def mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
-        descriptor, name = original_mkstemp(*args, **kwargs)
-        if kwargs.get("prefix") == f".{target_name}.":
-            observed["target_fd"] = descriptor
-            observed["temporary"] = Path(name)
-            observed["allocating_lock_bytes"] = (
-                Path(kwargs["dir"]).parent / ".active_run.lock"
-            ).read_bytes()
-        return descriptor, name
+    def atomic_replace(root: Path, relative: str, data: bytes) -> None:
+        destination_name = Path(relative).name
+        if destination_name in {"state.json", "state_journal_tail.json"}:
+            observed["replacement_bytes"][destination_name] = data
+        if destination_name != target_name:
+            original_atomic_replace(root, relative, data)
+            return
+        observed["allocating_lock_bytes"] = (root / "runs" / ".active_run.lock").read_bytes()
+        observed["data"] = data
+        active["enabled"] = True
+        try:
+            original_atomic_replace(root, relative, data)
+        finally:
+            active["enabled"] = False
 
-    def fdopen(descriptor: int, *args: Any, **kwargs: Any) -> Any:
-        handle = original_fdopen(descriptor, *args, **kwargs)
-        if descriptor != observed.get("target_fd"):
-            return handle
-        if operation in {"write_before", "write_during", "flush"}:
-            return _InterruptingFile(
-                handle,
-                operation=operation,
-                control_error=control_error,
-                observed=observed,
-            )
-        return _InterruptingFile(
-            handle,
-            operation="observe",
-            control_error=control_error,
-            observed=observed,
-        )
+    def write_all(descriptor: int, data: bytes) -> None:
+        if not active["enabled"]:
+            original_write_all(descriptor, data)
+            return
+        observed["target_fd"] = descriptor
+        if operation == "write_before":
+            raise control_error
+        if operation == "write_during":
+            controlled.os.write(descriptor, data[: max(1, len(data) // 2)])
+            raise control_error
+        if operation == "flush":
+            view = memoryview(data)
+            while view:
+                written = controlled.os.write(descriptor, view)
+                view = view[written:]
+            raise control_error
+        original_write_all(descriptor, data)
 
     def fsync(descriptor: int) -> None:
         if (
-            operation == "fsync"
+            active["enabled"]
+            and operation == "fsync"
             and descriptor == observed.get("target_fd")
-            and not observed.get("fsync_raised")
         ):
-            observed["fsync_raised"] = True
+            raise control_error
+        if (
+            active["enabled"]
+            and os.name != "nt"
+            and operation == "directory_sync"
+            and observed["replaced"]
+            and descriptor != observed.get("target_fd")
+        ):
             raise control_error
         original_fsync(descriptor)
 
-    def replace(source: Any, destination: Any) -> None:
-        destination_name = Path(destination).name
-        if destination_name in {"state.json", "state_journal_tail.json"}:
-            observed["replacement_bytes"][destination_name] = Path(source).read_bytes()
-        if destination_name == target_name:
+    def replace(*args: Any, **kwargs: Any) -> None:
+        if active["enabled"]:
             observed["replace_called"] = True
-            observed["data"] = Path(source).read_bytes()
             if operation == "replace_before":
                 raise control_error
-            original_replace(source, destination)
+        original_replace(*args, **kwargs)
+        if active["enabled"]:
             observed["replaced"] = True
             if operation == "replace_after":
                 raise control_error
-            return
-        original_replace(source, destination)
 
-    def sync_directory(path: Path, *, label: str) -> None:
-        if operation == "directory_sync" and label == f"{target_label} parent":
+    def win_rename(*args: Any, **kwargs: Any) -> None:
+        assert original_win_rename is not None
+        if active["enabled"]:
+            observed["replace_called"] = True
+            if operation == "replace_before":
+                raise control_error
+        original_win_rename(*args, **kwargs)
+        if active["enabled"]:
+            observed["replaced"] = True
+            if operation == "replace_after":
+                raise control_error
+
+    def win_sync(handle: int) -> None:
+        assert original_win_sync is not None
+        original_win_sync(handle)
+        if active["enabled"] and operation == "directory_sync" and observed["replaced"]:
             raise control_error
-        original_sync(path, label=label)
 
     def read_regular(self: Any, path: Path, *, label: str) -> bytes:
         if (
@@ -388,11 +412,14 @@ def _patch_state_io_window(
             raise control_error
         return original_read_anchor(self, run_id, allocation_token)
 
-    monkeypatch.setattr(store.tempfile, "mkstemp", mkstemp)
-    monkeypatch.setattr(store.os, "fdopen", fdopen)
-    monkeypatch.setattr(store.os, "fsync", fsync)
-    monkeypatch.setattr(store.os, "replace", replace)
-    monkeypatch.setattr(store, "_sync_directory", sync_directory)
+    monkeypatch.setattr(controlled, "atomic_replace", atomic_replace)
+    monkeypatch.setattr(controlled, "_write_all", write_all)
+    monkeypatch.setattr(controlled.os, "fsync", fsync)
+    if os.name == "nt":
+        monkeypatch.setattr(controlled, "_win_rename", win_rename)
+        monkeypatch.setattr(controlled, "_win_flush_directory", win_sync)
+    else:
+        monkeypatch.setattr(controlled.os, "replace", replace)
     monkeypatch.setattr(store.StateStore, "_read_regular", read_regular)
     monkeypatch.setattr(store.StateStore, "_read_state", read_state)
     monkeypatch.setattr(store.StateStore, "_read_anchor", read_anchor)
@@ -408,13 +435,16 @@ def _patch_running_lock_io_window(
 ) -> dict[str, Any]:
     from orchestrator.inspection_workflow import locking
 
-    original_mkstemp = locking.tempfile.mkstemp
-    original_fdopen = locking.os.fdopen
-    original_fsync = locking.os.fsync
-    original_replace = locking.os.replace
-    original_sync = locking._sync_directory
+    controlled = locking.controlled_fs
+    original_atomic_replace = controlled.atomic_replace
+    original_write_all = controlled._write_all
+    original_fsync = controlled.os.fsync
+    original_replace = controlled.os.replace
+    original_unlink = controlled.os.unlink
+    original_win_rename = getattr(controlled, "_win_rename", None)
+    original_win_sync = getattr(controlled, "_win_flush_directory", None)
+    original_win_dispose = getattr(controlled, "_win_dispose", None)
     original_read_lock = locking._read_lock
-    original_unlink = Path.unlink
     observed: dict[str, Any] = {
         "target_fd": None,
         "update_count": 0,
@@ -422,92 +452,115 @@ def _patch_running_lock_io_window(
         "read_after_start": 0,
         "replaced": False,
     }
+    active = {"enabled": False}
 
-    def mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
-        descriptor, name = original_mkstemp(*args, **kwargs)
-        if kwargs.get("prefix") == ".active-run-lock-":
-            observed["update_count"] += 1
-            if observed["update_count"] == 2:
-                observed["activation_started"] = True
-                observed["target_fd"] = descriptor
-                observed["temporary"] = Path(name)
-                runs_dir = Path(kwargs["dir"])
-                observed["lock_before"] = (runs_dir / ".active_run.lock").read_bytes()
-                run_dir = runs_dir / RUN_ID
-                observed["state_before_activation"] = (run_dir / "state.json").read_bytes()
-                observed["anchor_before_activation"] = (
-                    run_dir / "state_journal_tail.json"
-                ).read_bytes()
-        return descriptor, name
+    def atomic_replace(root: Path, relative: str, data: bytes) -> None:
+        if Path(relative).name != ".active_run.lock" or b'"phase":"running"' not in data:
+            original_atomic_replace(root, relative, data)
+            return
+        observed["update_count"] += 1
+        observed["activation_started"] = True
+        observed["lock_before"] = (root / "runs" / ".active_run.lock").read_bytes()
+        run_dir = root / "runs" / RUN_ID
+        observed["state_before_activation"] = (run_dir / "state.json").read_bytes()
+        observed["anchor_before_activation"] = (
+            run_dir / "state_journal_tail.json"
+        ).read_bytes()
+        observed["data"] = data
+        active["enabled"] = True
+        try:
+            original_atomic_replace(root, relative, data)
+        finally:
+            candidates = tuple((root / "runs").glob("..active_run.lock.*.tmp"))
+            if candidates:
+                observed["temporary"] = candidates[0]
+            active["enabled"] = False
 
-    def fdopen(descriptor: int, *args: Any, **kwargs: Any) -> Any:
-        handle = original_fdopen(descriptor, *args, **kwargs)
-        if descriptor != observed.get("target_fd"):
-            return handle
-        if operation in {"write_before", "write_during", "flush"}:
-            return _InterruptingFile(
-                handle,
-                operation=operation,
-                control_error=control_error,
-                observed=observed,
-            )
-        return _InterruptingFile(
-            handle,
-            operation="observe",
-            control_error=control_error,
-            observed=observed,
-        )
+    def write_all(descriptor: int, data: bytes) -> None:
+        if not active["enabled"]:
+            original_write_all(descriptor, data)
+            return
+        observed["target_fd"] = descriptor
+        if operation == "write_before":
+            raise control_error
+        if operation == "write_during":
+            controlled.os.write(descriptor, data[: max(1, len(data) // 2)])
+            raise control_error
+        if operation == "flush":
+            view = memoryview(data)
+            while view:
+                written = controlled.os.write(descriptor, view)
+                view = view[written:]
+            raise control_error
+        original_write_all(descriptor, data)
 
     def fsync(descriptor: int) -> None:
+        if active["enabled"] and operation == "fsync" and descriptor == observed.get("target_fd"):
+            raise control_error
         if (
-            operation == "fsync"
-            and descriptor == observed.get("target_fd")
-            and not observed.get("fsync_raised")
+            active["enabled"]
+            and os.name != "nt"
+            and operation == "directory_sync"
+            and observed["replaced"]
+            and descriptor != observed.get("target_fd")
         ):
-            observed["fsync_raised"] = True
             raise control_error
         original_fsync(descriptor)
+
+    def replace(*args: Any, **kwargs: Any) -> None:
+        if active["enabled"] and operation == "replace_before":
+            raise control_error
+        original_replace(*args, **kwargs)
+        if active["enabled"]:
+            observed["replaced"] = True
+            if operation == "replace_after":
+                raise control_error
+
+    def win_rename(*args: Any, **kwargs: Any) -> None:
+        assert original_win_rename is not None
+        if active["enabled"] and operation == "replace_before":
+            raise control_error
+        original_win_rename(*args, **kwargs)
+        if active["enabled"]:
+            observed["replaced"] = True
+            if operation == "replace_after":
+                raise control_error
+
+    def win_sync(handle: int) -> None:
+        assert original_win_sync is not None
+        original_win_sync(handle)
+        if active["enabled"] and operation == "directory_sync" and observed["replaced"]:
+            raise control_error
+
+    def win_dispose(handle: int) -> None:
+        assert original_win_dispose is not None
+        if active["enabled"] and cleanup_error is not None:
+            raise cleanup_error
+        original_win_dispose(handle)
+
+    def unlink(*args: Any, **kwargs: Any) -> None:
+        if active["enabled"] and cleanup_error is not None:
+            raise cleanup_error
+        original_unlink(*args, **kwargs)
 
     def read_lock(path: Path) -> Any:
         if observed["activation_started"]:
             observed["read_after_start"] += 1
-            if operation == "final_reread" and observed["read_after_start"] == 2:
+            if operation == "final_reread" and observed["read_after_start"] == 1:
                 raise control_error
         return original_read_lock(path)
 
-    def replace(source: Any, destination: Any) -> None:
-        if observed["activation_started"] and Path(destination).name == ".active_run.lock":
-            observed["data"] = Path(source).read_bytes()
-            if operation == "replace_before":
-                raise control_error
-            original_replace(source, destination)
-            observed["replaced"] = True
-            if operation == "replace_after":
-                raise control_error
-            return
-        original_replace(source, destination)
-
-    def sync_directory(path: Path, *, label: str) -> None:
-        if (
-            operation == "directory_sync"
-            and observed["activation_started"]
-            and label == "runs directory after Active Run Lock update"
-        ):
-            raise control_error
-        original_sync(path, label=label)
-
-    def unlink(path: Path, *args: Any, **kwargs: Any) -> None:
-        if cleanup_error is not None and path == observed.get("temporary"):
-            raise cleanup_error
-        original_unlink(path, *args, **kwargs)
-
-    monkeypatch.setattr(locking.tempfile, "mkstemp", mkstemp)
-    monkeypatch.setattr(locking.os, "fdopen", fdopen)
-    monkeypatch.setattr(locking.os, "fsync", fsync)
+    monkeypatch.setattr(controlled, "atomic_replace", atomic_replace)
+    monkeypatch.setattr(controlled, "_write_all", write_all)
+    monkeypatch.setattr(controlled.os, "fsync", fsync)
+    if os.name == "nt":
+        monkeypatch.setattr(controlled, "_win_rename", win_rename)
+        monkeypatch.setattr(controlled, "_win_flush_directory", win_sync)
+        monkeypatch.setattr(controlled, "_win_dispose", win_dispose)
+    else:
+        monkeypatch.setattr(controlled.os, "replace", replace)
+        monkeypatch.setattr(controlled.os, "unlink", unlink)
     monkeypatch.setattr(locking, "_read_lock", read_lock)
-    monkeypatch.setattr(locking.os, "replace", replace)
-    monkeypatch.setattr(locking, "_sync_directory", sync_directory)
-    monkeypatch.setattr(Path, "unlink", unlink)
     return observed
 
 
@@ -944,14 +997,18 @@ def test_normal_cli_release_failure_creates_real_tombstone_and_returns_exit_10(
     root, _ = _sandbox(tmp_path)
     module = _load_cli_module()
     source_before = _snapshot(root / "data")
-    original_unlink = Path.unlink
+    original_unlink = locking.controlled_fs.unlink
 
-    def fail_release_tombstone_cleanup(path: Path, *args: Any, **kwargs: Any) -> None:
-        if path.parent == root / "runs" and path.name.startswith(".active_run.release."):
+    def fail_release_tombstone_cleanup(
+        project_root: Path, relative: str, **kwargs: Any
+    ) -> None:
+        if relative.startswith("runs/.active_run.release."):
             raise OSError("injected release tombstone cleanup failure")
-        original_unlink(path, *args, **kwargs)
+        original_unlink(project_root, relative, **kwargs)
 
-    monkeypatch.setattr(Path, "unlink", fail_release_tombstone_cleanup)
+    monkeypatch.setattr(
+        locking.controlled_fs, "unlink", fail_release_tombstone_cleanup
+    )
     code = module.main(
         [
             "--task-file",
@@ -1557,12 +1614,9 @@ def test_process_control_in_state_initialization_io_window_preserves_exact_evide
     lock_path = root / "runs" / ".active_run.lock"
     assert lock_path.read_bytes() == observed["allocating_lock_bytes"]
     if operation not in {"final_read_state", "final_read_anchor"}:
-        temporary = observed.get("temporary")
-        assert temporary is not None
-        # StateStore owns this temporary file and cleanly removes it for every
-        # deterministic control-interrupt path. A separate test covers the
-        # cleanup-failure branch where the temporary must remain as evidence.
-        assert not temporary.exists()
+        # These injections execute inside the real controlled writer.  Its
+        # UUID-named temporary must be gone on every deterministic failure.
+        assert not tuple(run_dir.glob(f".{target_name}.*.tmp"))
 
 
 @pytest.mark.parametrize("commit_mode", ["none", "state_only", "complete"])
@@ -1678,11 +1732,8 @@ def test_process_control_in_running_lock_io_window_preserves_exact_evidence(
     ]
     assert not (run_dir / "state_journal.jsonl").exists()
     assert not (run_dir / ".state.lock").exists()
-    temporary = observed.get("temporary")
-    assert temporary is not None
-    # The lock writer also cleans a deterministic temporary-file failure. The
-    # dedicated cleanup-failure test below verifies retained evidence instead.
-    assert not temporary.exists()
+    # The failure is injected inside the real UUID-named controlled temporary.
+    assert not tuple((root / "runs").glob("..active_run.lock.*.tmp"))
 
 
 def test_running_lock_control_interrupt_and_temporary_cleanup_failure_preserve_primary(
@@ -1717,7 +1768,7 @@ def test_running_lock_control_interrupt_and_temporary_cleanup_failure_preserve_p
     )
     assert observed["temporary"].exists()
     assert any(
-        "Active Run Lock update temporary cleanup failed" in note
+        "controlled replacement cleanup failed" in note
         and "injected running lock temporary cleanup failure" in note
         for note in interrupt.__notes__
     )
@@ -1744,19 +1795,22 @@ def test_process_control_during_run_activation_preserves_lock_evidence(
     if activation_mode == "after_replace":
         from orchestrator.inspection_workflow import locking
 
-        lock_path = root / "runs" / ".active_run.lock"
-        original_replace = locking.os.replace
+        original_replace = locking.controlled_fs.atomic_replace
 
-        def replace_lock_then_interrupt(source: Any, destination: Any) -> None:
+        def replace_lock_then_interrupt(
+            project_root: Path, relative: str, data: bytes
+        ) -> None:
             should_interrupt = (
-                Path(destination) == lock_path
-                and b'"phase":"running"' in Path(source).read_bytes()
+                relative == "runs/.active_run.lock"
+                and b'"phase":"running"' in data
             )
-            original_replace(source, destination)
+            original_replace(project_root, relative, data)
             if should_interrupt:
                 raise control_error
 
-        monkeypatch.setattr(locking.os, "replace", replace_lock_then_interrupt)
+        monkeypatch.setattr(
+            locking.controlled_fs, "atomic_replace", replace_lock_then_interrupt
+        )
     else:
         def stop_run_activation(*args: Any, **kwargs: Any) -> None:
             if activation_mode == "after":
@@ -1876,6 +1930,72 @@ def test_cleanup_failure_does_not_replace_process_control_exception(
     assert _snapshot(root / "data") == source_before
     assert not (root / "outputs").exists()
     assert not (root / "logs").exists()
+
+
+def test_lifecycle_cleanup_keeps_original_owned_lock_identity_on_same_byte_aba(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "lifecycle-lock-aba"
+    (root / "runs").mkdir(parents=True)
+    allocation_token = "0f5de6d0-3e43-4ad0-8a9f-f6de8e8f9e09"
+    lock_token = "b5b1b58f-8170-4d65-afd7-a96d75e7f549"
+    locking.acquire_active_run_lock(
+        root,
+        task_id="task_610",
+        allocation_token=allocation_token,
+        lock_token=lock_token,
+    )
+    lock_path = root / "runs" / ".active_run.lock"
+    original_identity = locking.controlled_fs.file_identity(lock_path)
+    lock_bytes = lock_path.read_bytes()
+    locking.controlled_fs.atomic_replace(root, "runs/.active_run.lock", lock_bytes)
+    assert locking.controlled_fs.file_identity(lock_path) != original_identity
+
+    module = _load_cli_module()
+    captured: dict[str, object] = {}
+
+    def capture_cleanup(*args: object) -> list[str]:
+        captured["args"] = args
+        return []
+
+    monkeypatch.setattr(module.lifecycle, "_cleanup_failed_acquisition", capture_cleanup)
+    module.lifecycle._cleanup_owned_allocation_lock(
+        root,
+        allocation_token=allocation_token,
+        lock_token=lock_token,
+    )
+    assert captured["args"][3] == original_identity  # type: ignore[index]
+
+
+def test_lifecycle_cleanup_rejects_same_byte_aba_without_deleting_replacement(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "lifecycle-lock-aba-reject"
+    (root / "runs").mkdir(parents=True)
+    allocation_token = "2d9b1537-df9b-4a56-8c9e-8b7e5aceee1d"
+    lock_token = "f06bd2a3-7599-4935-88d0-d6f70851db1b"
+    locking.acquire_active_run_lock(
+        root,
+        task_id="task_610",
+        allocation_token=allocation_token,
+        lock_token=lock_token,
+    )
+    lock_path = root / "runs" / ".active_run.lock"
+    lock_bytes = lock_path.read_bytes()
+    original_identity = locking.controlled_fs.file_identity(lock_path)
+    locking.controlled_fs.atomic_replace(root, "runs/.active_run.lock", lock_bytes)
+    assert locking.controlled_fs.file_identity(lock_path) != original_identity
+
+    module = _load_cli_module()
+    with pytest.raises(OSError, match="cleanup"):
+        module.lifecycle._cleanup_owned_allocation_lock(
+            root,
+            allocation_token=allocation_token,
+            lock_token=lock_token,
+        )
+    assert lock_path.read_bytes() == lock_bytes
+    assert locking.controlled_fs.file_identity(lock_path) != original_identity
 
 
 def test_keyboard_interrupt_after_uncertain_sandbox_initialization_marks_recovery_then_propagates(

@@ -18,7 +18,7 @@ from typing import Any
 
 from orchestrator.dag.builder import build_dag
 from orchestrator.executor import DAGExecutor
-from orchestrator.inspection_workflow import a1_artifacts
+from orchestrator.inspection_workflow import a1_artifacts, controlled_fs
 from orchestrator.inspection_workflow.contracts import (
     REQUIRED_OUTPUT_NAMES,
     load_workflow_policy,
@@ -32,7 +32,9 @@ from orchestrator.inspection_workflow.locking import (
     _PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES,
     _cleanup_failed_acquisition,
     acquire_active_run_lock,
+    forget_process_owned_active_run_lock_snapshot,
     mark_active_run_running,
+    read_process_owned_active_run_lock_snapshot,
     read_existing_active_run_lock,
     release_active_run_lock,
     reserve_active_run_id,
@@ -1265,17 +1267,27 @@ def _cleanup_owned_allocation_lock(
         ):
             raise OSError("Active Run Lock ownership changed during Run initialization")
         lock_path = root / "runs" / ".active_run.lock"
-        expected_bytes = lock_path.read_bytes()
+        expected_bytes, expected_identity = read_process_owned_active_run_lock_snapshot(
+            root,
+            allocation_token=allocation_token,
+            lock_token=lock_token,
+        )
         diagnostics = _cleanup_failed_acquisition(
             lock_path,
             root / "runs",
             expected_bytes,
+            expected_identity,
             lock_token,
         )
         if diagnostics:
             raise OSError("; ".join(diagnostics))
     finally:
         _PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES.discard(identity)
+        forget_process_owned_active_run_lock_snapshot(
+            root,
+            allocation_token=allocation_token,
+            lock_token=lock_token,
+        )
 
 
 def _validate_resume_input_capture(

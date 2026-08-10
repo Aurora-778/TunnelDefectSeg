@@ -20,6 +20,7 @@ import tempfile
 from typing import Any, Iterator
 import uuid
 
+from orchestrator.inspection_workflow import controlled_fs
 from orchestrator.inspection_workflow.locking import (
     ActiveRunLockError,
     _assert_plain_entry,
@@ -282,34 +283,15 @@ def _add_cleanup_diagnostic(primary: BaseException, message: str) -> None:
 
 def _restore_state_lock_evidence(path: Path, run_dir: Path, data: bytes) -> list[str]:
     diagnostics: list[str] = []
-    descriptor: int | None = None
+    root = run_dir.parents[1]
     try:
         if _lstat(path, label="state lock recovery evidence") is None:
-            descriptor = os.open(
-                path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _BINARY_FLAG, 0o600
+            controlled_fs.write_exclusive(
+                root, path.relative_to(root).as_posix(), data
             )
-            view = memoryview(data)
-            while view:
-                written = os.write(descriptor, view)
-                if written <= 0:
-                    raise OSError("short state lock recovery write")
-                view = view[written:]
-            os.fsync(descriptor)
-            os.close(descriptor)
-            descriptor = None
     except Exception as exc:
         diagnostics.append(f"unable to restore blocking state lock evidence: {exc}")
         diagnostics.extend(_write_state_lock_recovery_marker(path, run_dir, data))
-    finally:
-        if descriptor is not None:
-            try:
-                os.close(descriptor)
-            except OSError as exc:
-                diagnostics.append(f"unable to close restored state lock evidence: {exc}")
-    try:
-        _sync_directory(run_dir, label="Run directory after restoring state lock evidence")
-    except Exception as exc:
-        diagnostics.append(f"unable to sync restored state lock evidence: {exc}")
     return diagnostics
 
 
@@ -318,31 +300,15 @@ def _write_state_lock_recovery_marker(path: Path, run_dir: Path, data: bytes) ->
 
     marker = run_dir / ".state_lock_recovery_required.json"
     diagnostics: list[str] = []
-    descriptor: int | None = None
+    root = run_dir.parents[1]
     try:
         if _lstat(marker, label="state lock recovery marker") is not None:
             return diagnostics
-        descriptor = os.open(
-            marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _BINARY_FLAG, 0o600
+        controlled_fs.write_exclusive(
+            root, marker.relative_to(root).as_posix(), data
         )
-        view = memoryview(data)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError("short state lock recovery marker write")
-            view = view[written:]
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
-        _sync_directory(run_dir, label="Run directory after state lock recovery marker")
     except Exception as exc:
         diagnostics.append(f"unable to write state lock recovery marker: {exc}")
-    finally:
-        if descriptor is not None:
-            try:
-                os.close(descriptor)
-            except OSError as exc:
-                diagnostics.append(f"unable to close state lock recovery marker: {exc}")
     return diagnostics
 
 
@@ -617,28 +583,18 @@ class StateStore:
                 "created_at": canonical_utc_now(),
             }
         )
-        descriptor: int | None = None
         primary: BaseException | None = None
         created = False
+        created_identity: tuple[int, int] | None = None
         try:
             if _lstat(paths["lock_recovery"], label="state lock recovery marker") is not None:
                 raise StateRecoveryRequiredError(
                     "state lock recovery marker exists; explicit recovery is required"
                 )
-            descriptor = os.open(
-                path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _BINARY_FLAG, 0o600
+            created_identity = controlled_fs.write_exclusive(
+                self.project_root, path.relative_to(self.project_root).as_posix(), data
             )
             created = True
-            view = memoryview(data)
-            while view:
-                written = os.write(descriptor, view)
-                if written <= 0:
-                    raise OSError("short state lock write")
-                view = view[written:]
-            os.fsync(descriptor)
-            os.close(descriptor)
-            descriptor = None
-            _sync_directory(paths["run_dir"], label="Run directory after state lock acquisition")
             if _lstat(paths["lock_recovery"], label="state lock recovery marker") is not None:
                 raise StateRecoveryRequiredError(
                     "state lock recovery marker exists; explicit recovery is required"
@@ -652,23 +608,30 @@ class StateStore:
         except FileExistsError as exc:
             primary = exc
             raise StateConflictError("state lock already exists; automatic cleanup is deferred") from exc
+        except controlled_fs.ControlledFilesystemError as exc:
+            primary = StateStoreError("unable to safely acquire state lock")
+            if not created:
+                try:
+                    created = _lstat(path, label="state lock") is not None
+                except Exception:
+                    created = False
+            raise primary from exc
         except BaseException as exc:
             primary = exc
+            if not created:
+                try:
+                    created = _lstat(path, label="state lock") is not None
+                except Exception:
+                    created = False
             raise
         finally:
-            if descriptor is not None:
-                try:
-                    os.close(descriptor)
-                except OSError as exc:
-                    if primary is not None:
-                        _add_cleanup_diagnostic(
-                            primary, f"state lock descriptor cleanup failed: {exc}"
-                        )
-                    else:
-                        raise StateStoreError("state lock descriptor cleanup failed") from exc
             if created:
                 release_failure: StateStoreError | None = None
                 try:
+                    if created_identity is None:
+                        raise StateConflictError(
+                            "state lock publication identity is uncertain; lock preserved"
+                        )
                     entry = _lstat(path, label="state lock")
                     if entry is None:
                         diagnostics = _restore_state_lock_evidence(
@@ -686,11 +649,11 @@ class StateStore:
                         raise StateConflictError(
                             "state lock ownership changed before release; lock preserved"
                         )
-                    path.unlink()
                     try:
-                        _sync_directory(
-                            paths["run_dir"],
-                            label="Run directory after state lock release",
+                        controlled_fs.unlink(
+                            self.project_root,
+                            path.relative_to(self.project_root).as_posix(),
+                            expected_identity=created_identity,
                         )
                     except Exception as sync_exc:
                         diagnostics = _restore_state_lock_evidence(
@@ -728,44 +691,23 @@ class StateStore:
             raise StateConflictError(f"unable to read {label}: {path}") from exc
 
     def _atomic_replace(self, path: Path, data: bytes, *, label: str) -> None:
-        temporary: Path | None = None
         replace_attempted = False
-        primary: BaseException | None = None
         try:
-            descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-            temporary = Path(name)
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(data)
-                handle.flush()
-                os.fsync(handle.fileno())
             replace_attempted = True
-            os.replace(temporary, path)
-            temporary = None
-            _sync_directory(path.parent, label=f"{label} parent")
+            controlled_fs.atomic_replace(
+                self.project_root, path.relative_to(self.project_root).as_posix(), data
+            )
             persisted = self._read_regular(path, label=label)
             if persisted != data:
                 raise StateConflictError(f"{label} bytes changed after atomic replace")
         except OSError as exc:
             error = StateStoreError(f"unable to atomically write {label}")
             error.write_state_uncertain = replace_attempted
-            primary = error
             raise error from exc
-        except BaseException as exc:
-            primary = exc
-            raise
-        finally:
-            if temporary is not None:
-                try:
-                    temporary.unlink(missing_ok=True)
-                except OSError as exc:
-                    if primary is not None:
-                        _add_cleanup_diagnostic(
-                            primary, f"temporary {label} cleanup failed: {exc}"
-                        )
-                    else:
-                        error = StateStoreError(f"unable to clean temporary {label}")
-                        error.write_state_uncertain = replace_attempted
-                        raise error from exc
+        except controlled_fs.ControlledFilesystemError as exc:
+            error = StateStoreError(f"unable to safely write {label}")
+            error.write_state_uncertain = replace_attempted
+            raise error from exc
 
     def _read_state(self, run_id: str) -> tuple[dict[str, Any], bytes]:
         path = self._paths(run_id)["state"]
@@ -1328,6 +1270,87 @@ class StateStore:
             self._validate_committed_state_binding(state, [])
             return _state_snapshot(state)
 
+    def validate_genesis_run_control_entries(self, *, run_id: str) -> tuple[str, ...]:
+        """Reject every non-genesis StateStore entry for a B.6 successor."""
+
+        paths = self._paths(run_id)
+        allowed = {
+            paths["state"].name,
+            paths["journal"].name,
+            paths["anchor"].name,
+        }
+        try:
+            entries = tuple(paths["run_dir"].iterdir())
+        except OSError as exc:
+            raise StateConflictError("unable to enumerate genesis Run evidence") from exc
+        names = {entry.name for entry in entries}
+        if paths["state"].name not in names or paths["anchor"].name not in names:
+            raise StateConflictError("genesis Run authority files are incomplete")
+        unknown = names - allowed
+        if unknown:
+            raise StateConflictError("unknown or recovery StateStore residue exists")
+        for entry in entries:
+            try:
+                _assert_plain_entry(entry, label="genesis Run authority entry", directory=False)
+            except ActiveRunLockError as exc:
+                raise StateConflictError(str(exc)) from exc
+        journal_entry = _lstat(paths["journal"], label="genesis state journal")
+        if journal_entry is not None:
+            _assert_regular_journal_entry(journal_entry, label="genesis state journal")
+            if journal_entry.st_size != 0:
+                raise StateConflictError("genesis state journal must be empty")
+        return tuple(sorted(names))
+
+    def validate_authority_snapshot_bytes(
+        self,
+        *,
+        run_id: str,
+        state_bytes: bytes,
+        journal_bytes: bytes,
+        anchor_bytes: bytes,
+    ) -> StateSnapshot:
+        """Validate one exact immutable State/Journal/anchor byte snapshot."""
+
+        if any(type(value) is not bytes for value in (state_bytes, journal_bytes, anchor_bytes)):
+            raise StateStoreError("authority snapshot values must be exact immutable bytes")
+        state = _validate_state(
+            _json_loads(state_bytes, label="canonical state snapshot"),
+            expected_run_id=run_id,
+        )
+        if _canonical_json_bytes(state) != state_bytes:
+            raise StateConflictError("canonical state snapshot must use canonical JSON")
+        allocation_token = state["allocation_token"]
+        anchor = self._validate_anchor(
+            _json_loads(anchor_bytes, label="state journal tail snapshot"),
+            run_id=run_id,
+            allocation_token=allocation_token,
+        )
+        if _canonical_json_bytes(anchor) != anchor_bytes:
+            raise StateConflictError("state journal tail snapshot must use canonical JSON")
+        anchor_size = anchor["tail_file_size_bytes"]
+        if len(journal_bytes) != anchor_size:
+            raise StateConflictError("Journal snapshot bytes do not exactly match the tail anchor")
+        records = self._parse_journal_prefix(
+            journal_bytes,
+            run_id=run_id,
+            allocation_token=allocation_token,
+        )
+        if anchor["tail_record_index"] is None:
+            if records:
+                raise StateConflictError("genesis anchor cannot cover Journal snapshot records")
+        else:
+            if not records:
+                raise StateConflictError("Journal snapshot anchor references a missing record")
+            tail = records[-1]
+            if (
+                tail["record_index"] != anchor["tail_record_index"]
+                or tail["record_checksum"] != anchor["tail_record_checksum"]
+            ):
+                raise StateConflictError("Journal snapshot tail does not match its anchor")
+        self._validate_recovery_audit_bindings(state, records)
+        self._validate_committed_state_binding(state, records)
+        return _state_snapshot(state)
+
     def initialize_run(
         self,
         *,
@@ -1415,6 +1438,118 @@ class StateStore:
             persisted_anchor, _ = self._read_anchor(run_id, allocation_token)
             if persisted != state or persisted_anchor != anchor:
                 raise StateConflictError("Run initialization bytes do not match expected state")
+            return _state_snapshot(persisted)
+
+    def repair_missing_genesis_anchor(
+        self,
+        *,
+        run_id: str,
+        allocation_token: str,
+        expected_lock_token: str,
+        expected_state_sha256: str,
+    ) -> StateSnapshot:
+        """Repair only the exact State-committed/genesis-anchor-missing seam.
+
+        The caller supplies the SHA of a previously validated canonical State
+        snapshot.  The SHA is rechecked while holding the ordinary per-Run
+        State lock, making the missing-anchor test a CAS rather than a schema
+        approximation in a workflow caller.  Existing locks or recovery
+        markers remain blocking evidence and are never removed here.
+        """
+
+        _validate_sha(expected_state_sha256, label="expected_state_sha256")
+        try:
+            _validate_uuid(allocation_token, label="allocation_token")
+            _validate_uuid(expected_lock_token, label="expected_lock_token")
+        except ActiveRunLockError as exc:
+            raise StateStoreError(str(exc)) from exc
+        paths = self._paths(run_id)
+        with self._state_lock(run_id):
+            allowed_names = {path.name for name, path in paths.items() if name != "run_dir"}
+            try:
+                unknown = tuple(
+                    entry.name
+                    for entry in paths["run_dir"].iterdir()
+                    if entry.name not in allowed_names
+                )
+            except OSError as exc:
+                raise StateConflictError("unable to enumerate genesis repair evidence") from exc
+            if unknown:
+                raise StateConflictError("unknown genesis repair residue exists")
+            try:
+                validate_existing_active_run_lock(
+                    self.project_root,
+                    run_id=run_id,
+                    allocation_token=allocation_token,
+                    expected_lock_token=expected_lock_token,
+                    allowed_phases={"allocating"},
+                )
+            except ActiveRunLockError as exc:
+                raise StateConflictError(str(exc)) from exc
+            if _lstat(paths["recovery"], label="state initialization recovery marker") is not None:
+                raise StateRecoveryRequiredError(
+                    "state initialization recovery marker blocks genesis repair"
+                )
+            state, state_bytes = self._read_state(run_id)
+            if (
+                _sha256(state_bytes) != expected_state_sha256
+                or state["allocation_token"] != allocation_token
+                or state["status"] != "CREATED"
+                or state["state_version"] != 0
+                or state["last_operation_kind"] is not None
+                or state["last_operation_id"] is not None
+                or state["last_operation_payload_sha256"] is not None
+            ):
+                raise StateConflictError(
+                    "canonical State does not match the missing-genesis repair CAS"
+                )
+            if _lstat(paths["anchor"], label="state journal tail") is not None:
+                raise StateConflictError("genesis anchor already exists")
+            journal_entry = _lstat(paths["journal"], label="state journal")
+            if journal_entry is not None:
+                _assert_regular_journal_entry(journal_entry, label="genesis state journal")
+                try:
+                    if paths["journal"].stat().st_size != 0:
+                        raise StateConflictError("genesis state journal must be empty")
+                except OSError as exc:
+                    raise StateConflictError("unable to inspect genesis state journal") from exc
+            # Validate the complete uncommitted genesis baseline before the
+            # repair publishes any authority bytes.  Schema-valid but
+            # non-genesis CREATED State must leave the missing-anchor seam
+            # untouched.
+            self._validate_committed_state_binding(state, [])
+            anchor = self._anchor_document(
+                run_id=run_id,
+                allocation_token=allocation_token,
+                tail_record_index=None,
+                tail_record_checksum=None,
+                tail_file_size_bytes=0,
+            )
+            data = _canonical_json_bytes(anchor)
+            try:
+                controlled_fs.write_exclusive(
+                    self.project_root,
+                    paths["anchor"].relative_to(self.project_root).as_posix(),
+                    data,
+                )
+            except FileExistsError as exc:
+                raise StateConflictError("genesis anchor appeared during repair") from exc
+            except controlled_fs.ControlledFilesystemError as exc:
+                raise StateStoreError("unable to safely persist repaired genesis anchor") from exc
+            except OSError as exc:
+                raise StateStoreError("unable to persist repaired genesis anchor") from exc
+            persisted, persisted_bytes = self._read_state(run_id)
+            persisted_anchor, persisted_anchor_bytes = self._read_anchor(
+                run_id, allocation_token
+            )
+            if (
+                persisted_bytes != state_bytes
+                or persisted != state
+                or persisted_anchor != anchor
+                or persisted_anchor_bytes != data
+            ):
+                raise StateConflictError("genesis repair authority changed after persistence")
+            self._validate_committed_state_binding(persisted, [])
             return _state_snapshot(persisted)
 
     def validate_takeover_preflight(

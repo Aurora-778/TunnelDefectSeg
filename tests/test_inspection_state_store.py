@@ -436,6 +436,224 @@ def test_state_only_partial_initialization_fails_closed(
         )
 
 
+def test_repair_missing_genesis_anchor_is_locked_and_state_sha_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, allocation_token, lock_token = _new_allocation(tmp_path)
+    original = store._write_anchor
+
+    def fail_anchor(run_id: str, anchor: Mapping[str, object]) -> None:
+        raise StateStoreError("injected state-only seam")
+
+    monkeypatch.setattr(store, "_write_anchor", fail_anchor)
+    with pytest.raises(StateStoreError, match="state-only"):
+        store.initialize_run(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            plan_fingerprint=PLAN_SHA,
+            task_plan=TASK_PLAN,
+            expected_lock_token=lock_token,
+            created_at=T0,
+        )
+    monkeypatch.setattr(store, "_write_anchor", original)
+    state_path = tmp_path / "runs" / "run_001" / "state.json"
+    expected_sha = hashlib.sha256(state_path.read_bytes()).hexdigest()
+    snapshot = store.repair_missing_genesis_anchor(
+        run_id="run_001",
+        allocation_token=allocation_token,
+        expected_lock_token=lock_token,
+        expected_state_sha256=expected_sha,
+    )
+    assert snapshot["status"] == "CREATED"
+    assert store.load(run_id="run_001")["canonical_state"] == snapshot["canonical_state"]
+    with pytest.raises(StateConflictError, match="already exists"):
+        store.repair_missing_genesis_anchor(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+            expected_state_sha256=expected_sha,
+        )
+
+
+def test_repair_missing_genesis_anchor_rejects_nonbaseline_state_before_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, allocation_token, lock_token = _new_allocation(tmp_path)
+
+    def fail_anchor(run_id: str, anchor: Mapping[str, object]) -> None:
+        raise StateStoreError("injected state-only seam")
+
+    monkeypatch.setattr(store, "_write_anchor", fail_anchor)
+    with pytest.raises(StateStoreError):
+        store.initialize_run(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            plan_fingerprint=PLAN_SHA,
+            task_plan=TASK_PLAN,
+            expected_lock_token=lock_token,
+            created_at=T0,
+        )
+    monkeypatch.undo()
+    run_dir = tmp_path / "runs" / "run_001"
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_bytes())
+    state["updated_at"] = "2026-07-27T00:00:01.000000Z"
+    state_bytes = _write_canonical(state_path, state)
+    before = tuple(sorted(path.name for path in run_dir.iterdir()))
+
+    with pytest.raises(StateConflictError, match="uncommitted CREATED baseline"):
+        store.repair_missing_genesis_anchor(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+            expected_state_sha256=hashlib.sha256(state_bytes).hexdigest(),
+        )
+
+    assert tuple(sorted(path.name for path in run_dir.iterdir())) == before
+    assert not (run_dir / "state_journal_tail.json").exists()
+
+
+def test_repair_missing_genesis_anchor_rejects_sha_and_state_lock_residue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, allocation_token, lock_token = _new_allocation(tmp_path)
+
+    def fail_anchor(run_id: str, anchor: Mapping[str, object]) -> None:
+        raise StateStoreError("injected state-only seam")
+
+    monkeypatch.setattr(store, "_write_anchor", fail_anchor)
+    with pytest.raises(StateStoreError):
+        store.initialize_run(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            plan_fingerprint=PLAN_SHA,
+            task_plan=TASK_PLAN,
+            expected_lock_token=lock_token,
+            created_at=T0,
+        )
+    monkeypatch.undo()
+    anchor_path = tmp_path / "runs" / "run_001" / "state_journal_tail.json"
+    with pytest.raises(StateConflictError, match="State does not match"):
+        store.repair_missing_genesis_anchor(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+            expected_state_sha256="0" * 64,
+        )
+    assert not anchor_path.exists()
+    residue = tmp_path / "runs" / "run_001" / ".state.json.crash.tmp"
+    residue.write_bytes(b"partial")
+    expected_sha = hashlib.sha256(
+        (tmp_path / "runs" / "run_001" / "state.json").read_bytes()
+    ).hexdigest()
+    with pytest.raises(StateConflictError, match="unknown genesis repair residue"):
+        store.repair_missing_genesis_anchor(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+            expected_state_sha256=expected_sha,
+        )
+    residue.unlink()
+    (tmp_path / "runs" / "run_001" / ".state.lock").write_bytes(b"crashed-owner")
+    with pytest.raises(StateConflictError, match="state lock already exists"):
+        store.repair_missing_genesis_anchor(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+            expected_state_sha256=expected_sha,
+        )
+    assert not anchor_path.exists()
+
+
+def test_repair_missing_genesis_anchor_translates_controlled_filesystem_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, allocation_token, lock_token = _new_allocation(tmp_path)
+
+    def fail_initial_anchor(run_id: str, anchor: Mapping[str, object]) -> None:
+        raise StateStoreError("injected state-only seam")
+
+    monkeypatch.setattr(store, "_write_anchor", fail_initial_anchor)
+    with pytest.raises(StateStoreError):
+        store.initialize_run(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            plan_fingerprint=PLAN_SHA,
+            task_plan=TASK_PLAN,
+            expected_lock_token=lock_token,
+            created_at=T0,
+        )
+    monkeypatch.undo()
+    expected_sha = hashlib.sha256(
+        (tmp_path / "runs" / "run_001" / "state.json").read_bytes()
+    ).hexdigest()
+    original = state_module.controlled_fs.write_exclusive
+
+    def reject_anchor(root: Path, relative: str, data: bytes) -> None:
+        if relative.endswith("/state_journal_tail.json"):
+            raise state_module.controlled_fs.ControlledFilesystemError(
+                "injected controlled anchor failure"
+            )
+        return original(root, relative, data)
+
+    monkeypatch.setattr(state_module.controlled_fs, "write_exclusive", reject_anchor)
+    with pytest.raises(StateStoreError, match="safely persist repaired genesis anchor"):
+        store.repair_missing_genesis_anchor(
+            run_id="run_001",
+            allocation_token=allocation_token,
+            expected_lock_token=lock_token,
+            expected_state_sha256=expected_sha,
+        )
+    assert not (tmp_path / "runs" / "run_001" / "state_journal_tail.json").exists()
+    assert not (tmp_path / "runs" / "run_001" / ".state.lock").exists()
+
+
+def test_genesis_control_entry_validator_rejects_residue_and_nonempty_journal(
+    tmp_path: Path,
+) -> None:
+    store, _, _ = _initialized(tmp_path)
+    run_dir = tmp_path / "runs" / "run_001"
+    assert store.validate_genesis_run_control_entries(run_id="run_001") == (
+        "state.json",
+        "state_journal_tail.json",
+    )
+    journal = run_dir / "state_journal.jsonl"
+    journal.write_bytes(b"")
+    assert store.validate_genesis_run_control_entries(run_id="run_001") == (
+        "state.json",
+        "state_journal.jsonl",
+        "state_journal_tail.json",
+    )
+    journal.write_bytes(b"X")
+    with pytest.raises(StateConflictError, match="must be empty"):
+        store.validate_genesis_run_control_entries(run_id="run_001")
+    journal.unlink()
+    (run_dir / ".unknown.tmp").write_bytes(b"residue")
+    with pytest.raises(StateConflictError, match="unknown or recovery"):
+        store.validate_genesis_run_control_entries(run_id="run_001")
+
+
+def test_authority_snapshot_bytes_reject_unanchored_journal_bytes(tmp_path: Path) -> None:
+    store, allocation_token, _ = _initialized(tmp_path)
+    run_dir = tmp_path / "runs" / "run_001"
+    state_bytes = (run_dir / "state.json").read_bytes()
+    anchor_bytes = (run_dir / "state_journal_tail.json").read_bytes()
+    snapshot = store.validate_authority_snapshot_bytes(
+        run_id="run_001",
+        state_bytes=state_bytes,
+        journal_bytes=b"",
+        anchor_bytes=anchor_bytes,
+    )
+    assert snapshot["canonical_state"]["allocation_token"] == allocation_token
+    with pytest.raises(StateConflictError, match="exactly match the tail anchor"):
+        store.validate_authority_snapshot_bytes(
+            run_id="run_001",
+            state_bytes=state_bytes,
+            journal_bytes=b"X",
+            anchor_bytes=anchor_bytes,
+        )
+
+
 def test_anchor_only_and_non_genesis_anchor_fail_closed(tmp_path: Path) -> None:
     for non_genesis in (False, True):
         root = tmp_path / ("non-genesis" if non_genesis else "anchor-only")
@@ -1514,6 +1732,38 @@ def test_state_lock_replacement_is_preserved_and_fails_closed(tmp_path: Path) ->
     assert lock_path.read_bytes() == replacement
 
 
+def test_state_lock_leaf_aba_before_release_preserves_new_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, _ = _initialized(tmp_path)
+    path = tmp_path / "runs" / "run_001" / ".state.lock"
+    replacement = b'{"owner":"replacement"}\n'
+    original = state_module.controlled_fs.unlink
+    replaced = False
+
+    def replace_before_identity_bound_unlink(
+        root: Path,
+        relative: str,
+        *,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> None:
+        nonlocal replaced
+        if relative.endswith("/.state.lock") and not replaced:
+            path.unlink()
+            path.write_bytes(replacement)
+            replaced = True
+        original(root, relative, expected_identity=expected_identity)
+
+    monkeypatch.setattr(
+        state_module.controlled_fs, "unlink", replace_before_identity_bound_unlink
+    )
+    with pytest.raises(StateStoreError, match="state lock release is uncertain"):
+        with store._state_lock("run_001"):
+            pass
+    assert replaced
+    assert path.read_bytes() == replacement
+
+
 def test_state_lock_deleted_during_mutation_prevents_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1553,17 +1803,22 @@ def test_state_lock_final_sync_failure_restores_blocking_evidence(
 ) -> None:
     store, _, lock_token = _initialized(tmp_path)
     lock_path = tmp_path / "runs" / "run_001" / ".state.lock"
-    original_sync = state_module._sync_directory
+    original_unlink = state_module.controlled_fs.unlink
     failed = False
 
-    def fail_release_sync(path: Path, *, label: str) -> None:
+    def fail_release_sync(
+        root: Path,
+        relative: str,
+        *,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> None:
         nonlocal failed
-        if label == "Run directory after state lock release" and not failed:
+        original_unlink(root, relative, expected_identity=expected_identity)
+        if relative.endswith("/.state.lock") and not failed:
             failed = True
             raise OSError("release directory sync failed")
-        original_sync(path, label=label)
 
-    monkeypatch.setattr(state_module, "_sync_directory", fail_release_sync)
+    monkeypatch.setattr(state_module.controlled_fs, "unlink", fail_release_sync)
     with pytest.raises(
         StateStoreError,
         match="state lock release is uncertain; blocking evidence was restored",
@@ -1594,27 +1849,30 @@ def test_state_lock_restore_failure_leaves_recovery_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store, _, lock_token = _initialized(tmp_path)
-    original_sync = state_module._sync_directory
-    original_open = state_module.os.open
+    original_unlink = state_module.controlled_fs.unlink
+    original_write = state_module.controlled_fs.write_exclusive
     lock_open_count = 0
 
-    def fail_release_sync(path: Path, *, label: str) -> None:
-        if label == "Run directory after state lock release":
+    def fail_release_sync(
+        root: Path,
+        relative: str,
+        *,
+        expected_identity: tuple[int, int] | None = None,
+    ) -> None:
+        original_unlink(root, relative, expected_identity=expected_identity)
+        if relative.endswith("/.state.lock"):
             raise OSError("release directory sync failed")
-        original_sync(path, label=label)
 
-    def fail_restore_open(
-        path: str | bytes | os.PathLike[str] | os.PathLike[bytes], *args: object
-    ) -> int:
+    def fail_restore_write(root: Path, relative: str, data: bytes) -> None:
         nonlocal lock_open_count
-        if Path(path).name == ".state.lock":
+        if relative.endswith("/.state.lock"):
             lock_open_count += 1
             if lock_open_count == 2:
                 raise OSError("injected state lock restoration failure")
-        return original_open(path, *args)
+        return original_write(root, relative, data)
 
-    monkeypatch.setattr(state_module, "_sync_directory", fail_release_sync)
-    monkeypatch.setattr(state_module.os, "open", fail_restore_open)
+    monkeypatch.setattr(state_module.controlled_fs, "unlink", fail_release_sync)
+    monkeypatch.setattr(state_module.controlled_fs, "write_exclusive", fail_restore_write)
     with pytest.raises(StateStoreError, match="state lock release is uncertain"):
         _transition(
             store,
