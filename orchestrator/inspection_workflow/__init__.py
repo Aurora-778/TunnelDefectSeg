@@ -111,6 +111,12 @@ from .safe_reuse_staleness import (
     SafeReuseStalenessObserver,
 )
 from .explicit_resume_admission import ExplicitResumeAdmission, ExplicitResumeAdmissionResult
+from .resume_execution_preparation import (
+    RESUME_EXECUTION_PREPARATION_SCHEMA_VERSION,
+    ResumeExecutionPreparation,
+    ResumeExecutionPreparer,
+    prepare_resume_execution,
+)
 
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
@@ -201,4 +207,8 @@ __all__ = [
     "SafeReuseStalenessObserver",
     "ExplicitResumeAdmission",
     "ExplicitResumeAdmissionResult",
+    "RESUME_EXECUTION_PREPARATION_SCHEMA_VERSION",
+    "ResumeExecutionPreparation",
+    "ResumeExecutionPreparer",
+    "prepare_resume_execution",
 ]
