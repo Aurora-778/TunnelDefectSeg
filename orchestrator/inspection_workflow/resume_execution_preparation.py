@@ -74,18 +74,20 @@ def _is_uuid(value: str) -> bool:
 
 def _pristine_successor_entries(
     root: Path, successor_run_id: str,
+    _directory_chain=ExplicitResumeActivation._directory_chain,
+    _read_guarded=_B1_READ_GUARDED,
 ) -> tuple[tuple[str, ...], tuple[tuple[Path, int, int], ...]]:
     """Reject every successor entry that B.6's genesis authority does not own."""
     successor = root / "runs" / successor_run_id
-    chain = _B6_DIRECTORY_CHAIN(root, successor, label="B.7 successor entry set")
+    chain = _directory_chain(root, successor, label="B.7 successor entry set")
     entries = tuple(sorted(entry.name for entry in successor.iterdir()))
     if not {"state.json", "state_journal_tail.json"}.issubset(entries) or any(
         name not in _GENESIS_SUCCESSOR_ENTRIES for name in entries
     ):
         raise ValueError("successor contains non-genesis entries")
     for name in entries:
-        _B1_READ_GUARDED(root, f"runs/{successor_run_id}/{name}")
-    if _B6_DIRECTORY_CHAIN(root, successor, label="B.7 successor entry set") != chain:
+        _read_guarded(root, f"runs/{successor_run_id}/{name}")
+    if _directory_chain(root, successor, label="B.7 successor entry set") != chain:
         raise ValueError("successor directory changed during entry validation")
     return entries, chain
 
@@ -210,15 +212,18 @@ class ResumeExecutionPreparer:
         self.project_root = Path(project_root).absolute()
 
     def prepare(
-        self, *, successor_run_id: str, activation: ExplicitResumeActivationResult
+        self, *, successor_run_id: str, activation: ExplicitResumeActivationResult,
+        _controlled_root=a1_artifacts._controlled_temporary_root,
+        _result_type=ExplicitResumeActivationResult,
+        _result_validate=ExplicitResumeActivationResult.__post_init__,
     ) -> ResumeExecutionPreparation:
         try:
-            root = _CONTROLLED_ROOT(self.project_root)
+            root = _controlled_root(self.project_root)
             if type(successor_run_id) is not str or _RUN_ID_RE.fullmatch(successor_run_id) is None:
                 raise ValueError("successor run id is invalid")
-            if type(activation) is not _B6_RESULT:
+            if type(activation) is not _result_type:
                 raise ValueError("activation is not exact")
-            _B6_RESULT_VALIDATE(activation)
+            _result_validate(activation)
             if activation.status != _ACTIVATED or activation.successor_run_id != successor_run_id:
                 raise ValueError("activation does not bind successor")
             return self._prepare_current(root, activation)
@@ -228,9 +233,15 @@ class ResumeExecutionPreparer:
     def _prepare_current(
         self, root: Path, activation: ExplicitResumeActivationResult,
         _b6_evidence=ExplicitResumeActivation._activation_evidence,
+        _activation_type=ExplicitResumeActivation,
+        _state_store_type=StateStore,
+        _intent_path_for=ExplicitResumeActivation._intent_path_for,
+        _directory_chain=ExplicitResumeActivation._directory_chain,
+        _validate_intent=ExplicitResumeActivation._validate_intent,
+        _read_guarded=_B1_READ_GUARDED,
     ) -> ResumeExecutionPreparation:
-        verifier = _B6_ACTIVATION(root)
-        source = _STATE_STORE(root).load(run_id=activation.source_run_id)["canonical_state"]
+        verifier = _activation_type(root)
+        source = _state_store_type(root).load(run_id=activation.source_run_id)["canonical_state"]
         context = source.get("context")
         if (
             source.get("status") != "COMPLETED"
@@ -239,12 +250,12 @@ class ResumeExecutionPreparer:
             or context.get("resolved_input_descriptor_sha256") != activation.input_descriptor_sha256
         ):
             raise ValueError("source State drifted")
-        intent_path = _B6_INTENT_PATH_FOR(
+        intent_path = _intent_path_for(
             root, activation.source_run_id or "", activation.source_admission_sha256 or "",
         )
-        chain = _B6_DIRECTORY_CHAIN(root, intent_path.parent, label="B.7 activation intent")
-        intent_bytes, _ = _B1_READ_GUARDED(root, intent_path.relative_to(root).as_posix())
-        intent = _B6_VALIDATE_INTENT(json.loads(intent_bytes.decode("utf-8")))
+        chain = _directory_chain(root, intent_path.parent, label="B.7 activation intent")
+        intent_bytes, _ = _read_guarded(root, intent_path.relative_to(root).as_posix())
+        intent = _validate_intent(json.loads(intent_bytes.decode("utf-8")))
         expected = {
             "source_run_id": activation.source_run_id,
             "successor_run_id": activation.successor_run_id,
@@ -259,7 +270,7 @@ class ResumeExecutionPreparer:
         if source.get("state_version") != intent.get("source_state_version"):
             raise ValueError("source State version drifted")
         entries_before, successor_chain_before = _pristine_successor_entries(
-            root, activation.successor_run_id or ""
+            root, activation.successor_run_id or "", _directory_chain, _read_guarded
         )
         first = _b6_evidence(
             verifier, root, intent=intent, intent_bytes=intent_bytes,
@@ -274,10 +285,20 @@ class ResumeExecutionPreparer:
         )):
             raise ValueError("activation evidence drifted")
         entries_after, successor_chain_after = _pristine_successor_entries(
-            root, activation.successor_run_id or ""
+            root, activation.successor_run_id or "", _directory_chain, _read_guarded
         )
         if entries_after != entries_before or successor_chain_after != successor_chain_before:
             raise ValueError("successor entry set changed during preparation")
+        final_source = _state_store_type(root).load(run_id=activation.source_run_id)["canonical_state"]
+        final_context = final_source.get("context")
+        if (
+            final_source.get("state_version") != source.get("state_version")
+            or final_source.get("plan_fingerprint") != source.get("plan_fingerprint")
+            or not isinstance(final_context, Mapping)
+            or final_context.get("resolved_input_descriptor_sha256")
+            != context.get("resolved_input_descriptor_sha256")
+        ):
+            raise ValueError("source State changed during preparation")
         state = second["state"]
         if (
             state.get("status") != "CREATED" or state.get("state_version") != 0

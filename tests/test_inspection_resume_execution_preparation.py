@@ -19,6 +19,7 @@ from orchestrator.inspection_workflow.resume_execution_preparation import (
     ResumeExecutionPreparation,
     ResumeExecutionPreparer,
 )
+from orchestrator.state.store import StateStore
 
 
 @pytest.fixture
@@ -146,11 +147,13 @@ def test_non_genesis_entries_and_lock_residue_fail_closed(activated_successor, t
     _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id=activation.successor_run_id, activation=activation))
 
 
-def test_guarded_read_failure_and_successor_file_symlink_fail_closed(activated_successor, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_replaced_visible_guarded_read_does_not_substitute_authority(activated_successor, monkeypatch: pytest.MonkeyPatch) -> None:
     root, activation = activated_successor
     module = __import__("orchestrator.inspection_workflow.resume_execution_preparation", fromlist=["x"])
     monkeypatch.setattr(module, "_B1_READ_GUARDED", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("unreadable")))
-    _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id=activation.successor_run_id, activation=activation))
+    assert ResumeExecutionPreparer(root).prepare(
+        successor_run_id=activation.successor_run_id, activation=activation
+    ).resume_execution_prepared
 
 
 def test_leaf_symlink_fails_closed_when_supported(activated_successor) -> None:
@@ -204,7 +207,36 @@ def test_replaced_visible_b6_evidence_cannot_hide_missing_lock(
     root, activation = activated_successor
     module = __import__("orchestrator.inspection_workflow.resume_execution_preparation", fromlist=["x"])
     monkeypatch.setattr(module, "_B6_ACTIVATION_EVIDENCE", lambda *args, **kwargs: {}, raising=False)
+    monkeypatch.setattr(module, "_B6_ACTIVATION", lambda *args, **kwargs: object(), raising=False)
     (root / "runs" / ".active_run.lock").unlink()
+    _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id=activation.successor_run_id, activation=activation))
+
+
+@pytest.mark.parametrize("field", ["state_version", "plan_fingerprint", "descriptor"])
+def test_source_state_change_after_first_read_fails_closed(
+    activated_successor, monkeypatch: pytest.MonkeyPatch, field: str,
+) -> None:
+    root, activation = activated_successor
+    original_load = StateStore.load
+    changed = False
+
+    def load_then_change(self, *, run_id):
+        nonlocal changed
+        result = original_load(self, run_id=run_id)
+        if run_id == RUN_ID and not changed:
+            changed = True
+            path = root / "runs" / RUN_ID / "state.json"
+            value = json.loads(path.read_bytes())
+            if field == "state_version":
+                value["state_version"] += 1
+            elif field == "plan_fingerprint":
+                value["plan_fingerprint"] = "0" * 64
+            else:
+                value["context"]["resolved_input_descriptor_sha256"] = "0" * 64
+            path.write_bytes(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n")
+        return result
+
+    monkeypatch.setattr(StateStore, "load", load_then_change)
     _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id=activation.successor_run_id, activation=activation))
 
 

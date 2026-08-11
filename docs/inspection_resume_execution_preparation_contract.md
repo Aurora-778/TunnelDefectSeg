@@ -20,6 +20,12 @@ Every call re-validates the supplied activation bytes/SHA and all activation
 bindings, then reuses B.6's guarded activation-evidence authority twice.  The
 two complete observations must agree and exactly bind intent, source admission,
 successor State, Journal, tail anchor and running Active Run Lock.  The
+source State is also loaded again before result construction; its version, plan
+fingerprint and descriptor SHA must match the first controlled snapshot.
+The B.6, StateStore, intent/path and guarded-read authority handles are bound
+when the B.7 methods are defined, so replacing visible module globals cannot
+substitute those reads.
+
 successor must remain a pristine CREATED State at version zero with genesis
 Journal/anchor, empty task history, no publication evidence and the matching
 running Lock.  Its Run directory is a closed genesis set: `state.json`,
