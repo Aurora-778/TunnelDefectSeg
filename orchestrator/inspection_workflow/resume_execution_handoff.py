@@ -11,6 +11,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
+import types
 import uuid
 import weakref
 
@@ -128,7 +129,7 @@ _RESULT_IS_OFFICIAL, _REGISTER_RESULT, _DISCARD_RESULT = _new_result_registry()
 
 @dataclass(frozen=True, init=False, slots=True, weakref_slot=True)
 class ResumeExecutionHandoffResult:
-    """Immutable B.8 result; successful values are process-locally issued."""
+    """B.8 result frozen for the supported API; successes are internally issued."""
 
     status: str
     handoff_bytes: bytes
@@ -156,42 +157,31 @@ class ResumeExecutionHandoffResult:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         raise TypeError("ResumeExecutionHandoffResult is factory-only")
 
-    def __post_init__(
-        self,
-        _is_official=_RESULT_IS_OFFICIAL,
-        _sha256=_sha,
-        _bindings=_result_bindings,
-        _canonical_bytes=_canonical,
-        _ready=_READY,
-        _denied_status=_DENIED,
-        _schema_version=RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION,
-        _run_id_re=_RUN_ID_RE,
-        _sha_re=_SHA_RE,
-        _uuid_check=_is_uuid,
-    ) -> None:
-        if not _is_official(self):
+    def __post_init__(self) -> None:
+        authority = ResumeExecutionHandoffResult
+        if not authority._is_official_internal(self):
             raise ValueError("handoff result was not officially issued")
         if (
-            self.status not in {_ready, _denied_status}
+            self.status not in {authority._ready_internal, authority._denied_status_internal}
             or type(self.handoff_bytes) is not bytes
             or type(self.handoff_sha256) is not str
-            or _sha256(self.handoff_bytes) != self.handoff_sha256
+            or authority._sha256_internal(self.handoff_bytes) != self.handoff_sha256
             or type(self.required_task_ids) is not tuple
         ):
             raise ValueError("handoff result envelope is invalid")
-        bindings = _bindings(self)
-        expected = _canonical_bytes(
-            {"schema_version": _schema_version, "status": self.status}
-            if self.status == _denied_status
+        bindings = authority._bindings_internal(self)
+        expected = authority._canonical_internal(
+            {"schema_version": authority._schema_version_internal, "status": self.status}
+            if self.status == authority._denied_status_internal
             else {
-                "schema_version": _schema_version,
+                "schema_version": authority._schema_version_internal,
                 "status": self.status,
                 **bindings,
             }
         )
         if self.handoff_bytes != expected:
             raise ValueError("handoff canonical bytes do not match fields")
-        if self.status == _denied_status:
+        if self.status == authority._denied_status_internal:
             if self.required_task_ids or any(
                 value is not None
                 for name, value in bindings.items()
@@ -201,19 +191,19 @@ class ResumeExecutionHandoffResult:
             return
         if (
             type(self.successor_run_id) is not str
-            or _run_id_re.fullmatch(self.successor_run_id) is None
+            or authority._run_id_re_internal.fullmatch(self.successor_run_id) is None
             or type(self.source_run_id) is not str
-            or _run_id_re.fullmatch(self.source_run_id) is None
+            or authority._run_id_re_internal.fullmatch(self.source_run_id) is None
             or self.state_version != 1
             or type(self.source_state_version) is not int
             or self.source_state_version < 0
-            or not _uuid_check(self.allocation_token)
-            or not _uuid_check(self.lock_token)
+            or not authority._uuid_check_internal(self.allocation_token)
+            or not authority._uuid_check_internal(self.lock_token)
             or not self.required_task_ids
             or tuple(sorted(set(self.required_task_ids))) != self.required_task_ids
             or any(
                 type(getattr(self, name)) is not str
-                or _sha_re.fullmatch(getattr(self, name)) is None
+                or authority._sha_re_internal.fullmatch(getattr(self, name)) is None
                 for name in (
                     "handoff_intent_sha256",
                     "preparation_sha256",
@@ -234,7 +224,14 @@ class ResumeExecutionHandoffResult:
 
     @property
     def resume_execution_handed_off(self) -> bool:
-        return self.status == _READY
+        # Keep the public predicate independent of mutable module symbols and
+        # do not let an object.__new__ shell with copied fields self-assert as
+        # an official success without passing the sealed envelope check.
+        try:
+            self.__post_init__()
+        except Exception:
+            return False
+        return self.status == "resume_execution_handed_off"
 
 
 def _new_result_issuer(
@@ -266,7 +263,22 @@ def _new_result_issuer(
     return issue
 
 
+# Bind the result envelope's authority before creating the issuer.  None of
+# these capabilities is a dataclass field or a function default.
+ResumeExecutionHandoffResult._is_official_internal = _RESULT_IS_OFFICIAL
+ResumeExecutionHandoffResult._sha256_internal = _sha
+ResumeExecutionHandoffResult._bindings_internal = _result_bindings
+ResumeExecutionHandoffResult._canonical_internal = _canonical
+ResumeExecutionHandoffResult._ready_internal = "resume_execution_handed_off"
+ResumeExecutionHandoffResult._denied_status_internal = "resume_execution_not_handed_off"
+ResumeExecutionHandoffResult._schema_version_internal = RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION
+ResumeExecutionHandoffResult._run_id_re_internal = _RUN_ID_RE
+ResumeExecutionHandoffResult._sha_re_internal = _SHA_RE
+ResumeExecutionHandoffResult._uuid_check_internal = _is_uuid
+
+
 _RESULT_ISSUER = _new_result_issuer(_REGISTER_RESULT, _DISCARD_RESULT)
+ResumeExecutionHandoffResult._issue_internal = _RESULT_ISSUER
 
 
 def _new_denied_factory(issue_result: Any) -> Any:
@@ -284,6 +296,7 @@ def _new_denied_factory(issue_result: Any) -> Any:
 
 
 _DENIED_FACTORY = _new_denied_factory(_RESULT_ISSUER)
+ResumeExecutionHandoffResult._denied_internal = _DENIED_FACTORY
 
 
 def _issue(_values: Mapping[str, Any]) -> ResumeExecutionHandoffResult:
@@ -358,9 +371,12 @@ class ResumeExecutionHandoff:
         _transition_authority=None,
         _result_authority=None,
         _evidence_authority=None,
-        _denied_factory=_DENIED_FACTORY,
+        _denied_factory=None,
+        _canonical_bytes=_canonical,
     ) -> ResumeExecutionHandoffResult:
         try:
+            if _denied_factory is None:
+                _denied_factory = ResumeExecutionHandoffResult._denied_internal
             if any(
                 item is None
                 for item in (
@@ -462,7 +478,7 @@ class ResumeExecutionHandoff:
                     _now(),
                     source["state_version"],
                 )
-                intent_bytes = _canonical(intent)
+                intent_bytes = _canonical_bytes(intent)
                 with _bind_directories(chain):
                     _assert_directory_chain(chain, label="B.8 pre-intent")
                     # Reuse the sealed B.7 core as the last observable
@@ -591,9 +607,10 @@ class ResumeExecutionHandoff:
         run_id: str,
         activation: ExplicitResumeActivationResult,
         preparation: ResumeExecutionPreparation,
+        canonical_bytes=_canonical,
     ) -> dict[str, Any]:
         value = json.loads(data.decode("utf-8"))
-        if not isinstance(value, dict) or _canonical(value) != data:
+        if not isinstance(value, dict) or canonical_bytes(value) != data:
             raise ValueError("handoff intent is not canonical")
         timestamp = value.get("mutation_timestamp")
         if type(timestamp) is not str:
@@ -629,6 +646,7 @@ class ResumeExecutionHandoff:
         intent: Mapping[str, Any],
         intent_bytes: bytes,
         transition=StateStore.transition_status,
+        sha256=_sha,
     ) -> None:
         run_id = intent["successor_run_id"]
         token = intent["lock_token"]
@@ -645,7 +663,7 @@ class ResumeExecutionHandoff:
             payload={
                 "next_status": "PLANNED",
                 "metadata": {
-                    "resume_execution_handoff_intent_sha256": _sha(intent_bytes),
+                    "resume_execution_handoff_intent_sha256": sha256(intent_bytes),
                     "resume_execution_preparation_sha256": intent["preparation_sha256"],
                 },
                 "completion_evidence": None,
@@ -669,6 +687,8 @@ class ResumeExecutionHandoff:
         validate_lock=validate_active_run_lock_snapshot,
         validate_snapshot=StateStore.validate_authority_snapshot_bytes,
         intent_validate=None,
+        canonical_bytes=_canonical,
+        sha256=_sha,
     ) -> dict[str, Any]:
         run_id = intent["successor_run_id"]
         assert_directory_chain(chain, label="B.8 evidence")
@@ -715,11 +735,12 @@ class ResumeExecutionHandoff:
             or resume_activation.get("source_admission_sha256") != intent["source_admission_sha256"]
             or resume_activation.get("source_run_id") != intent["source_run_id"]
             or not isinstance(transition_metadata, Mapping)
-            or transition_metadata.get("resume_execution_handoff_intent_sha256") != _sha(intent_bytes)
+            or transition_metadata.get("resume_execution_handoff_intent_sha256") != sha256(intent_bytes)
             or transition_metadata.get("resume_execution_preparation_sha256") != intent["preparation_sha256"]
             or state.get("last_operation_id") != expected_operation
             or state.get("last_operation_kind") != "status_transition"
-            or _sha(_canonical(_plain(state.get("task_plan")))) != intent["task_plan_sha256"]
+            or sha256(canonical_bytes(_plain(state.get("task_plan"))))
+            != intent["task_plan_sha256"]
             or any(
                 state.get(name)
                 for name in (
@@ -746,10 +767,10 @@ class ResumeExecutionHandoff:
             raise ValueError("Active Run authority changed during evidence")
         assert_directory_chain(chain, label="B.8 evidence")
         return {
-            "state_sha256": _sha(state_bytes),
-            "journal_sha256": _sha(journal_bytes),
-            "journal_anchor_sha256": _sha(anchor_bytes),
-            "lock_sha256": _sha(lock_bytes),
+            "state_sha256": sha256(state_bytes),
+            "journal_sha256": sha256(journal_bytes),
+            "journal_anchor_sha256": sha256(anchor_bytes),
+            "lock_sha256": sha256(lock_bytes),
         }
 
     @classmethod
@@ -770,11 +791,11 @@ class ResumeExecutionHandoff:
         intent_validate=None,
         activation: ExplicitResumeActivationResult | None = None,
         source_validate=None,
-        issue_result=_RESULT_ISSUER,
+        issue_result=None,
         canonical_bytes=_canonical,
         sha256=_sha,
         schema_version=RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION,
-        ready_status=_READY,
+        ready_status="resume_execution_handed_off",
     ) -> ResumeExecutionHandoffResult:
         if (
             evidence_authority is None
@@ -783,6 +804,8 @@ class ResumeExecutionHandoff:
             or source_validate is None
         ):
             raise ValueError("result authority is unavailable")
+        if issue_result is None:
+            issue_result = ResumeExecutionHandoffResult._issue_internal
         source_before = store_load(
             store_type(root), run_id=intent["source_run_id"]
         )["canonical_state"]
@@ -897,10 +920,26 @@ def _seal_public_handoff(
     return handoff
 
 
+def _copy_function_defaults(function: Any) -> Any:
+    """Copy a function so later mutation of the source kwdefaults is inert."""
+
+    copied = types.FunctionType(
+        function.__code__,
+        function.__globals__,
+        name=function.__name__,
+        argdefs=function.__defaults__,
+        closure=function.__closure__,
+    )
+    copied.__kwdefaults__ = dict(function.__kwdefaults__ or {})
+    copied.__annotations__ = dict(getattr(function, "__annotations__", {}))
+    return copied
+
+
 _HANDOFF_AUTHORITY = ResumeExecutionHandoff.handoff
+_PUBLIC_HANDOFF_AUTHORITY = _copy_function_defaults(_HANDOFF_AUTHORITY)
 
 ResumeExecutionHandoff.handoff = _seal_public_handoff(  # type: ignore[method-assign]
-    _HANDOFF_AUTHORITY,
+    _PUBLIC_HANDOFF_AUTHORITY,
     ResumeExecutionHandoff._make_intent,
     ResumeExecutionHandoff._validate_intent,
     ResumeExecutionHandoff._validate_source,
@@ -940,6 +979,8 @@ del _REGISTER_RESULT
 del _DISCARD_RESULT
 del _RESULT_ISSUER
 del _DENIED_FACTORY
+del _PUBLIC_HANDOFF_AUTHORITY
 del _new_result_registry
 del _new_result_issuer
 del _new_denied_factory
+del _copy_function_defaults

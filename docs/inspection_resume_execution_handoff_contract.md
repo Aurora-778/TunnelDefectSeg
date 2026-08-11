@@ -27,17 +27,25 @@ match the activation and B.8 intent.  Replacing visible B.7 or StateStore module
 these authority calls.
 Both the class method and the module-level convenience function capture their
 real handoff callables at definition time; the convenience function does not
-dynamically look up `.handoff` on the captured class.  The handoff authority
-also captures independent success and denial issuers at definition time.  The
-result authority as a whole captures the exact result type, dataclass field
-set, official post-init validator, private process-local issuance registry,
-canonical serializer and SHA function.  Registry mutation and universal
-issuance capabilities are removed from the module namespace after sealing;
-visible `_denied`, `_issue` and issuer-helper compatibility symbols are not
-authority paths.  Replacing those symbols, the visible class or its `handoff`
-method therefore cannot redirect success or denial through the supported API.
-Every denial is a newly issued result, so mutating a previously returned
-object through unsupported Python reflection cannot poison later denials.
+dynamically look up `.handoff` on the captured class.  The public handoff uses
+an independent snapshot of the authority callable's defaults, so mutating the
+original authority function's `__kwdefaults__` is not a supported way to alter
+the public path.  Result issuance, denial, registration, canonicalization and
+SHA helpers are bound at definition time and are not placed in the `_result`
+issuer default or the `post_init` default tuple.  Visible `_denied`, `_issue`
+and issuer-helper compatibility symbols are not authority paths.  Replacing
+those ordinary module symbols, the visible class or its `handoff` method
+therefore cannot redirect success or denial through the supported API.
+Every denial is a newly issued result, so a prior denial cannot poison later
+denials through the supported API.
+
+This is a supported-API and ordinary-module-symbol-rebinding guarantee, not a
+claim that hostile same-process Python reflection is impossible.  In
+particular, callers must not use `object.__new__`, `object.__setattr__`,
+function `__closure__`/`__defaults__`/`__kwdefaults__`, private class
+attributes, or other runtime introspection as an authority interface.  Such
+operations are outside the immutable/result-authenticity contract and may
+mutate objects in a process that has already broken the module boundary.
 
 B.7's public `prepare()` dispatches its core through an instance attribute.
 B.8 therefore requires both the definition-time-captured public B.7 result and
@@ -140,13 +148,15 @@ classifies or validates source artifacts.
 
 ## Result and scope limits
 
-The result is immutable, canonical and process-locally factory-issued.  A
-public constructor, `object.__new__`, copied fields or self-consistent forged
-bytes are not an official success.  Result post-init validation and issuance
-use definition-time-bound private closures, so replacing visible issuance
-helpers cannot turn either branch into a forged official result.  The module
-does not expose the issuance registry, register/discard capability or a
-universal issuer.  Every
+The result is canonical, dataclass-frozen and process-locally factory-issued
+for the supported API.  A public constructor, copied fields or
+self-consistent forged bytes are not an official success through that API.
+Result post-init validation and issuance use definition-time-bound internal
+authority, so replacing visible issuance helpers cannot turn either branch
+into a forged official result.  The module does not document or support the
+issuance registry, register/discard capability or a universal issuer as an
+API.  Reflection that directly mutates a frozen object or reaches private
+runtime capabilities is explicitly excluded from this guarantee.  Every
 failure collapses to one stable
 `resume_execution_not_handed_off` value containing no run id, task id, path,
 binding, exception text or reason category.

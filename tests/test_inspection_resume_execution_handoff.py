@@ -485,6 +485,118 @@ def test_handoff_uses_definition_bound_denied_factory(
     assert _tree_snapshot(root) == before
 
 
+def test_original_authority_kwdefaults_cannot_replace_public_denial(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    handoff = ResumeExecutionHandoff(root)
+    first = handoff.handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+    assert first.resume_execution_handed_off
+
+    module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
+    )
+    authority = module._HANDOFF_AUTHORITY
+    original = dict(authority.__kwdefaults__ or {})
+    try:
+        authority.__kwdefaults__["_denied_factory"] = lambda: first
+        before = _tree_snapshot(root)
+        replay = handoff.handoff(
+            successor_run_id=activation.successor_run_id,
+            activation=activation,
+            preparation=preparation,
+        )
+    finally:
+        authority.__kwdefaults__ = original
+
+    _assert_denied(replay)
+    assert _tree_snapshot(root) == before
+
+
+def test_result_and_post_init_defaults_do_not_expose_success_issuance(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
+    )
+    result_function = ResumeExecutionHandoff._result.__func__
+    assert result_function.__defaults__ is not None
+    assert result_function.__defaults__[11] is None  # issue_result is not injectable
+    assert not any(
+        callable(value) and getattr(value, "__name__", None) == "issue"
+        for value in result_function.__defaults__
+    )
+    assert ResumeExecutionHandoffResult.__post_init__.__defaults__ is None
+
+    denied = ResumeExecutionHandoff(Path(".")).handoff(
+        successor_run_id="invalid",
+        activation=object(),  # type: ignore[arg-type]
+        preparation=object(),  # type: ignore[arg-type]
+    )
+    forged = object.__new__(ResumeExecutionHandoffResult)
+    for field in ResumeExecutionHandoffResult.__dataclass_fields__:
+        object.__setattr__(forged, field, getattr(denied, field))
+    assert not forged.resume_execution_handed_off
+    post_init = ResumeExecutionHandoffResult.__post_init__
+    original_defaults = post_init.__defaults__
+    try:
+        post_init.__defaults__ = (lambda *_args: True,)
+        with pytest.raises(ValueError):
+            forged.__post_init__()
+    finally:
+        post_init.__defaults__ = original_defaults
+    assert not hasattr(module, "_RESULT_ISSUER")
+
+
+def test_module_sha_and_canonical_rebinding_cannot_forge_evidence(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
+    )
+    monkeypatch.setattr(module, "_sha", lambda _data: "0" * 64)
+    monkeypatch.setattr(module, "_canonical", lambda _value: b"forged\n")
+
+    result = ResumeExecutionHandoff(root).handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+
+    assert result.resume_execution_handed_off
+    successor = root / "runs" / activation.successor_run_id
+    assert result.handoff_sha256 == hashlib.sha256(result.handoff_bytes).hexdigest()
+    for field, name in (
+        ("state_sha256", "state.json"),
+        ("journal_sha256", "state_journal.jsonl"),
+        ("journal_anchor_sha256", "state_journal_tail.json"),
+        ("lock_sha256", None),
+    ):
+        path = successor / name if name else root / "runs" / ".active_run.lock"
+        assert getattr(result, field) == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_ready_symbol_rebinding_cannot_turn_denied_into_success(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _, _ = activated_prepared_successor
+    module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
+    )
+    denied = ResumeExecutionHandoff(root).handoff(
+        successor_run_id="invalid",
+        activation=object(),  # type: ignore[arg-type]
+        preparation=object(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(module, "_READY", module._DENIED)
+    assert not denied.resume_execution_handed_off
+
+
 def test_success_result_uses_fully_sealed_issuance_chain(
     activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
