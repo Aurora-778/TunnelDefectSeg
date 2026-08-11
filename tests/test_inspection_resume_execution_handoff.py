@@ -518,7 +518,7 @@ def test_original_authority_kwdefaults_cannot_replace_public_denial(
 
 
 def test_result_and_post_init_defaults_do_not_expose_success_issuance(
-    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     module = __import__(
         "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
@@ -532,7 +532,7 @@ def test_result_and_post_init_defaults_do_not_expose_success_issuance(
     )
     assert ResumeExecutionHandoffResult.__post_init__.__defaults__ is None
 
-    denied = ResumeExecutionHandoff(Path(".")).handoff(
+    denied = ResumeExecutionHandoff(tmp_path).handoff(
         successor_run_id="invalid",
         activation=object(),  # type: ignore[arg-type]
         preparation=object(),  # type: ignore[arg-type]
