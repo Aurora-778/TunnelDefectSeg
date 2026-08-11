@@ -254,3 +254,11 @@ Remove-Item -LiteralPath $tmp -Force
 - Treat the default project loop as: implement change -> summarize and provide review prompt -> review -> provide repair prompt -> repair.
 - Look in `docs/solutions/` for reusable solved-problem notes before re-solving workflow, tooling, environment, or training-entrypoint issues.
 - After each `ce-compound` run, also persist stable reusable conclusions into long-term memory when the environment provides a memory mechanism; if no memory tool is available, record the durable rule in `AGENTS.md` or the relevant project knowledge file.
+
+## Long-running Tool Polling
+
+- For empty-stdin long-running asynchronous work, use `yield_time_ms >= 180000`; prefer `300000` when no intermediate output is needed.
+- Use `functions.wait` with `yield_time_ms >= 180000` for long-running cells or sub-agents.
+- Set the outer `functions.exec` `@exec` yield time at least 30000 ms longer than the longest nested wait so the outer cell does not yield first.
+- Do not apply long waits to non-empty `write_stdin` calls that send interactive input.
+- These tools return early when the process or cell completes; do not wake the model merely to report that work is still running.
