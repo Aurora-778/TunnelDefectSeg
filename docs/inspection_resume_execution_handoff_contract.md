@@ -15,12 +15,13 @@ an exact officially issued B.7 `resume_execution_prepared` result.  It accepts
 no path, task list, graph, artifact, hash, Registry, Controller, checkpoint or
 restore-point input.
 
-For a fresh `CREATED@0` successor, B.8 calls the definition-time-bound real
-B.7 preparation authority and requires exact preparation bytes and SHA before
-persisting anything.  The supplied activation and preparation must also pass
+On every supported call, B.8 calls the definition-time-bound real B.7
+preparation authority and requires an exact successful preparation with the
+same bytes and SHA before inspecting or persisting a B.8 intent.  The supplied
+activation and preparation must also pass
 their official post-init issuance checks and bind the same successor,
 activation, source admission, tokens, plan, descriptor, task plan and required
-task set.  The completed source State is reread on fresh handoff and replay;
+task set.  The completed source State is reread on a fresh handoff;
 its persisted version, plan fingerprint and descriptor binding must still
 match the activation and B.8 intent.  Replacing visible B.7 or StateStore module symbols cannot substitute
 these authority calls.
@@ -28,11 +29,21 @@ Both the class method and the module-level convenience function capture their
 real handoff authorities at definition time; replacing either visible class
 symbol does not redirect the supported API.
 
-After a successful handoff B.7 can no longer be called because its contract
-correctly accepts only a pristine `CREATED@0` successor.  An identical replay
-therefore validates the persisted B.8 intent and complete `PLANNED@1`
-State/Journal/tail-anchor/running-Lock authority instead.  It performs no new
-write and returns the same canonical result bytes.
+B.7's public `prepare()` dispatches its core through an instance attribute.
+B.8 therefore requires both the definition-time-captured public B.7 result and
+the definition-time-captured B.7 core result to be exact, officially valid and
+byte-identical.  Replacing visible `prepare`, `_prepare_current`, or the B.7
+denied-result helper cannot turn an old preparation into a successful replay.
+This is authority reuse, not a resolver-local copy of B.7 validation rules.
+
+The existing B.7 contract accepts only a pristine `CREATED@0` successor.  Once
+B.8 has committed `PLANNED@1`, B.7 cannot reissue a successful preparation.
+B.8 does not replace that authority with a local freshness approximation:
+every later replay is uniformly denied before any write, even when the
+persisted B.8 evidence is unchanged.  Repeated replay denials are byte-stable.
+This is the deliberate fail-closed resolution of the conflict between a real
+B.7 fence and success-result replay; a future authority may add replay-safe
+currentness proof, but B.8 does not copy B.1--B.7 validation rules.
 
 ## Transaction order
 
@@ -67,7 +78,7 @@ and Lock SHA values.
 |---|---|
 | No intent, pristine `CREATED@0` | Fresh B.7 fence, durable intent, official CAS transition |
 | Durable intent but still `CREATED@0` | Uniform denial; explicit later recovery is required |
-| Complete matching `PLANNED@1` authority | Idempotent success with identical result bytes |
+| Complete matching `PLANNED@1` authority | Uniform denial because real B.7 cannot re-prove a pristine preparation; no write |
 | State without intent | Uniform denial |
 | Journal/anchor/State split-brain or unresolved transaction | Uniform denial through StateStore authority |
 | Missing/conflicting Lock, recovery/release residue or unknown entry | Uniform denial |
@@ -87,6 +98,11 @@ their recovery and split-brain residues.  These checks provide a final
 observable pre-write identity fence, not a claim of kernel-atomic identity
 across unrelated directories.  Any observed ABA, path replacement, authority
 drift or exception fails closed.
+
+Deleting or changing source admission artifacts after the initial handoff
+cannot make replay succeed: replay must first pass the real B.7 authority and
+therefore denies at `PLANNED@1`.  This does not claim that B.8 independently
+classifies or validates source artifacts.
 
 ## Result and scope limits
 

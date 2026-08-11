@@ -54,7 +54,7 @@ def _assert_denied(result: ResumeExecutionHandoffResult) -> None:
     assert result.required_task_ids == ()
 
 
-def test_handoff_is_planned_only_idempotent_and_source_preserving(
+def test_handoff_is_planned_only_and_replay_fails_closed_without_writes(
     activated_prepared_successor,
 ) -> None:
     root, activation, preparation = activated_prepared_successor
@@ -71,9 +71,15 @@ def test_handoff_is_planned_only_idempotent_and_source_preserving(
         activation=activation,
         preparation=preparation,
     )
+    third = handoff.handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
     assert first.resume_execution_handed_off
-    assert first.handoff_bytes == second.handoff_bytes
-    assert first.handoff_sha256 == second.handoff_sha256
+    _assert_denied(second)
+    assert third.handoff_bytes == second.handoff_bytes
+    assert third.handoff_sha256 == second.handoff_sha256
     assert _tree_snapshot(root) == after_first
     assert _tree_snapshot(root / "runs" / RUN_ID) == source_before
 
@@ -88,6 +94,53 @@ def test_handoff_is_planned_only_idempotent_and_source_preserving(
         "state_journal.jsonl",
         "state_journal_tail.json",
     }
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "mutation"),
+    [
+        (f"runs/{RUN_ID}/artifacts/claim_decision.json", "delete"),
+        (f"runs/{RUN_ID}/artifacts/claim_decision.json", "same_size"),
+        (f"runs/{RUN_ID}/artifacts/comparison_evidence_manifest.json", "delete"),
+        (f"runs/{RUN_ID}/artifacts/comparison_evidence_manifest.json", "same_size"),
+        (f"runs/{RUN_ID}/final_summary.md", "delete"),
+        (f"runs/{RUN_ID}/final_summary.md", "same_size"),
+    ],
+)
+def test_replay_rechecks_real_b7_and_rejects_source_artifact_drift_without_writes(
+    activated_prepared_successor,
+    relative_path: str,
+    mutation: str,
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    handoff = ResumeExecutionHandoff(root)
+    assert handoff.handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    ).resume_execution_handed_off
+
+    target = root / relative_path
+    assert target.is_file()
+    if mutation == "delete":
+        target.unlink()
+    else:
+        original = target.read_bytes()
+        changed = bytearray(original)
+        assert changed
+        changed[len(changed) // 2] ^= 1
+        target.write_bytes(bytes(changed))
+        assert target.stat().st_size == len(original)
+    before = _tree_snapshot(root)
+
+    _assert_denied(
+        handoff.handoff(
+            successor_run_id=activation.successor_run_id,
+            activation=activation,
+            preparation=preparation,
+        )
+    )
+    assert _tree_snapshot(root) == before
 
 
 def test_intent_only_crash_is_stable_explicit_recovery_residue(
@@ -188,6 +241,46 @@ def test_visible_authority_symbol_replacement_cannot_admit_stale_evidence(
     assert result.resume_execution_handed_off
 
 
+def test_replay_uses_definition_bound_b7_despite_visible_success_substitution(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    handoff = ResumeExecutionHandoff(root)
+    assert handoff.handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    ).resume_execution_handed_off
+    module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
+    )
+    b7_module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_preparation", fromlist=["x"]
+    )
+    monkeypatch.setattr(module, "ResumeExecutionPreparer", lambda *_args: object())
+    monkeypatch.setattr(
+        ResumeExecutionPreparer,
+        "prepare",
+        lambda *_args, **_kwargs: preparation,
+    )
+    monkeypatch.setattr(
+        ResumeExecutionPreparer,
+        "_prepare_current",
+        lambda *_args, **_kwargs: preparation,
+    )
+    monkeypatch.setattr(b7_module, "_not_prepared", lambda: preparation)
+    before = _tree_snapshot(root)
+
+    _assert_denied(
+        handoff.handoff(
+            successor_run_id=activation.successor_run_id,
+            activation=activation,
+            preparation=preparation,
+        )
+    )
+    assert _tree_snapshot(root) == before
+
+
 def test_public_handoff_signature_has_no_authority_injection_parameters() -> None:
     assert tuple(inspect.signature(ResumeExecutionHandoff.handoff).parameters) == (
         "self",
@@ -277,8 +370,29 @@ def test_symlink_or_reparse_intent_residue_is_write_free(
     assert _tree_snapshot(root) == before
 
 
-@pytest.mark.parametrize("residue", ["missing_lock", "recovery", "unknown_successor"])
-def test_lock_recovery_and_unknown_residue_fail_closed(
+def test_simulated_reparse_is_executable_and_write_free(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    resolver = __import__(
+        "orchestrator.inspection_workflow.artifact_resolver", fromlist=["x"]
+    )
+    monkeypatch.setattr(resolver, "_is_reparse", lambda _entry: True)
+    before = _tree_snapshot(root)
+    _assert_denied(
+        ResumeExecutionHandoff(root).handoff(
+            successor_run_id=activation.successor_run_id,
+            activation=activation,
+            preparation=preparation,
+        )
+    )
+    assert _tree_snapshot(root) == before
+
+
+@pytest.mark.parametrize(
+    "residue", ["missing_lock", "recovery", "release", "unknown_successor"]
+)
+def test_lock_recovery_release_and_unknown_residue_fail_closed(
     activated_prepared_successor, residue: str
 ) -> None:
     root, activation, preparation = activated_prepared_successor
@@ -286,6 +400,8 @@ def test_lock_recovery_and_unknown_residue_fail_closed(
         (root / "runs" / ".active_run.lock").unlink()
     elif residue == "recovery":
         (root / "runs" / ".active_run.recovery.lock").write_bytes(b"residue")
+    elif residue == "release":
+        (root / "runs" / ".active_run.release.review.json").write_bytes(b"residue")
     else:
         (root / "runs" / activation.successor_run_id / "checkpoint.json").write_bytes(b"{}\n")
     before = _tree_snapshot(root)

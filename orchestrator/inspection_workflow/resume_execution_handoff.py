@@ -257,6 +257,7 @@ class ResumeExecutionHandoff:
         _preparation_validate=ResumeExecutionPreparation.__post_init__,
         _preparer_type=ResumeExecutionPreparer,
         _prepare=ResumeExecutionPreparer.prepare,
+        _prepare_current=ResumeExecutionPreparer._prepare_current,
         _directory_chain=ExplicitResumeActivation._directory_chain,
         _assert_directory_chain=ExplicitResumeActivation._assert_directory_chain,
         _read_guarded=_B1_READ_GUARDED,
@@ -307,6 +308,46 @@ class ResumeExecutionHandoff:
 
             successor = root / "runs" / successor_run_id
             chain = _directory_chain(root, successor, label="B.8 successor authority")
+
+            # B.7 is the only authority permitted to prove that the supplied
+            # preparation is current.  Run it on every supported invocation,
+            # including a call made after B.8 has already transitioned the
+            # successor.  B.7 intentionally accepts only pristine CREATED@0;
+            # therefore a PLANNED@1 replay fails closed instead of falling
+            # back to a resolver-local approximation of source freshness.
+            fresh = _prepare(
+                _preparer_type(root),
+                successor_run_id=successor_run_id,
+                activation=activation,
+            )
+            if (
+                type(fresh) is not _preparation_type
+                or not fresh.resume_execution_prepared
+                or fresh.preparation_bytes != preparation.preparation_bytes
+                or fresh.preparation_sha256 != preparation.preparation_sha256
+            ):
+                raise ValueError("preparation authority drifted")
+            _preparation_validate(fresh)
+            # ``ResumeExecutionPreparer.prepare`` dispatches its core through
+            # an instance attribute.  Cross-check the public result against
+            # the definition-time-captured B.7 core so replacing that visible
+            # class attribute (or B.7's denied-result helper) cannot replay an
+            # old successful preparation after the successor is PLANNED.
+            core_fresh = _prepare_current(
+                _preparer_type(root), root, activation
+            )
+            if (
+                type(core_fresh) is not _preparation_type
+                or not core_fresh.resume_execution_prepared
+                or core_fresh.preparation_bytes != preparation.preparation_bytes
+                or core_fresh.preparation_sha256 != preparation.preparation_sha256
+                or core_fresh.preparation_bytes != fresh.preparation_bytes
+                or core_fresh.preparation_sha256 != fresh.preparation_sha256
+            ):
+                raise ValueError("preparation core authority drifted")
+            _preparation_validate(core_fresh)
+            _assert_directory_chain(chain, label="B.8 post-preparation")
+
             intent_rel = f"runs/{successor_run_id}/resume_execution_handoff.intent.json"
             try:
                 (root / intent_rel).lstat()
@@ -317,19 +358,6 @@ class ResumeExecutionHandoff:
             intent_was_present = intent_bytes is not None
 
             if intent_bytes is None:
-                fresh = _prepare(
-                    _preparer_type(root),
-                    successor_run_id=successor_run_id,
-                    activation=activation,
-                )
-                if (
-                    type(fresh) is not _preparation_type
-                    or not fresh.resume_execution_prepared
-                    or fresh.preparation_bytes != preparation.preparation_bytes
-                    or fresh.preparation_sha256 != preparation.preparation_sha256
-                ):
-                    raise ValueError("preparation authority drifted")
-                _preparation_validate(fresh)
                 source = _store_load(
                     _store_type(root), run_id=activation.source_run_id
                 )["canonical_state"]
