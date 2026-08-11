@@ -43,6 +43,11 @@ admission SHA values, allocation/lock tokens, State version, plan fingerprint,
 descriptor SHA, canonical task-plan SHA and sorted required task ids.  This is
 a momentary integrity proof, not authorization to execute work.
 
+Successful objects are also issued by the local B.7 factory.  A value assembled
+with `object.__new__` is not an official preparation, even when its public
+fields and digest are self-consistent.  This issuance proof is intentionally
+process-local; it is not a serialization or cross-process authority format.
+
 ## Scope limit
 
 The boundary provides no hostile-source-authentication guarantee and cannot

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -77,6 +76,19 @@ def test_public_success_constructors_and_wrong_run_are_closed(activated_successo
         ResumeExecutionPreparation()  # type: ignore[call-arg]
     _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id="run_999", activation=activation))
     _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id=activation.successor_run_id, activation=object()))  # type: ignore[arg-type]
+
+
+def test_object_new_self_consistent_preparation_is_not_officially_issued(activated_successor) -> None:
+    root, activation = activated_successor
+    genuine = ResumeExecutionPreparer(root).prepare(
+        successor_run_id=activation.successor_run_id, activation=activation
+    )
+    assert genuine.resume_execution_prepared
+    forged = object.__new__(ResumeExecutionPreparation)
+    for name in genuine.__dataclass_fields__:
+        object.__setattr__(forged, name, getattr(genuine, name))
+    with pytest.raises(ValueError, match="official factory"):
+        forged.__post_init__()
 
 
 @pytest.mark.parametrize("run_id", ["", "run_1", "../run_701", "run_701/next", r"run_701\\next", "run_701:ads"])
@@ -186,28 +198,13 @@ def test_bound_authority_fields_drifting_fail_closed(activated_successor, target
     _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id=activation.successor_run_id, activation=activation))
 
 
-def test_same_byte_successor_directory_replacement_during_preparation_fails_closed(
+def test_replaced_visible_b6_evidence_cannot_hide_missing_lock(
     activated_successor, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, activation = activated_successor
     module = __import__("orchestrator.inspection_workflow.resume_execution_preparation", fromlist=["x"])
-    original = module._B6_ACTIVATION_EVIDENCE
-    successor = root / "runs" / activation.successor_run_id
-    calls = 0
-
-    def swap_after_first_evidence(*args, **kwargs):
-        nonlocal calls
-        result = original(*args, **kwargs)
-        calls += 1
-        if calls == 1:
-            replacement = successor.with_name(successor.name + "_replacement")
-            retired = successor.with_name(successor.name + "_retired")
-            shutil.copytree(successor, replacement)
-            successor.rename(retired)
-            replacement.rename(successor)
-        return result
-
-    monkeypatch.setattr(module, "_B6_ACTIVATION_EVIDENCE", swap_after_first_evidence)
+    monkeypatch.setattr(module, "_B6_ACTIVATION_EVIDENCE", lambda *args, **kwargs: {}, raising=False)
+    (root / "runs" / ".active_run.lock").unlink()
     _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id=activation.successor_run_id, activation=activation))
 
 

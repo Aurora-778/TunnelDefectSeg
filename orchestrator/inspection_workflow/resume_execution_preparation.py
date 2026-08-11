@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 import uuid
+import weakref
 
 from . import a1_artifacts
 from .explicit_resume_activation import (
@@ -33,7 +34,6 @@ _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _B6_ACTIVATION = ExplicitResumeActivation
 _B6_RESULT = ExplicitResumeActivationResult
 _B6_RESULT_VALIDATE = ExplicitResumeActivationResult.__post_init__
-_B6_ACTIVATION_EVIDENCE = ExplicitResumeActivation._activation_evidence
 _B6_INTENT_PATH_FOR = ExplicitResumeActivation._intent_path_for
 _B6_DIRECTORY_CHAIN = ExplicitResumeActivation._directory_chain
 _B6_VALIDATE_INTENT = ExplicitResumeActivation._validate_intent
@@ -90,7 +90,7 @@ def _pristine_successor_entries(
     return entries, chain
 
 
-@dataclass(frozen=True, init=False, slots=True)
+@dataclass(frozen=True, init=False, slots=True, weakref_slot=True)
 class ResumeExecutionPreparation:
     """Immutable B.7 handoff; successful values are factory-only."""
 
@@ -114,6 +114,8 @@ class ResumeExecutionPreparation:
         raise TypeError("ResumeExecutionPreparation is created only by ResumeExecutionPreparer")
 
     def __post_init__(self) -> None:
+        if id(self) not in _PREPARATION_BUILDING and _ISSUED_PREPARATIONS.get(id(self)) is not self:
+            raise ValueError("preparation was not issued by the official factory")
         if self.status not in {_READY, _NOT_READY} or type(self.preparation_bytes) is not bytes:
             raise ValueError("preparation status or bytes are invalid")
         if type(self.required_task_ids) is not tuple or not all(
@@ -173,6 +175,22 @@ class ResumeExecutionPreparation:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
 
 
+_PREPARATION_BUILDING: set[int] = set()
+_ISSUED_PREPARATIONS: weakref.WeakValueDictionary[int, ResumeExecutionPreparation] = weakref.WeakValueDictionary()
+
+
+def _seal_preparation(result: ResumeExecutionPreparation) -> ResumeExecutionPreparation:
+    """Register only results constructed by this module's internal factory."""
+    marker = id(result)
+    _PREPARATION_BUILDING.add(marker)
+    try:
+        result.__post_init__()
+    finally:
+        _PREPARATION_BUILDING.discard(marker)
+    _ISSUED_PREPARATIONS[id(result)] = result
+    return result
+
+
 def _not_prepared() -> ResumeExecutionPreparation:
     result = object.__new__(ResumeExecutionPreparation)
     object.__setattr__(result, "status", _NOT_READY)
@@ -182,8 +200,7 @@ def _not_prepared() -> ResumeExecutionPreparation:
     for name in ResumeExecutionPreparation.__dataclass_fields__:
         if name not in {"status", "preparation_bytes", "preparation_sha256"}:
             object.__setattr__(result, name, () if name == "required_task_ids" else None)
-    result.__post_init__()
-    return result
+    return _seal_preparation(result)
 
 
 class ResumeExecutionPreparer:
@@ -208,7 +225,10 @@ class ResumeExecutionPreparer:
         except Exception:
             return _not_prepared()
 
-    def _prepare_current(self, root: Path, activation: ExplicitResumeActivationResult) -> ResumeExecutionPreparation:
+    def _prepare_current(
+        self, root: Path, activation: ExplicitResumeActivationResult,
+        _b6_evidence=ExplicitResumeActivation._activation_evidence,
+    ) -> ResumeExecutionPreparation:
         verifier = _B6_ACTIVATION(root)
         source = _STATE_STORE(root).load(run_id=activation.source_run_id)["canonical_state"]
         context = source.get("context")
@@ -241,11 +261,11 @@ class ResumeExecutionPreparer:
         entries_before, successor_chain_before = _pristine_successor_entries(
             root, activation.successor_run_id or ""
         )
-        first = _B6_ACTIVATION_EVIDENCE(
+        first = _b6_evidence(
             verifier, root, intent=intent, intent_bytes=intent_bytes,
             source_state=source, durable_intent_chain=chain,
         )
-        second = _B6_ACTIVATION_EVIDENCE(
+        second = _b6_evidence(
             verifier, root, intent=intent, intent_bytes=intent_bytes,
             source_state=source, durable_intent_chain=chain,
         )
@@ -293,8 +313,7 @@ class ResumeExecutionPreparer:
         object.__setattr__(result, "preparation_sha256", _sha256(data))
         for name, value in bindings.items():
             object.__setattr__(result, name, tuple(value) if name == "required_task_ids" else value)
-        result.__post_init__()
-        return result
+        return _seal_preparation(result)
 
 
 def prepare_resume_execution(
