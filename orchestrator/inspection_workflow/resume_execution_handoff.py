@@ -276,6 +276,7 @@ class ResumeExecutionHandoff:
         _transition_authority=None,
         _result_authority=None,
         _evidence_authority=None,
+        _denied_factory=_denied,
     ) -> ResumeExecutionHandoffResult:
         try:
             if any(
@@ -382,6 +383,27 @@ class ResumeExecutionHandoff:
                 intent_bytes = _canonical(intent)
                 with _bind_directories(chain):
                     _assert_directory_chain(chain, label="B.8 pre-intent")
+                    # Reuse the sealed B.7 core as the last observable
+                    # successor-authority fence before the first B.8 write.
+                    # It re-reads and validates the canonical State, Journal,
+                    # tail anchor, running Lock, activation intent, directory
+                    # identities, and complete preparation bindings.
+                    prewrite_fresh = _prepare_current(
+                        _preparer_type(root), root, activation
+                    )
+                    if (
+                        type(prewrite_fresh) is not _preparation_type
+                        or not prewrite_fresh.resume_execution_prepared
+                        or prewrite_fresh.preparation_bytes != preparation.preparation_bytes
+                        or prewrite_fresh.preparation_sha256 != preparation.preparation_sha256
+                        or prewrite_fresh.preparation_bytes != fresh.preparation_bytes
+                        or prewrite_fresh.preparation_sha256 != fresh.preparation_sha256
+                        or prewrite_fresh.preparation_bytes != core_fresh.preparation_bytes
+                        or prewrite_fresh.preparation_sha256 != core_fresh.preparation_sha256
+                    ):
+                        raise ValueError("pre-intent successor authority drifted")
+                    _preparation_validate(prewrite_fresh)
+                    _assert_directory_chain(chain, label="B.8 pre-intent authority")
                     _write_exclusive(root, intent_rel, intent_bytes)
                     _assert_directory_chain(chain, label="B.8 post-intent")
             else:
@@ -431,7 +453,7 @@ class ResumeExecutionHandoff:
                 _source_validate,
             )
         except Exception:
-            return _denied()
+            return _denied_factory()
 
     @staticmethod
     def _make_intent(
@@ -782,7 +804,7 @@ ResumeExecutionHandoff.handoff = _seal_public_handoff(  # type: ignore[method-as
 )
 
 
-def _seal_public_function(handoff_type: Any) -> Any:
+def _seal_public_function(handoff_type: Any, handoff_authority: Any) -> Any:
     def handoff_resume_execution(
         project_root: Path,
         *,
@@ -790,7 +812,8 @@ def _seal_public_function(handoff_type: Any) -> Any:
         activation: ExplicitResumeActivationResult,
         preparation: ResumeExecutionPreparation,
     ) -> ResumeExecutionHandoffResult:
-        return handoff_type(project_root).handoff(
+        return handoff_authority(
+            handoff_type(project_root),
             successor_run_id=successor_run_id,
             activation=activation,
             preparation=preparation,
@@ -799,4 +822,6 @@ def _seal_public_function(handoff_type: Any) -> Any:
     return handoff_resume_execution
 
 
-handoff_resume_execution = _seal_public_function(ResumeExecutionHandoff)
+handoff_resume_execution = _seal_public_function(
+    ResumeExecutionHandoff, ResumeExecutionHandoff.handoff
+)

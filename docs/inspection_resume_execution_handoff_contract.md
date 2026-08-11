@@ -26,8 +26,11 @@ its persisted version, plan fingerprint and descriptor binding must still
 match the activation and B.8 intent.  Replacing visible B.7 or StateStore module symbols cannot substitute
 these authority calls.
 Both the class method and the module-level convenience function capture their
-real handoff authorities at definition time; replacing either visible class
-symbol does not redirect the supported API.
+real handoff callables at definition time; the convenience function does not
+dynamically look up `.handoff` on the captured class.  The handoff authority
+also captures the canonical denied-result factory at definition time.
+Replacing the visible class, its `handoff` method, or the module `_denied`
+symbol therefore cannot redirect success or denial through the supported API.
 
 B.7's public `prepare()` dispatches its core through an instance attribute.
 B.8 therefore requires both the definition-time-captured public B.7 result and
@@ -38,6 +41,17 @@ is collapsed only after the other authority has also been attempted.  Replacing
 visible `prepare`, `_prepare_current`, or the B.7 denied-result helper cannot
 turn an old preparation into a successful replay.  This is authority reuse,
 not a resolver-local copy of B.7 validation rules.
+
+After both initial B.7 authorities succeed and immediately before the first
+B.8 intent publication, B.8 invokes the definition-time-bound B.7 core again
+inside the captured successor directory binding.  That official fence rereads
+the activation intent, successor State, Journal, tail anchor and running Lock,
+rechecks the successor directory identity and closed entry set, and must issue
+an exact, officially valid preparation whose bytes and SHA match the supplied
+and both initial preparations.  Consequently, a canonical `CREATED@0`
+authority rebound to a different plan or task plan after the initial B.7 pair
+is denied before B.8 writes intent, State, Journal or anchor bytes.  B.8 does
+not reproduce any reduced B.7 schema or evidence validator.
 
 The existing B.7 contract accepts only a pristine `CREATED@0` successor.  Once
 B.8 has committed `PLANNED@1`, B.7 cannot reissue a successful preparation.
@@ -53,12 +67,14 @@ currentness proof, but B.8 does not copy B.1--B.7 validation rules.
 The transaction has these observable states:
 
 1. `CREATED@0`, genesis Journal/anchor, running ActiveRunLock, no B.8 intent.
-2. A canonical B.8 intent is durably published with an exclusive controlled
+2. A final official B.7 core observation proves the same complete successor
+   authority and preparation binding inside the captured directory chain.
+3. A canonical B.8 intent is durably published with an exclusive controlled
    write while the captured root/runs/successor directory identities are
    bound.
-3. The official StateStore CAS transition commits `PLANNED@1`, its Journal
+4. The official StateStore CAS transition commits `PLANNED@1`, its Journal
    record and tail anchor under the same captured directory binding.
-4. Two complete guarded evidence observations must agree before B.8 issues a
+5. Two complete guarded evidence observations must agree before B.8 issues a
    success result.
 
 The intent binds source/successor ids, B.7 preparation SHA, B.6 activation and

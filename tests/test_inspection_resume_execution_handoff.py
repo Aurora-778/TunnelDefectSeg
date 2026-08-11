@@ -408,6 +408,107 @@ def test_public_function_uses_sealed_handoff_type(
     ).resume_execution_handed_off
 
 
+def test_public_function_uses_definition_bound_handoff_callable(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    first = handoff_resume_execution(
+        root,
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+    assert first.resume_execution_handed_off
+    monkeypatch.setattr(
+        ResumeExecutionHandoff,
+        "handoff",
+        lambda *_args, **_kwargs: first,
+    )
+    before = _tree_snapshot(root)
+
+    result = handoff_resume_execution(
+        root,
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+
+    _assert_denied(result)
+    assert _tree_snapshot(root) == before
+
+
+def test_handoff_uses_definition_bound_denied_factory(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    handoff = ResumeExecutionHandoff(root)
+    first = handoff.handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+    assert first.resume_execution_handed_off
+    module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
+    )
+    monkeypatch.setattr(module, "_denied", lambda: first)
+    before = _tree_snapshot(root)
+
+    result = handoff.handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+
+    _assert_denied(result)
+    assert _tree_snapshot(root) == before
+
+
+def test_successor_authority_rebind_after_b7_is_denied_before_intent_write(
+    activated_prepared_successor,
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    successor = root / "runs" / activation.successor_run_id
+    state_path = successor / "state.json"
+    rebound_snapshot = None
+    changed = False
+
+    def assert_then_rebind(chain, *, label):
+        nonlocal changed, rebound_snapshot
+        if label == "B.8 post-preparation" and not changed:
+            state = json.loads(state_path.read_bytes())
+            rebound_plan = list(state["task_plan"])
+            rebound_plan.append({"task_id": "zz_rebound", "deps": [], "required": True})
+            state["task_plan"] = rebound_plan
+            plan_bytes = json.dumps(
+                rebound_plan, sort_keys=True, separators=(",", ":")
+            ).encode() + b"\n"
+            state["plan_fingerprint"] = hashlib.sha256(plan_bytes).hexdigest()
+            state_path.write_bytes(
+                json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+            )
+            loaded = StateStore(root).load(run_id=activation.successor_run_id)[
+                "canonical_state"
+            ]
+            assert loaded["status"] == "CREATED" and loaded["state_version"] == 0
+            assert loaded["task_plan"][-1]["task_id"] == "zz_rebound"
+            rebound_snapshot = _tree_snapshot(root)
+            changed = True
+
+    result = _invoke_handoff_authority(
+        ResumeExecutionHandoff(root),
+        activation,
+        preparation,
+        _assert_directory_chain=assert_then_rebind,
+    )
+
+    _assert_denied(result)
+    assert changed
+    assert rebound_snapshot is not None
+    assert _tree_snapshot(root) == rebound_snapshot
+    assert not (successor / "resume_execution_handoff.intent.json").exists()
+
+
 def test_same_byte_successor_directory_aba_before_intent_write_is_write_free(
     activated_prepared_successor,
 ) -> None:
