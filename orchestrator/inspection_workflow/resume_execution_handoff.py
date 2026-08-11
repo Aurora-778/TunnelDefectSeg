@@ -315,36 +315,47 @@ class ResumeExecutionHandoff:
             # successor.  B.7 intentionally accepts only pristine CREATED@0;
             # therefore a PLANNED@1 replay fails closed instead of falling
             # back to a resolver-local approximation of source freshness.
-            fresh = _prepare(
-                _preparer_type(root),
-                successor_run_id=successor_run_id,
-                activation=activation,
-            )
-            if (
-                type(fresh) is not _preparation_type
-                or not fresh.resume_execution_prepared
-                or fresh.preparation_bytes != preparation.preparation_bytes
-                or fresh.preparation_sha256 != preparation.preparation_sha256
-            ):
-                raise ValueError("preparation authority drifted")
-            _preparation_validate(fresh)
             # ``ResumeExecutionPreparer.prepare`` dispatches its core through
             # an instance attribute.  Cross-check the public result against
             # the definition-time-captured B.7 core so replacing that visible
             # class attribute (or B.7's denied-result helper) cannot replay an
-            # old successful preparation after the successor is PLANNED.
-            core_fresh = _prepare_current(
-                _preparer_type(root), root, activation
-            )
+            # old successful preparation after the successor is PLANNED.  Both
+            # authorities are attempted before either result is evaluated, so
+            # a public denial cannot bypass the captured core fence.
+            fresh = None
+            core_fresh = None
+            public_failed = False
+            core_failed = False
+            try:
+                fresh = _prepare(
+                    _preparer_type(root),
+                    successor_run_id=successor_run_id,
+                    activation=activation,
+                )
+            except Exception:
+                public_failed = True
+            try:
+                core_fresh = _prepare_current(
+                    _preparer_type(root), root, activation
+                )
+            except Exception:
+                core_failed = True
             if (
-                type(core_fresh) is not _preparation_type
+                public_failed
+                or core_failed
+                or type(fresh) is not _preparation_type
+                or type(core_fresh) is not _preparation_type
+                or not fresh.resume_execution_prepared
                 or not core_fresh.resume_execution_prepared
+                or fresh.preparation_bytes != preparation.preparation_bytes
+                or fresh.preparation_sha256 != preparation.preparation_sha256
                 or core_fresh.preparation_bytes != preparation.preparation_bytes
                 or core_fresh.preparation_sha256 != preparation.preparation_sha256
                 or core_fresh.preparation_bytes != fresh.preparation_bytes
                 or core_fresh.preparation_sha256 != fresh.preparation_sha256
             ):
-                raise ValueError("preparation core authority drifted")
+                raise ValueError("preparation authorities drifted")
+            _preparation_validate(fresh)
             _preparation_validate(core_fresh)
             _assert_directory_chain(chain, label="B.8 post-preparation")
 

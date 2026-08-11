@@ -32,9 +32,12 @@ symbol does not redirect the supported API.
 B.7's public `prepare()` dispatches its core through an instance attribute.
 B.8 therefore requires both the definition-time-captured public B.7 result and
 the definition-time-captured B.7 core result to be exact, officially valid and
-byte-identical.  Replacing visible `prepare`, `_prepare_current`, or the B.7
-denied-result helper cannot turn an old preparation into a successful replay.
-This is authority reuse, not a resolver-local copy of B.7 validation rules.
+byte-identical.  Both authorities are attempted before either result is
+evaluated, including on a `PLANNED@1` replay; a denial or exception from either
+is collapsed only after the other authority has also been attempted.  Replacing
+visible `prepare`, `_prepare_current`, or the B.7 denied-result helper cannot
+turn an old preparation into a successful replay.  This is authority reuse,
+not a resolver-local copy of B.7 validation rules.
 
 The existing B.7 contract accepts only a pristine `CREATED@0` successor.  Once
 B.8 has committed `PLANNED@1`, B.7 cannot reissue a successful preparation.

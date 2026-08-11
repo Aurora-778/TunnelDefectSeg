@@ -54,6 +54,33 @@ def _assert_denied(result: ResumeExecutionHandoffResult) -> None:
     assert result.required_task_ids == ()
 
 
+def _invoke_handoff_authority(
+    handoff: ResumeExecutionHandoff,
+    activation: ExplicitResumeActivationResult,
+    preparation: ResumeExecutionPreparation,
+    **overrides,
+) -> ResumeExecutionHandoffResult:
+    module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
+    )
+    authorities = {
+        "_intent_factory": ResumeExecutionHandoff._make_intent,
+        "_intent_validate": ResumeExecutionHandoff._validate_intent,
+        "_source_validate": ResumeExecutionHandoff._validate_source,
+        "_transition_authority": ResumeExecutionHandoff._transition,
+        "_result_authority": ResumeExecutionHandoff._result,
+        "_evidence_authority": ResumeExecutionHandoff._evidence,
+    }
+    authorities.update(overrides)
+    return module._HANDOFF_AUTHORITY(
+        handoff,
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+        **authorities,
+    )
+
+
 def test_handoff_is_planned_only_and_replay_fails_closed_without_writes(
     activated_prepared_successor,
 ) -> None:
@@ -94,6 +121,79 @@ def test_handoff_is_planned_only_and_replay_fails_closed_without_writes(
         "state_journal.jsonl",
         "state_journal_tail.json",
     }
+
+
+def test_planned_replay_attempts_public_and_core_b7_before_denial(
+    activated_prepared_successor,
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    handoff = ResumeExecutionHandoff(root)
+    assert handoff.handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    ).resume_execution_handed_off
+
+    public_prepare = ResumeExecutionPreparer.prepare
+    core_prepare = ResumeExecutionPreparer._prepare_current
+    calls: list[str] = []
+
+    def counted_public(*args, **kwargs):
+        calls.append("public")
+        return public_prepare(*args, **kwargs)
+
+    def counted_core(*args, **kwargs):
+        calls.append("core")
+        return core_prepare(*args, **kwargs)
+
+    before = _tree_snapshot(root)
+    result = _invoke_handoff_authority(
+        handoff,
+        activation,
+        preparation,
+        _prepare=counted_public,
+        _prepare_current=counted_core,
+    )
+
+    _assert_denied(result)
+    assert calls == ["public", "core"]
+    assert _tree_snapshot(root) == before
+
+
+@pytest.mark.parametrize("failing_authority", ["public", "core"])
+def test_b7_authority_exception_still_attempts_both_before_write_free_denial(
+    activated_prepared_successor,
+    failing_authority: str,
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    public_prepare = ResumeExecutionPreparer.prepare
+    core_prepare = ResumeExecutionPreparer._prepare_current
+    calls: list[str] = []
+
+    def counted_public(*args, **kwargs):
+        calls.append("public")
+        if failing_authority == "public":
+            raise RuntimeError("public authority failure")
+        return public_prepare(*args, **kwargs)
+
+    def counted_core(*args, **kwargs):
+        calls.append("core")
+        if failing_authority == "core":
+            raise RuntimeError("core authority failure")
+        return core_prepare(*args, **kwargs)
+
+    before = _tree_snapshot(root)
+    result = _invoke_handoff_authority(
+        ResumeExecutionHandoff(root),
+        activation,
+        preparation,
+        _prepare=counted_public,
+        _prepare_current=counted_core,
+    )
+
+    _assert_denied(result)
+    assert calls == ["public", "core"]
+    assert _tree_snapshot(root) == before
 
 
 @pytest.mark.parametrize(
