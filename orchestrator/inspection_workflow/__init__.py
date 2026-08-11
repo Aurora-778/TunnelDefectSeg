@@ -117,6 +117,13 @@ from .resume_execution_preparation import (
     ResumeExecutionPreparer,
     prepare_resume_execution,
 )
+from .resume_execution_handoff import (
+    RESUME_EXECUTION_HANDOFF_INTENT_SCHEMA_VERSION,
+    RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION,
+    ResumeExecutionHandoff,
+    ResumeExecutionHandoffResult,
+    handoff_resume_execution,
+)
 
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
@@ -211,4 +218,9 @@ __all__ = [
     "ResumeExecutionPreparation",
     "ResumeExecutionPreparer",
     "prepare_resume_execution",
+    "RESUME_EXECUTION_HANDOFF_INTENT_SCHEMA_VERSION",
+    "RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION",
+    "ResumeExecutionHandoff",
+    "ResumeExecutionHandoffResult",
+    "handoff_resume_execution",
 ]
