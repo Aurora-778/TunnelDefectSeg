@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -237,6 +238,41 @@ def test_source_state_change_after_first_read_fails_closed(
         return result
 
     monkeypatch.setattr(StateStore, "load", load_then_change)
+    _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id=activation.successor_run_id, activation=activation))
+
+
+@pytest.mark.parametrize("target", ["lock", "state", "journal", "anchor", "directory"])
+def test_successor_change_during_final_source_read_fails_closed(
+    activated_successor, monkeypatch: pytest.MonkeyPatch, target: str,
+) -> None:
+    root, activation = activated_successor
+    original_load = StateStore.load
+    source_reads = 0
+    successor = root / "runs" / activation.successor_run_id
+
+    def load_then_change_successor(self, *, run_id):
+        nonlocal source_reads
+        result = original_load(self, run_id=run_id)
+        if run_id == RUN_ID:
+            source_reads += 1
+            if source_reads == 2:
+                if target == "lock":
+                    (root / "runs" / ".active_run.lock").unlink()
+                elif target == "state":
+                    (successor / "state.json").write_bytes(b"{}\n")
+                elif target == "journal":
+                    (successor / "state_journal.jsonl").write_bytes(b"drift\n")
+                elif target == "anchor":
+                    (successor / "state_journal_tail.json").write_bytes(b"{}\n")
+                else:
+                    replacement = successor.with_name(successor.name + "_replacement")
+                    retired = successor.with_name(successor.name + "_retired")
+                    shutil.copytree(successor, replacement)
+                    successor.rename(retired)
+                    replacement.rename(successor)
+        return result
+
+    monkeypatch.setattr(StateStore, "load", load_then_change_successor)
     _assert_denied(ResumeExecutionPreparer(root).prepare(successor_run_id=activation.successor_run_id, activation=activation))
 
 

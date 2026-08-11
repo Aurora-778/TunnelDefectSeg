@@ -299,7 +299,20 @@ class ResumeExecutionPreparer:
             != context.get("resolved_input_descriptor_sha256")
         ):
             raise ValueError("source State changed during preparation")
-        state = second["state"]
+        final_evidence = _b6_evidence(
+            verifier, root, intent=intent, intent_bytes=intent_bytes,
+            source_state=final_source, durable_intent_chain=chain,
+        )
+        entries_final, successor_chain_final = _pristine_successor_entries(
+            root, activation.successor_run_id or "", _directory_chain, _read_guarded
+        )
+        if (
+            final_evidence != second
+            or entries_final != entries_after
+            or successor_chain_final != successor_chain_after
+        ):
+            raise ValueError("successor authority changed before preparation result")
+        state = final_evidence["state"]
         if (
             state.get("status") != "CREATED" or state.get("state_version") != 0
             or bool(state.get("task_status")) or bool(state.get("task_attempts"))

@@ -22,6 +22,9 @@ two complete observations must agree and exactly bind intent, source admission,
 successor State, Journal, tail anchor and running Active Run Lock.  The
 source State is also loaded again before result construction; its version, plan
 fingerprint and descriptor SHA must match the first controlled snapshot.
+After that source check, B.7 performs one final complete B.6 evidence and
+successor-directory observation; it must exactly equal the prior evidence and
+directory identity/entry-set snapshot before a prepared result is issued.
 The B.6, StateStore, intent/path and guarded-read authority handles are bound
 when the B.7 methods are defined, so replacing visible module globals cannot
 substitute those reads.
