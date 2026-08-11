@@ -50,7 +50,27 @@ def _assert_denied(result: ResumeExecutionHandoffResult) -> None:
         b'"status":"resume_execution_not_handed_off"}\n'
     )
     assert result.handoff_sha256 == hashlib.sha256(result.handoff_bytes).hexdigest()
-    assert result.successor_run_id is None
+    for name in (
+        "successor_run_id",
+        "source_run_id",
+        "handoff_intent_sha256",
+        "preparation_sha256",
+        "activation_sha256",
+        "activation_intent_sha256",
+        "source_admission_sha256",
+        "source_state_version",
+        "allocation_token",
+        "lock_token",
+        "state_version",
+        "plan_fingerprint",
+        "input_descriptor_sha256",
+        "task_plan_sha256",
+        "state_sha256",
+        "journal_sha256",
+        "journal_anchor_sha256",
+        "lock_sha256",
+    ):
+        assert getattr(result, name) is None
     assert result.required_task_ids == ()
 
 
@@ -461,7 +481,209 @@ def test_handoff_uses_definition_bound_denied_factory(
     )
 
     _assert_denied(result)
+    result.__post_init__()
     assert _tree_snapshot(root) == before
+
+
+def test_success_result_uses_fully_sealed_issuance_chain(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
+    )
+    monkeypatch.setattr(
+        module,
+        "_issue",
+        lambda _values: (_ for _ in ()).throw(AssertionError("substituted issue")),
+    )
+    monkeypatch.setattr(
+        module,
+        "_seal_result_issuer",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("substituted issuer seal")
+        ),
+    )
+    monkeypatch.setattr(module, "_denied", lambda: None)
+    for name in (
+        "_RESULT_IS_OFFICIAL",
+        "_REGISTER_RESULT",
+        "_DISCARD_RESULT",
+        "_RESULT_ISSUER",
+        "_DENIED_FACTORY",
+        "_BUILDING",
+        "_ISSUED",
+    ):
+        assert not hasattr(module, name)
+    real_evidence = ResumeExecutionHandoff._evidence
+    evidence_calls = 0
+
+    def evidence_then_replace_issuance_symbols(*args, **kwargs):
+        nonlocal evidence_calls
+        value = real_evidence(*args, **kwargs)
+        evidence_calls += 1
+        if evidence_calls == 2:
+            monkeypatch.setattr(
+                module,
+                "_canonical",
+                lambda _value: (_ for _ in ()).throw(
+                    AssertionError("substituted canonical serializer")
+                ),
+            )
+            monkeypatch.setattr(
+                module,
+                "_sha",
+                lambda _data: (_ for _ in ()).throw(
+                    AssertionError("substituted SHA helper")
+                ),
+            )
+        return value
+
+    result = _invoke_handoff_authority(
+        ResumeExecutionHandoff(root),
+        activation,
+        preparation,
+        _evidence_authority=evidence_then_replace_issuance_symbols,
+    )
+
+    assert result.resume_execution_handed_off
+    assert evidence_calls == 2
+    result.__post_init__()
+
+
+def test_handoff_uses_fully_sealed_denied_issuance_chain(
+    activated_prepared_successor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    handoff = ResumeExecutionHandoff(root)
+    first = handoff.handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+    assert first.resume_execution_handed_off
+    module = __import__(
+        "orchestrator.inspection_workflow.resume_execution_handoff", fromlist=["x"]
+    )
+    monkeypatch.setattr(module, "_denied", lambda: first)
+    monkeypatch.setattr(module, "_issue", lambda _values: first)
+    monkeypatch.setattr(module, "_seal_result_issuer", lambda *_args: lambda _values: first)
+    monkeypatch.setattr(module, "_canonical", lambda _value: first.handoff_bytes)
+    monkeypatch.setattr(module, "_sha", lambda _data: first.handoff_sha256)
+    before = _tree_snapshot(root)
+
+    result = handoff.handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+
+    _assert_denied(result)
+    result.__post_init__()
+    assert _tree_snapshot(root) == before
+
+
+def test_denied_results_are_fresh_and_cannot_poison_later_denials(
+    activated_prepared_successor,
+) -> None:
+    root, _, _ = activated_prepared_successor
+    handoff = ResumeExecutionHandoff(root)
+    first = handoff.handoff(
+        successor_run_id="invalid",
+        activation=object(),  # type: ignore[arg-type]
+        preparation=object(),  # type: ignore[arg-type]
+    )
+    _assert_denied(first)
+    object.__setattr__(first, "status", "resume_execution_handed_off")
+
+    second = handoff.handoff(
+        successor_run_id="invalid",
+        activation=object(),  # type: ignore[arg-type]
+        preparation=object(),  # type: ignore[arg-type]
+    )
+
+    assert second is not first
+    _assert_denied(second)
+    second.__post_init__()
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["activation_intent", "successor_plan_fingerprint", "successor_task_plan"],
+)
+def test_authority_drift_after_final_b7_is_denied_before_any_handoff_write(
+    activated_prepared_successor,
+    drift: str,
+) -> None:
+    root, activation, preparation = activated_prepared_successor
+    successor = root / "runs" / activation.successor_run_id
+    activation_intent = next(
+        (root / "runs" / RUN_ID / "resume_activation").glob("*.intent.json")
+    )
+    state_path = successor / "state.json"
+    real_core = ResumeExecutionPreparer._prepare_current
+    attack_snapshot = None
+    calls = 0
+
+    def prepare_then_drift(preparer, authority_root, authority_activation):
+        nonlocal calls, attack_snapshot
+        result = real_core(preparer, authority_root, authority_activation)
+        calls += 1
+        if calls == 2:
+            if drift == "activation_intent":
+                changed = json.loads(activation_intent.read_bytes())
+                changed["source_state_version"] += 1
+                checksum_value = {
+                    name: value
+                    for name, value in changed.items()
+                    if name != "intent_checksum"
+                }
+                checksum_bytes = json.dumps(
+                    checksum_value, sort_keys=True, separators=(",", ":")
+                ).encode() + b"\n"
+                changed["intent_checksum"] = hashlib.sha256(checksum_bytes).hexdigest()
+                activation_intent.write_bytes(
+                    json.dumps(changed, sort_keys=True, separators=(",", ":")).encode()
+                    + b"\n"
+                )
+                assert ExplicitResumeActivation._validate_intent(changed) == changed
+            else:
+                state = json.loads(state_path.read_bytes())
+                if drift == "successor_plan_fingerprint":
+                    state["plan_fingerprint"] = "a" * 64
+                else:
+                    rebound_plan = list(state["task_plan"])
+                    rebound_plan.append(
+                        {"task_id": "zz_after_fence", "deps": [], "required": True}
+                    )
+                    state["task_plan"] = rebound_plan
+                state_path.write_bytes(
+                    json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
+                    + b"\n"
+                )
+                loaded = StateStore(root).load(run_id=activation.successor_run_id)[
+                    "canonical_state"
+                ]
+                assert loaded["status"] == "CREATED" and loaded["state_version"] == 0
+                if drift == "successor_plan_fingerprint":
+                    assert loaded["plan_fingerprint"] == "a" * 64
+                else:
+                    assert loaded["task_plan"][-1]["task_id"] == "zz_after_fence"
+            attack_snapshot = _tree_snapshot(root)
+        return result
+
+    result = _invoke_handoff_authority(
+        ResumeExecutionHandoff(root),
+        activation,
+        preparation,
+        _prepare_current=prepare_then_drift,
+    )
+
+    _assert_denied(result)
+    assert calls >= 2
+    assert attack_snapshot is not None
+    assert _tree_snapshot(root) == attack_snapshot
+    assert not (successor / "resume_execution_handoff.intent.json").exists()
 
 
 def test_successor_authority_rebind_after_b7_is_denied_before_intent_write(

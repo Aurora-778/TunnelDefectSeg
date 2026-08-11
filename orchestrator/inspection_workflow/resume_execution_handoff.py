@@ -106,6 +106,26 @@ def _result_bindings(result: "ResumeExecutionHandoffResult") -> dict[str, Any]:
     }
 
 
+def _new_result_registry() -> tuple[Any, Any, Any]:
+    issued: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
+
+    def is_official(result: Any) -> bool:
+        return issued.get(id(result)) is result
+
+    def register(result: Any) -> None:
+        issued[id(result)] = result
+
+    def discard(result: Any) -> None:
+        marker = id(result)
+        if issued.get(marker) is result:
+            issued.pop(marker, None)
+
+    return is_official, register, discard
+
+
+_RESULT_IS_OFFICIAL, _REGISTER_RESULT, _DISCARD_RESULT = _new_result_registry()
+
+
 @dataclass(frozen=True, init=False, slots=True, weakref_slot=True)
 class ResumeExecutionHandoffResult:
     """Immutable B.8 result; successful values are process-locally issued."""
@@ -136,30 +156,42 @@ class ResumeExecutionHandoffResult:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         raise TypeError("ResumeExecutionHandoffResult is factory-only")
 
-    def __post_init__(self) -> None:
-        if id(self) not in _BUILDING and _ISSUED.get(id(self)) is not self:
+    def __post_init__(
+        self,
+        _is_official=_RESULT_IS_OFFICIAL,
+        _sha256=_sha,
+        _bindings=_result_bindings,
+        _canonical_bytes=_canonical,
+        _ready=_READY,
+        _denied_status=_DENIED,
+        _schema_version=RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION,
+        _run_id_re=_RUN_ID_RE,
+        _sha_re=_SHA_RE,
+        _uuid_check=_is_uuid,
+    ) -> None:
+        if not _is_official(self):
             raise ValueError("handoff result was not officially issued")
         if (
-            self.status not in {_READY, _DENIED}
+            self.status not in {_ready, _denied_status}
             or type(self.handoff_bytes) is not bytes
             or type(self.handoff_sha256) is not str
-            or _sha(self.handoff_bytes) != self.handoff_sha256
+            or _sha256(self.handoff_bytes) != self.handoff_sha256
             or type(self.required_task_ids) is not tuple
         ):
             raise ValueError("handoff result envelope is invalid")
-        bindings = _result_bindings(self)
-        expected = _canonical(
-            {"schema_version": RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION, "status": self.status}
-            if self.status == _DENIED
+        bindings = _bindings(self)
+        expected = _canonical_bytes(
+            {"schema_version": _schema_version, "status": self.status}
+            if self.status == _denied_status
             else {
-                "schema_version": RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION,
+                "schema_version": _schema_version,
                 "status": self.status,
                 **bindings,
             }
         )
         if self.handoff_bytes != expected:
             raise ValueError("handoff canonical bytes do not match fields")
-        if self.status == _DENIED:
+        if self.status == _denied_status:
             if self.required_task_ids or any(
                 value is not None
                 for name, value in bindings.items()
@@ -169,19 +201,19 @@ class ResumeExecutionHandoffResult:
             return
         if (
             type(self.successor_run_id) is not str
-            or _RUN_ID_RE.fullmatch(self.successor_run_id) is None
+            or _run_id_re.fullmatch(self.successor_run_id) is None
             or type(self.source_run_id) is not str
-            or _RUN_ID_RE.fullmatch(self.source_run_id) is None
+            or _run_id_re.fullmatch(self.source_run_id) is None
             or self.state_version != 1
             or type(self.source_state_version) is not int
             or self.source_state_version < 0
-            or not _is_uuid(self.allocation_token)
-            or not _is_uuid(self.lock_token)
+            or not _uuid_check(self.allocation_token)
+            or not _uuid_check(self.lock_token)
             or not self.required_task_ids
             or tuple(sorted(set(self.required_task_ids))) != self.required_task_ids
             or any(
                 type(getattr(self, name)) is not str
-                or _SHA_RE.fullmatch(getattr(self, name)) is None
+                or _sha_re.fullmatch(getattr(self, name)) is None
                 for name in (
                     "handoff_intent_sha256",
                     "preparation_sha256",
@@ -205,37 +237,86 @@ class ResumeExecutionHandoffResult:
         return self.status == _READY
 
 
-_BUILDING: set[int] = set()
-_ISSUED: weakref.WeakValueDictionary[int, ResumeExecutionHandoffResult] = (
-    weakref.WeakValueDictionary()
-)
+def _new_result_issuer(
+    register: Any,
+    discard: Any,
+) -> Any:
+    result_type = ResumeExecutionHandoffResult
+    post_init = ResumeExecutionHandoffResult.__post_init__
+    fields = tuple(result_type.__dataclass_fields__)
+    object_new = object.__new__
+    object_setattr = object.__setattr__
+
+    def issue(values: Mapping[str, Any]) -> ResumeExecutionHandoffResult:
+        result = object_new(result_type)
+        for name in fields:
+            object_setattr(
+                result,
+                name,
+                values.get(name, () if name == "required_task_ids" else None),
+            )
+        register(result)
+        try:
+            post_init(result)
+        except Exception:
+            discard(result)
+            raise
+        return result
+
+    return issue
 
 
-def _issue(values: Mapping[str, Any]) -> ResumeExecutionHandoffResult:
-    result = object.__new__(ResumeExecutionHandoffResult)
-    for name in ResumeExecutionHandoffResult.__dataclass_fields__:
-        object.__setattr__(
-            result,
-            name,
-            values.get(name, () if name == "required_task_ids" else None),
-        )
-    marker = id(result)
-    _BUILDING.add(marker)
-    try:
-        result.__post_init__()
-    finally:
-        _BUILDING.discard(marker)
-    _ISSUED[marker] = result
-    return result
+_RESULT_ISSUER = _new_result_issuer(_REGISTER_RESULT, _DISCARD_RESULT)
 
 
-def _denied() -> ResumeExecutionHandoffResult:
+def _new_denied_factory(issue_result: Any) -> Any:
     data = _canonical(
         {"schema_version": RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION, "status": _DENIED}
     )
-    return _issue(
-        {"status": _DENIED, "handoff_bytes": data, "handoff_sha256": _sha(data)}
-    )
+    sha256 = _sha
+
+    def denied() -> ResumeExecutionHandoffResult:
+        return issue_result(
+            {"status": _DENIED, "handoff_bytes": data, "handoff_sha256": sha256(data)}
+        )
+
+    return denied
+
+
+_DENIED_FACTORY = _new_denied_factory(_RESULT_ISSUER)
+
+
+def _issue(_values: Mapping[str, Any]) -> ResumeExecutionHandoffResult:
+    """Unsupported visible compatibility surface; never an authority."""
+
+    raise TypeError("handoff result issuance is internal")
+
+
+def _denied() -> ResumeExecutionHandoffResult:
+    """Unsupported visible compatibility surface; never an authority."""
+
+    raise TypeError("handoff denial issuance is internal")
+
+
+def _seal_result_issuer(*_args: Any, **_kwargs: Any) -> Any:
+    """Unsupported visible compatibility surface; never an authority."""
+
+    raise TypeError("handoff result issuer sealing is internal")
+
+
+def _publish_intent(
+    root: Path,
+    relative: str,
+    data: bytes,
+    precondition: Any,
+    write_exclusive: Any,
+) -> tuple[int, int]:
+    """Run the final observable authority fence at publication entry."""
+
+    if not callable(precondition):
+        raise ValueError("intent publication precondition is unavailable")
+    precondition()
+    return write_exclusive(root, relative, data)
 
 
 class ResumeExecutionHandoff:
@@ -262,6 +343,7 @@ class ResumeExecutionHandoff:
         _assert_directory_chain=ExplicitResumeActivation._assert_directory_chain,
         _read_guarded=_B1_READ_GUARDED,
         _write_exclusive=controlled_fs.write_exclusive,
+        _publish_authority=_publish_intent,
         _bind_directories=controlled_fs.bind_directory_identities,
         _store_type=StateStore,
         _store_load=StateStore.load,
@@ -276,7 +358,7 @@ class ResumeExecutionHandoff:
         _transition_authority=None,
         _result_authority=None,
         _evidence_authority=None,
-        _denied_factory=_denied,
+        _denied_factory=_DENIED_FACTORY,
     ) -> ResumeExecutionHandoffResult:
         try:
             if any(
@@ -388,23 +470,42 @@ class ResumeExecutionHandoff:
                     # It re-reads and validates the canonical State, Journal,
                     # tail anchor, running Lock, activation intent, directory
                     # identities, and complete preparation bindings.
-                    prewrite_fresh = _prepare_current(
-                        _preparer_type(root), root, activation
+                    def validate_publication_precondition() -> None:
+                        prewrite_fresh = _prepare_current(
+                            _preparer_type(root), root, activation
+                        )
+                        if (
+                            type(prewrite_fresh) is not _preparation_type
+                            or not prewrite_fresh.resume_execution_prepared
+                            or prewrite_fresh.preparation_bytes
+                            != preparation.preparation_bytes
+                            or prewrite_fresh.preparation_sha256
+                            != preparation.preparation_sha256
+                            or prewrite_fresh.preparation_bytes != fresh.preparation_bytes
+                            or prewrite_fresh.preparation_sha256
+                            != fresh.preparation_sha256
+                            or prewrite_fresh.preparation_bytes
+                            != core_fresh.preparation_bytes
+                            or prewrite_fresh.preparation_sha256
+                            != core_fresh.preparation_sha256
+                        ):
+                            raise ValueError("pre-intent successor authority drifted")
+                        _preparation_validate(prewrite_fresh)
+                        _assert_directory_chain(
+                            chain, label="B.8 pre-intent authority"
+                        )
+
+                    # Establish the baseline, then require the sealed publisher
+                    # to run the same complete authority proof as its immediate
+                    # observable write precondition.
+                    validate_publication_precondition()
+                    _publish_authority(
+                        root,
+                        intent_rel,
+                        intent_bytes,
+                        validate_publication_precondition,
+                        _write_exclusive,
                     )
-                    if (
-                        type(prewrite_fresh) is not _preparation_type
-                        or not prewrite_fresh.resume_execution_prepared
-                        or prewrite_fresh.preparation_bytes != preparation.preparation_bytes
-                        or prewrite_fresh.preparation_sha256 != preparation.preparation_sha256
-                        or prewrite_fresh.preparation_bytes != fresh.preparation_bytes
-                        or prewrite_fresh.preparation_sha256 != fresh.preparation_sha256
-                        or prewrite_fresh.preparation_bytes != core_fresh.preparation_bytes
-                        or prewrite_fresh.preparation_sha256 != core_fresh.preparation_sha256
-                    ):
-                        raise ValueError("pre-intent successor authority drifted")
-                    _preparation_validate(prewrite_fresh)
-                    _assert_directory_chain(chain, label="B.8 pre-intent authority")
-                    _write_exclusive(root, intent_rel, intent_bytes)
                     _assert_directory_chain(chain, label="B.8 post-intent")
             else:
                 intent = _intent_validate(
@@ -669,6 +770,11 @@ class ResumeExecutionHandoff:
         intent_validate=None,
         activation: ExplicitResumeActivationResult | None = None,
         source_validate=None,
+        issue_result=_RESULT_ISSUER,
+        canonical_bytes=_canonical,
+        sha256=_sha,
+        schema_version=RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION,
+        ready_status=_READY,
     ) -> ResumeExecutionHandoffResult:
         if (
             evidence_authority is None
@@ -710,7 +816,7 @@ class ResumeExecutionHandoff:
         bindings = {
             "successor_run_id": intent["successor_run_id"],
             "source_run_id": intent["source_run_id"],
-            "handoff_intent_sha256": _sha(intent_bytes),
+            "handoff_intent_sha256": sha256(intent_bytes),
             "preparation_sha256": intent["preparation_sha256"],
             "activation_sha256": intent["activation_sha256"],
             "activation_intent_sha256": intent["activation_intent_sha256"],
@@ -725,12 +831,12 @@ class ResumeExecutionHandoff:
             "required_task_ids": tuple(intent["required_task_ids"]),
             **first,
         }
-        data = _canonical(
-            {"schema_version": RESUME_EXECUTION_HANDOFF_SCHEMA_VERSION, "status": _READY,
+        data = canonical_bytes(
+            {"schema_version": schema_version, "status": ready_status,
              **{**bindings, "required_task_ids": list(bindings["required_task_ids"])}}
         )
-        return _issue(
-            {"status": _READY, "handoff_bytes": data, "handoff_sha256": _sha(data), **bindings}
+        return issue_result(
+            {"status": ready_status, "handoff_bytes": data, "handoff_sha256": sha256(data), **bindings}
         )
 
 
@@ -825,3 +931,15 @@ def _seal_public_function(handoff_type: Any, handoff_authority: Any) -> Any:
 handoff_resume_execution = _seal_public_function(
     ResumeExecutionHandoff, ResumeExecutionHandoff.handoff
 )
+
+# The supported callables above retain the authority closures they need.  Do
+# not leave the registries, register/discard capabilities, or universal issuer
+# reachable as module attributes that a caller could repurpose.
+del _RESULT_IS_OFFICIAL
+del _REGISTER_RESULT
+del _DISCARD_RESULT
+del _RESULT_ISSUER
+del _DENIED_FACTORY
+del _new_result_registry
+del _new_result_issuer
+del _new_denied_factory

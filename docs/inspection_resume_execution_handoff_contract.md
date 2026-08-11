@@ -28,9 +28,16 @@ these authority calls.
 Both the class method and the module-level convenience function capture their
 real handoff callables at definition time; the convenience function does not
 dynamically look up `.handoff` on the captured class.  The handoff authority
-also captures the canonical denied-result factory at definition time.
-Replacing the visible class, its `handoff` method, or the module `_denied`
-symbol therefore cannot redirect success or denial through the supported API.
+also captures independent success and denial issuers at definition time.  The
+result authority as a whole captures the exact result type, dataclass field
+set, official post-init validator, private process-local issuance registry,
+canonical serializer and SHA function.  Registry mutation and universal
+issuance capabilities are removed from the module namespace after sealing;
+visible `_denied`, `_issue` and issuer-helper compatibility symbols are not
+authority paths.  Replacing those symbols, the visible class or its `handoff`
+method therefore cannot redirect success or denial through the supported API.
+Every denial is a newly issued result, so mutating a previously returned
+object through unsupported Python reflection cannot poison later denials.
 
 B.7's public `prepare()` dispatches its core through an instance attribute.
 B.8 therefore requires both the definition-time-captured public B.7 result and
@@ -42,16 +49,19 @@ visible `prepare`, `_prepare_current`, or the B.7 denied-result helper cannot
 turn an old preparation into a successful replay.  This is authority reuse,
 not a resolver-local copy of B.7 validation rules.
 
-After both initial B.7 authorities succeed and immediately before the first
-B.8 intent publication, B.8 invokes the definition-time-bound B.7 core again
-inside the captured successor directory binding.  That official fence rereads
-the activation intent, successor State, Journal, tail anchor and running Lock,
+After both initial B.7 authorities succeed, B.8 first establishes a complete
+B.7/B.6 authority baseline inside the captured successor directory binding.
+The definition-time-bound intent publisher then invokes that same complete
+authority proof again as its last observable publication-entry precondition,
+before it calls the controlled exclusive writer.  The proof rereads the B.6
+activation intent, successor State, Journal, tail anchor and running Lock,
 rechecks the successor directory identity and closed entry set, and must issue
 an exact, officially valid preparation whose bytes and SHA match the supplied
-and both initial preparations.  Consequently, a canonical `CREATED@0`
-authority rebound to a different plan or task plan after the initial B.7 pair
-is denied before B.8 writes intent, State, Journal or anchor bytes.  B.8 does
-not reproduce any reduced B.7 schema or evidence validator.
+and both initial preparations.  Consequently, an activation-intent drift or a
+canonical `CREATED@0` authority rebound to a different plan or task plan that
+is observable at publication entry is denied before B.8 writes intent, State,
+Journal or anchor bytes.  B.8 does not reproduce any reduced B.6/B.7 schema or
+evidence validator.
 
 The existing B.7 contract accepts only a pristine `CREATED@0` successor.  Once
 B.8 has committed `PLANNED@1`, B.7 cannot reissue a successful preparation.
@@ -67,11 +77,12 @@ currentness proof, but B.8 does not copy B.1--B.7 validation rules.
 The transaction has these observable states:
 
 1. `CREATED@0`, genesis Journal/anchor, running ActiveRunLock, no B.8 intent.
-2. A final official B.7 core observation proves the same complete successor
-   authority and preparation binding inside the captured directory chain.
-3. A canonical B.8 intent is durably published with an exclusive controlled
-   write while the captured root/runs/successor directory identities are
-   bound.
+2. An official B.7 core observation establishes the complete successor
+   authority and preparation baseline inside the captured directory chain.
+3. The sealed publication authority repeats that official proof as its last
+   observable publication-entry precondition, then durably publishes the
+   canonical B.8 intent with the captured exclusive controlled writer while
+   the root/runs/successor directory identities are bound.
 4. The official StateStore CAS transition commits `PLANNED@1`, its Journal
    record and tail anchor under the same captured directory binding.
 5. Two complete guarded evidence observations must agree before B.8 issues a
@@ -114,9 +125,13 @@ Intent creation and StateStore mutation use the existing controlled filesystem
 and directory-identity binding.  Guarded reads reject non-regular files,
 symlinks and reparse points; StateStore and ActiveRunLock validators reject
 their recovery and split-brain residues.  These checks provide a final
-observable pre-write identity fence, not a claim of kernel-atomic identity
-across unrelated directories.  Any observed ABA, path replacement, authority
-drift or exception fails closed.
+observable publication-entry identity and authority fence, not a claim of a
+kernel-atomic transaction across the separately stored activation evidence,
+successor authority and B.8 intent.  Any ABA, path replacement, authority
+drift or exception observed by that fence fails closed without a B.8 write.
+An unsynchronised hostile mutation in the instruction gap after the callback
+returns is outside this boundary's provable guarantee; B.8 does not describe
+the callback and subsequent filesystem publication as cross-directory atomic.
 
 Deleting or changing source admission artifacts after the initial handoff
 cannot make replay succeed: replay must first pass the real B.7 authority and
@@ -127,7 +142,12 @@ classifies or validates source artifacts.
 
 The result is immutable, canonical and process-locally factory-issued.  A
 public constructor, `object.__new__`, copied fields or self-consistent forged
-bytes are not an official success.  Every failure collapses to one stable
+bytes are not an official success.  Result post-init validation and issuance
+use definition-time-bound private closures, so replacing visible issuance
+helpers cannot turn either branch into a forged official result.  The module
+does not expose the issuance registry, register/discard capability or a
+universal issuer.  Every
+failure collapses to one stable
 `resume_execution_not_handed_off` value containing no run id, task id, path,
 binding, exception text or reason category.
 
