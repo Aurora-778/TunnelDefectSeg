@@ -44,19 +44,20 @@ def activated_prepared_successor(
         "orchestrator.inspection_workflow.explicit_resume_activation",
         fromlist=["x"],
     )
-    baseline_artifacts: dict[str, bytes] | None = None
+    baseline_source: dict[str, bytes] | None = None
 
-    def artifact_snapshot() -> dict[str, bytes]:
+    def source_snapshot() -> dict[str, bytes]:
         return {
             path.relative_to(completed_run).as_posix(): path.read_bytes()
             for path in sorted(
-                (completed_run / "runs" / RUN_ID / "artifacts").rglob("*")
+                (completed_run / "runs" / RUN_ID).rglob("*")
             )
             if path.is_file()
+            and "resume_activation" not in path.relative_to(completed_run).parts
         }
 
     def fast_b5_admit(admitter: object, *, run_id: object):
-        nonlocal baseline_artifacts
+        nonlocal baseline_source
         result = _test_b5_admit(admitter, run_id=run_id)
         if not (
             (completed_run / "runs" / RUN_ID / "artifacts" / "claim_decision.json")
@@ -65,10 +66,10 @@ def activated_prepared_successor(
                 "orchestrator.inspection_workflow.explicit_resume_admission",
                 fromlist=["x"],
             )._not_admissible()
-        current_artifacts = artifact_snapshot()
-        if baseline_artifacts is None:
-            baseline_artifacts = current_artifacts
-        elif current_artifacts != baseline_artifacts:
+        current_source = source_snapshot()
+        if baseline_source is None:
+            baseline_source = current_source
+        elif current_source != baseline_source:
             return __import__(
                 "orchestrator.inspection_workflow.explicit_resume_admission",
                 fromlist=["x"],
@@ -640,3 +641,274 @@ def test_b9_failed_first_task_records_one_attempt_and_never_auto_retries(
 
     assert not second.resume_execution_executed
     assert _tree_snapshot(root) == after_failure
+
+
+@pytest.mark.parametrize(
+    "selector",
+    ["claim", "a1_manifest", "frame_records", "admitted"],
+)
+def test_b9_agent_entry_source_drift_cannot_issue_success(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+    selector: str,
+) -> None:
+    from orchestrator.agents.association_agent import AssociationAgent
+    from orchestrator.inspection_workflow.safe_reuse import SafeReuseAuthorizer
+
+    root, activation, preparation, handoff = activated_prepared_successor
+    source = root / "runs" / handoff.source_run_id
+    if selector == "claim":
+        target = source / "artifacts" / "claim_decision.json"
+    elif selector == "a1_manifest":
+        target = source / "artifacts" / "comparison_evidence_manifest.json"
+    elif selector == "frame_records":
+        target = source / "work" / "raw_prepared" / "frame_records.csv"
+    else:
+        decision = SafeReuseAuthorizer(root).authorize(run_id=handoff.source_run_id)
+        assert decision.reuse_allowed
+        target = root / str(decision.inventory[-1]["path"])
+    assert target.is_file()
+    original = AssociationAgent.run
+    drifted = False
+
+    def drift_at_agent_entry(self, context):
+        nonlocal drifted
+        if not drifted:
+            data = bytearray(target.read_bytes())
+            data[len(data) // 2] ^= 1
+            target.write_bytes(bytes(data))
+            drifted = True
+        return original(self, context)
+
+    monkeypatch.setattr(AssociationAgent, "run", drift_at_agent_entry)
+    result = _b9(root, handoff)
+
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+def test_b9_public_sink_replacement_cannot_bypass_task_fences(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_b9()
+    root, activation, preparation, handoff = activated_prepared_successor
+    target = root / "runs" / handoff.source_run_id / "artifacts" / "claim_decision.json"
+
+    async def bypass(self, event):
+        if event.get("checkpoint_kind") == "task_started":
+            data = bytearray(target.read_bytes())
+            data[len(data) // 2] ^= 1
+            target.write_bytes(bytes(data))
+        return await self._controller.submit_checkpoint_event(event)
+
+    monkeypatch.setattr(module._BoundedSink, "submit_checkpoint_event", bypass)
+    monkeypatch.setattr(module._BoundedSink, "set_task_start_fence", lambda *_args: None)
+    result = _b9(root, handoff)
+
+    assert result.resume_execution_executed
+    manifest = json.loads(
+        (
+            root
+            / "runs"
+            / handoff.successor_run_id
+            / "work"
+            / "raw_history"
+            / "association_manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert "/work/resume_execution_input/frame_records.csv" in manifest["source_frame_records"]
+
+
+def test_b9_dangling_publication_symlink_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    root, activation, preparation, handoff = activated_prepared_successor
+    successor = root / "runs" / handoff.successor_run_id
+    original = AssociationAgent.run
+
+    def add_dangling_residue(self, context):
+        result = original(self, context)
+        try:
+            (successor / "final_summary.md").symlink_to(successor / "missing-summary")
+        except OSError:
+            pytest.skip("symlink creation is unavailable")
+        return result
+
+    monkeypatch.setattr(AssociationAgent, "run", add_dangling_residue)
+    result = _b9(root, handoff)
+    assert not result.resume_execution_executed
+
+
+def test_b9_retry_or_cache_plan_is_rejected_before_intent(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dataclasses
+    import inspect
+
+    module = _load_b9()
+    root, activation, preparation, handoff = activated_prepared_successor
+    original = module._BUILD_DAG
+    safe_tasks, _config = original(module._DAG_PATH, profile=module._EXECUTION_PROFILE)
+    safe_plan = module._BUILD_PLAN(safe_tasks)
+
+    def unsafe_plan(*args, **kwargs):
+        tasks, config = original(*args, **kwargs)
+        first = next(iter(tasks))
+        tasks[first] = dataclasses.replace(tasks[first], retries=1, cache=True)
+        return tasks, config
+
+    monkeypatch.setattr(module, "_BUILD_DAG", unsafe_plan)
+    # The visible helper is intentionally not authority; mutate the captured
+    # callable used by the sealed graph to prove the execution-time guard.
+    sealed = inspect.getclosurevars(module.execute_resume_execution).nonlocals["execute"]
+    monkeypatch.setitem(sealed.__globals__, "_BUILD_DAG", unsafe_plan)
+    monkeypatch.setitem(sealed.__globals__, "_BUILD_PLAN", lambda _tasks: safe_plan)
+    monkeypatch.setitem(
+        sealed.__globals__, "_PLAN_FINGERPRINT", lambda *_args, **_kwargs: handoff.plan_fingerprint
+    )
+    before = _tree_snapshot(root)
+    result = _b9(root, handoff)
+    assert not result.resume_execution_executed
+    assert _tree_snapshot(root) == before
+
+
+@pytest.mark.parametrize("status", ["initialized", "running", "pending_journal"])
+def test_b9_crash_intermediate_state_is_denied_without_new_writes(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+) -> None:
+    root, activation, preparation, handoff = activated_prepared_successor
+    original_prepare = InspectionWorkflowController.prepare_execution
+
+    async def stop_after_initialization(self, tasks):
+        if status == "initialized":
+            original_transition = self._transition_locked
+            calls = 0
+
+            def stop_before_running(next_status, **kwargs):
+                nonlocal calls
+                calls += 1
+                if next_status == "RUNNING":
+                    raise RuntimeError("stop after run_initialized")
+                return original_transition(next_status, **kwargs)
+
+            self._transition_locked = stop_before_running
+        return await original_prepare(self, tasks)
+
+    if status == "pending_journal":
+        run_dir = root / "runs" / handoff.successor_run_id
+        journal = run_dir / "state_journal.jsonl"
+        journal.write_bytes(journal.read_bytes() + b'{"phase":"pending"}\n')
+        before = _tree_snapshot(root)
+        result = _b9(root, handoff)
+        assert not result.resume_execution_executed
+        assert _tree_snapshot(root) == before
+        return
+    if status in {"initialized", "running"}:
+        monkeypatch.setattr(
+            InspectionWorkflowController, "prepare_execution", stop_after_initialization
+        )
+        if status == "running":
+            from orchestrator.agents.association_agent import AssociationAgent
+
+            monkeypatch.setattr(
+                AssociationAgent,
+                "run",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError("stop after RUNNING")
+                ),
+            )
+    first = _b9(root, handoff)
+    assert not first.resume_execution_executed
+    before = _tree_snapshot(root)
+    second = _b9(root, handoff)
+    assert not second.resume_execution_executed
+    assert _tree_snapshot(root) == before
+
+
+def test_b9_real_b5_authority_end_to_end(completed_run: Path) -> None:
+    import importlib
+
+    from orchestrator.inspection_workflow.resume_execution_preparation import (
+        ResumeExecutionPreparer,
+    )
+
+    admission = ExplicitResumeAdmission(completed_run).admit(run_id=RUN_ID)
+    assert admission.resume_admissible
+    activation = ExplicitResumeActivation(completed_run).activate(
+        run_id=RUN_ID, admission=admission
+    )
+    assert activation.resume_activated
+    preparation = ResumeExecutionPreparer(completed_run).prepare(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+    )
+    assert preparation.resume_execution_prepared
+    handoff = ResumeExecutionHandoff(completed_run).handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+    assert handoff.resume_execution_handed_off
+    module = importlib.reload(_load_b9())
+
+    result = module.execute_resume_execution(
+        completed_run,
+        successor_run_id=handoff.successor_run_id,
+        handoff=handoff,
+    )
+
+    assert result.resume_execution_executed
+    assert result.state_version == 5
+
+
+def test_b9_visible_state_validator_replacement_cannot_forge_final_binding(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, activation, preparation, handoff = activated_prepared_successor
+    original = StateStore.validate_authority_snapshot_bytes
+
+    def forged(self, **kwargs):
+        result = original(self, **kwargs)
+        state = dict(result["canonical_state"])
+        state["plan_fingerprint"] = "0" * 64
+        return {**result, "canonical_state": state}
+
+    monkeypatch.setattr(StateStore, "validate_authority_snapshot_bytes", forged)
+    result = _b9(root, handoff)
+    assert result.resume_execution_executed
+
+
+def test_b9_same_bytes_snapshot_path_replacement_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    root, activation, preparation, handoff = activated_prepared_successor
+    original = AssociationAgent.run
+    replaced = False
+
+    def replace_snapshot(self, context):
+        nonlocal replaced
+        if not replaced:
+            path = Path(context["inputs"]["association"]["frame_records"])
+            if not path.is_absolute():
+                path = root / path
+            data = path.read_bytes()
+            replacement = path.with_name("replacement.csv")
+            replacement.write_bytes(data)
+            replacement.replace(path)
+            replaced = True
+        return original(self, context)
+
+    monkeypatch.setattr(AssociationAgent, "run", replace_snapshot)
+    result = _b9(root, handoff)
+    assert not result.resume_execution_executed

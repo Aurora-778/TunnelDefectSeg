@@ -21,6 +21,7 @@ import uuid
 import weakref
 
 from . import a1_artifacts, controlled_fs
+from .artifact_resolver import _read_guarded_file as _artifact_guarded_read
 from .explicit_resume_activation import (
     ExplicitResumeActivation,
     _B1_READ_GUARDED,
@@ -66,6 +67,7 @@ _SUCCESSOR_BEFORE_EXECUTION = frozenset(
     }
 )
 _START_INTENT_NAME = "resume_execution_start.intent.json"
+_INPUT_SNAPSHOT_DIR = "work/resume_execution_input"
 
 
 def _copy_function(function: Any) -> Any:
@@ -415,8 +417,12 @@ _DIRECTORY_CHAIN = ExplicitResumeActivation._directory_chain
 _ASSERT_DIRECTORY_CHAIN = ExplicitResumeActivation._assert_directory_chain
 _READ_GUARDED = _B1_READ_GUARDED
 _WRITE_EXCLUSIVE = controlled_fs.write_exclusive
+_MAKE_DIRECTORY = controlled_fs.make_directory
 _BIND_DIRECTORIES = controlled_fs.bind_directory_identities
+_FILE_IDENTITY = controlled_fs.file_identity
+_ARTIFACT_READ = _artifact_guarded_read
 _STORE = StateStore
+_VALIDATE_SNAPSHOT = _freeze_method(StateStore.validate_authority_snapshot_bytes)
 _BUILD_DAG = build_dag
 _BUILD_PLAN = build_required_task_plan
 _PLAN_FINGERPRINT = task_plan_fingerprint
@@ -506,6 +512,7 @@ def _validate_b5_current(root: Path, handoff: ResumeExecutionHandoffResult) -> N
 def _make_start_intent(
     handoff: ResumeExecutionHandoffResult,
     intent_timestamp: str,
+    input_snapshots: tuple[Mapping[str, Any], ...],
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "schema_version": _INTENT_SCHEMA,
@@ -526,6 +533,7 @@ def _make_start_intent(
         "input_descriptor_sha256": handoff.input_descriptor_sha256,
         "task_plan_sha256": handoff.task_plan_sha256,
         "required_task_ids": list(handoff.required_task_ids),
+        "input_snapshots": [dict(item) for item in input_snapshots],
         "mutation_timestamp": intent_timestamp,
         "intent_checksum": None,
     }
@@ -536,11 +544,14 @@ def _make_start_intent(
 
 
 def _validate_start_intent(
-    value: Mapping[str, Any], data: bytes, handoff: ResumeExecutionHandoffResult
+    value: Mapping[str, Any], data: bytes, handoff: ResumeExecutionHandoffResult,
+    input_snapshots: tuple[Mapping[str, Any], ...],
 ) -> None:
     if not isinstance(value, Mapping) or _canonical(dict(value)) != data:
         raise ValueError("execution-start intent is not canonical")
-    expected = _make_start_intent(handoff, value.get("mutation_timestamp"))
+    expected = _make_start_intent(
+        handoff, value.get("mutation_timestamp"), input_snapshots
+    )
     if dict(value) != expected:
         raise ValueError("execution-start intent bindings drifted")
 
@@ -560,7 +571,104 @@ def _canonical_task_plan(root: Path, source: Mapping[str, Any], handoff: ResumeE
         raise ValueError("authoritative task plan drifted")
     if tuple(item["task_id"] for item in task_plan) != handoff.required_task_ids:
         raise ValueError("authoritative required task ids drifted")
+    if any(task.retries != 0 or task.cache is not False for task in tasks.values()):
+        raise ValueError("B.9 canonical tasks must disable retry and cache")
     return tasks, task_plan
+
+
+def _source_snapshot_spec(
+    root: Path, source: Mapping[str, Any], handoff: ResumeExecutionHandoffResult
+) -> tuple[tuple[dict[str, Any], bytes], ...]:
+    context = source.get("context")
+    descriptor = context.get("resolved_input_descriptor") if isinstance(context, Mapping) else None
+    artifacts = descriptor.get("source_artifacts") if isinstance(descriptor, Mapping) else None
+    if not isinstance(artifacts, (list, tuple)):
+        raise ValueError("source descriptor artifacts are invalid")
+    by_name = {
+        Path(item["path"]).name: item["path"]
+        for item in artifacts
+        if isinstance(item, Mapping) and type(item.get("path")) is str
+    }
+    mode = context.get("workflow_input_mode")
+    names = (
+        ("frame_records.csv", "preparation_manifest.json")
+        if mode == "prepared_dataset"
+        else ("robot_kict_frame_records.csv",)
+    )
+    expected = (
+        {
+            "frame_records.csv": f"runs/{handoff.source_run_id}/work/raw_prepared/frame_records.csv",
+            "preparation_manifest.json": f"runs/{handoff.source_run_id}/work/raw_prepared/preparation_manifest.json",
+        }
+        if mode == "prepared_dataset"
+        else {
+            "robot_kict_frame_records.csv": (
+                f"runs/{handoff.source_run_id}/work/legacy_simulated/robot_kict_frame_records.csv"
+            )
+        }
+    )
+    result: list[tuple[dict[str, Any], bytes]] = []
+    for name in names:
+        source_path = by_name.get(name)
+        if type(source_path) is not str:
+            raise ValueError("source execution input is incomplete")
+        if source_path != expected[name]:
+            raise ValueError("source execution input path is not canonical")
+        data, snapshot = _ARTIFACT_READ(
+            root,
+            source_path,
+            run_id=handoff.source_run_id,
+        )
+        target_name = "frame_records.csv" if name == "robot_kict_frame_records.csv" else name
+        result.append(
+            (
+                {
+                    "source_path": source_path,
+                    "snapshot_path": (
+                        f"runs/{handoff.successor_run_id}/{_INPUT_SNAPSHOT_DIR}/{target_name}"
+                    ),
+                    "size_bytes": snapshot["size_bytes"],
+                    "sha256": snapshot["sha256"],
+                },
+                data,
+            )
+        )
+    return tuple(result)
+
+
+def _validate_input_snapshots(
+    root: Path,
+    successor_run_id: str,
+    input_snapshots: tuple[Mapping[str, Any], ...],
+) -> None:
+    expected_names = {Path(item["snapshot_path"]).name for item in input_snapshots}
+    snapshot_dir = root / "runs" / successor_run_id / _INPUT_SNAPSHOT_DIR
+    if {entry.name for entry in snapshot_dir.iterdir()} != expected_names:
+        raise ValueError("execution input snapshot set changed")
+    for item in input_snapshots:
+        data, snapshot = _ARTIFACT_READ(
+            root, item["snapshot_path"], run_id=successor_run_id
+        )
+        if (
+            snapshot["size_bytes"] != item["size_bytes"]
+            or snapshot["sha256"] != item["sha256"]
+            or _sha(data) != item["sha256"]
+            or _FILE_IDENTITY(
+                root.joinpath(*item["snapshot_path"].split("/"))
+            )
+            != (item["device"], item["inode"])
+        ):
+            raise ValueError("execution input snapshot changed")
+
+
+def _entry_exists(path: Path) -> bool:
+    try:
+        path.lstat()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ValueError("unable to inspect forbidden execution residue") from exc
 
 
 def _source_input_context(
@@ -568,6 +676,7 @@ def _source_input_context(
     successor_run_id: str,
     source: Mapping[str, Any],
     handoff: ResumeExecutionHandoffResult,
+    input_snapshots: tuple[Mapping[str, Any], ...],
 ) -> dict[str, Any]:
     context = source.get("context")
     if not isinstance(context, Mapping):
@@ -581,23 +690,13 @@ def _source_input_context(
         plan_fingerprint=handoff.plan_fingerprint,
         input_mode=input_mode,
     )
-    descriptor = context.get("resolved_input_descriptor")
-    if not isinstance(descriptor, Mapping):
-        raise ValueError("source descriptor is invalid")
-    artifacts = descriptor.get("source_artifacts")
-    if not isinstance(artifacts, (list, tuple)):
-        raise ValueError("source descriptor artifacts are invalid")
-    paths = {
-        Path(item["path"]).name: item["path"]
-        for item in artifacts
-        if isinstance(item, Mapping) and type(item.get("path")) is str
-    }
+    paths = {Path(item["snapshot_path"]).name: item["snapshot_path"] for item in input_snapshots}
     if input_mode == "prepared_dataset":
         frame = paths.get("frame_records.csv")
         manifest = paths.get("preparation_manifest.json")
         if not frame or not manifest:
             raise ValueError("source prepared input set is incomplete")
-        expected_prefix = f"runs/{handoff.source_run_id}/work/raw_prepared/"
+        expected_prefix = f"runs/{successor_run_id}/{_INPUT_SNAPSHOT_DIR}/"
         if (
             frame != expected_prefix + "frame_records.csv"
             or manifest != expected_prefix + "preparation_manifest.json"
@@ -606,10 +705,9 @@ def _source_input_context(
         result["inputs"]["association"]["frame_records"] = frame
         result["inputs"]["comparison_evidence"]["prepared_manifest_path"] = manifest
     else:
-        legacy = paths.get("robot_kict_frame_records.csv")
+        legacy = paths.get("frame_records.csv")
         expected_legacy = (
-            f"runs/{handoff.source_run_id}/work/legacy_simulated/"
-            "robot_kict_frame_records.csv"
+            f"runs/{successor_run_id}/{_INPUT_SNAPSHOT_DIR}/frame_records.csv"
         )
         if legacy != expected_legacy:
             raise ValueError("source legacy input path is outside the canonical Run domain")
@@ -625,15 +723,23 @@ def _validate_running_fence(
     b8_intent: Mapping[str, Any],
     start_intent: Mapping[str, Any],
     start_bytes: bytes,
+    input_snapshots: tuple[Mapping[str, Any], ...],
+    successor_chain: tuple[Any, ...],
     *,
     check_admission: bool = False,
 ) -> Mapping[str, Any]:
     current_intent, current_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
     )
-    _validate_start_intent(current_intent, current_bytes, handoff)
+    _ASSERT_DIRECTORY_CHAIN(successor_chain, label="B.9 running fence")
+    if successor_chain != _DIRECTORY_CHAIN(
+        root, root / "runs" / successor_run_id, label="B.9 running fence"
+    ):
+        raise ValueError("successor directory identity changed")
+    _validate_start_intent(current_intent, current_bytes, handoff, input_snapshots)
     if current_bytes != start_bytes:
         raise ValueError("execution-start intent changed")
+    _validate_input_snapshots(root, successor_run_id, input_snapshots)
     current_source = _B8_STATE_LOAD(_B8_STATE_STORE(root), run_id=handoff.source_run_id)["canonical_state"]
     _B8_SOURCE_VALIDATE(current_source, _B8_PREPARATION_VIEW(b8_intent))
     if current_source != source:
@@ -644,14 +750,28 @@ def _validate_running_fence(
     state_bytes, _ = _READ_GUARDED(root, f"runs/{successor_run_id}/state.json")
     journal_bytes, _ = _READ_GUARDED(root, f"runs/{successor_run_id}/state_journal.jsonl")
     anchor_bytes, _ = _READ_GUARDED(root, f"runs/{successor_run_id}/state_journal_tail.json")
-    authority = _STORE(root).validate_authority_snapshot_bytes(
+    authority = _VALIDATE_SNAPSHOT(
+        _STORE(root),
         run_id=successor_run_id,
         state_bytes=state_bytes,
         journal_bytes=journal_bytes,
         anchor_bytes=anchor_bytes,
     )
     state = authority["canonical_state"]
-    if state.get("status") != "RUNNING" or state.get("state_version", 0) < 3:
+    context = state.get("context")
+    resume_activation = context.get("resume_activation") if isinstance(context, Mapping) else None
+    if (
+        state.get("status") != "RUNNING"
+        or state.get("state_version", 0) < 3
+        or state.get("allocation_token") != handoff.allocation_token
+        or state.get("plan_fingerprint") != handoff.plan_fingerprint
+        or _sha(_canonical(_plain(state.get("task_plan")))) != handoff.task_plan_sha256
+        or not isinstance(resume_activation, Mapping)
+        or resume_activation.get("input_descriptor_sha256") != handoff.input_descriptor_sha256
+        or resume_activation.get("intent_sha256") != handoff.activation_intent_sha256
+        or resume_activation.get("source_admission_sha256") != handoff.source_admission_sha256
+        or resume_activation.get("source_run_id") != handoff.source_run_id
+    ):
         raise ValueError("successor is not running")
     lock_bytes, _ = _READ_GUARDED(root, "runs/.active_run.lock")
     lock = validate_active_run_lock_snapshot(lock_bytes)
@@ -663,6 +783,9 @@ def _validate_running_fence(
         or lock.get("lock_token") != handoff.lock_token
     ):
         raise ValueError("running lock is not bound")
+    top_entries = {entry.name for entry in (root / "runs" / successor_run_id).iterdir()}
+    if top_entries != _SUCCESSOR_BEFORE_EXECUTION | {_START_INTENT_NAME, "work"}:
+        raise ValueError("successor has unexpected execution residue")
     return {
         "state": state,
         "state_bytes": state_bytes,
@@ -680,6 +803,8 @@ def _validate_planned_fence(
     b8_intent: Mapping[str, Any],
     start_intent: Mapping[str, Any],
     start_bytes: bytes,
+    input_snapshots: tuple[Mapping[str, Any], ...],
+    successor_chain: tuple[Any, ...],
     expected_tasks: Mapping[str, Any],
     expected_task_plan: Any,
 ) -> Mapping[str, Any]:
@@ -687,14 +812,15 @@ def _validate_planned_fence(
 
     successor = root / "runs" / successor_run_id
     current_chain = _DIRECTORY_CHAIN(root, successor, label="B.9 planned fence")
-    _ASSERT_DIRECTORY_CHAIN(current_chain, label="B.9 planned fence")
+    _ASSERT_DIRECTORY_CHAIN(successor_chain, label="B.9 planned fence")
     current_intent, current_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
     )
-    _validate_start_intent(current_intent, current_bytes, handoff)
+    _validate_start_intent(current_intent, current_bytes, handoff, input_snapshots)
     if current_bytes != start_bytes:
         raise ValueError("execution-start intent changed before State CAS")
-    if current_chain != _DIRECTORY_CHAIN(root, successor, label="B.9 planned fence"):
+    _validate_input_snapshots(root, successor_run_id, input_snapshots)
+    if current_chain != successor_chain or current_chain != _DIRECTORY_CHAIN(root, successor, label="B.9 planned fence"):
         raise ValueError("successor directory changed before State CAS")
 
     current_source = _B8_STATE_LOAD(
@@ -711,7 +837,8 @@ def _validate_planned_fence(
     state_bytes, _ = _READ_GUARDED(root, f"runs/{successor_run_id}/state.json")
     journal_bytes, _ = _READ_GUARDED(root, f"runs/{successor_run_id}/state_journal.jsonl")
     anchor_bytes, _ = _READ_GUARDED(root, f"runs/{successor_run_id}/state_journal_tail.json")
-    authority = _STORE(root).validate_authority_snapshot_bytes(
+    authority = _VALIDATE_SNAPSHOT(
+        _STORE(root),
         run_id=successor_run_id,
         state_bytes=state_bytes,
         journal_bytes=journal_bytes,
@@ -742,7 +869,7 @@ def _validate_planned_fence(
         raise ValueError("running lock is not bound before State CAS")
     validate_active_run_control_entries(root)
     entries = tuple(sorted(entry.name for entry in successor.iterdir()))
-    if frozenset(entries) != _SUCCESSOR_BEFORE_EXECUTION | {_START_INTENT_NAME}:
+    if frozenset(entries) != _SUCCESSOR_BEFORE_EXECUTION | {_START_INTENT_NAME, "work"}:
         raise ValueError("successor has unexpected pre-CAS residue")
     return {
         "state": state,
@@ -805,6 +932,28 @@ class _BoundedSink:
         return self._controller.project_executor_context(context)
 
 
+def _sealed_sink_type() -> type:
+    """Copy the sink implementation so public class mutation is not authority."""
+
+    return type(
+        "_SealedBoundedSink",
+        (),
+        {
+            "__init__": _copy_function(_BoundedSink.__init__),
+            "run_id": property(_copy_function(_BoundedSink.run_id.fget)),
+            "snapshot": property(_copy_function(_BoundedSink.snapshot.fget)),
+            "prepare_execution": _copy_function(_BoundedSink.prepare_execution),
+            "submit_checkpoint_event": _copy_function(_BoundedSink.submit_checkpoint_event),
+            "set_task_mutation_fence": _copy_function(_BoundedSink.set_task_mutation_fence),
+            "set_task_start_fence": _copy_function(_BoundedSink.set_task_start_fence),
+            "project_executor_context": _copy_function(_BoundedSink.project_executor_context),
+        },
+    )
+
+
+_SINK_TYPE = _sealed_sink_type()
+
+
 def _execute(
     root: Path,
     successor_run_id: str,
@@ -827,15 +976,42 @@ def _execute(
     timestamp = intent.get("mutation_timestamp")
     if type(timestamp) is not str:
         raise ValueError("B.8 mutation timestamp is invalid")
-    start_intent = _make_start_intent(handoff, timestamp)
-    start_bytes = _canonical(start_intent)
+    captured_inputs = _source_snapshot_spec(root, source, handoff)
     with _BIND_DIRECTORIES(chain):
         _ASSERT_DIRECTORY_CHAIN(chain, label="B.9 pre-intent")
+        _MAKE_DIRECTORY(
+            root, f"runs/{successor_run_id}/work"
+        )
+    work_chain = _DIRECTORY_CHAIN(
+        root, successor / "work", label="B.9 execution work"
+    )
+    with _BIND_DIRECTORIES(work_chain):
+        _MAKE_DIRECTORY(
+            root, f"runs/{successor_run_id}/{_INPUT_SNAPSHOT_DIR}"
+        )
+    chain = _DIRECTORY_CHAIN(root, successor, label="B.9 successor")
+    mutation_chain = _DIRECTORY_CHAIN(
+        root, successor / _INPUT_SNAPSHOT_DIR, label="B.9 execution snapshot"
+    )
+    bound_inputs: list[Mapping[str, Any]] = []
+    with _BIND_DIRECTORIES(mutation_chain):
+        for item, data in captured_inputs:
+            device, inode = _WRITE_EXCLUSIVE(root, item["snapshot_path"], data)
+            bound_inputs.append({**item, "device": device, "inode": inode})
+    input_snapshots = tuple(bound_inputs)
+    start_intent = _make_start_intent(handoff, timestamp, input_snapshots)
+    start_bytes = _canonical(start_intent)
+    with _BIND_DIRECTORIES(chain):
+        _validate_input_snapshots(root, successor_run_id, input_snapshots)
+        # Snapshot bytes are immutable successor-owned execution inputs.  The
+        # source authority is rechecked after publication, so no stale source
+        # can authorize the snapshot consumed by the worker.
+        _validate_b5_current(root, handoff)
         _WRITE_EXCLUSIVE(root, f"runs/{successor_run_id}/{_START_INTENT_NAME}", start_bytes)
     current_start, current_start_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
     )
-    _validate_start_intent(current_start, current_start_bytes, handoff)
+    _validate_start_intent(current_start, current_start_bytes, handoff, input_snapshots)
     if current_start_bytes != start_bytes:
         raise ValueError("execution-start intent publication changed")
     # B.8's archived evidence is intentionally closed over the PLANNED@1
@@ -846,7 +1022,7 @@ def _execute(
     current_start, current_start_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
     )
-    _validate_start_intent(current_start, current_start_bytes, handoff)
+    _validate_start_intent(current_start, current_start_bytes, handoff, input_snapshots)
     if current_start_bytes != start_bytes:
         raise ValueError("execution-start intent changed before State mutation")
 
@@ -872,7 +1048,7 @@ def _execute(
         raise ValueError("authoritative DAG has no executable layer")
     execution_task_ids = tuple(sorted(layers[0]))
     execution_tasks = {task_id: tasks[task_id] for task_id in execution_task_ids}
-    sink = _BoundedSink(
+    sink = _SINK_TYPE(
         controller,
         tasks,
         lambda: _validate_planned_fence(
@@ -883,6 +1059,8 @@ def _execute(
             intent,
             current_start,
             current_start_bytes,
+            input_snapshots,
+            chain,
             tasks,
             task_plan,
         ),
@@ -895,6 +1073,8 @@ def _execute(
                 intent,
                 current_start,
                 current_start_bytes,
+                input_snapshots,
+                chain,
             ),
         ),
     )
@@ -907,6 +1087,9 @@ def _execute(
             intent,
             current_start,
             current_start_bytes,
+            input_snapshots,
+            chain,
+            check_admission=True,
         )
     )
     sink.set_task_start_fence(
@@ -918,10 +1101,14 @@ def _execute(
             intent,
             current_start,
             current_start_bytes,
+            input_snapshots,
+            chain,
             check_admission=True,
         )
     )
-    context = _source_input_context(root, successor_run_id, source, handoff)
+    context = _source_input_context(
+        root, successor_run_id, source, handoff, input_snapshots
+    )
     executor = _EXECUTOR(
         _BUILD_REGISTRY(),
         root,
@@ -944,6 +1131,9 @@ def _execute(
         intent,
         current_start,
         current_start_bytes,
+        input_snapshots,
+        chain,
+        check_admission=True,
     )
     state = final["state"]
     task_status = state.get("task_status")
@@ -975,7 +1165,7 @@ def _execute(
     ):
         raise ValueError("task skip or cache checkpoint is not permitted")
     if any(
-        (successor / name).exists()
+        _entry_exists(successor / name)
         for name in ("publication_transaction.json", "final_summary.md", "publication_backup")
     ):
         raise ValueError("publication residue is not permitted")
@@ -1028,12 +1218,15 @@ def _seal_execution_authority() -> Any:
         "_make_start_intent",
         "_validate_start_intent",
         "_canonical_task_plan",
+        "_source_snapshot_spec",
+        "_validate_input_snapshots",
         "_source_input_context",
         "_validate_running_fence",
         "_validate_planned_fence",
         "_execute",
     )
     frozen = dict(globals())
+    frozen["_SINK_TYPE"] = _sealed_sink_type()
     copies: dict[str, Any] = {}
     for name in names:
         function = frozen[name]
