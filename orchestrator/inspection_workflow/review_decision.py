@@ -122,6 +122,10 @@ def _require_nfc_string(value: Any, *, field: str, maximum: int = 2_000) -> str:
         or unicodedata.normalize("NFC", value) != value
     ):
         raise ReviewDecisionContractError(f"{field} must be a canonical NFC string")
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise ReviewDecisionContractError(f"{field} must be valid UTF-8") from exc
     return value
 
 
@@ -233,7 +237,8 @@ def _validate_decision(value: Mapping[str, Any]) -> dict[str, Any]:
     association_hash = _require_hash(
         value["association_snapshot_sha256"], field="association_snapshot_sha256"
     )
-    if value["decision"] not in _OUTCOMES:
+    decision = _require_nfc_string(value["decision"], field="decision", maximum=32)
+    if decision not in _OUTCOMES:
         raise ReviewDecisionContractError("decision is not allowed")
     reviewer_id = _require_safe_id(value["reviewer_id"], field="reviewer_id")
     authority_hash = _require_hash(
@@ -256,7 +261,7 @@ def _validate_decision(value: Mapping[str, Any]) -> dict[str, Any]:
         "run_id": run_id,
         "association_id": association_id,
         "association_snapshot_sha256": association_hash,
-        "decision": value["decision"],
+        "decision": decision,
         "reviewer_id": reviewer_id,
         "authority_evidence_sha256": authority_hash,
         "decided_at": value["decided_at"],

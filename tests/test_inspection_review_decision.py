@@ -3,7 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import subprocess
+import sys
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -29,6 +33,92 @@ def test_phase_c_contract_is_available_from_package_root():
     )
     assert inspection_workflow.sign_review_decision is sign_review_decision
     assert inspection_workflow.validate_review_decision is validate_review_decision
+
+
+def test_phase_a_b_package_import_does_not_require_cryptography(tmp_path):
+    blocker = tmp_path / "block_crypto"
+    blocker.mkdir()
+    (blocker / "sitecustomize.py").write_text(
+        """
+import builtins
+
+_real_import = builtins.__import__
+
+def _blocked_import(name, *args, **kwargs):
+    if name == "cryptography" or name.startswith("cryptography."):
+        error = ModuleNotFoundError("simulated missing cryptography")
+        error.name = name
+        raise error
+    return _real_import(name, *args, **kwargs)
+
+builtins.__import__ = _blocked_import
+""".lstrip(),
+        encoding="utf-8",
+    )
+    project_root = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(blocker), project_root, env.get("PYTHONPATH", "")) if part
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import orchestrator.inspection_workflow as workflow; "
+                "assert callable(workflow.validate_claim_decision_document); "
+                "assert not hasattr(workflow, 'validate_review_decision')"
+            ),
+        ],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_phase_c_optional_import_does_not_hide_unrelated_missing_modules(tmp_path):
+    blocker = tmp_path / "block_review_decision"
+    blocker.mkdir()
+    (blocker / "sitecustomize.py").write_text(
+        """
+import sys
+
+class _BrokenReviewDecisionFinder:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "orchestrator.inspection_workflow.review_decision":
+            error = ModuleNotFoundError("simulated unrelated missing module")
+            error.name = "unexpected_dependency"
+            raise error
+        return None
+
+sys.meta_path.insert(0, _BrokenReviewDecisionFinder())
+""".lstrip(),
+        encoding="utf-8",
+    )
+    project_root = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(blocker), project_root, env.get("PYTHONPATH", "")) if part
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import orchestrator.inspection_workflow"],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "simulated unrelated missing module" in result.stderr
 
 
 def _b64url(value: bytes) -> str:
@@ -357,6 +447,21 @@ def test_signer_rejects_unsupported_outcome_and_oversized_rationale(signed_revie
         signed_review["sign"](decision="human_verified")
     with pytest.raises(ReviewDecisionContractError, match="canonical NFC string"):
         signed_review["sign"](rationale="x" * 2_001)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("decision", [], "decision must be a canonical NFC string"),
+        ("decision", {}, "decision must be a canonical NFC string"),
+        ("rationale", "\ud800", "rationale must be valid UTF-8"),
+    ],
+)
+def test_signer_normalizes_malformed_field_errors(
+    signed_review, field, value, message
+):
+    with pytest.raises(ReviewDecisionContractError, match=message):
+        signed_review["sign"](**{field: value})
 
 
 def test_valid_signature_from_unbound_key_fails_closed(signed_review):

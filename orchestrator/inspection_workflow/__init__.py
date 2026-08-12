@@ -125,16 +125,6 @@ from .resume_execution_handoff import (
     handoff_resume_execution,
 )
 from .resume_execution import ResumeExecutionResult, execute_resume_execution
-from .review_decision import (
-    REVIEW_ACTION_SCOPE,
-    REVIEW_AUTHORITY_SCHEMA_VERSION,
-    REVIEW_DECISION_SCHEMA_VERSION,
-    ReviewDecisionContractError,
-    ReviewDecisionValidation,
-    canonical_review_authority_bytes,
-    sign_review_decision,
-    validate_review_decision,
-)
 
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
@@ -236,12 +226,32 @@ __all__ = [
     "handoff_resume_execution",
     "ResumeExecutionResult",
     "execute_resume_execution",
-    "REVIEW_ACTION_SCOPE",
-    "REVIEW_AUTHORITY_SCHEMA_VERSION",
-    "REVIEW_DECISION_SCHEMA_VERSION",
-    "ReviewDecisionContractError",
-    "ReviewDecisionValidation",
-    "canonical_review_authority_bytes",
-    "sign_review_decision",
-    "validate_review_decision",
 ]
+
+try:
+    from .review_decision import (
+        REVIEW_ACTION_SCOPE,
+        REVIEW_AUTHORITY_SCHEMA_VERSION,
+        REVIEW_DECISION_SCHEMA_VERSION,
+        ReviewDecisionContractError,
+        ReviewDecisionValidation,
+        canonical_review_authority_bytes,
+        sign_review_decision,
+        validate_review_decision,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "cryptography" and not str(exc.name).startswith("cryptography."):
+        raise
+else:
+    __all__.extend(
+        [
+            "REVIEW_ACTION_SCOPE",
+            "REVIEW_AUTHORITY_SCHEMA_VERSION",
+            "REVIEW_DECISION_SCHEMA_VERSION",
+            "ReviewDecisionContractError",
+            "ReviewDecisionValidation",
+            "canonical_review_authority_bytes",
+            "sign_review_decision",
+            "validate_review_decision",
+        ]
+    )

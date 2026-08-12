@@ -7,6 +7,11 @@ review decision and a pure validator. It does **not** change `StateStore`, the
 active-run lock, Resume execution, Publication Manifest, Claim Policy, or Web
 review behavior.
 
+Phase C's Ed25519 support is optional for the existing Phase A/B runtime. Install
+it with `pip install -r requirements-phase-c.txt`. Without that optional
+dependency, `orchestrator.inspection_workflow` continues to expose its existing
+Phase A/B API, while the Phase C `review_decision` submodule remains unavailable.
+
 The validator may return `human_verified` only when all trusted bindings pass.
 An input field, unsigned JSON document, reviewer name, or SHA-256 alone cannot
 establish human identity or review authority.
