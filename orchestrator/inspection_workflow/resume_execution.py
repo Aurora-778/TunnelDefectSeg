@@ -10,11 +10,16 @@ outside this boundary.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import csv
 from dataclasses import dataclass
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import types
 from typing import Any, Mapping
 import uuid
@@ -420,6 +425,7 @@ _WRITE_EXCLUSIVE = controlled_fs.write_exclusive
 _MAKE_DIRECTORY = controlled_fs.make_directory
 _BIND_DIRECTORIES = controlled_fs.bind_directory_identities
 _FILE_IDENTITY = controlled_fs.file_identity
+_DIRECTORY_IDENTITY = controlled_fs.directory_identity
 _ARTIFACT_READ = _artifact_guarded_read
 _STORE = StateStore
 _VALIDATE_SNAPSHOT = _freeze_method(StateStore.validate_authority_snapshot_bytes)
@@ -513,6 +519,7 @@ def _make_start_intent(
     handoff: ResumeExecutionHandoffResult,
     intent_timestamp: str,
     input_snapshots: tuple[Mapping[str, Any], ...],
+    snapshot_directory_chain: tuple[Mapping[str, Any], ...],
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "schema_version": _INTENT_SCHEMA,
@@ -534,6 +541,9 @@ def _make_start_intent(
         "task_plan_sha256": handoff.task_plan_sha256,
         "required_task_ids": list(handoff.required_task_ids),
         "input_snapshots": [dict(item) for item in input_snapshots],
+        "input_snapshot_directory_chain": [
+            dict(item) for item in snapshot_directory_chain
+        ],
         "mutation_timestamp": intent_timestamp,
         "intent_checksum": None,
     }
@@ -546,11 +556,15 @@ def _make_start_intent(
 def _validate_start_intent(
     value: Mapping[str, Any], data: bytes, handoff: ResumeExecutionHandoffResult,
     input_snapshots: tuple[Mapping[str, Any], ...],
+    snapshot_directory_chain: tuple[Mapping[str, Any], ...],
 ) -> None:
     if not isinstance(value, Mapping) or _canonical(dict(value)) != data:
         raise ValueError("execution-start intent is not canonical")
     expected = _make_start_intent(
-        handoff, value.get("mutation_timestamp"), input_snapshots
+        handoff,
+        value.get("mutation_timestamp"),
+        input_snapshots,
+        snapshot_directory_chain,
     )
     if dict(value) != expected:
         raise ValueError("execution-start intent bindings drifted")
@@ -574,6 +588,90 @@ def _canonical_task_plan(root: Path, source: Mapping[str, Any], handoff: ResumeE
     if any(task.retries != 0 or task.cache is not False for task in tasks.values()):
         raise ValueError("B.9 canonical tasks must disable retry and cache")
     return tasks, task_plan
+
+
+def _open_source_read_guard(path: Path):
+    """Open one source object while denying concurrent write/delete on Windows."""
+
+    if os.name != "nt":
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        return os.fdopen(os.open(path, flags), "rb", buffering=0)
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(path),
+        0x80000000,  # GENERIC_READ
+        0x00000001,  # FILE_SHARE_READ; deny write and delete while captured
+        None,
+        3,  # OPEN_EXISTING
+        0x00200000,  # FILE_FLAG_OPEN_REPARSE_POINT
+        None,
+    )
+    invalid = ctypes.c_void_p(-1).value
+    if handle in (None, invalid):
+        raise OSError(ctypes.get_last_error(), "unable to open guarded source object")
+    try:
+        descriptor = msvcrt.open_osfhandle(int(handle), os.O_RDONLY)
+    except BaseException:
+        kernel32.CloseHandle(handle)
+        raise
+    return os.fdopen(descriptor, "rb", buffering=0)
+
+
+def _held_source_snapshot_bytes(
+    root: Path,
+    source_paths: tuple[str, ...],
+    handoff: ResumeExecutionHandoffResult,
+    _open_guard: Any = _open_source_read_guard,
+    _file_identity: Any = _FILE_IDENTITY,
+    _b5_validate: Any = _validate_b5_current,
+):
+    @contextmanager
+    def held():
+        handles: list[Any] = []
+        captured: dict[str, bytes] = {}
+        primary: BaseException | None = None
+        try:
+            for relative in source_paths:
+                path = root.joinpath(*relative.split("/"))
+                before_identity = _file_identity(path)
+                handle = _open_guard(path)
+                handles.append(handle)
+                data = handle.read()
+                after_identity = _file_identity(path)
+                if before_identity != after_identity:
+                    raise ValueError("source execution input identity changed")
+                captured[relative] = data
+            _b5_validate(root, handoff)
+            yield types.MappingProxyType(captured)
+        except BaseException as exc:
+            primary = exc
+            raise
+        finally:
+            cleanup_errors: list[BaseException] = []
+            for handle in reversed(handles):
+                try:
+                    handle.close()
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+            if primary is None and cleanup_errors:
+                raise cleanup_errors[0]
+
+    return held()
 
 
 def _source_snapshot_spec(
@@ -607,32 +705,38 @@ def _source_snapshot_spec(
             )
         }
     )
-    result: list[tuple[dict[str, Any], bytes]] = []
+    source_paths: list[str] = []
     for name in names:
         source_path = by_name.get(name)
         if type(source_path) is not str:
             raise ValueError("source execution input is incomplete")
         if source_path != expected[name]:
             raise ValueError("source execution input path is not canonical")
-        data, snapshot = _ARTIFACT_READ(
-            root,
-            source_path,
-            run_id=handoff.source_run_id,
-        )
-        target_name = "frame_records.csv" if name == "robot_kict_frame_records.csv" else name
-        result.append(
-            (
-                {
-                    "source_path": source_path,
-                    "snapshot_path": (
-                        f"runs/{handoff.successor_run_id}/{_INPUT_SNAPSHOT_DIR}/{target_name}"
-                    ),
-                    "size_bytes": snapshot["size_bytes"],
-                    "sha256": snapshot["sha256"],
-                },
-                data,
+        source_paths.append(source_path)
+    result: list[tuple[dict[str, Any], bytes]] = []
+    with _held_source_snapshot_bytes(root, tuple(source_paths), handoff) as held:
+        for name, source_path in zip(names, source_paths):
+            data, snapshot = _ARTIFACT_READ(
+                root,
+                source_path,
+                run_id=handoff.source_run_id,
             )
-        )
+            if data != held[source_path]:
+                raise ValueError("guarded source bytes do not match held source object")
+            target_name = "frame_records.csv" if name == "robot_kict_frame_records.csv" else name
+            result.append(
+                (
+                    {
+                        "source_path": source_path,
+                        "snapshot_path": (
+                            f"runs/{handoff.successor_run_id}/{_INPUT_SNAPSHOT_DIR}/{target_name}"
+                        ),
+                        "size_bytes": snapshot["size_bytes"],
+                        "sha256": snapshot["sha256"],
+                    },
+                    data,
+                )
+            )
     return tuple(result)
 
 
@@ -640,12 +744,36 @@ def _validate_input_snapshots(
     root: Path,
     successor_run_id: str,
     input_snapshots: tuple[Mapping[str, Any], ...],
-) -> None:
+    snapshot_directory_chain: tuple[Mapping[str, Any], ...],
+    bound_snapshot_bytes: Mapping[str, bytes] | None = None,
+) -> Mapping[str, bytes]:
+    current_chain = _DIRECTORY_CHAIN(
+        root,
+        root / "runs" / successor_run_id / _INPUT_SNAPSHOT_DIR,
+        label="B.9 execution snapshot",
+    )
+    if _directory_chain_binding(root, current_chain) != snapshot_directory_chain:
+        raise ValueError("execution input snapshot directory changed")
     expected_names = {Path(item["snapshot_path"]).name for item in input_snapshots}
     snapshot_dir = root / "runs" / successor_run_id / _INPUT_SNAPSHOT_DIR
     if {entry.name for entry in snapshot_dir.iterdir()} != expected_names:
         raise ValueError("execution input snapshot set changed")
+    captured: dict[str, bytes] = {}
     for item in input_snapshots:
+        path = root.joinpath(*item["snapshot_path"].split("/"))
+        if bound_snapshot_bytes is not None:
+            data = bound_snapshot_bytes[item["snapshot_path"]]
+            state = path.lstat()
+            if (
+                not stat.S_ISREG(state.st_mode)
+                or state.st_size != item["size_bytes"]
+                or len(data) != item["size_bytes"]
+                or _sha(data) != item["sha256"]
+                or _FILE_IDENTITY(path) != (item["device"], item["inode"])
+            ):
+                raise ValueError("execution input snapshot changed")
+            captured[item["snapshot_path"]] = data
+            continue
         data, snapshot = _ARTIFACT_READ(
             root, item["snapshot_path"], run_id=successor_run_id
         )
@@ -653,12 +781,111 @@ def _validate_input_snapshots(
             snapshot["size_bytes"] != item["size_bytes"]
             or snapshot["sha256"] != item["sha256"]
             or _sha(data) != item["sha256"]
-            or _FILE_IDENTITY(
-                root.joinpath(*item["snapshot_path"].split("/"))
-            )
-            != (item["device"], item["inode"])
+            or _FILE_IDENTITY(path) != (item["device"], item["inode"])
         ):
             raise ValueError("execution input snapshot changed")
+        captured[item["snapshot_path"]] = data
+    return types.MappingProxyType(captured)
+
+
+def _directory_chain_binding(
+    root: Path, chain: tuple[tuple[Path, int, int], ...]
+) -> tuple[Mapping[str, Any], ...]:
+    result: list[Mapping[str, Any]] = []
+    for path, device, inode in chain:
+        relative = path.relative_to(root).as_posix()
+        result.append(
+            types.MappingProxyType(
+                {"path": relative if relative != "." else ".", "device": device, "inode": inode}
+            )
+        )
+    return tuple(result)
+
+
+def _csv_rows_from_bytes(data: bytes) -> list[dict[str, str]]:
+    text = data.decode("utf-8-sig")
+    return list(csv.DictReader(io.StringIO(text, newline="")))
+
+
+def _bind_worker_snapshot_bytes(
+    registry: Any,
+    root: Path,
+    input_snapshots: tuple[Mapping[str, Any], ...],
+    snapshot_bytes: Mapping[str, bytes],
+) -> None:
+    agent = registry.get("association")
+    original_read_csv = agent.read_csv
+    bound: dict[Path, bytes] = {
+        root.joinpath(*relative.split("/")): bytes(data)
+        for relative, data in snapshot_bytes.items()
+    }
+
+    def read_csv(path: Path) -> list[dict[str, str]]:
+        candidate = Path(path).absolute()
+        data = bound.get(candidate)
+        if data is not None:
+            return _csv_rows_from_bytes(data)
+        return original_read_csv(path)
+
+    agent.read_csv = read_csv
+
+
+@contextmanager
+def _hold_snapshot_objects(
+    root: Path,
+    input_snapshots: tuple[Mapping[str, Any], ...],
+    _file_identity: Any = _FILE_IDENTITY,
+    _os: Any = os,
+    _stat: Any = stat,
+):
+    handles: list[tuple[Any, int, bool]] = []
+    primary: BaseException | None = None
+    try:
+        for item in input_snapshots:
+            path = root.joinpath(*item["snapshot_path"].split("/"))
+            handle = path.open("r+b", buffering=0)
+            locked = False
+            try:
+                state = _os.fstat(handle.fileno())
+                if (
+                    not _stat.S_ISREG(state.st_mode)
+                    or state.st_size != item["size_bytes"]
+                    or _file_identity(path) != (item["device"], item["inode"])
+                ):
+                    raise ValueError("execution input snapshot object changed")
+                lock_size = max(1, state.st_size)
+                if _os.name == "nt":
+                    import msvcrt
+
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, lock_size)
+                    locked = True
+            except BaseException:
+                handle.close()
+                raise
+            handles.append((handle, lock_size, locked))
+        yield
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        cleanup_errors: list[BaseException] = []
+        for handle, lock_size, locked in reversed(handles):
+            try:
+                if locked:
+                    import msvcrt
+
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, lock_size)
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+            finally:
+                try:
+                    handle.close()
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+        if primary is None and cleanup_errors:
+            raise cleanup_errors[0]
 
 
 def _entry_exists(path: Path) -> bool:
@@ -669,6 +896,157 @@ def _entry_exists(path: Path) -> bool:
         return False
     except OSError as exc:
         raise ValueError("unable to inspect forbidden execution residue") from exc
+
+
+def _expected_work_entries(
+    successor_run_id: str,
+    input_snapshots: tuple[Mapping[str, Any], ...],
+    snapshot_bytes: Mapping[str, bytes],
+) -> frozenset[str]:
+    frame_item = next(
+        (
+            item
+            for item in input_snapshots
+            if Path(item["snapshot_path"]).name == "frame_records.csv"
+        ),
+        None,
+    )
+    if frame_item is None:
+        raise ValueError("execution frame snapshot is missing")
+    rows = _csv_rows_from_bytes(snapshot_bytes[frame_item["snapshot_path"]])
+    inspections = sorted(
+        {row.get("inspection_id", "") for row in rows},
+        key=lambda value: (
+            int("".join(char for char in value if char.isdigit()) or "0"), value
+        ),
+    )
+    if not inspections or "" in inspections:
+        raise ValueError("execution frame snapshot is invalid")
+    entries = {
+        _INPUT_SNAPSHOT_DIR,
+        "work/raw_history",
+        "work/raw_history/association_manifest.json",
+        "work/raw_history/association_records.csv",
+        "work/raw_history/main_progressive",
+    }
+    entries.update(
+        str(item["snapshot_path"]).split(f"runs/{successor_run_id}/", 1)[1]
+        for item in input_snapshots
+    )
+    history_files = {
+        "association_records.csv",
+        "history_engineering_report.csv",
+        "history_frames.csv",
+        "history_growth_analysis.csv",
+        "memory_after_query_report.md",
+        "memory_after_query.csv",
+        "memory_after_query.log",
+        "memory_before_query_report.md",
+        "memory_before_query_summary.md",
+        "memory_before_query.csv",
+        "memory_before_query.log",
+    }
+    for index, _inspection in enumerate(inspections, start=1):
+        prefix = f"work/raw_history/main_progressive/round_{index:03d}"
+        entries.add(prefix)
+        entries.add(f"{prefix}/query_frames.csv")
+        if index > 1:
+            entries.update(f"{prefix}/{name}" for name in history_files)
+    return frozenset(entries)
+
+
+def _execution_work_entries(root: Path, successor_run_id: str) -> frozenset[str]:
+    successor = root / "runs" / successor_run_id
+    work = successor / "work"
+    result: set[str] = set()
+    pending = [work]
+    while pending:
+        directory = pending.pop()
+        _DIRECTORY_IDENTITY(directory)
+        for entry in directory.iterdir():
+            relative = entry.relative_to(successor).as_posix()
+            state = entry.lstat()
+            if stat.S_ISLNK(state.st_mode):
+                raise ValueError("execution work contains a link")
+            if stat.S_ISDIR(state.st_mode):
+                _DIRECTORY_IDENTITY(entry)
+                result.add(relative)
+                pending.append(entry)
+            elif stat.S_ISREG(state.st_mode):
+                _FILE_IDENTITY(entry)
+                result.add(relative)
+            else:
+                raise ValueError("execution work contains an unsupported entry")
+    return frozenset(result)
+
+
+def _external_tree_snapshot(root: Path, name: str) -> tuple[tuple[Any, ...], ...]:
+    target = root / name
+    if not _entry_exists(target):
+        return ()
+    result: list[tuple[Any, ...]] = []
+    pending = [target]
+    while pending:
+        directory = pending.pop()
+        device, inode = _DIRECTORY_IDENTITY(directory)
+        relative_dir = directory.relative_to(root).as_posix()
+        result.append(("directory", relative_dir, device, inode))
+        for entry in directory.iterdir():
+            state = entry.lstat()
+            if stat.S_ISLNK(state.st_mode):
+                raise ValueError("formal tree contains a link")
+            if stat.S_ISDIR(state.st_mode):
+                pending.append(entry)
+            elif stat.S_ISREG(state.st_mode):
+                identity = _FILE_IDENTITY(entry)
+                with entry.open("rb") as handle:
+                    before = os.fstat(handle.fileno())
+                    data = handle.read()
+                    after = os.fstat(handle.fileno())
+                before_key = (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mtime_ns,
+                    before.st_ctime_ns,
+                )
+                after_key = (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                )
+                if before_key != after_key:
+                    raise ValueError("formal tree file changed during snapshot")
+                result.append(
+                    (
+                        "file",
+                        entry.relative_to(root).as_posix(),
+                        identity[0],
+                        identity[1],
+                        len(data),
+                        _sha(data),
+                    )
+                )
+            else:
+                raise ValueError("formal tree contains an unsupported entry")
+    return tuple(sorted(result))
+
+
+def _validate_execution_write_set(
+    root: Path,
+    successor_run_id: str,
+    expected_work_entries: frozenset[str],
+    formal_tree_evidence: Mapping[str, tuple[tuple[Any, ...], ...]],
+) -> None:
+    if _execution_work_entries(root, successor_run_id) != expected_work_entries:
+        raise ValueError("execution work set changed")
+    if any(
+        _external_tree_snapshot(root, name) != evidence
+        for name, evidence in formal_tree_evidence.items()
+    ):
+        raise ValueError("formal output or staging tree changed")
 
 
 def _source_input_context(
@@ -724,9 +1102,11 @@ def _validate_running_fence(
     start_intent: Mapping[str, Any],
     start_bytes: bytes,
     input_snapshots: tuple[Mapping[str, Any], ...],
+    snapshot_directory_chain: tuple[Mapping[str, Any], ...],
     successor_chain: tuple[Any, ...],
     *,
     check_admission: bool = False,
+    bound_snapshot_bytes: Mapping[str, bytes] | None = None,
 ) -> Mapping[str, Any]:
     current_intent, current_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
@@ -736,10 +1116,22 @@ def _validate_running_fence(
         root, root / "runs" / successor_run_id, label="B.9 running fence"
     ):
         raise ValueError("successor directory identity changed")
-    _validate_start_intent(current_intent, current_bytes, handoff, input_snapshots)
+    _validate_start_intent(
+        current_intent,
+        current_bytes,
+        handoff,
+        input_snapshots,
+        snapshot_directory_chain,
+    )
     if current_bytes != start_bytes:
         raise ValueError("execution-start intent changed")
-    _validate_input_snapshots(root, successor_run_id, input_snapshots)
+    _validate_input_snapshots(
+        root,
+        successor_run_id,
+        input_snapshots,
+        snapshot_directory_chain,
+        bound_snapshot_bytes,
+    )
     current_source = _B8_STATE_LOAD(_B8_STATE_STORE(root), run_id=handoff.source_run_id)["canonical_state"]
     _B8_SOURCE_VALIDATE(current_source, _B8_PREPARATION_VIEW(b8_intent))
     if current_source != source:
@@ -804,9 +1196,11 @@ def _validate_planned_fence(
     start_intent: Mapping[str, Any],
     start_bytes: bytes,
     input_snapshots: tuple[Mapping[str, Any], ...],
+    snapshot_directory_chain: tuple[Mapping[str, Any], ...],
     successor_chain: tuple[Any, ...],
     expected_tasks: Mapping[str, Any],
     expected_task_plan: Any,
+    bound_snapshot_bytes: Mapping[str, bytes] | None = None,
 ) -> Mapping[str, Any]:
     """Fence the exact pre-CAS State before Controller initialization writes."""
 
@@ -816,10 +1210,22 @@ def _validate_planned_fence(
     current_intent, current_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
     )
-    _validate_start_intent(current_intent, current_bytes, handoff, input_snapshots)
+    _validate_start_intent(
+        current_intent,
+        current_bytes,
+        handoff,
+        input_snapshots,
+        snapshot_directory_chain,
+    )
     if current_bytes != start_bytes:
         raise ValueError("execution-start intent changed before State CAS")
-    _validate_input_snapshots(root, successor_run_id, input_snapshots)
+    _validate_input_snapshots(
+        root,
+        successor_run_id,
+        input_snapshots,
+        snapshot_directory_chain,
+        bound_snapshot_bytes,
+    )
     if current_chain != successor_chain or current_chain != _DIRECTORY_CHAIN(root, successor, label="B.9 planned fence"):
         raise ValueError("successor directory changed before State CAS")
 
@@ -977,6 +1383,12 @@ def _execute(
     if type(timestamp) is not str:
         raise ValueError("B.8 mutation timestamp is invalid")
     captured_inputs = _source_snapshot_spec(root, source, handoff)
+    formal_tree_evidence = types.MappingProxyType(
+        {
+            name: _external_tree_snapshot(root, name)
+            for name in ("outputs", "staging")
+        }
+    )
     with _BIND_DIRECTORIES(chain):
         _ASSERT_DIRECTORY_CHAIN(chain, label="B.9 pre-intent")
         _MAKE_DIRECTORY(
@@ -989,20 +1401,33 @@ def _execute(
         _MAKE_DIRECTORY(
             root, f"runs/{successor_run_id}/{_INPUT_SNAPSHOT_DIR}"
         )
-    chain = _DIRECTORY_CHAIN(root, successor, label="B.9 successor")
     mutation_chain = _DIRECTORY_CHAIN(
         root, successor / _INPUT_SNAPSHOT_DIR, label="B.9 execution snapshot"
     )
+    snapshot_directory_chain = _directory_chain_binding(root, mutation_chain)
     bound_inputs: list[Mapping[str, Any]] = []
     with _BIND_DIRECTORIES(mutation_chain):
         for item, data in captured_inputs:
             device, inode = _WRITE_EXCLUSIVE(root, item["snapshot_path"], data)
             bound_inputs.append({**item, "device": device, "inode": inode})
     input_snapshots = tuple(bound_inputs)
-    start_intent = _make_start_intent(handoff, timestamp, input_snapshots)
+    bound_snapshot_bytes = _validate_input_snapshots(
+        root,
+        successor_run_id,
+        input_snapshots,
+        snapshot_directory_chain,
+    )
+    start_intent = _make_start_intent(
+        handoff,
+        timestamp,
+        input_snapshots,
+        snapshot_directory_chain,
+    )
     start_bytes = _canonical(start_intent)
     with _BIND_DIRECTORIES(chain):
-        _validate_input_snapshots(root, successor_run_id, input_snapshots)
+        _validate_input_snapshots(
+            root, successor_run_id, input_snapshots, snapshot_directory_chain
+        )
         # Snapshot bytes are immutable successor-owned execution inputs.  The
         # source authority is rechecked after publication, so no stale source
         # can authorize the snapshot consumed by the worker.
@@ -1011,7 +1436,13 @@ def _execute(
     current_start, current_start_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
     )
-    _validate_start_intent(current_start, current_start_bytes, handoff, input_snapshots)
+    _validate_start_intent(
+        current_start,
+        current_start_bytes,
+        handoff,
+        input_snapshots,
+        snapshot_directory_chain,
+    )
     if current_start_bytes != start_bytes:
         raise ValueError("execution-start intent publication changed")
     # B.8's archived evidence is intentionally closed over the PLANNED@1
@@ -1022,7 +1453,13 @@ def _execute(
     current_start, current_start_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
     )
-    _validate_start_intent(current_start, current_start_bytes, handoff, input_snapshots)
+    _validate_start_intent(
+        current_start,
+        current_start_bytes,
+        handoff,
+        input_snapshots,
+        snapshot_directory_chain,
+    )
     if current_start_bytes != start_bytes:
         raise ValueError("execution-start intent changed before State mutation")
 
@@ -1060,9 +1497,11 @@ def _execute(
             current_start,
             current_start_bytes,
             input_snapshots,
+            snapshot_directory_chain,
             chain,
             tasks,
             task_plan,
+            bound_snapshot_bytes,
         ),
         lambda: (
             _validate_running_fence(
@@ -1074,7 +1513,9 @@ def _execute(
                 current_start,
                 current_start_bytes,
                 input_snapshots,
+                snapshot_directory_chain,
                 chain,
+                bound_snapshot_bytes=bound_snapshot_bytes,
             ),
         ),
     )
@@ -1088,8 +1529,10 @@ def _execute(
             current_start,
             current_start_bytes,
             input_snapshots,
+            snapshot_directory_chain,
             chain,
             check_admission=True,
+            bound_snapshot_bytes=bound_snapshot_bytes,
         )
     )
     sink.set_task_start_fence(
@@ -1102,15 +1545,24 @@ def _execute(
             current_start,
             current_start_bytes,
             input_snapshots,
+            snapshot_directory_chain,
             chain,
             check_admission=True,
+            bound_snapshot_bytes=bound_snapshot_bytes,
         )
     )
     context = _source_input_context(
         root, successor_run_id, source, handoff, input_snapshots
     )
+    registry = _BUILD_REGISTRY()
+    _bind_worker_snapshot_bytes(
+        registry, root, input_snapshots, bound_snapshot_bytes
+    )
+    expected_work_entries = _expected_work_entries(
+        successor_run_id, input_snapshots, bound_snapshot_bytes
+    )
     executor = _EXECUTOR(
-        _BUILD_REGISTRY(),
+        registry,
         root,
         resume=False,
         run_id=successor_run_id,
@@ -1120,7 +1572,9 @@ def _execute(
     # official StateStore/CAS/checkpoint mutation.  The controlled filesystem
     # performs its last observable pre-write identity check at each mutation;
     # this does not claim a cross-file kernel transaction.
-    with _BIND_DIRECTORIES(chain):
+    with _BIND_DIRECTORIES(mutation_chain), _hold_snapshot_objects(
+        root, input_snapshots
+    ):
         _ASSERT_DIRECTORY_CHAIN(chain, label="B.9 execution mutations")
         executor.run(execution_tasks, context)
     final = _validate_running_fence(
@@ -1132,8 +1586,10 @@ def _execute(
         current_start,
         current_start_bytes,
         input_snapshots,
+        snapshot_directory_chain,
         chain,
         check_admission=True,
+        bound_snapshot_bytes=bound_snapshot_bytes,
     )
     state = final["state"]
     task_status = state.get("task_status")
@@ -1169,6 +1625,9 @@ def _execute(
         for name in ("publication_transaction.json", "final_summary.md", "publication_backup")
     ):
         raise ValueError("publication residue is not permitted")
+    _validate_execution_write_set(
+        root, successor_run_id, expected_work_entries, formal_tree_evidence
+    )
     start_sha = _sha(current_start_bytes)
     bindings = {
         "successor_run_id": successor_run_id,
@@ -1218,8 +1677,18 @@ def _seal_execution_authority() -> Any:
         "_make_start_intent",
         "_validate_start_intent",
         "_canonical_task_plan",
+        "_open_source_read_guard",
+        "_held_source_snapshot_bytes",
         "_source_snapshot_spec",
+        "_directory_chain_binding",
+        "_csv_rows_from_bytes",
         "_validate_input_snapshots",
+        "_bind_worker_snapshot_bytes",
+        "_entry_exists",
+        "_expected_work_entries",
+        "_execution_work_entries",
+        "_external_tree_snapshot",
+        "_validate_execution_write_set",
         "_source_input_context",
         "_validate_running_fence",
         "_validate_planned_fence",
@@ -1238,6 +1707,11 @@ def _seal_execution_authority() -> Any:
             closure=function.__closure__,
         )
         copies[name].__kwdefaults__ = dict(function.__kwdefaults__ or {})
+    copies["_held_source_snapshot_bytes"].__defaults__ = (
+        copies["_open_source_read_guard"],
+        frozen["_FILE_IDENTITY"],
+        copies["_validate_b5_current"],
+    )
     frozen.update(copies)
     return copies["_execute"]
 
@@ -1260,7 +1734,7 @@ def _seal_public_executor(execute: Any, denied: Any, controlled_root: Any) -> An
         try:
             root = controlled_root(path_type(project_root).absolute())
             return execute(root, successor_run_id, handoff)
-        except Exception:
+        except BaseException:
             return denied()
 
     return public

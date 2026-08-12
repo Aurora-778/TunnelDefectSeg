@@ -107,6 +107,11 @@ def activated_prepared_successor(
     return completed_run, activation, preparation, handoff
 
 
+@pytest.fixture
+def real_b5_case(completed_run: Path):
+    return _real_b9_handoff(completed_run)
+
+
 def _load_b9():
     import importlib
 
@@ -696,6 +701,7 @@ def test_b9_public_sink_replacement_cannot_bypass_task_fences(
     target = root / "runs" / handoff.source_run_id / "artifacts" / "claim_decision.json"
 
     async def bypass(self, event):
+        raise AssertionError("public sink method was used as authority")
         if event.get("checkpoint_kind") == "task_started":
             data = bytearray(target.read_bytes())
             data[len(data) // 2] ^= 1
@@ -832,40 +838,32 @@ def test_b9_crash_intermediate_state_is_denied_without_new_writes(
     assert _tree_snapshot(root) == before
 
 
-def test_b9_real_b5_authority_end_to_end(completed_run: Path) -> None:
-    import importlib
+def test_b9_real_b5_authority_end_to_end(
+    real_b5_case, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, handoff = real_b5_case
+    from orchestrator.agents.association_agent import AssociationAgent
 
-    from orchestrator.inspection_workflow.resume_execution_preparation import (
-        ResumeExecutionPreparer,
-    )
+    original = AssociationAgent.read_csv
+    snapshot_read_attempted = False
 
-    admission = ExplicitResumeAdmission(completed_run).admit(run_id=RUN_ID)
-    assert admission.resume_admissible
-    activation = ExplicitResumeActivation(completed_run).activate(
-        run_id=RUN_ID, admission=admission
-    )
-    assert activation.resume_activated
-    preparation = ResumeExecutionPreparer(completed_run).prepare(
-        successor_run_id=activation.successor_run_id,
-        activation=activation,
-    )
-    assert preparation.resume_execution_prepared
-    handoff = ResumeExecutionHandoff(completed_run).handoff(
-        successor_run_id=activation.successor_run_id,
-        activation=activation,
-        preparation=preparation,
-    )
-    assert handoff.resume_execution_handed_off
-    module = importlib.reload(_load_b9())
+    def reject_snapshot_open(self, path):
+        nonlocal snapshot_read_attempted
+        if "resume_execution_input" in Path(path).parts:
+            snapshot_read_attempted = True
+            raise AssertionError("worker reopened execution snapshot path")
+        return original(self, path)
 
-    result = module.execute_resume_execution(
-        completed_run,
+    monkeypatch.setattr(AssociationAgent, "read_csv", reject_snapshot_open)
+    result = _load_b9().execute_resume_execution(
+        root,
         successor_run_id=handoff.successor_run_id,
         handoff=handoff,
     )
 
     assert result.resume_execution_executed
     assert result.state_version == 5
+    assert not snapshot_read_attempted
 
 
 def test_b9_visible_state_validator_replacement_cannot_forge_final_binding(
@@ -912,3 +910,221 @@ def test_b9_same_bytes_snapshot_path_replacement_is_denied(
     monkeypatch.setattr(AssociationAgent, "run", replace_snapshot)
     result = _b9(root, handoff)
     assert not result.resume_execution_executed
+
+
+def test_b9_snapshot_leaf_content_aba_is_denied_and_worker_uses_bound_bytes(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    original = AssociationAgent.run
+    attack_reached = False
+
+    def content_aba(self, context):
+        nonlocal attack_reached
+        attack_reached = True
+        frame_path = root / str(context["inputs"]["association"]["frame_records"])
+        before = frame_path.read_bytes()
+        changed = before.replace(b"0", b"1", 1)
+        assert changed != before and len(changed) == len(before)
+        frame_path.write_bytes(changed)
+        try:
+            return original(self, context)
+        finally:
+            frame_path.write_bytes(before)
+
+    monkeypatch.setattr(AssociationAgent, "run", content_aba)
+    result = _b9(root, handoff)
+
+    assert attack_reached
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+def test_b9_source_leaf_aba_during_snapshot_capture_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    module = _load_b9()
+    sealed = __import__("inspect").getclosurevars(
+        module.execute_resume_execution
+    ).nonlocals["execute"]
+    original = sealed.__globals__["_ARTIFACT_READ"]
+    source_path = (
+        root
+        / "runs"
+        / handoff.source_run_id
+        / "work"
+        / "raw_prepared"
+        / "frame_records.csv"
+    )
+    original_bytes = source_path.read_bytes()
+    changed = original_bytes.replace(b"0", b"1", 1)
+    attempted = False
+
+    def source_aba(project_root, relative_path, **kwargs):
+        nonlocal attempted
+        if relative_path.endswith("/work/raw_prepared/frame_records.csv"):
+            attempted = True
+            source_path.write_bytes(changed)
+            source_path.write_bytes(original_bytes)
+        return original(project_root, relative_path, **kwargs)
+
+    monkeypatch.setitem(sealed.__globals__, "_ARTIFACT_READ", source_aba)
+    result = _b9(root, handoff)
+
+    assert attempted
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+def test_b9_worker_uses_guarded_snapshot_bytes_not_snapshot_path(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    original = AssociationAgent.read_csv
+    snapshot_read_attempted = False
+
+    def reject_snapshot_open(self, path):
+        nonlocal snapshot_read_attempted
+        if "resume_execution_input" in Path(path).parts:
+            snapshot_read_attempted = True
+            raise AssertionError("worker reopened execution snapshot path")
+        return original(self, path)
+
+    monkeypatch.setattr(AssociationAgent, "read_csv", reject_snapshot_open)
+    result = _b9(root, handoff)
+
+    assert result.resume_execution_executed
+    assert not snapshot_read_attempted
+
+
+def test_b9_snapshot_parent_aba_preserving_leaf_identity_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    original = AssociationAgent.run
+
+    def parent_aba(self, context):
+        frame = root / str(context["inputs"]["association"]["frame_records"])
+        snapshot_dir = frame.parent
+        displaced = snapshot_dir.with_name(snapshot_dir.name + "-old")
+        snapshot_dir.rename(displaced)
+        snapshot_dir.mkdir()
+        for child in tuple(displaced.iterdir()):
+            child.replace(snapshot_dir / child.name)
+        displaced.rmdir()
+        return original(self, context)
+
+    monkeypatch.setattr(AssociationAgent, "run", parent_aba)
+    result = _b9(root, handoff)
+
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+@pytest.mark.parametrize("relative", ["work/unknown.tmp", "work/raw_history/unknown.tmp"])
+def test_b9_unknown_nested_execution_residue_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+    relative: str,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    original = AssociationAgent.run
+
+    def inject_residue(self, context):
+        result = original(self, context)
+        target = root / "runs" / handoff.successor_run_id / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"unknown")
+        return result
+
+    monkeypatch.setattr(AssociationAgent, "run", inject_residue)
+    result = _b9(root, handoff)
+
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+def test_b9_formal_outputs_write_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    original = AssociationAgent.run
+
+    def write_formal_output(self, context):
+        target = root / "outputs" / "forged.bin"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"forged")
+        return original(self, context)
+
+    monkeypatch.setattr(AssociationAgent, "run", write_formal_output)
+    result = _b9(root, handoff)
+
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+@pytest.mark.parametrize("tree_name", ["outputs", "staging"])
+def test_b9_preexisting_formal_tree_change_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+    tree_name: str,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    target = root / tree_name / "existing.bin"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"before")
+    original = AssociationAgent.run
+
+    def change_formal_tree(self, context):
+        target.write_bytes(b"after!")
+        return original(self, context)
+
+    monkeypatch.setattr(AssociationAgent, "run", change_formal_tree)
+    result = _b9(root, handoff)
+
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+def _real_b9_handoff(root: Path):
+    import importlib
+
+    from orchestrator.inspection_workflow.resume_execution_preparation import (
+        ResumeExecutionPreparer,
+    )
+
+    admission = ExplicitResumeAdmission(root).admit(run_id=RUN_ID)
+    assert admission.resume_admissible
+    activation = ExplicitResumeActivation(root).activate(run_id=RUN_ID, admission=admission)
+    assert activation.resume_activated
+    preparation = ResumeExecutionPreparer(root).prepare(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+    )
+    assert preparation.resume_execution_prepared
+    handoff = ResumeExecutionHandoff(root).handoff(
+        successor_run_id=activation.successor_run_id,
+        activation=activation,
+        preparation=preparation,
+    )
+    assert handoff.resume_execution_handed_off
+    importlib.reload(_load_b9())
+    return root, handoff
