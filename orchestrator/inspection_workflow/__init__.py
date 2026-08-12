@@ -124,6 +124,7 @@ from .resume_execution_handoff import (
     ResumeExecutionHandoffResult,
     handoff_resume_execution,
 )
+from .resume_execution import ResumeExecutionResult, execute_resume_execution
 
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
@@ -223,4 +224,6 @@ __all__ = [
     "ResumeExecutionHandoff",
     "ResumeExecutionHandoffResult",
     "handoff_resume_execution",
+    "ResumeExecutionResult",
+    "execute_resume_execution",
 ]
