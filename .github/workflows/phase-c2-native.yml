@@ -1,0 +1,40 @@
+name: phase-c2-native
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements-phase-c.txt
+      - run: python -m pytest --rootdir . tests/test_inspection_review_admission.py -q -p no:cacheprovider
+      - name: Require every Windows-native Phase C-2 test
+        run: python -m pytest --rootdir . tests/test_inspection_review_admission.py -k native_windows -q -p no:cacheprovider
+
+  linux-x86-64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -r requirements-phase-c.txt
+      - name: Establish nodev native-test filesystem
+        run: |
+          sudo mkdir -p /mnt/phase-c2-nodev
+          sudo mount -t tmpfs -o nodev,nosuid,noexec,size=64m tmpfs /mnt/phase-c2-nodev
+          sudo chown "$USER" /mnt/phase-c2-nodev
+      - run: python -m pytest --rootdir . tests/test_inspection_review_admission.py -q -p no:cacheprovider
+        env:
+          PHASE_C2_NODEV_ROOT: /mnt/phase-c2-nodev
+      - name: Require every Linux-native Phase C-2 test
+        run: python -m pytest --rootdir . tests/test_inspection_review_admission.py -k native_linux -q -p no:cacheprovider
+        env:
+          PHASE_C2_NODEV_ROOT: /mnt/phase-c2-nodev

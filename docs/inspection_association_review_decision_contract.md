@@ -2,15 +2,18 @@
 
 ## Scope
 
-This is the parallel-safe Phase C foundation. It defines an immutable signed
-review decision and a pure validator. It does **not** change `StateStore`, the
+This is the parallel-safe Phase C-2 read-only admission boundary. It defines an
+immutable signed review decision and validates it only against the fixed
+Run-local `runs/<run_id>/work/association_records.csv`. It does **not** change `StateStore`, the
 active-run lock, Resume execution, Publication Manifest, Claim Policy, or Web
 review behavior.
 
 Phase C's Ed25519 support is optional for the existing Phase A/B runtime. Install
 it with `pip install -r requirements-phase-c.txt`. Without that optional
 dependency, `orchestrator.inspection_workflow` continues to expose its existing
-Phase A/B API, while the Phase C `review_decision` submodule remains unavailable.
+Phase A/B API. Phase C is imported directly from the isolated
+`orchestrator.inspection_review_admission` module; it is deliberately not
+re-exported from `orchestrator.inspection_workflow`.
 
 The validator may return `human_verified` only when all trusted bindings pass.
 An input field, unsigned JSON document, reviewer name, or SHA-256 alone cannot
@@ -32,10 +35,22 @@ allowlist is the foundation's revocation mechanism. The later integration must
 revalidate against the current allowlist; it must not persist and trust a
 cached boolean.
 
-The supplied Association binding validator is trusted application code. It
-must prove that the supplied immutable snapshot belongs to the signed `run_id`
-and contains exactly the signed review subject. Returning `True` without these
-checks destroys the subject-binding guarantee.
+Callers cannot supply snapshot bytes, a path, an Association binding callback,
+`accepted_at`, or a clock. The admission reads the fixed CSV through the opaque
+trusted root capability, checks its exact A1 schema and unique subject, and
+samples the UTC wall clock only after every non-time validation succeeds.
+
+The trusted launcher is a dedicated, single-thread, single-handoff composition
+root bound to its creating thread. It rejects cross-thread use and reentrant
+handoff. On Windows this is also a deployment prerequisite: the launcher must
+run in a process where no other thread or native component can create a process
+during the temporary inheritable-handle `CreateProcess` call. The fixed child is
+the only permitted spawn in that process. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`
+limits the intended child but cannot police an unrelated concurrent
+inherit-all `CreateProcess`; deployments that cannot enforce this dedicated
+process boundary must treat Phase C-2 admission as unavailable. The admission
+context itself remains thread-safe for duplicate-versus-close through its
+single private lifecycle mutex.
 
 ## Decision document
 
@@ -102,19 +117,27 @@ decision fields except `proof`, prefixed by the domain separator
 `inspection-association-review-decision-v1\0`. The decision identity is the
 SHA-256 of the complete canonical document.
 
-## Validation result
+## Admission result
 
-The pure validator returns one of:
+The sole authority-bearing production entry point, `admit_review_decision`,
+returns one of:
 
 - `human_verified`: authenticated acceptance with all immutable bindings;
 - `human_rejected`: authenticated rejection with all immutable bindings;
 - `review_invalid`: one generic denial code and no hashes, identities, subject,
   or timestamp that downstream code could mistake for authority.
 
-The validator performs no filesystem reads and no mutations. Missing evidence,
-bad callback results, parse failures, wrong scope, untrusted authority,
+The admission performs only handle-anchored bounded reads and no mutations.
+Missing evidence, CSV parse failures, wrong scope, untrusted authority,
 expiration, subject replay, byte changes, and invalid signatures all produce
 the same zero-authority invalid shape.
+
+The snapshot is capped at 8 MiB, 65,536 rows, 16 columns, 1 MiB per logical
+record, and 65,536 Unicode code points per field. Authority allowlists must be
+exact built-in `set` or `frozenset` instances containing 1–256 canonical
+lowercase SHA-256 strings. Every valid-call failure returns the complete
+zero-authority shape; passing a nonexistent `accepted_at` or clock keyword is
+Python signature misuse and raises `TypeError`.
 
 ## Later integration boundary
 

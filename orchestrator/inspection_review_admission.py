@@ -1,4 +1,4 @@
-"""Pure Phase C contract for trusted human Association review decisions.
+"""Isolated Phase C-2 fixed-snapshot review admission.
 
 This module deliberately does not mutate workflow State, locks, Manifests, or
 Claim Policy.  It validates immutable bytes and returns a zero-authority result
@@ -13,10 +13,25 @@ import binascii
 import hashlib
 import json
 import re
+import sys
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Mapping
+from datetime import datetime, timedelta, timezone
+from typing import Any, Mapping
+
+from orchestrator.inspection_review_root_capability import (
+    CONTEXT_UNAVAILABLE,
+    _ConfiguredProjectContext,
+    _PendingProjectContext,
+    _bootstrap_review_project_context,
+)
+
+if sys.platform == "win32":
+    from orchestrator import _inspection_review_fs_windows as _fs
+elif sys.platform == "linux":
+    from orchestrator import _inspection_review_fs_posix as _fs
+else:
+    _fs = None
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
@@ -66,7 +81,29 @@ class ReviewDecisionContractError(ValueError):
     """Raised by builders when a Phase C document is malformed."""
 
 
-AssociationBindingValidator = Callable[[bytes, str, str], bool]
+ASSOCIATION_PROJECTION_FIELDS = (
+    "source_reference_schema_version",
+    "association_id",
+    "inspection_id",
+    "current_observation_id",
+    "frame_id",
+    "image_id",
+    "memory_id",
+    "association_status",
+    "association_mode",
+    "use_disease_id_score",
+    "association_score",
+    "match_type",
+    "candidate_count",
+    "score_margin",
+    "conflict_reason",
+    "needs_manual_review",
+)
+_MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
+_MAX_RECORD_BYTES = 1024 * 1024
+_MAX_ROWS = 65_536
+_MAX_FIELD_CODEPOINTS = 65_536
+_MAX_AUTHORITIES = 256
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -330,7 +367,7 @@ class ReviewDecisionValidation:
     accepted_at: str | None
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        raise TypeError("ReviewDecisionValidation is created only by validate_review_decision")
+        raise TypeError("ReviewDecisionValidation is created only by admit_review_decision")
 
     def __post_init__(self) -> None:
         if self.status not in {"human_verified", "human_rejected", "review_invalid"}:
@@ -357,7 +394,7 @@ class ReviewDecisionValidation:
         return "human_verified" if self.status == "human_verified" else None
 
 
-def _result(
+def _authority_result(
     status: str,
     *,
     decision_sha256: str | None = None,
@@ -373,7 +410,7 @@ def _result(
     object.__setattr__(
         result,
         "denial_codes",
-        ("review_decision_invalid",) if status == "review_invalid" else (),
+        (),
     )
     object.__setattr__(result, "decision_sha256", decision_sha256)
     object.__setattr__(result, "association_snapshot_sha256", association_snapshot_sha256)
@@ -387,45 +424,248 @@ def _result(
 
 
 def _invalid() -> ReviewDecisionValidation:
-    return _result("review_invalid")
+    result = object.__new__(ReviewDecisionValidation)
+    object.__setattr__(result, "status", "review_invalid")
+    object.__setattr__(result, "denial_codes", ("review_decision_invalid",))
+    object.__setattr__(result, "decision_sha256", None)
+    object.__setattr__(result, "association_snapshot_sha256", None)
+    object.__setattr__(result, "authority_evidence_sha256", None)
+    object.__setattr__(result, "run_id", None)
+    object.__setattr__(result, "association_id", None)
+    object.__setattr__(result, "reviewer_id", None)
+    object.__setattr__(result, "accepted_at", None)
+    result.__post_init__()
+    return result
 
 
-def validate_review_decision(
+def _parse_association_chunks(chunks: object, target_association_id: str) -> bool:
+    if type(chunks) not in (tuple, list) or not chunks or any(
+        type(chunk) not in (bytes, memoryview) for chunk in chunks
+    ):
+        raise ReviewDecisionContractError("Association snapshot chunks are invalid")
+    snapshot_size = sum(len(chunk) for chunk in chunks)
+    if snapshot_size == 0 or snapshot_size > _MAX_SNAPSHOT_BYTES:
+        raise ReviewDecisionContractError("Association snapshot is invalid")
+    prefix_parts: list[bytes] = []
+    prefix_size = 0
+    for chunk in chunks:
+        if prefix_size >= 3:
+            break
+        part = chunk[: 3 - prefix_size]
+        prefix_parts.append(part)
+        prefix_size += len(part)
+    prefix = b"".join(prefix_parts)
+    if prefix == b"\xef\xbb\xbf":
+        raise ReviewDecisionContractError("Association snapshot must not contain a BOM")
+
+    rows = 0
+    target_count = 0
+    seen: set[str] = set()
+    fields: list[str] = []
+    field = bytearray()
+    record_bytes = 0
+    quoted = False
+    after_quote = False
+    pending_quote = False
+    pending_cr = False
+
+    def finish_field() -> None:
+        nonlocal field
+        try:
+            value = bytes(field).decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ReviewDecisionContractError("Association CSV is not strict UTF-8") from exc
+        if len(value) > _MAX_FIELD_CODEPOINTS:
+            raise ReviewDecisionContractError("Association CSV field is too long")
+        fields.append(value)
+        field = bytearray()
+        if len(fields) > len(ASSOCIATION_PROJECTION_FIELDS):
+            raise ReviewDecisionContractError("Association CSV has too many columns")
+
+    def finish_record() -> None:
+        nonlocal fields, rows, target_count, record_bytes
+        finish_field()
+        if len(fields) != len(ASSOCIATION_PROJECTION_FIELDS):
+            raise ReviewDecisionContractError("Association CSV has the wrong column count")
+        if rows == 0:
+            if tuple(fields) != ASSOCIATION_PROJECTION_FIELDS:
+                raise ReviewDecisionContractError("Association CSV header is invalid")
+        else:
+            association_id = _require_safe_id(fields[1], field="association_id")
+            if association_id in seen:
+                raise ReviewDecisionContractError("Association CSV contains duplicate IDs")
+            seen.add(association_id)
+            if association_id == target_association_id:
+                target_count += 1
+            if rows > _MAX_ROWS:
+                raise ReviewDecisionContractError("Association CSV has too many rows")
+        rows += 1
+        fields = []
+        record_bytes = 0
+
+    for chunk in chunks:
+      for byte in chunk:
+        if pending_cr:
+            pending_cr = False
+            if byte == 0x0A:
+                record_bytes += 1
+                if record_bytes > _MAX_RECORD_BYTES:
+                    raise ReviewDecisionContractError("Association CSV record is too large")
+                finish_record()
+                continue
+            finish_record()
+        record_bytes += 1
+        if record_bytes > _MAX_RECORD_BYTES:
+            raise ReviewDecisionContractError("Association CSV record is too large")
+        if quoted:
+            if pending_quote:
+                if byte == 0x22:
+                    field.append(byte)
+                    pending_quote = False
+                    continue
+                quoted = False
+                after_quote = True
+                pending_quote = False
+                # Reprocess the current byte under the after-quote state.
+            if byte == 0x22:
+                pending_quote = True
+                continue
+            if quoted:
+                field.append(byte)
+                continue
+        if after_quote:
+            if byte == 0x2C:
+                if len(fields) >= len(ASSOCIATION_PROJECTION_FIELDS) - 1:
+                    raise ReviewDecisionContractError("Association CSV has too many columns")
+                finish_field()
+                after_quote = False
+                continue
+            if byte in (0x0A, 0x0D):
+                if byte == 0x0D:
+                    pending_cr = True
+                else:
+                    finish_record()
+                after_quote = False
+                continue
+            raise ReviewDecisionContractError("characters follow a closing CSV quote")
+        if byte == 0x22:
+            if field:
+                raise ReviewDecisionContractError("CSV quote appears inside an unquoted field")
+            quoted = True
+        elif byte == 0x2C:
+            if len(fields) >= len(ASSOCIATION_PROJECTION_FIELDS) - 1:
+                raise ReviewDecisionContractError("Association CSV has too many columns")
+            finish_field()
+        elif byte in (0x0A, 0x0D):
+            if byte == 0x0D:
+                pending_cr = True
+            else:
+                finish_record()
+        else:
+            field.append(byte)
+
+    if pending_cr:
+        finish_record()
+    if quoted and not pending_quote:
+        raise ReviewDecisionContractError("Association CSV has an unclosed quote")
+    if pending_quote:
+        quoted = False
+        after_quote = True
+    if fields or field or after_quote:
+        finish_record()
+    if rows < 2 or target_count != 1:
+        raise ReviewDecisionContractError("Association target is missing")
+    return True
+
+
+def _parse_association_snapshot(snapshot: bytes, target_association_id: str) -> bool:
+    if type(snapshot) is not bytes:
+        raise ReviewDecisionContractError("Association snapshot is invalid")
+    view = memoryview(snapshot)
+    chunks = tuple(view[offset : offset + 65_536] for offset in range(0, len(view), 65_536))
+    return _parse_association_chunks(chunks, target_association_id)
+
+
+def _trusted_allowlist(value: object) -> frozenset[str]:
+    if type(value) not in (set, frozenset):
+        raise ReviewDecisionContractError("trusted authority allowlist must be a built-in set")
+    if not 1 <= len(value) <= _MAX_AUTHORITIES:
+        raise ReviewDecisionContractError("trusted authority allowlist has invalid size")
+    if any(type(item) is not str or _HASH_RE.fullmatch(item) is None for item in value):
+        raise ReviewDecisionContractError("trusted authority allowlist is malformed")
+    return frozenset(value)
+
+
+def _time_is_valid(
+    *, decided_at: datetime, accepted_at: datetime, valid_from: datetime, valid_until: datetime
+) -> bool:
+    return (
+        valid_from <= decided_at <= accepted_at <= valid_until
+        and accepted_at - decided_at <= timedelta(minutes=15)
+    )
+
+
+def _read_fixed_snapshot(context: _ConfiguredProjectContext, run_id: str) -> tuple[bytes, str]:
+    if _fs is None:
+        raise ReviewDecisionContractError("filesystem backend is unavailable")
+    duplicate = context._duplicate_for_admission()
+    if duplicate is None:
+        raise ReviewDecisionContractError("project context is unavailable")
+    root, expected_identity, project_id, _project_root = duplicate
+    ancestors: list[int] = []
+    leaf: int | None = None
+    snapshot: bytes | None = None
+    cleanup_failed = False
+
+    def close_for_cleanup(handle: int) -> bool:
+        _fs.close_capability(handle)
+        return False
+
+    try:
+        _fs.require_directory(root, expected_identity)
+        parent = root
+        for component in ("runs", run_id, "work"):
+            handle = _fs.open_directory(parent, component)
+            ancestors.append(handle)
+            parent = handle
+        leaf = _fs.open_regular(parent, "association_records.csv")
+        snapshot = _fs.read_bounded(leaf, _MAX_SNAPSHOT_BYTES)
+    finally:
+        if leaf is not None:
+            cleanup_failed = close_for_cleanup(leaf) or cleanup_failed
+        for handle in reversed(ancestors):
+            cleanup_failed = close_for_cleanup(handle) or cleanup_failed
+        cleanup_failed = close_for_cleanup(root) or cleanup_failed
+    if cleanup_failed or snapshot is None:
+        raise ReviewDecisionContractError("snapshot capability cleanup failed")
+    return snapshot, project_id
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedEvidence:
+    decision: dict[str, Any]
+    decision_sha256: str
+    snapshot_sha256: str
+    authority_sha256: str
+    decided_at: datetime
+    valid_from: datetime
+    valid_until: datetime
+
+
+def _verify_non_time_evidence(
     *,
     decision_bytes: bytes,
     association_snapshot_bytes: bytes,
     authority_evidence_bytes: bytes,
-    trusted_authority_sha256: Iterable[str],
+    trusted_authority_sha256: object,
     expected_project_id: str,
     expected_run_id: str,
     expected_association_id: str,
-    accepted_at: str,
-    association_binding_validator: AssociationBindingValidator,
-) -> ReviewDecisionValidation:
-    """Validate a decision without filesystem reads or workflow mutations.
-
-    ``trusted_authority_sha256`` is the configured trust allowlist.  The
-    binding callback must validate that the immutable Association snapshot
-    belongs to ``run_id`` and contains exactly ``association_id``.
-    """
-
-    try:
-        if type(association_snapshot_bytes) is not bytes or not association_snapshot_bytes:
-            raise ReviewDecisionContractError("Association snapshot must be immutable bytes")
-        if not callable(association_binding_validator):
-            raise ReviewDecisionContractError("Association binding validator is required")
+) -> _VerifiedEvidence:
         project_id = _require_safe_id(expected_project_id, field="expected_project_id")
         run_id = _require_safe_id(expected_run_id, field="expected_run_id")
-        association_id = _require_safe_id(
-            expected_association_id, field="expected_association_id"
-        )
-        accepted_time = _require_timestamp(accepted_at, field="accepted_at")
-
-        trusted = tuple(trusted_authority_sha256)
-        if not trusted or any(type(item) is not str or _HASH_RE.fullmatch(item) is None for item in trusted):
-            raise ReviewDecisionContractError("trusted authority allowlist is malformed")
-        if len(trusted) != len(set(trusted)):
-            raise ReviewDecisionContractError("trusted authority allowlist contains duplicates")
+        association_id = _require_safe_id(expected_association_id, field="expected_association_id")
+        trusted = _trusted_allowlist(trusted_authority_sha256)
 
         authority = _validate_authority(
             _parse_json_object(authority_evidence_bytes, label="review authority")
@@ -449,12 +689,6 @@ def validate_review_decision(
         if decision["proof"]["key_id"] != authority["key_id"]:
             raise ReviewDecisionContractError("proof key does not match authority")
 
-        decided_time = _require_timestamp(decision["decided_at"], field="decided_at")
-        valid_from = _require_timestamp(authority["valid_from"], field="valid_from")
-        valid_until = _require_timestamp(authority["valid_until"], field="valid_until")
-        if not (valid_from <= decided_time <= accepted_time <= valid_until):
-            raise ReviewDecisionContractError("review or acceptance time is outside authority validity")
-
         public_key = Ed25519PublicKey.from_public_bytes(
             _require_base64url(
                 authority["public_key_base64url"],
@@ -470,19 +704,60 @@ def validate_review_decision(
         snapshot_hash = _sha256(association_snapshot_bytes)
         if decision["association_snapshot_sha256"] != snapshot_hash:
             raise ReviewDecisionContractError("Association snapshot binding does not match")
-        if association_binding_validator(
-            association_snapshot_bytes,
-            decision["run_id"],
-            decision["association_id"],
-        ) is not True:
-            raise ReviewDecisionContractError("Association snapshot subject binding is invalid")
-
+        _parse_association_snapshot(association_snapshot_bytes, association_id)
         canonical_decision = _canonical_json_bytes(decision)
-        return _result(
-            "human_verified" if decision["decision"] == "accept_association" else "human_rejected",
+        return _VerifiedEvidence(
+            decision=decision,
             decision_sha256=_sha256(canonical_decision),
-            association_snapshot_sha256=snapshot_hash,
-            authority_evidence_sha256=authority_hash,
+            snapshot_sha256=snapshot_hash,
+            authority_sha256=authority_hash,
+            decided_at=_require_timestamp(decision["decided_at"], field="decided_at"),
+            valid_from=_require_timestamp(authority["valid_from"], field="valid_from"),
+            valid_until=_require_timestamp(authority["valid_until"], field="valid_until"),
+        )
+
+
+def admit_review_decision(
+    *,
+    project_context: object,
+    expected_run_id: str,
+    expected_association_id: str,
+    decision_bytes: bytes,
+    authority_evidence_bytes: bytes,
+    trusted_authority_sha256: object,
+) -> ReviewDecisionValidation:
+    """Admit a signed decision against the fixed Run-local CSV snapshot."""
+
+    try:
+        if project_context is CONTEXT_UNAVAILABLE or type(project_context) is not _ConfiguredProjectContext:
+            return _invalid()
+        run_id = _require_safe_id(expected_run_id, field="expected_run_id")
+        association_id = _require_safe_id(expected_association_id, field="expected_association_id")
+        snapshot, expected_project_id = _read_fixed_snapshot(project_context, run_id)
+        evidence = _verify_non_time_evidence(
+            decision_bytes=decision_bytes,
+            association_snapshot_bytes=snapshot,
+            authority_evidence_bytes=authority_evidence_bytes,
+            trusted_authority_sha256=trusted_authority_sha256,
+            expected_project_id=expected_project_id,
+            expected_run_id=run_id,
+            expected_association_id=association_id,
+        )
+        accepted_time = datetime.now(timezone.utc)
+        if not _time_is_valid(
+            decided_at=evidence.decided_at,
+            accepted_at=accepted_time,
+            valid_from=evidence.valid_from,
+            valid_until=evidence.valid_until,
+        ):
+            return _invalid()
+        accepted_at = accepted_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        decision = evidence.decision
+        return _authority_result(
+            "human_verified" if decision["decision"] == "accept_association" else "human_rejected",
+            decision_sha256=evidence.decision_sha256,
+            association_snapshot_sha256=evidence.snapshot_sha256,
+            authority_evidence_sha256=evidence.authority_sha256,
             run_id=decision["run_id"],
             association_id=decision["association_id"],
             reviewer_id=decision["reviewer_id"],
@@ -492,8 +767,104 @@ def validate_review_decision(
         return _invalid()
 
 
+def _read_control_message() -> dict[str, object]:
+    raw = sys.stdin.buffer.readline(1024 * 1024 + 1)
+    if not raw or len(raw) > 1024 * 1024:
+        raise ValueError("control message is missing or oversized")
+    value = json.loads(raw.decode("utf-8", errors="strict"))
+    if type(value) is not dict:
+        raise ValueError("control message must be an object")
+    return value
+
+
+def _write_control_message(value: dict[str, object]) -> None:
+    sys.stdout.buffer.write(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    )
+    sys.stdout.buffer.flush()
+
+
+def _decode_identity(value: object) -> object:
+    if sys.platform == "win32":
+        if type(value) is not dict or set(value) != {"volume_serial", "file_id"}:
+            raise ValueError("Windows handle identity is invalid")
+        if type(value["volume_serial"]) is not int or type(value["file_id"]) is not str:
+            raise ValueError("Windows handle identity is invalid")
+        return _fs.HandleIdentity(value["volume_serial"], bytes.fromhex(value["file_id"]))
+    if type(value) is not dict or set(value) != {"device", "inode"}:
+        raise ValueError("POSIX handle identity is invalid")
+    if type(value["device"]) is not int or type(value["inode"]) is not int:
+        raise ValueError("POSIX handle identity is invalid")
+    return _fs.HandleIdentity(value["device"], value["inode"])
+
+
+def _validation_payload(result: ReviewDecisionValidation) -> dict[str, object]:
+    return {
+        "status": result.status,
+        "denial_codes": list(result.denial_codes),
+        "decision_sha256": result.decision_sha256,
+        "association_snapshot_sha256": result.association_snapshot_sha256,
+        "authority_evidence_sha256": result.authority_evidence_sha256,
+        "run_id": result.run_id,
+        "association_id": result.association_id,
+        "reviewer_id": result.reviewer_id,
+        "accepted_at": result.accepted_at,
+    }
+
+
+def _child_main() -> int:
+    pending: object = CONTEXT_UNAVAILABLE
+    context: object = CONTEXT_UNAVAILABLE
+    try:
+        setup = _read_control_message()
+        if set(setup) != {"handle", "identity", "project_id", "project_root"}:
+            raise ValueError("setup message is invalid")
+        source_handle = setup["handle"]
+        if type(source_handle) is not int:
+            raise ValueError("transferred handle is invalid")
+        pending = _bootstrap_review_project_context(
+            source_handle=source_handle,
+            expected_identity=_decode_identity(setup["identity"]),
+            expected_project_id=setup["project_id"],
+            project_root=setup["project_root"],
+        )
+        if type(pending) is not _PendingProjectContext:
+            raise ValueError("bootstrap failed")
+        _write_control_message({"state": "READY"})
+        if _read_control_message() != {"state": "COMMIT"}:
+            raise ValueError("COMMIT message is invalid")
+        context = pending._commit()
+        request = _read_control_message()
+        required = {
+            "run_id", "association_id", "decision_base64", "authority_base64",
+            "trusted_authority_sha256",
+        }
+        if context is CONTEXT_UNAVAILABLE or set(request) != required:
+            raise ValueError("admission request is invalid")
+        hashes = request["trusted_authority_sha256"]
+        if type(hashes) is not list:
+            raise ValueError("authority hash list is invalid")
+        result = admit_review_decision(
+            project_context=context,
+            expected_run_id=request["run_id"],
+            expected_association_id=request["association_id"],
+            decision_bytes=base64.b64decode(request["decision_base64"], validate=True),
+            authority_evidence_bytes=base64.b64decode(request["authority_base64"], validate=True),
+            trusted_authority_sha256=set(hashes),
+        )
+        _write_control_message({"state": "RESULT", "validation": _validation_payload(result)})
+        return 0
+    except Exception:
+        return 2
+    finally:
+        if context is not CONTEXT_UNAVAILABLE:
+            context.close()
+        elif type(pending) is _PendingProjectContext:
+            pending.close()
+
+
 __all__ = [
-    "AssociationBindingValidator",
+    "ASSOCIATION_PROJECTION_FIELDS",
     "REVIEW_ACTION_SCOPE",
     "REVIEW_AUTHORITY_SCHEMA_VERSION",
     "REVIEW_DECISION_SCHEMA_VERSION",
@@ -501,5 +872,9 @@ __all__ = [
     "ReviewDecisionValidation",
     "canonical_review_authority_bytes",
     "sign_review_decision",
-    "validate_review_decision",
+    "admit_review_decision",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(_child_main())
