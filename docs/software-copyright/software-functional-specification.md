@@ -247,6 +247,7 @@ Web Dashboard 支持以下展示功能：
 | 软件环境 | Windows 10 / Windows 11，Python 3.8 及以上，Microsoft Edge / Chrome 等现代浏览器；基础分析依赖包括 pandas、NumPy、Pillow、Matplotlib、OpenCV；Supervision 为可选视频标注展示层依赖，不属于核心算法必需依赖。 |
 | 编程语言 | Python、HTML、CSS、JavaScript。 |
 | 源程序量 | 自研核心 Python 源码约 29500 行，正式申请时以最终整理的源程序页为准。 |
+| 软件的技术特点（100字内） | 人工智能辅助分析软件，支持单sequence、已有mask的离线校验、病害特征提取、路线关联和复检提示；在隔离临时沙箱内形成离线工程原型处理闭环，本地Web仅展示已生成结果。 |
 | 主要功能和技术特点 | 软件将巡检图像、已有 mask 与工程元数据整理为统一记录，生成工程化病害描述、Disease Memory Bank、no-id Association、路线级 defect track、比较证据、声明分级、重点复检清单、可视化图表、视频 demo 标注产物、受控工作流审计产物和本地 Web Dashboard 展示结果。 |
 
 以上内容用于软著材料填写，不应扩展为真实现场长期预测或工程验收结论。

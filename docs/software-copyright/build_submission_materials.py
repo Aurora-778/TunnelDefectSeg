@@ -48,6 +48,10 @@ from reportlab.platypus import (
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = Path(__file__).resolve().parent / "submission"
 SOFTWARE_NAME = "机器人隧道巡检病害时空分析与复检管理系统"
+REGISTRATION_TECHNICAL_FEATURES = (
+    "人工智能辅助分析软件，支持单sequence、已有mask的离线校验、病害特征提取、"
+    "路线关联和复检提示；在隔离临时沙箱内形成离线工程原型处理闭环，本地Web仅展示已生成结果。"
+)
 
 PROGRAM_PDF = OUTPUT_DIR / "程序鉴别材料.pdf"
 DOCUMENT_PDF = OUTPUT_DIR / "文档鉴别材料.pdf"
@@ -627,6 +631,7 @@ def write_manifest(program_pages: int, document_pages: int, counts: dict[str, in
             "",
             "- 表单选择“一般交存”，没有机密代码时不要选择“例外交存”。",
             "- 两个 PDF 均不加密码，检查浏览器预览能正常显示中文和代码。",
+            f"- R11‘软件的技术特点’短摘要（100字内）：{REGISTRATION_TECHNICAL_FEATURES}",
             "- 说明书中的边界保持为单 sequence、已有 mask、离线、已生成 JSON/demo 结果、隔离临时沙箱；不表述为真实现场闭环、在线推理或生产调度服务。",
         ]
     )
