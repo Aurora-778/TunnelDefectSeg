@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -134,6 +136,19 @@ def _b9(root: Path, handoff):
         successor_run_id=handoff.successor_run_id,
         handoff=handoff,
     )
+
+
+def _root_and_handoff(case: tuple[object, ...]):
+    return case[0], case[-1]
+
+
+def _overwrite_bytes(path: Path, data: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY)
+    try:
+        os.ftruncate(descriptor, 0)
+        os.write(descriptor, data)
+    finally:
+        os.close(descriptor)
 
 
 def test_b9_success_uses_canonical_plan_and_official_transactions(
@@ -550,13 +565,15 @@ def test_b9_same_size_source_artifact_change_is_write_free(
     assert _tree_snapshot(root) == before
 
 
+@pytest.mark.parametrize("case_name", ["activated_prepared_successor", "real_b5_case"])
 def test_b9_task_start_fence_blocks_source_drift_before_agent_run(
-    activated_prepared_successor,
+    request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
+    case_name: str,
 ) -> None:
     from orchestrator.agents.association_agent import AssociationAgent
 
-    root, activation, preparation, handoff = activated_prepared_successor
+    root, handoff = _root_and_handoff(request.getfixturevalue(case_name))
     target = root / "runs" / handoff.source_run_id / "artifacts" / "claim_decision.json"
     original_submit = InspectionWorkflowController.submit_checkpoint_event
     agent_called = False
@@ -566,7 +583,7 @@ def test_b9_task_start_fence_blocks_source_drift_before_agent_run(
             data = target.read_bytes()
             changed = bytearray(data)
             changed[len(changed) // 2] ^= 1
-            target.write_bytes(bytes(changed))
+            _overwrite_bytes(target, bytes(changed))
         return await original_submit(self, event)
 
     def forbidden_agent_run(self, context):
@@ -912,11 +929,13 @@ def test_b9_same_bytes_snapshot_path_replacement_is_denied(
     assert not result.resume_execution_executed
 
 
+@pytest.mark.parametrize("case_name", ["activated_prepared_successor", "real_b5_case"])
 def test_b9_snapshot_leaf_content_aba_is_denied_and_worker_uses_bound_bytes(
-    activated_prepared_successor,
+    request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
+    case_name: str,
 ) -> None:
-    root, _activation, _preparation, handoff = activated_prepared_successor
+    root, handoff = _root_and_handoff(request.getfixturevalue(case_name))
     from orchestrator.agents.association_agent import AssociationAgent
 
     original = AssociationAgent.run
@@ -929,11 +948,11 @@ def test_b9_snapshot_leaf_content_aba_is_denied_and_worker_uses_bound_bytes(
         before = frame_path.read_bytes()
         changed = before.replace(b"0", b"1", 1)
         assert changed != before and len(changed) == len(before)
-        frame_path.write_bytes(changed)
+        _overwrite_bytes(frame_path, changed)
         try:
             return original(self, context)
         finally:
-            frame_path.write_bytes(before)
+            _overwrite_bytes(frame_path, before)
 
     monkeypatch.setattr(AssociationAgent, "run", content_aba)
     result = _b9(root, handoff)
@@ -943,11 +962,13 @@ def test_b9_snapshot_leaf_content_aba_is_denied_and_worker_uses_bound_bytes(
     assert result.successor_run_id is None
 
 
+@pytest.mark.parametrize("case_name", ["activated_prepared_successor", "real_b5_case"])
 def test_b9_source_leaf_aba_during_snapshot_capture_is_denied(
-    activated_prepared_successor,
+    request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
+    case_name: str,
 ) -> None:
-    root, _activation, _preparation, handoff = activated_prepared_successor
+    root, handoff = _root_and_handoff(request.getfixturevalue(case_name))
     module = _load_b9()
     sealed = __import__("inspect").getclosurevars(
         module.execute_resume_execution
@@ -963,22 +984,125 @@ def test_b9_source_leaf_aba_during_snapshot_capture_is_denied(
     )
     original_bytes = source_path.read_bytes()
     changed = original_bytes.replace(b"0", b"1", 1)
-    attempted = False
+    write_blocked = False
 
     def source_aba(project_root, relative_path, **kwargs):
-        nonlocal attempted
+        nonlocal write_blocked
         if relative_path.endswith("/work/raw_prepared/frame_records.csv"):
-            attempted = True
-            source_path.write_bytes(changed)
-            source_path.write_bytes(original_bytes)
+            try:
+                source_path.write_bytes(changed)
+            except PermissionError:
+                write_blocked = True
+            else:
+                assert source_path.read_bytes() == changed
+                source_path.write_bytes(original_bytes)
+                assert source_path.read_bytes() == original_bytes
         return original(project_root, relative_path, **kwargs)
 
     monkeypatch.setitem(sealed.__globals__, "_ARTIFACT_READ", source_aba)
     result = _b9(root, handoff)
 
-    assert attempted
+    if os.name == "nt":
+        assert write_blocked
+        assert result.resume_execution_executed
+    else:
+        assert not result.resume_execution_executed
+        assert result.successor_run_id is None
+
+
+def test_b9_snapshot_changed_after_worker_returns_is_denied_by_held_object_fence(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    module = _load_b9()
+    sealed = __import__("inspect").getclosurevars(
+        module.execute_resume_execution
+    ).nonlocals["execute"]
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    @contextmanager
+    def unlocked_hold(project_root, input_snapshots):
+        handles = {}
+        try:
+            for item in input_snapshots:
+                path = project_root.joinpath(*item["snapshot_path"].split("/"))
+                handles[item["snapshot_path"]] = path.open("rb", buffering=0)
+            yield handles
+        finally:
+            for handle in handles.values():
+                handle.close()
+
+    original = AssociationAgent.run
+    changed = False
+
+    def mutate_after_worker(self, context):
+        nonlocal changed
+        outcome = original(self, context)
+        path = root / str(context["inputs"]["association"]["frame_records"])
+        data = path.read_bytes()
+        replacement = bytearray(data)
+        replacement[len(replacement) // 2] ^= 1
+        descriptor = os.open(path, os.O_WRONLY)
+        try:
+            os.write(descriptor, bytes(replacement))
+        finally:
+            os.close(descriptor)
+        changed = True
+        return outcome
+
+    monkeypatch.setitem(sealed.__globals__, "_hold_snapshot_objects", unlocked_hold)
+    monkeypatch.setattr(AssociationAgent, "run", mutate_after_worker)
+    result = _b9(root, handoff)
+
+    assert changed
     assert not result.resume_execution_executed
     assert result.successor_run_id is None
+
+
+@pytest.mark.parametrize("target_kind", ["source", "sandbox_internal", "sandbox_external"])
+def test_b9_worker_rejects_preexisting_hardlink_without_changing_target(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+    target_kind: str,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    if target_kind == "source":
+        target = root / "runs" / handoff.source_run_id / "artifacts" / "claim_decision.json"
+    elif target_kind == "sandbox_internal":
+        target = root / "hardlink-target.bin"
+        target.write_bytes(b"sandbox-internal-target")
+    else:
+        target = root.parent / "hardlink-target-external.bin"
+        target.write_bytes(b"sandbox-external-target")
+    target_before = target.read_bytes()
+    original = AssociationAgent.run
+    attack_reached = False
+
+    def inject_hardlink(self, context):
+        nonlocal attack_reached
+        leaf = (
+            root
+            / "runs"
+            / handoff.successor_run_id
+            / "work"
+            / "raw_history"
+            / "association_records.csv"
+        )
+        leaf.parent.mkdir(parents=True, exist_ok=True)
+        os.link(target, leaf)
+        attack_reached = True
+        return original(self, context)
+
+    monkeypatch.setattr(AssociationAgent, "run", inject_hardlink)
+    result = _b9(root, handoff)
+
+    assert attack_reached
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+    assert target.read_bytes() == target_before
 
 
 def test_b9_worker_uses_guarded_snapshot_bytes_not_snapshot_path(
@@ -1075,6 +1199,81 @@ def test_b9_formal_outputs_write_is_denied(
     monkeypatch.setattr(AssociationAgent, "run", write_formal_output)
     result = _b9(root, handoff)
 
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+def test_b9_unlisted_project_root_write_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    original = AssociationAgent.run
+    target = root / "unlisted-side-effect.bin"
+
+    def write_unlisted(self, context):
+        target.write_bytes(b"forged")
+        return original(self, context)
+
+    monkeypatch.setattr(AssociationAgent, "run", write_unlisted)
+    result = _b9(root, handoff)
+
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+    assert not target.exists()
+
+
+def test_b9_sandbox_external_write_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    original = AssociationAgent.run
+    target = root.parent / "forbidden-worker-write.bin"
+
+    def write_external(self, context):
+        target.write_bytes(b"forged")
+        return original(self, context)
+
+    monkeypatch.setattr(AssociationAgent, "run", write_external)
+    result = _b9(root, handoff)
+
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+    assert not target.exists()
+
+
+def test_b9_worker_output_same_inode_content_change_before_final_fence_is_denied(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    module = _load_b9()
+    sealed = __import__("inspect").getclosurevars(
+        module.execute_resume_execution
+    ).nonlocals["execute"]
+    original = sealed.__globals__["_ARTIFACT_READ"]
+    attacked = False
+
+    def mutate_output(project_root, relative_path, **kwargs):
+        nonlocal attacked
+        if relative_path.endswith("/work/raw_history/association_records.csv"):
+            path = project_root.joinpath(*relative_path.split("/"))
+            data = path.read_bytes()
+            replacement = bytearray(data)
+            replacement[len(replacement) // 2] ^= 1
+            _overwrite_bytes(path, bytes(replacement))
+            attacked = True
+        return original(project_root, relative_path, **kwargs)
+
+    monkeypatch.setitem(sealed.__globals__, "_ARTIFACT_READ", mutate_output)
+    result = _b9(root, handoff)
+
+    assert attacked
     assert not result.resume_execution_executed
     assert result.successor_run_id is None
 

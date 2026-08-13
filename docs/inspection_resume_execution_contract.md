@@ -31,8 +31,11 @@ The supported official first-layer `AssociationAgent` input channel never
 reopens source Run or successor snapshot input paths. It consumes the exact
 in-memory bytes returned by the existing
 ArtifactResolver guarded-read of each published successor snapshot; the
-snapshot file objects remain held for the worker interval. The start intent
-binds each source path, snapshot path, file identity, size and SHA-256, plus
+snapshot file objects remain held through the final authority fence and
+successful result issuance. The final input fence reads those held objects
+again and requires their identity, single-link status, bytes, size and SHA to
+equal both the start intent and the bytes consumed by the worker. The start
+intent binds each source path, snapshot path, file identity, size and SHA-256, plus
 the complete `root/runs/successor/work/resume_execution_input` directory
 identity chain. That original chain is rechecked by the State/task fences and
 again before result issuance. A source artifact that is deleted or changed,
@@ -42,7 +45,11 @@ During source capture, B.9 holds the actual regular source objects read-only
 (and, on Windows, denies concurrent write/delete sharing), executes the real
 B.5 admission while those objects remain held, and requires the B.1
 guarded-read bytes to equal the held-object bytes before publication. Thus a
-source A→B→A window cannot authorize B while B.5 observes A.
+source replacement or any source bytes visible at a guarded fence cannot be
+silently substituted. Windows additionally denies concurrent write/delete
+sharing for the held source objects. On non-Windows platforms this boundary
+does not claim detection of an unobservable same-inode A→B→A that completes
+entirely between observable fences.
 
 The durable order is:
 
@@ -76,16 +83,27 @@ running Lock, successor directory identity and guarded authority snapshot are
 the observable mutation fence. The final State is rebound to allocation
 token, plan fingerprint, descriptor, task-plan SHA, resume activation and
 source admission before success. This contract does not claim cross-file
-kernel atomicity, rollback of writes attempted by a hostile in-process agent,
+kernel atomicity, rollback of arbitrary writes attempted by a hostile
+in-process agent,
 or that no external process can change source files after the final observable
 authority fence. This is not a sandbox against a hostile replacement agent
 that uses arbitrary Python filesystem calls; such in-process monkeypatching
 and reflection are outside the supported API boundary. On Windows the
-published snapshot objects are additionally byte-range locked while the
-official worker runs; other platforms rely on bound in-memory consumption and
-the observable identity/content fences rather than claiming unobservable
-A→B→A detection. The complete successor `work/` entry set is checked against
-the deterministic first-layer write set; nested unknown files, links and
+published snapshot objects are additionally byte-range locked through success
+issuance; other platforms rely on bound in-memory consumption plus held-object
+identity/content fences rather than claiming an external-process kernel lock.
+Official Association/History output opens are restricted to deterministic new
+successor-work leaves. Existing files, hard links (`st_nlink != 1`), links,
+junctions/reparse points and parent identity replacements are rejected before
+the worker can open them for writing, so an ordinary path open cannot redirect
+official output to another source or sandbox object. During the official
+worker interval, ordinary `Path` write/create opens outside that exact leaf
+set are rejected, including paths outside the controlled root. Each official close is
+published with the controlled-filesystem primitive, and the resulting leaf
+and parent-directory identities remain evidence that is checked again at the
+final success fence. The complete successor `work/` entry set is checked
+against the deterministic first-layer write set;
+nested unknown files, links and
 reparse entries are rejected. The pre-existing project `outputs/` and
 `staging/` trees must retain their pre-execution directory/file identities,
 sizes and content hashes at the final fence.

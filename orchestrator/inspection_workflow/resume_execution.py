@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import threading
 import types
 from typing import Any, Mapping
 import uuid
@@ -422,10 +423,12 @@ _DIRECTORY_CHAIN = ExplicitResumeActivation._directory_chain
 _ASSERT_DIRECTORY_CHAIN = ExplicitResumeActivation._assert_directory_chain
 _READ_GUARDED = _B1_READ_GUARDED
 _WRITE_EXCLUSIVE = controlled_fs.write_exclusive
+_ATOMIC_REPLACE = controlled_fs.atomic_replace
 _MAKE_DIRECTORY = controlled_fs.make_directory
 _BIND_DIRECTORIES = controlled_fs.bind_directory_identities
 _FILE_IDENTITY = controlled_fs.file_identity
 _DIRECTORY_IDENTITY = controlled_fs.directory_identity
+_WORKER_WRITE_GUARD_LOCK = threading.RLock()
 _ARTIFACT_READ = _artifact_guarded_read
 _STORE = StateStore
 _VALIDATE_SNAPSHOT = _freeze_method(StateStore.validate_authority_snapshot_bytes)
@@ -746,6 +749,7 @@ def _validate_input_snapshots(
     input_snapshots: tuple[Mapping[str, Any], ...],
     snapshot_directory_chain: tuple[Mapping[str, Any], ...],
     bound_snapshot_bytes: Mapping[str, bytes] | None = None,
+    held_snapshot_objects: Mapping[str, Any] | None = None,
 ) -> Mapping[str, bytes]:
     current_chain = _DIRECTORY_CHAIN(
         root,
@@ -761,11 +765,48 @@ def _validate_input_snapshots(
     captured: dict[str, bytes] = {}
     for item in input_snapshots:
         path = root.joinpath(*item["snapshot_path"].split("/"))
+        if held_snapshot_objects is not None:
+            handle = held_snapshot_objects[item["snapshot_path"]]
+            handle.seek(0)
+            before = os.fstat(handle.fileno())
+            data = handle.read()
+            after = os.fstat(handle.fileno())
+            path_state = path.lstat()
+            expected_identity = (item["device"], item["inode"])
+            before_handle_identity = (
+                before.st_ino == item["inode"]
+                and (os.name == "nt" or before.st_dev == item["device"])
+            )
+            after_handle_identity = (
+                after.st_ino == item["inode"]
+                and (os.name == "nt" or after.st_dev == item["device"])
+            )
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or not stat.S_ISREG(after.st_mode)
+                or not stat.S_ISREG(path_state.st_mode)
+                or before.st_nlink != 1
+                or after.st_nlink != 1
+                or path_state.st_nlink != 1
+                or not before_handle_identity
+                or not after_handle_identity
+                or _FILE_IDENTITY(path) != expected_identity
+                or before.st_size != item["size_bytes"]
+                or after.st_size != item["size_bytes"]
+                or len(data) != item["size_bytes"]
+                or _sha(data) != item["sha256"]
+                or bound_snapshot_bytes is None
+                or data != bound_snapshot_bytes[item["snapshot_path"]]
+            ):
+                raise ValueError("held execution input snapshot changed")
+            captured[item["snapshot_path"]] = data
+            continue
         if bound_snapshot_bytes is not None:
             data = bound_snapshot_bytes[item["snapshot_path"]]
             state = path.lstat()
             if (
                 not stat.S_ISREG(state.st_mode)
+                or state.st_nlink != 1
                 or state.st_size != item["size_bytes"]
                 or len(data) != item["size_bytes"]
                 or _sha(data) != item["sha256"]
@@ -777,8 +818,11 @@ def _validate_input_snapshots(
         data, snapshot = _ARTIFACT_READ(
             root, item["snapshot_path"], run_id=successor_run_id
         )
+        path_state = path.lstat()
         if (
-            snapshot["size_bytes"] != item["size_bytes"]
+            not stat.S_ISREG(path_state.st_mode)
+            or path_state.st_nlink != 1
+            or snapshot["size_bytes"] != item["size_bytes"]
             or snapshot["sha256"] != item["sha256"]
             or _sha(data) != item["sha256"]
             or _FILE_IDENTITY(path) != (item["device"], item["inode"])
@@ -837,8 +881,11 @@ def _hold_snapshot_objects(
     _file_identity: Any = _FILE_IDENTITY,
     _os: Any = os,
     _stat: Any = stat,
+    _sha256: Any = _sha,
+    _mapping_proxy: Any = types.MappingProxyType,
 ):
     handles: list[tuple[Any, int, bool]] = []
+    held: dict[str, Any] = {}
     primary: BaseException | None = None
     try:
         for item in input_snapshots:
@@ -849,10 +896,15 @@ def _hold_snapshot_objects(
                 state = _os.fstat(handle.fileno())
                 if (
                     not _stat.S_ISREG(state.st_mode)
+                    or state.st_nlink != 1
                     or state.st_size != item["size_bytes"]
                     or _file_identity(path) != (item["device"], item["inode"])
                 ):
                     raise ValueError("execution input snapshot object changed")
+                handle.seek(0)
+                data = handle.read()
+                if len(data) != item["size_bytes"] or _sha256(data) != item["sha256"]:
+                    raise ValueError("execution input snapshot bytes changed")
                 lock_size = max(1, state.st_size)
                 if _os.name == "nt":
                     import msvcrt
@@ -864,7 +916,8 @@ def _hold_snapshot_objects(
                 handle.close()
                 raise
             handles.append((handle, lock_size, locked))
-        yield
+            held[item["snapshot_path"]] = handle
+        yield _mapping_proxy(held)
     except BaseException as exc:
         primary = exc
         raise
@@ -886,6 +939,254 @@ def _hold_snapshot_objects(
                     cleanup_errors.append(exc)
         if primary is None and cleanup_errors:
             raise cleanup_errors[0]
+
+
+@contextmanager
+def _guard_worker_work_writes(
+    root: Path,
+    successor_run_id: str,
+    expected_work_entries: frozenset[str],
+    input_snapshots: tuple[Mapping[str, Any], ...],
+    _path_open: Any = Path.open,
+    _directory_chain: Any = _DIRECTORY_CHAIN,
+    _directory_identity: Any = _DIRECTORY_IDENTITY,
+    _file_identity: Any = _FILE_IDENTITY,
+    _write_exclusive: Any = _WRITE_EXCLUSIVE,
+    _atomic_replace: Any = _ATOMIC_REPLACE,
+    _make_directory: Any = _MAKE_DIRECTORY,
+    _bind_directories: Any = _BIND_DIRECTORIES,
+    _path_type: Any = Path,
+    _guard_lock: Any = _WORKER_WRITE_GUARD_LOCK,
+    _hash_bytes: Any = _sha,
+):
+    """Buffer official worker output and publish only through controlled FS."""
+
+    successor = root / "runs" / successor_run_id
+    immutable = frozenset(
+        item["snapshot_path"].split(f"runs/{successor_run_id}/", 1)[1]
+        for item in input_snapshots
+    )
+    directory_entries = frozenset(
+        entry
+        for entry in expected_work_entries
+        if any(other.startswith(entry + "/") for other in expected_work_entries)
+    )
+    output_leaves = expected_work_entries - directory_entries - immutable
+    buffered: dict[str, bytes] = {}
+    owned: dict[str, tuple[int, int]] = {}
+    parent_identities: dict[str, tuple[int, int] | None] = {}
+    original_project_entries = frozenset(
+        path.relative_to(root).as_posix()
+        for path in root.iterdir()
+        if path.name not in {"runs", "outputs", "staging"}
+    )
+    previous_open: Any = None
+
+    dynamic_directories = frozenset(
+        entry
+        for entry in directory_entries
+        if entry.startswith("work/raw_history/main_progressive/round_")
+    )
+    stable_directories = directory_entries - dynamic_directories
+    for relative in sorted(stable_directories, key=lambda value: (value.count("/"), value)):
+        directory = successor.joinpath(*relative.split("/"))
+        try:
+            directory.lstat()
+        except FileNotFoundError:
+            parent_chain = _directory_chain(
+                root, directory.parent, label="B.9 worker output parent"
+            )
+            with _bind_directories(parent_chain):
+                _make_directory(root, directory.relative_to(root).as_posix())
+    for relative in stable_directories:
+        directory = successor.joinpath(*relative.split("/"))
+        parent_identities[relative] = _directory_identity(directory)
+
+    def save(relative: str, data: bytes) -> None:
+        path = successor.joinpath(*relative.split("/"))
+        parent_key = path.parent.relative_to(successor).as_posix()
+        current_parent_identity = _directory_identity(path.parent)
+        if parent_identities[parent_key] is None:
+            parent_identities[parent_key] = current_parent_identity
+        elif current_parent_identity != parent_identities[parent_key]:
+            raise ValueError("worker output parent directory changed")
+        chain = _directory_chain(root, path.parent, label="B.9 worker output leaf")
+        try:
+            state = path.lstat()
+        except FileNotFoundError:
+            if relative in owned:
+                raise ValueError("worker output leaf disappeared")
+            with _bind_directories(chain):
+                identity = _write_exclusive(
+                    root, path.relative_to(root).as_posix(), data
+                )
+        else:
+            if (
+                not stat.S_ISREG(state.st_mode)
+                or state.st_nlink != 1
+                or relative not in owned
+                or _file_identity(path) != owned[relative]
+            ):
+                raise ValueError("worker output leaf was replaced or linked")
+            with _bind_directories(chain):
+                identity = _atomic_replace(
+                    root, path.relative_to(root).as_posix(), data
+                )
+        owned[relative] = identity
+        buffered[relative] = data
+
+    class _CapturedBytes(io.BytesIO):
+        def __init__(self, initial: bytes, save: Any) -> None:
+            super().__init__(initial)
+            self._save = save
+
+        def close(self) -> None:
+            if not self.closed:
+                self._save(self.getvalue())
+            super().close()
+
+    class _CapturedText(io.StringIO):
+        def __init__(self, initial: str, save: Any, newline: str | None) -> None:
+            super().__init__(initial, newline=newline)
+            self._save = save
+
+        def close(self) -> None:
+            if not self.closed:
+                self._save(self.getvalue())
+            super().close()
+
+    def guarded_open(
+        path_object: Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ):
+        path = _path_type(path_object).absolute()
+        writing = any(flag in mode for flag in "wax+")
+        try:
+            relative = path.relative_to(successor).as_posix()
+        except ValueError:
+            if writing:
+                raise ValueError("worker write is outside the authorized successor work set")
+            return previous_open(path_object, mode, buffering, encoding, errors, newline)
+        if not writing and relative not in buffered:
+            return previous_open(path_object, mode, buffering, encoding, errors, newline)
+        if not relative.startswith("work/") or relative not in output_leaves:
+            raise ValueError("worker write leaf is not authorized")
+        binary = "b" in mode
+        append = "a" in mode
+        exclusive = "x" in mode
+        if exclusive and relative in buffered:
+            raise FileExistsError(path)
+        initial = buffered.get(relative, b"") if append or not writing else b""
+        selected_encoding = encoding or "utf-8"
+        if not writing:
+            if binary:
+                return io.BytesIO(initial)
+            return io.StringIO(
+                initial.decode(selected_encoding, errors or "strict"), newline=newline
+            )
+        if binary:
+            handle = _CapturedBytes(initial, lambda data: save(relative, data))
+        else:
+            text = initial.decode(selected_encoding, errors or "strict")
+            handle = _CapturedText(
+                text,
+                lambda value: save(
+                    relative, value.encode(selected_encoding, errors or "strict")
+                ),
+                newline,
+            )
+        if append:
+            handle.seek(0, io.SEEK_END)
+        return handle
+
+    def guarded_mkdir(
+        path_object: Path,
+        mode: int = 0o777,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        path = _path_type(path_object).absolute()
+        try:
+            relative = path.relative_to(successor).as_posix()
+        except ValueError:
+            if not path.exists():
+                raise ValueError("worker directory is outside the authorized successor work set")
+            return previous_mkdir(path_object, mode=mode, parents=parents, exist_ok=exist_ok)
+        if relative not in directory_entries:
+            raise ValueError("worker output directory is not authorized")
+        if relative in parent_identities:
+            if _directory_identity(path) != parent_identities[relative]:
+                raise ValueError("worker output directory changed")
+            if exist_ok:
+                return None
+            raise FileExistsError(path)
+        parent_key = path.parent.relative_to(successor).as_posix()
+        expected_parent = parent_identities.get(parent_key)
+        if expected_parent is None or _directory_identity(path.parent) != expected_parent:
+            raise ValueError("worker output parent directory changed")
+        chain = _directory_chain(root, path.parent, label="B.9 worker directory")
+        with _bind_directories(chain):
+            _make_directory(root, path.relative_to(root).as_posix())
+        parent_identities[relative] = _directory_identity(path)
+        return None
+
+    def publish() -> Mapping[str, tuple[tuple[Any, ...], ...]]:
+        if frozenset(buffered) != output_leaves:
+            raise ValueError(
+                f"worker output set is incomplete: missing={sorted(output_leaves - frozenset(buffered))} "
+                f"extra={sorted(frozenset(buffered) - output_leaves)}"
+            )
+        for relative, identity in owned.items():
+            path = successor.joinpath(*relative.split("/"))
+            state = path.lstat()
+            if (
+                not stat.S_ISREG(state.st_mode)
+                or state.st_nlink != 1
+                or _file_identity(path) != identity
+            ):
+                raise ValueError("worker output leaf changed before publication fence")
+        if frozenset(
+            path.relative_to(root).as_posix()
+            for path in root.iterdir()
+            if path.name not in {"runs", "outputs", "staging"}
+        ) != original_project_entries:
+            raise ValueError("worker changed an unauthorized project-root entry")
+        return {
+            "files": tuple(
+                sorted(
+                    (
+                        relative,
+                        identity[0],
+                        identity[1],
+                        len(buffered[relative]),
+                        _hash_bytes(buffered[relative]),
+                    )
+                    for relative, identity in owned.items()
+                )
+            ),
+            "directories": tuple(
+                sorted(
+                    (relative, identity[0], identity[1])
+                    for relative, identity in parent_identities.items()
+                    if identity is not None
+                )
+            ),
+        }
+
+    with _guard_lock:
+        previous_open = _path_type.open
+        previous_mkdir = _path_type.mkdir
+        _path_type.open = guarded_open
+        _path_type.mkdir = guarded_mkdir
+        try:
+            yield publish
+        finally:
+            _path_type.open = previous_open
+            _path_type.mkdir = previous_mkdir
 
 
 def _entry_exists(path: Path) -> bool:
@@ -973,6 +1274,8 @@ def _execution_work_entries(root: Path, successor_run_id: str) -> frozenset[str]
                 result.add(relative)
                 pending.append(entry)
             elif stat.S_ISREG(state.st_mode):
+                if state.st_nlink != 1:
+                    raise ValueError("execution work contains a hard link")
                 _FILE_IDENTITY(entry)
                 result.add(relative)
             else:
@@ -1039,9 +1342,47 @@ def _validate_execution_write_set(
     successor_run_id: str,
     expected_work_entries: frozenset[str],
     formal_tree_evidence: Mapping[str, tuple[tuple[Any, ...], ...]],
+    worker_write_evidence: Mapping[str, tuple[tuple[Any, ...], ...]],
 ) -> None:
     if _execution_work_entries(root, successor_run_id) != expected_work_entries:
         raise ValueError("execution work set changed")
+    successor = root / "runs" / successor_run_id
+    files = worker_write_evidence.get("files")
+    directories = worker_write_evidence.get("directories")
+    if type(files) is not tuple or type(directories) is not tuple:
+        raise ValueError("worker write evidence is invalid")
+    evidenced_paths: set[str] = set()
+    for row in files:
+        if type(row) is not tuple or len(row) != 5 or type(row[0]) is not str:
+            raise ValueError("worker file evidence is invalid")
+        relative, device, inode, expected_size, expected_sha = row
+        path = successor.joinpath(*relative.split("/"))
+        state = path.lstat()
+        data, snapshot = _ARTIFACT_READ(root, path.relative_to(root).as_posix())
+        if (
+            not stat.S_ISREG(state.st_mode)
+            or state.st_nlink != 1
+            or _FILE_IDENTITY(path) != (device, inode)
+            or _FILE_IDENTITY(path) != (device, inode)
+            or snapshot["size_bytes"] != expected_size
+            or len(data) != expected_size
+            or _sha(data) != expected_sha
+        ):
+            raise ValueError("worker output leaf changed")
+        evidenced_paths.add(relative)
+    for row in directories:
+        if type(row) is not tuple or len(row) != 3 or type(row[0]) is not str:
+            raise ValueError("worker directory evidence is invalid")
+        relative, device, inode = row
+        path = successor.joinpath(*relative.split("/"))
+        if _DIRECTORY_IDENTITY(path) != (device, inode):
+            raise ValueError("worker output directory changed")
+        evidenced_paths.add(relative)
+    snapshot_paths = {
+        entry for entry in expected_work_entries if entry.startswith(_INPUT_SNAPSHOT_DIR + "/")
+    }
+    if evidenced_paths | snapshot_paths != set(expected_work_entries):
+        raise ValueError("worker write evidence is incomplete")
     if any(
         _external_tree_snapshot(root, name) != evidence
         for name, evidence in formal_tree_evidence.items()
@@ -1107,6 +1448,7 @@ def _validate_running_fence(
     *,
     check_admission: bool = False,
     bound_snapshot_bytes: Mapping[str, bytes] | None = None,
+    held_snapshot_objects: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     current_intent, current_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
@@ -1131,6 +1473,7 @@ def _validate_running_fence(
         input_snapshots,
         snapshot_directory_chain,
         bound_snapshot_bytes,
+        held_snapshot_objects,
     )
     current_source = _B8_STATE_LOAD(_B8_STATE_STORE(root), run_id=handoff.source_run_id)["canonical_state"]
     _B8_SOURCE_VALIDATE(current_source, _B8_PREPARATION_VIEW(b8_intent))
@@ -1574,95 +1917,114 @@ def _execute(
     # this does not claim a cross-file kernel transaction.
     with _BIND_DIRECTORIES(mutation_chain), _hold_snapshot_objects(
         root, input_snapshots
-    ):
+    ) as held_snapshot_objects:
         _ASSERT_DIRECTORY_CHAIN(chain, label="B.9 execution mutations")
-        executor.run(execution_tasks, context)
-    final = _validate_running_fence(
-        root,
-        successor_run_id,
-        source,
-        handoff,
-        intent,
-        current_start,
-        current_start_bytes,
-        input_snapshots,
-        snapshot_directory_chain,
-        chain,
-        check_admission=True,
-        bound_snapshot_bytes=bound_snapshot_bytes,
-    )
-    state = final["state"]
-    task_status = state.get("task_status")
-    task_attempts = state.get("task_attempts")
-    executed_task_ids = tuple(
-        sorted(task_id for task_id, status in task_status.items() if status == "success")
-    ) if isinstance(task_status, Mapping) else ()
-    if (
-        not isinstance(task_status, Mapping)
-        or executed_task_ids != execution_task_ids
-        or any(
-            status != ("success" if task_id in execution_task_ids else "pending")
-            for task_id, status in task_status.items()
+        with _guard_worker_work_writes(
+            root, successor_run_id, expected_work_entries, input_snapshots
+        ) as publish_worker_outputs:
+            executor.run(execution_tasks, context)
+            worker_write_evidence = publish_worker_outputs()
+        final = _validate_running_fence(
+            root,
+            successor_run_id,
+            source,
+            handoff,
+            intent,
+            current_start,
+            current_start_bytes,
+            input_snapshots,
+            snapshot_directory_chain,
+            chain,
+            check_admission=True,
+            bound_snapshot_bytes=bound_snapshot_bytes,
+            held_snapshot_objects=held_snapshot_objects,
         )
-        or not isinstance(task_attempts, Mapping)
-        or tuple(sorted(task_attempts)) != tuple(handoff.required_task_ids)
-        or any(
-            type(value) is not int
-            or value != (1 if task_id in execution_task_ids else 0)
-            for task_id, value in task_attempts.items()
+        state = final["state"]
+        task_status = state.get("task_status")
+        task_attempts = state.get("task_attempts")
+        executed_task_ids = tuple(
+            sorted(task_id for task_id, status in task_status.items() if status == "success")
+        ) if isinstance(task_status, Mapping) else ()
+        if (
+            not isinstance(task_status, Mapping)
+            or executed_task_ids != execution_task_ids
+            or any(
+                status != ("success" if task_id in execution_task_ids else "pending")
+                for task_id, status in task_status.items()
+            )
+            or not isinstance(task_attempts, Mapping)
+            or tuple(sorted(task_attempts)) != tuple(handoff.required_task_ids)
+            or any(
+                type(value) is not int
+                or value != (1 if task_id in execution_task_ids else 0)
+                for task_id, value in task_attempts.items()
+            )
+        ):
+            raise ValueError("required task execution did not complete successfully")
+        events = state.get("context", {}).get("phase_a3_checkpoint_events", {})
+        if not isinstance(events, Mapping) or any(
+            isinstance(row, Mapping)
+            and row.get("checkpoint_kind") in {"task_skipped", "task_cache_hit"}
+            for row in events.values()
+        ):
+            raise ValueError("task skip or cache checkpoint is not permitted")
+        if any(
+            _entry_exists(successor / name)
+            for name in ("publication_transaction.json", "final_summary.md", "publication_backup")
+        ):
+            raise ValueError("publication residue is not permitted")
+        _validate_execution_write_set(
+            root,
+            successor_run_id,
+            expected_work_entries,
+            formal_tree_evidence,
+            worker_write_evidence,
         )
-    ):
-        raise ValueError("required task execution did not complete successfully")
-    events = state.get("context", {}).get("phase_a3_checkpoint_events", {})
-    if not isinstance(events, Mapping) or any(
-        isinstance(row, Mapping)
-        and row.get("checkpoint_kind") in {"task_skipped", "task_cache_hit"}
-        for row in events.values()
-    ):
-        raise ValueError("task skip or cache checkpoint is not permitted")
-    if any(
-        _entry_exists(successor / name)
-        for name in ("publication_transaction.json", "final_summary.md", "publication_backup")
-    ):
-        raise ValueError("publication residue is not permitted")
-    _validate_execution_write_set(
-        root, successor_run_id, expected_work_entries, formal_tree_evidence
-    )
-    start_sha = _sha(current_start_bytes)
-    bindings = {
-        "successor_run_id": successor_run_id,
-        "source_run_id": handoff.source_run_id,
-        "handoff_sha256": handoff.handoff_sha256,
-        "handoff_intent_sha256": handoff.handoff_intent_sha256,
-        "activation_sha256": handoff.activation_sha256,
-        "activation_intent_sha256": handoff.activation_intent_sha256,
-        "source_admission_sha256": handoff.source_admission_sha256,
-        "source_state_version": handoff.source_state_version,
-        "allocation_token": handoff.allocation_token,
-        "lock_token": handoff.lock_token,
-        "state_version": state["state_version"],
-        "plan_fingerprint": handoff.plan_fingerprint,
-        "input_descriptor_sha256": handoff.input_descriptor_sha256,
-        "task_plan_sha256": handoff.task_plan_sha256,
-        "required_task_ids": list(handoff.required_task_ids),
-        "executed_task_ids": list(executed_task_ids),
-        "start_intent_sha256": start_sha,
-        "state_sha256": _sha(final["state_bytes"]),
-        "journal_sha256": _sha(final["journal_bytes"]),
-        "journal_anchor_sha256": _sha(final["anchor_bytes"]),
-        "lock_sha256": _sha(final["lock_bytes"]),
-    }
-    data = _canonical({"schema_version": _SCHEMA, "status": _EXECUTED, **bindings})
-    return _RESULT_ISSUE_AUTHORITY(
-        {
-            "status": _EXECUTED,
-            "execution_bytes": data,
-            "execution_sha256": _sha(data),
-            **bindings,
-            "required_task_ids": tuple(handoff.required_task_ids),
-            "executed_task_ids": executed_task_ids,
+        # Keep the actual snapshot objects live through issuance and make the
+        # last observable input check read those handles, not their pathnames.
+        _validate_input_snapshots(
+            root,
+            successor_run_id,
+            input_snapshots,
+            snapshot_directory_chain,
+            bound_snapshot_bytes,
+            held_snapshot_objects,
+        )
+        start_sha = _sha(current_start_bytes)
+        bindings = {
+            "successor_run_id": successor_run_id,
+            "source_run_id": handoff.source_run_id,
+            "handoff_sha256": handoff.handoff_sha256,
+            "handoff_intent_sha256": handoff.handoff_intent_sha256,
+            "activation_sha256": handoff.activation_sha256,
+            "activation_intent_sha256": handoff.activation_intent_sha256,
+            "source_admission_sha256": handoff.source_admission_sha256,
+            "source_state_version": handoff.source_state_version,
+            "allocation_token": handoff.allocation_token,
+            "lock_token": handoff.lock_token,
+            "state_version": state["state_version"],
+            "plan_fingerprint": handoff.plan_fingerprint,
+            "input_descriptor_sha256": handoff.input_descriptor_sha256,
+            "task_plan_sha256": handoff.task_plan_sha256,
+            "required_task_ids": list(handoff.required_task_ids),
+            "executed_task_ids": list(executed_task_ids),
+            "start_intent_sha256": start_sha,
+            "state_sha256": _sha(final["state_bytes"]),
+            "journal_sha256": _sha(final["journal_bytes"]),
+            "journal_anchor_sha256": _sha(final["anchor_bytes"]),
+            "lock_sha256": _sha(final["lock_bytes"]),
         }
-    )
+        data = _canonical({"schema_version": _SCHEMA, "status": _EXECUTED, **bindings})
+        return _RESULT_ISSUE_AUTHORITY(
+            {
+                "status": _EXECUTED,
+                "execution_bytes": data,
+                "execution_sha256": _sha(data),
+                **bindings,
+                "required_task_ids": tuple(handoff.required_task_ids),
+                "executed_task_ids": executed_task_ids,
+            }
+        )
 
 
 def _seal_execution_authority() -> Any:
