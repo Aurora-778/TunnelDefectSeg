@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import csv
+import copy
 from dataclasses import dataclass
 import hashlib
 import io
@@ -49,6 +50,8 @@ from .resume_execution_handoff import (
 from orchestrator.dag.builder import build_dag
 from orchestrator.dag.scheduler import execution_layers
 from orchestrator.executor import DAGExecutor
+from orchestrator import history_only_association as _HISTORY_ONLY_ASSOCIATION
+from orchestrator.agents.memory_agent import MemoryAgent as _HISTORY_MEMORY_AGENT
 from orchestrator.inspection_workflow.controller import InspectionWorkflowController
 from orchestrator.inspection_workflow.lifecycle import (
     _DAG_CONFIG_PATH,
@@ -423,7 +426,6 @@ _DIRECTORY_CHAIN = ExplicitResumeActivation._directory_chain
 _ASSERT_DIRECTORY_CHAIN = ExplicitResumeActivation._assert_directory_chain
 _READ_GUARDED = _B1_READ_GUARDED
 _WRITE_EXCLUSIVE = controlled_fs.write_exclusive
-_ATOMIC_REPLACE = controlled_fs.atomic_replace
 _MAKE_DIRECTORY = controlled_fs.make_directory
 _BIND_DIRECTORIES = controlled_fs.bind_directory_identities
 _FILE_IDENTITY = controlled_fs.file_identity
@@ -851,29 +853,6 @@ def _csv_rows_from_bytes(data: bytes) -> list[dict[str, str]]:
     return list(csv.DictReader(io.StringIO(text, newline="")))
 
 
-def _bind_worker_snapshot_bytes(
-    registry: Any,
-    root: Path,
-    input_snapshots: tuple[Mapping[str, Any], ...],
-    snapshot_bytes: Mapping[str, bytes],
-) -> None:
-    agent = registry.get("association")
-    original_read_csv = agent.read_csv
-    bound: dict[Path, bytes] = {
-        root.joinpath(*relative.split("/")): bytes(data)
-        for relative, data in snapshot_bytes.items()
-    }
-
-    def read_csv(path: Path) -> list[dict[str, str]]:
-        candidate = Path(path).absolute()
-        data = bound.get(candidate)
-        if data is not None:
-            return _csv_rows_from_bytes(data)
-        return original_read_csv(path)
-
-    agent.read_csv = read_csv
-
-
 @contextmanager
 def _hold_snapshot_objects(
     root: Path,
@@ -941,254 +920,6 @@ def _hold_snapshot_objects(
             raise cleanup_errors[0]
 
 
-@contextmanager
-def _guard_worker_work_writes(
-    root: Path,
-    successor_run_id: str,
-    expected_work_entries: frozenset[str],
-    input_snapshots: tuple[Mapping[str, Any], ...],
-    _path_open: Any = Path.open,
-    _directory_chain: Any = _DIRECTORY_CHAIN,
-    _directory_identity: Any = _DIRECTORY_IDENTITY,
-    _file_identity: Any = _FILE_IDENTITY,
-    _write_exclusive: Any = _WRITE_EXCLUSIVE,
-    _atomic_replace: Any = _ATOMIC_REPLACE,
-    _make_directory: Any = _MAKE_DIRECTORY,
-    _bind_directories: Any = _BIND_DIRECTORIES,
-    _path_type: Any = Path,
-    _guard_lock: Any = _WORKER_WRITE_GUARD_LOCK,
-    _hash_bytes: Any = _sha,
-):
-    """Buffer official worker output and publish only through controlled FS."""
-
-    successor = root / "runs" / successor_run_id
-    immutable = frozenset(
-        item["snapshot_path"].split(f"runs/{successor_run_id}/", 1)[1]
-        for item in input_snapshots
-    )
-    directory_entries = frozenset(
-        entry
-        for entry in expected_work_entries
-        if any(other.startswith(entry + "/") for other in expected_work_entries)
-    )
-    output_leaves = expected_work_entries - directory_entries - immutable
-    buffered: dict[str, bytes] = {}
-    owned: dict[str, tuple[int, int]] = {}
-    parent_identities: dict[str, tuple[int, int] | None] = {}
-    original_project_entries = frozenset(
-        path.relative_to(root).as_posix()
-        for path in root.iterdir()
-        if path.name not in {"runs", "outputs", "staging"}
-    )
-    previous_open: Any = None
-
-    dynamic_directories = frozenset(
-        entry
-        for entry in directory_entries
-        if entry.startswith("work/raw_history/main_progressive/round_")
-    )
-    stable_directories = directory_entries - dynamic_directories
-    for relative in sorted(stable_directories, key=lambda value: (value.count("/"), value)):
-        directory = successor.joinpath(*relative.split("/"))
-        try:
-            directory.lstat()
-        except FileNotFoundError:
-            parent_chain = _directory_chain(
-                root, directory.parent, label="B.9 worker output parent"
-            )
-            with _bind_directories(parent_chain):
-                _make_directory(root, directory.relative_to(root).as_posix())
-    for relative in stable_directories:
-        directory = successor.joinpath(*relative.split("/"))
-        parent_identities[relative] = _directory_identity(directory)
-
-    def save(relative: str, data: bytes) -> None:
-        path = successor.joinpath(*relative.split("/"))
-        parent_key = path.parent.relative_to(successor).as_posix()
-        current_parent_identity = _directory_identity(path.parent)
-        if parent_identities[parent_key] is None:
-            parent_identities[parent_key] = current_parent_identity
-        elif current_parent_identity != parent_identities[parent_key]:
-            raise ValueError("worker output parent directory changed")
-        chain = _directory_chain(root, path.parent, label="B.9 worker output leaf")
-        try:
-            state = path.lstat()
-        except FileNotFoundError:
-            if relative in owned:
-                raise ValueError("worker output leaf disappeared")
-            with _bind_directories(chain):
-                identity = _write_exclusive(
-                    root, path.relative_to(root).as_posix(), data
-                )
-        else:
-            if (
-                not stat.S_ISREG(state.st_mode)
-                or state.st_nlink != 1
-                or relative not in owned
-                or _file_identity(path) != owned[relative]
-            ):
-                raise ValueError("worker output leaf was replaced or linked")
-            with _bind_directories(chain):
-                identity = _atomic_replace(
-                    root, path.relative_to(root).as_posix(), data
-                )
-        owned[relative] = identity
-        buffered[relative] = data
-
-    class _CapturedBytes(io.BytesIO):
-        def __init__(self, initial: bytes, save: Any) -> None:
-            super().__init__(initial)
-            self._save = save
-
-        def close(self) -> None:
-            if not self.closed:
-                self._save(self.getvalue())
-            super().close()
-
-    class _CapturedText(io.StringIO):
-        def __init__(self, initial: str, save: Any, newline: str | None) -> None:
-            super().__init__(initial, newline=newline)
-            self._save = save
-
-        def close(self) -> None:
-            if not self.closed:
-                self._save(self.getvalue())
-            super().close()
-
-    def guarded_open(
-        path_object: Path,
-        mode: str = "r",
-        buffering: int = -1,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ):
-        path = _path_type(path_object).absolute()
-        writing = any(flag in mode for flag in "wax+")
-        try:
-            relative = path.relative_to(successor).as_posix()
-        except ValueError:
-            if writing:
-                raise ValueError("worker write is outside the authorized successor work set")
-            return previous_open(path_object, mode, buffering, encoding, errors, newline)
-        if not writing and relative not in buffered:
-            return previous_open(path_object, mode, buffering, encoding, errors, newline)
-        if not relative.startswith("work/") or relative not in output_leaves:
-            raise ValueError("worker write leaf is not authorized")
-        binary = "b" in mode
-        append = "a" in mode
-        exclusive = "x" in mode
-        if exclusive and relative in buffered:
-            raise FileExistsError(path)
-        initial = buffered.get(relative, b"") if append or not writing else b""
-        selected_encoding = encoding or "utf-8"
-        if not writing:
-            if binary:
-                return io.BytesIO(initial)
-            return io.StringIO(
-                initial.decode(selected_encoding, errors or "strict"), newline=newline
-            )
-        if binary:
-            handle = _CapturedBytes(initial, lambda data: save(relative, data))
-        else:
-            text = initial.decode(selected_encoding, errors or "strict")
-            handle = _CapturedText(
-                text,
-                lambda value: save(
-                    relative, value.encode(selected_encoding, errors or "strict")
-                ),
-                newline,
-            )
-        if append:
-            handle.seek(0, io.SEEK_END)
-        return handle
-
-    def guarded_mkdir(
-        path_object: Path,
-        mode: int = 0o777,
-        parents: bool = False,
-        exist_ok: bool = False,
-    ) -> None:
-        path = _path_type(path_object).absolute()
-        try:
-            relative = path.relative_to(successor).as_posix()
-        except ValueError:
-            if not path.exists():
-                raise ValueError("worker directory is outside the authorized successor work set")
-            return previous_mkdir(path_object, mode=mode, parents=parents, exist_ok=exist_ok)
-        if relative not in directory_entries:
-            raise ValueError("worker output directory is not authorized")
-        if relative in parent_identities:
-            if _directory_identity(path) != parent_identities[relative]:
-                raise ValueError("worker output directory changed")
-            if exist_ok:
-                return None
-            raise FileExistsError(path)
-        parent_key = path.parent.relative_to(successor).as_posix()
-        expected_parent = parent_identities.get(parent_key)
-        if expected_parent is None or _directory_identity(path.parent) != expected_parent:
-            raise ValueError("worker output parent directory changed")
-        chain = _directory_chain(root, path.parent, label="B.9 worker directory")
-        with _bind_directories(chain):
-            _make_directory(root, path.relative_to(root).as_posix())
-        parent_identities[relative] = _directory_identity(path)
-        return None
-
-    def publish() -> Mapping[str, tuple[tuple[Any, ...], ...]]:
-        if frozenset(buffered) != output_leaves:
-            raise ValueError(
-                f"worker output set is incomplete: missing={sorted(output_leaves - frozenset(buffered))} "
-                f"extra={sorted(frozenset(buffered) - output_leaves)}"
-            )
-        for relative, identity in owned.items():
-            path = successor.joinpath(*relative.split("/"))
-            state = path.lstat()
-            if (
-                not stat.S_ISREG(state.st_mode)
-                or state.st_nlink != 1
-                or _file_identity(path) != identity
-            ):
-                raise ValueError("worker output leaf changed before publication fence")
-        if frozenset(
-            path.relative_to(root).as_posix()
-            for path in root.iterdir()
-            if path.name not in {"runs", "outputs", "staging"}
-        ) != original_project_entries:
-            raise ValueError("worker changed an unauthorized project-root entry")
-        return {
-            "files": tuple(
-                sorted(
-                    (
-                        relative,
-                        identity[0],
-                        identity[1],
-                        len(buffered[relative]),
-                        _hash_bytes(buffered[relative]),
-                    )
-                    for relative, identity in owned.items()
-                )
-            ),
-            "directories": tuple(
-                sorted(
-                    (relative, identity[0], identity[1])
-                    for relative, identity in parent_identities.items()
-                    if identity is not None
-                )
-            ),
-        }
-
-    with _guard_lock:
-        previous_open = _path_type.open
-        previous_mkdir = _path_type.mkdir
-        _path_type.open = guarded_open
-        _path_type.mkdir = guarded_mkdir
-        try:
-            yield publish
-        finally:
-            _path_type.open = previous_open
-            _path_type.mkdir = previous_mkdir
-
-
 def _entry_exists(path: Path) -> bool:
     try:
         path.lstat()
@@ -1197,6 +928,727 @@ def _entry_exists(path: Path) -> bool:
         return False
     except OSError as exc:
         raise ValueError("unable to inspect forbidden execution residue") from exc
+
+
+def _worker_file_metadata(path: Path, root: Path) -> tuple[Any, ...]:
+    state = path.lstat()
+    if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode):
+        raise ValueError("worker boundary contains an unsupported file entry")
+    if state.st_nlink != 1:
+        raise ValueError("worker boundary contains a hard link")
+    return (
+        "file",
+        path.relative_to(root).as_posix(),
+        state.st_dev,
+        state.st_ino,
+        state.st_nlink,
+        state.st_size,
+    )
+
+
+def _worker_tree_metadata(root: Path, *, exclude_successor_run_id: str) -> tuple[tuple[Any, ...], ...]:
+    runs = root / "runs"
+    result: list[tuple[Any, ...]] = []
+    pending = [runs]
+    while pending:
+        directory = pending.pop()
+        state = directory.lstat()
+        if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+            raise ValueError("worker boundary contains an unsupported directory entry")
+        result.append(
+            (
+                "directory",
+                directory.relative_to(root).as_posix(),
+                state.st_dev,
+                state.st_ino,
+            )
+        )
+        for entry in directory.iterdir():
+            relative_parts = entry.relative_to(runs).parts
+            if relative_parts and relative_parts[0] == exclude_successor_run_id:
+                continue
+            entry_state = entry.lstat()
+            if stat.S_ISLNK(entry_state.st_mode):
+                raise ValueError("worker boundary contains a link")
+            if stat.S_ISDIR(entry_state.st_mode):
+                _DIRECTORY_IDENTITY(entry)
+                pending.append(entry)
+            elif stat.S_ISREG(entry_state.st_mode):
+                result.append(_worker_file_metadata(entry, root))
+            else:
+                raise ValueError("worker boundary contains an unsupported entry")
+    return tuple(sorted(result))
+
+
+def _worker_direct_metadata(directory: Path, *, exclude: frozenset[str]) -> tuple[tuple[Any, ...], ...]:
+    result: list[tuple[Any, ...]] = []
+    for entry in directory.iterdir():
+        if entry.name in exclude:
+            continue
+        state = entry.lstat()
+        if stat.S_ISLNK(state.st_mode):
+            raise ValueError("worker boundary contains a link")
+        if stat.S_ISDIR(state.st_mode):
+            _DIRECTORY_IDENTITY(entry)
+            result.append(("directory", entry.name, state.st_dev, state.st_ino))
+        elif stat.S_ISREG(state.st_mode):
+            if state.st_nlink != 1:
+                raise ValueError("worker boundary contains a hard link")
+            digest = None
+            if state.st_size <= 1024 * 1024:
+                digest = _sha(entry.read_bytes())
+            result.append(("file", entry.name, state.st_dev, state.st_ino, state.st_nlink, state.st_size, digest))
+        else:
+            raise ValueError("worker boundary contains an unsupported entry")
+    return tuple(sorted(result))
+
+
+class _ExecutionWorkerPath:
+    """Path-like view whose mutations are delegated to one writer instance."""
+
+    __slots__ = ("_writer", "_path")
+
+    def __init__(self, writer: "_ExecutionWorkerWriter", path: Path) -> None:
+        self._writer = writer
+        self._path = path
+
+    def __str__(self) -> str:
+        # Official nested agents stringify paths into a second context before
+        # resolving them again.  Keep that round-trip canonical and sandbox
+        # relative; exposing a Windows absolute string here would reintroduce
+        # drive-colon/backslash parsing and make the controlled capability
+        # unusable without a process-global Path monkeypatch.
+        try:
+            relative = self._path.absolute().relative_to(self._writer.root.absolute()).as_posix()
+        except ValueError:
+            return str(self._path)
+        return relative if relative != "." else "."
+
+    def __repr__(self) -> str:
+        return f"_ExecutionWorkerPath({self._path!r})"
+
+    def __hash__(self) -> int:
+        return hash(self._path)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, _ExecutionWorkerPath):
+            return self._path == other._path
+        return self._path == other
+
+    def __fspath__(self) -> str:
+        # Passing a controlled worker path to os.open/shutil/pathlib is an
+        # unsupported mutation/read bypass.  Official code must use one of
+        # this view's explicit methods so the execution-local writer remains
+        # the authority.
+        raise ValueError("worker path must use the controlled execution writer")
+
+    @property
+    def name(self) -> str:
+        return self._path.name
+
+    @property
+    def parts(self) -> tuple[str, ...]:
+        return self._path.parts
+
+    @property
+    def parent(self) -> "_ExecutionWorkerPath":
+        return self._writer._wrap(self._path.parent)
+
+    def __truediv__(self, value: str | os.PathLike[str]) -> "_ExecutionWorkerPath":
+        if isinstance(value, _ExecutionWorkerPath):
+            value = value._path
+        return self._writer._wrap(self._path / value)
+
+    def joinpath(self, *parts: str | os.PathLike[str]) -> "_ExecutionWorkerPath":
+        unwrapped = [part._path if isinstance(part, _ExecutionWorkerPath) else part for part in parts]
+        return self._writer._wrap(self._path.joinpath(*unwrapped))
+
+    def with_name(self, name: str) -> "_ExecutionWorkerPath":
+        return self._writer._wrap(self._path.with_name(name))
+
+    def with_suffix(self, suffix: str) -> "_ExecutionWorkerPath":
+        return self._writer._wrap(self._path.with_suffix(suffix))
+
+    def absolute(self) -> "_ExecutionWorkerPath":
+        return self._writer._wrap(self._path.absolute())
+
+    def resolve(self, strict: bool = False) -> "_ExecutionWorkerPath":
+        # Keep the capability wrapper across resolution.  Returning a plain
+        # Path here would make ``worker_path.resolve().touch()`` (or
+        # ``os.open(worker_path.resolve(), ...)``) an unmediated mutation
+        # escape hatch even though the original value was controlled.
+        return self._writer._wrap(self._path.resolve(strict=strict))
+
+    def relative_to(self, other: object) -> Path:
+        if isinstance(other, _ExecutionWorkerPath):
+            other = other._path
+        return self._path.relative_to(other)
+
+    def exists(self) -> bool:
+        return self._writer.exists(self._path)
+
+    def is_file(self) -> bool:
+        return self._writer.is_file(self._path)
+
+    def is_dir(self) -> bool:
+        return self._writer.is_dir(self._path)
+
+    def lstat(self) -> os.stat_result:
+        return self._path.lstat()
+
+    def iterdir(self):
+        return tuple(self._writer._wrap(entry) for entry in self._path.iterdir())
+
+    def glob(self, pattern: str):
+        return tuple(self._writer._wrap(entry) for entry in self._path.glob(pattern))
+
+    def open(self, *args: Any, **kwargs: Any):
+        return self._writer.open(self._path, *args, **kwargs)
+
+    def read_bytes(self) -> bytes:
+        return self._writer.read_bytes(self._path)
+
+    def read_text(self, *args: Any, **kwargs: Any) -> str:
+        return self._writer.read_text(self._path, *args, **kwargs)
+
+    def write_bytes(self, data: bytes) -> int:
+        return self._writer.write_bytes(self._path, data)
+
+    def write_text(self, data: str, *args: Any, **kwargs: Any) -> int:
+        return self._writer.write_text(self._path, data, *args, **kwargs)
+
+    def mkdir(self, *args: Any, **kwargs: Any) -> None:
+        self._writer.mkdir(self._path, *args, **kwargs)
+
+    def touch(self, *args: Any, **kwargs: Any) -> None:
+        self._writer.reject_mutation("touch")
+
+    def unlink(self, *args: Any, **kwargs: Any) -> None:
+        self._writer.reject_mutation("unlink")
+
+    def rename(self, *args: Any, **kwargs: Any) -> None:
+        self._writer.reject_mutation("rename")
+
+    def replace(self, *args: Any, **kwargs: Any) -> None:
+        self._writer.reject_mutation("replace")
+
+
+class _ExecutionWorkerWriter:
+    """Execution-local output buffer and exact successor work-set authority."""
+
+    _PATH_KEYS = frozenset(
+        {
+            "frame_records",
+            "memory_bank",
+            "output_path",
+            "history_output_dir",
+            "manifest_path",
+            "prepared_manifest_path",
+            "legacy_frame_path",
+            "history_association_path",
+            "history_manifest_path",
+            "previous_memory",
+            "engineering_report",
+            "growth_results",
+            "recheck_list",
+            "visualization_dir",
+            "visualization_report",
+            "recheck_report",
+            "visualization_summary",
+            "association_graph",
+        }
+    )
+
+    def __init__(
+        self,
+        root: Path,
+        successor_run_id: str,
+        expected_work_entries: frozenset[str],
+        input_snapshots: tuple[Mapping[str, Any], ...],
+        snapshot_bytes: Mapping[str, bytes] | None = None,
+        _directory_chain: Any = _DIRECTORY_CHAIN,
+        _directory_identity: Any = _DIRECTORY_IDENTITY,
+        _file_identity: Any = _FILE_IDENTITY,
+        _entry_exists_fn: Any = _entry_exists,
+        _write_exclusive: Any = _WRITE_EXCLUSIVE,
+        _make_directory: Any = _MAKE_DIRECTORY,
+        _bind_directories: Any = _BIND_DIRECTORIES,
+        _tree_metadata: Any = _worker_tree_metadata,
+        _direct_metadata: Any = _worker_direct_metadata,
+        _hash_bytes: Any = _sha,
+    ) -> None:
+        self.root = Path(root).absolute()
+        self.successor = self.root / "runs" / successor_run_id
+        self.successor_run_id = successor_run_id
+        self._directory_chain = _directory_chain
+        self._directory_identity = _directory_identity
+        self._file_identity = _file_identity
+        self._entry_exists = _entry_exists_fn
+        self._write_exclusive = _write_exclusive
+        self._make_directory = _make_directory
+        self._bind_directories = _bind_directories
+        self._tree_metadata = _tree_metadata
+        self._direct_metadata = _direct_metadata
+        self._hash_bytes = _hash_bytes
+        self.expected = frozenset(self._canonical_relative(item) for item in expected_work_entries)
+        self.immutable = frozenset(
+            self._canonical_relative(item["snapshot_path"]).split(f"runs/{successor_run_id}/", 1)[1]
+            for item in input_snapshots
+        )
+        self.directories = frozenset(
+            entry for entry in self.expected if any(other.startswith(entry + "/") for other in self.expected)
+        )
+        self.output_leaves = self.expected - self.directories - self.immutable
+        if not self.output_leaves:
+            raise ValueError("execution writer has no output leaves")
+        self.snapshot_bytes = {
+            self.root.joinpath(*relative.split("/")).absolute(): bytes(data)
+            for relative, data in (snapshot_bytes or {}).items()
+        }
+        self.buffered: dict[str, bytes] = {}
+        self.owned: dict[str, tuple[int, int]] = {}
+        self.parent_identities: dict[str, tuple[int, int]] = {}
+        self._before_runs = self._tree_metadata(self.root, exclude_successor_run_id=successor_run_id)
+        self._before_project = self._direct_metadata(
+            self.root, exclude=frozenset({"runs", "outputs", "staging"})
+        )
+        self._before_parent = self._direct_metadata(
+            self.root.parent, exclude=frozenset({self.root.name})
+        )
+        self._prepared = False
+
+    @staticmethod
+    def _canonical_relative(value: object) -> str:
+        if type(value) is not str or not value or "\\" in value or ":" in value:
+            raise ValueError("execution writer path is invalid")
+        path = Path(value)
+        if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+            raise ValueError("execution writer path is invalid")
+        return path.as_posix()
+
+    def _relative(self, path: Path) -> str:
+        try:
+            relative = path.absolute().relative_to(self.successor.absolute()).as_posix()
+        except ValueError as exc:
+            raise ValueError("worker path is outside the successor work domain") from exc
+        return self._canonical_relative(relative)
+
+    def _wrap(self, path: Path) -> _ExecutionWorkerPath:
+        return _ExecutionWorkerPath(self, path)
+
+    def path(self, relative: str) -> _ExecutionWorkerPath:
+        return self._wrap(self.successor.joinpath(*self._canonical_relative(relative).split("/")))
+
+    def root_path(self) -> _ExecutionWorkerPath:
+        return self._wrap(self.root)
+
+    def resolve(self, value: object) -> _ExecutionWorkerPath:
+        if isinstance(value, _ExecutionWorkerPath):
+            path = value._path
+        elif isinstance(value, Path):
+            path = value
+        elif type(value) is str:
+            if "\\" in value or ":" in value:
+                raise ValueError("worker path is not canonical")
+            candidate = Path(value)
+            path = candidate if candidate.is_absolute() else self.root / candidate
+        else:
+            raise ValueError("worker path is invalid")
+        try:
+            path.absolute().relative_to(self.root.absolute())
+        except ValueError as exc:
+            raise ValueError("worker path is outside the sandbox") from exc
+        return self._wrap(path.absolute())
+
+    def _prepare(self) -> None:
+        if self._prepared:
+            return
+        dynamic_directories = frozenset(
+            entry
+            for entry in self.directories
+            if entry.startswith("work/raw_history/main_progressive/round_")
+        )
+        for relative in sorted(self.directories, key=lambda item: (item.count("/"), item)):
+            if relative in dynamic_directories:
+                continue
+            path = self.successor.joinpath(*relative.split("/"))
+            try:
+                state = path.lstat()
+            except FileNotFoundError:
+                chain = self._directory_chain(
+                    self.root, path.parent, label="B.9 worker output parent"
+                )
+                with self._bind_directories(chain):
+                    self._make_directory(self.root, path.relative_to(self.root).as_posix())
+                state = path.lstat()
+            if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+                raise ValueError("worker output directory is invalid")
+            self.parent_identities[relative] = self._directory_identity(path)
+        for relative in self.output_leaves:
+            path = self.successor.joinpath(*relative.split("/"))
+            if self._entry_exists(path):
+                raise ValueError("worker output leaf already exists")
+        self._prepared = True
+
+    def __enter__(self) -> "_ExecutionWorkerWriter":
+        self._prepare()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        return None
+
+    def reject_mutation(self, operation: str) -> None:
+        raise ValueError(f"worker path mutation is not supported: {operation}")
+
+    def _assert_boundary_unchanged(self) -> None:
+        if self._tree_metadata(self.root, exclude_successor_run_id=self.successor_run_id) != self._before_runs:
+            raise ValueError("worker changed a non-successor Run")
+        if self._direct_metadata(
+            self.root, exclude=frozenset({"runs", "outputs", "staging"})
+        ) != self._before_project:
+            raise ValueError("worker changed an unauthorized project-root entry")
+        if self._direct_metadata(
+            self.root.parent, exclude=frozenset({self.root.name})
+        ) != self._before_parent:
+            raise ValueError("worker changed an entry outside the sandbox")
+
+    def _assert_parent(self, path: Path) -> str:
+        relative = self._relative(path)
+        parent_relative = path.parent.absolute().relative_to(self.successor.absolute()).as_posix()
+        expected = self.parent_identities.get(parent_relative)
+        if expected is None or self._directory_identity(path.parent) != expected:
+            raise ValueError("worker output parent directory changed")
+        self._directory_chain(self.root, path.parent, label="B.9 worker output leaf")
+        return relative
+
+    def save(self, path: Path, data: bytes) -> None:
+        relative = self._assert_parent(path)
+        if relative not in self.output_leaves:
+            raise ValueError("worker output leaf is not authorized")
+        if type(data) is not bytes:
+            raise ValueError("worker output requires immutable bytes")
+        if self._entry_exists(path):
+            # No replace is part of this worker contract.  A pre-existing or
+            # concurrently created leaf is a failed CAS, never an overwrite.
+            raise ValueError("worker output leaf was replaced")
+        self.buffered[relative] = data
+
+    def open(
+        self,
+        path: Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ):
+        del buffering
+        writing = any(flag in mode for flag in "wax+")
+        relative = self._relative(path)
+        if writing:
+            if relative not in self.output_leaves:
+                raise ValueError("worker write leaf is not authorized")
+            if "x" in mode and relative in self.buffered:
+                raise FileExistsError(path)
+            initial = self.buffered.get(relative, b"") if "a" in mode or "+" in mode else b""
+            selected_encoding = encoding or "utf-8"
+            if "b" in mode:
+                handle = _ExecutionCapturedBytes(initial, lambda data: self.save(path, data))
+            else:
+                handle = _ExecutionCapturedText(
+                    initial.decode(selected_encoding, errors or "strict"),
+                    lambda value: self.save(
+                        path, value.encode(selected_encoding, errors or "strict")
+                    ),
+                    newline,
+                )
+            if "a" in mode:
+                handle.seek(0, io.SEEK_END)
+            return handle
+        data = self.read_bytes(path)
+        if "b" in mode:
+            return io.BytesIO(data)
+        selected_encoding = encoding or "utf-8"
+        return io.StringIO(data.decode(selected_encoding, errors or "strict"), newline=newline)
+
+    def read_bytes(self, path: Path) -> bytes:
+        absolute = path.absolute()
+        if absolute in self.snapshot_bytes:
+            return self.snapshot_bytes[absolute]
+        relative = self._relative(path)
+        if relative in self.buffered:
+            return self.buffered[relative]
+        if relative not in self.expected:
+            raise ValueError("worker read is outside the authorized execution set")
+        state = path.lstat()
+        if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode) or state.st_nlink != 1:
+            raise ValueError("worker read object is invalid")
+        data = path.read_bytes()
+        after = path.lstat()
+        if (
+            stat.S_ISLNK(after.st_mode)
+            or after.st_nlink != 1
+            or after.st_size != len(data)
+            or self._file_identity(path) != (state.st_dev, state.st_ino)
+        ):
+            raise ValueError("worker read object changed")
+        return data
+
+    def read_text(self, path: Path, *args: Any, **kwargs: Any) -> str:
+        encoding = kwargs.get("encoding") or (args[0] if args else None) or "utf-8"
+        errors = kwargs.get("errors") or "strict"
+        return self.read_bytes(path).decode(encoding, errors)
+
+    def write_bytes(self, path: Path, data: bytes) -> int:
+        with self.open(path, "wb") as handle:
+            handle.write(data)
+        return len(data)
+
+    def write_text(self, path: Path, data: str, *args: Any, **kwargs: Any) -> int:
+        encoding = kwargs.get("encoding") or (args[0] if args else None) or "utf-8"
+        errors = kwargs.get("errors") or "strict"
+        with self.open(path, "w", encoding=encoding, errors=errors, newline=kwargs.get("newline")) as handle:
+            handle.write(data)
+        return len(data)
+
+    def exists(self, path: Path) -> bool:
+        absolute = path.absolute()
+        if absolute in self.snapshot_bytes:
+            return True
+        try:
+            return path.lstat() is not None
+        except FileNotFoundError:
+            return False
+
+    def is_file(self, path: Path) -> bool:
+        try:
+            return stat.S_ISREG(path.lstat().st_mode)
+        except FileNotFoundError:
+            return False
+
+    def is_dir(self, path: Path) -> bool:
+        try:
+            return stat.S_ISDIR(path.lstat().st_mode)
+        except FileNotFoundError:
+            return False
+
+    def mkdir(self, path: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False) -> None:
+        del mode, parents
+        relative = self._relative(path)
+        if relative not in self.directories:
+            raise ValueError("worker output directory is not authorized")
+        try:
+            state = path.lstat()
+        except FileNotFoundError as exc:
+            parent_relative = path.parent.absolute().relative_to(self.successor.absolute()).as_posix()
+            expected_parent = self.parent_identities.get(parent_relative)
+            if expected_parent is None or self._directory_identity(path.parent) != expected_parent:
+                raise ValueError("worker output directory parent changed") from exc
+            chain = self._directory_chain(
+                self.root, path.parent, label="B.9 worker directory publication"
+            )
+            with self._bind_directories(chain):
+                self._make_directory(self.root, path.relative_to(self.root).as_posix())
+            current = self._directory_identity(path)
+            self.parent_identities[relative] = current
+            return None
+        if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+            raise ValueError("worker output directory is invalid")
+        current = self._directory_identity(path)
+        expected = self.parent_identities.get(relative)
+        if expected != current:
+            raise ValueError("worker output directory changed")
+        if not exist_ok:
+            raise FileExistsError(path)
+
+    def _controlled_context(self, context: Mapping[str, Any]) -> dict[str, Any]:
+        def convert(value: Any, key: str = "") -> Any:
+            if isinstance(value, Mapping):
+                return {item_key: convert(item, str(item_key)) for item_key, item in value.items()}
+            if isinstance(value, list):
+                return [convert(item, key) for item in value]
+            if isinstance(value, tuple):
+                return tuple(convert(item, key) for item in value)
+            if key == "project_root":
+                return self.root_path()
+            if key in self._PATH_KEYS:
+                if isinstance(value, _ExecutionWorkerPath):
+                    return value
+                if type(value) is str or isinstance(value, Path):
+                    try:
+                        return self.resolve(value)
+                    except ValueError:
+                        return value
+            return value
+
+        result = convert(dict(context))
+        shared = result.setdefault("shared", {})
+        shared["project_root"] = self.root_path()
+        return result
+
+    def read_csv(self, path: object) -> list[dict[str, str]]:
+        candidate = path._path if isinstance(path, _ExecutionWorkerPath) else self.resolve(path)._path
+        return _csv_rows_from_bytes(self.read_bytes(candidate))
+
+    def write_csv(self, path: object, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
+        candidate = path._path if isinstance(path, _ExecutionWorkerPath) else self.resolve(path)._path
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({name: row.get(name, "") for name in fieldnames})
+        self.write_bytes(candidate, output.getvalue().encode("utf-8-sig"))
+
+    def write_markdown(self, path: object, title: str, lines: list[str]) -> None:
+        candidate = path._path if isinstance(path, _ExecutionWorkerPath) else self.resolve(path)._path
+        content = [f"# {title}", "", *lines]
+        self.write_text(candidate, "\n".join(content) + "\n", encoding="utf-8")
+
+    def _path_value(self, value: Any) -> Any:
+        return value if isinstance(value, _ExecutionWorkerPath) else self.resolve(value)
+
+    def publish(self) -> Mapping[str, tuple[tuple[Any, ...], ...]]:
+        self._prepare()
+        if frozenset(self.buffered) != self.output_leaves:
+            raise ValueError(
+                "worker output set is incomplete: "
+                f"missing={sorted(self.output_leaves - frozenset(self.buffered))} "
+                f"extra={sorted(frozenset(self.buffered) - self.output_leaves)}"
+            )
+        self._assert_boundary_unchanged()
+        for relative in sorted(self.output_leaves):
+            path = self.successor.joinpath(*relative.split("/"))
+            self._assert_parent(path)
+            if self._entry_exists(path):
+                raise ValueError("worker output leaf appeared before publication")
+        published: dict[str, tuple[int, int]] = {}
+        try:
+            for relative in sorted(self.output_leaves):
+                path = self.successor.joinpath(*relative.split("/"))
+                chain = self._directory_chain(
+                    self.root, path.parent, label="B.9 worker output publication"
+                )
+                with self._bind_directories(chain):
+                    published[relative] = self._write_exclusive(
+                        self.root, path.relative_to(self.root).as_posix(), self.buffered[relative]
+                    )
+        except BaseException:
+            raise
+        self.owned = published
+        self._assert_boundary_unchanged()
+        return {
+            "files": tuple(
+                sorted(
+                    (
+                        relative,
+                        identity[0],
+                        identity[1],
+                        len(self.buffered[relative]),
+                        self._hash_bytes(self.buffered[relative]),
+                    )
+                    for relative, identity in published.items()
+                )
+            ),
+            "directories": tuple(
+                sorted(
+                    (relative, identity[0], identity[1])
+                    for relative, identity in self.parent_identities.items()
+                )
+            ),
+            "runs_before": self._before_runs,
+            "project_before": self._before_project,
+            "parent_before": self._before_parent,
+        }
+
+
+class _ExecutionCapturedBytes(io.BytesIO):
+    def __init__(self, initial: bytes, save: Any) -> None:
+        super().__init__(initial)
+        self._save = save
+
+    def close(self) -> None:
+        if not self.closed:
+            self._save(self.getvalue())
+        super().close()
+
+
+class _ExecutionCapturedText(io.StringIO):
+    def __init__(self, initial: str, save: Any, newline: str | None) -> None:
+        super().__init__(initial, newline=newline)
+        self._save = save
+
+    def close(self) -> None:
+        if not self.closed:
+            self._save(self.getvalue())
+        super().close()
+
+
+class _ExecutionWorkerAgent:
+    def __init__(self, agent: Any, writer: _ExecutionWorkerWriter) -> None:
+        self._agent = agent
+        self._writer = writer
+        self.name = agent.name
+
+    def run(self, context: Mapping[str, Any]) -> dict[str, Any]:
+        proxy = copy.copy(self._agent)
+        proxy.resolve_path = types.MethodType(
+            lambda _self, _context, value: self._writer.resolve(value), proxy
+        )
+        proxy.project_root = types.MethodType(
+            lambda _self, _context: self._writer.root_path(), proxy
+        )
+        proxy.read_csv = types.MethodType(
+            lambda _self, path: self._writer.read_csv(path), proxy
+        )
+        proxy.write_csv = types.MethodType(
+            lambda _self, path, rows, fieldnames: self._writer.write_csv(path, rows, fieldnames),
+            proxy,
+        )
+        proxy.write_markdown = types.MethodType(
+            lambda _self, path, title, lines: self._writer.write_markdown(path, title, lines),
+            proxy,
+        )
+        controlled_context = self._writer._controlled_context(context)
+        return type(self._agent).run(proxy, controlled_context)
+
+
+class _ExecutionWorkerRegistry:
+    def __init__(self, registry: Any, writer: _ExecutionWorkerWriter) -> None:
+        self._agents = {
+            name: _ExecutionWorkerAgent(agent, writer)
+            for name, agent in registry._agents.items()
+        }
+
+    def get(self, name: str) -> _ExecutionWorkerAgent:
+        if name not in self._agents:
+            raise KeyError(f"Agent is not registered: {name}")
+        return self._agents[name]
+
+    def list(self) -> list[str]:
+        return sorted(self._agents)
+
+
+@contextmanager
+def _bind_execution_worker_agents(
+    registry: Any,
+    writer: _ExecutionWorkerWriter,
+    _history_module: Any = _HISTORY_ONLY_ASSOCIATION,
+    _memory_agent: Any = _HISTORY_MEMORY_AGENT,
+):
+    """Bind nested official agents to the same execution-local writer."""
+
+    original_memory_agent = _history_module.MemoryAgent
+
+    class _ControlledMemoryAgent:
+        def __new__(cls, *args: Any, **kwargs: Any) -> _ExecutionWorkerAgent:
+            return _ExecutionWorkerAgent(_memory_agent(*args, **kwargs), writer)
+
+    with _WORKER_WRITE_GUARD_LOCK:
+        _history_module.MemoryAgent = _ControlledMemoryAgent
+        try:
+            yield _ExecutionWorkerRegistry(registry, writer)
+        finally:
+            _history_module.MemoryAgent = original_memory_agent
 
 
 def _expected_work_entries(
@@ -1349,8 +1801,25 @@ def _validate_execution_write_set(
     successor = root / "runs" / successor_run_id
     files = worker_write_evidence.get("files")
     directories = worker_write_evidence.get("directories")
-    if type(files) is not tuple or type(directories) is not tuple:
+    runs_before = worker_write_evidence.get("runs_before")
+    project_before = worker_write_evidence.get("project_before")
+    parent_before = worker_write_evidence.get("parent_before")
+    if (
+        type(files) is not tuple
+        or type(directories) is not tuple
+        or type(runs_before) is not tuple
+        or type(project_before) is not tuple
+        or type(parent_before) is not tuple
+    ):
         raise ValueError("worker write evidence is invalid")
+    if _worker_tree_metadata(root, exclude_successor_run_id=successor_run_id) != runs_before:
+        raise ValueError("non-successor Run tree changed during execution")
+    if _worker_direct_metadata(
+        root, exclude=frozenset({"runs", "outputs", "staging"})
+    ) != project_before:
+        raise ValueError("project-root tree changed during execution")
+    if _worker_direct_metadata(root.parent, exclude=frozenset({root.name})) != parent_before:
+        raise ValueError("sandbox parent tree changed during execution")
     evidenced_paths: set[str] = set()
     for row in files:
         if type(row) is not tuple or len(row) != 5 or type(row[0]) is not str:
@@ -1898,18 +2367,15 @@ def _execute(
         root, successor_run_id, source, handoff, input_snapshots
     )
     registry = _BUILD_REGISTRY()
-    _bind_worker_snapshot_bytes(
-        registry, root, input_snapshots, bound_snapshot_bytes
-    )
     expected_work_entries = _expected_work_entries(
         successor_run_id, input_snapshots, bound_snapshot_bytes
     )
-    executor = _EXECUTOR(
-        registry,
+    worker_writer = _ExecutionWorkerWriter(
         root,
-        resume=False,
-        run_id=successor_run_id,
-        checkpoint_event_sink=sink,
+        successor_run_id,
+        expected_work_entries,
+        input_snapshots,
+        bound_snapshot_bytes,
     )
     # Keep the original successor directory identity bound across every
     # official StateStore/CAS/checkpoint mutation.  The controlled filesystem
@@ -1919,11 +2385,18 @@ def _execute(
         root, input_snapshots
     ) as held_snapshot_objects:
         _ASSERT_DIRECTORY_CHAIN(chain, label="B.9 execution mutations")
-        with _guard_worker_work_writes(
-            root, successor_run_id, expected_work_entries, input_snapshots
-        ) as publish_worker_outputs:
+        with worker_writer as controlled_writer, _bind_execution_worker_agents(
+            registry, controlled_writer
+        ) as worker_registry:
+            executor = _EXECUTOR(
+                worker_registry,
+                root,
+                resume=False,
+                run_id=successor_run_id,
+                checkpoint_event_sink=sink,
+            )
             executor.run(execution_tasks, context)
-            worker_write_evidence = publish_worker_outputs()
+            worker_write_evidence = controlled_writer.publish()
         final = _validate_running_fence(
             root,
             successor_run_id,
@@ -2045,7 +2518,6 @@ def _seal_execution_authority() -> Any:
         "_directory_chain_binding",
         "_csv_rows_from_bytes",
         "_validate_input_snapshots",
-        "_bind_worker_snapshot_bytes",
         "_entry_exists",
         "_expected_work_entries",
         "_execution_work_entries",

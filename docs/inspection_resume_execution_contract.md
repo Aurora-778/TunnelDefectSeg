@@ -92,21 +92,36 @@ and reflection are outside the supported API boundary. On Windows the
 published snapshot objects are additionally byte-range locked through success
 issuance; other platforms rely on bound in-memory consumption plus held-object
 identity/content fences rather than claiming an external-process kernel lock.
-Official Association/History output opens are restricted to deterministic new
-successor-work leaves. Existing files, hard links (`st_nlink != 1`), links,
-junctions/reparse points and parent identity replacements are rejected before
-the worker can open them for writing, so an ordinary path open cannot redirect
-official output to another source or sandbox object. During the official
-worker interval, ordinary `Path` write/create opens outside that exact leaf
-set are rejected, including paths outside the controlled root. Each official close is
-published with the controlled-filesystem primitive, and the resulting leaf
-and parent-directory identities remain evidence that is checked again at the
-final success fence. The complete successor `work/` entry set is checked
-against the deterministic first-layer write set;
-nested unknown files, links and
-reparse entries are rejected. The pre-existing project `outputs/` and
-`staging/` trees must retain their pre-execution directory/file identities,
-sizes and content hashes at the final fence.
+Official Association/History writes run through an execution-local writer
+capability; B.9 no longer replaces process-global `Path.open` or `Path.mkdir`.
+The writer buffers only deterministic new successor-work leaves and publishes
+them once, through the existing controlled-filesystem exclusive primitive,
+after a complete pre-publication boundary check. Existing files, hard links
+(`st_nlink != 1`), links, junctions/reparse points and parent identity
+replacements are rejected before publication. The controlled path view also
+rejects `touch`, `unlink`, `rename`, `replace`, raw `os.open`/`shutil` path
+conversion and every path outside the successor work domain; unsupported
+filesystem APIs are not silently downgraded to ordinary writes. Nested
+History/Memory agents receive the same execution-local capability. The
+supported capability's string form is sandbox-relative canonical text so
+nested official contexts can resolve it again; converting an arbitrary
+absolute string back into a Path remains outside the supported boundary.
+complete successor `work/` entry set is checked against the deterministic
+first-layer write set; nested unknown files, links and reparse entries are
+rejected. Non-successor Run entries, project-root entries and the direct
+sandbox-parent boundary are compared before and after worker publication.
+The pre-existing project `outputs/` and `staging/` trees must retain their
+pre-execution directory/file identities, sizes and content hashes at the final
+fence.
+
+The writer intentionally does not implement replacement of an already existing
+worker leaf. This is the B.9 leaf-CAS rule: a leaf that appears after the
+worker opens a buffered output but before publication causes denial, so there
+is no `atomic_replace` check/use window in the supported path. The final
+contract remains a last-observable fence, not a cross-file kernel transaction;
+arbitrary hostile in-process code that converts a plain string into raw OS
+calls is outside the supported public API and is caught only when its mutation
+falls inside the observed Run/sandbox boundary.
 
 ## Result and failure semantics
 
