@@ -1046,7 +1046,10 @@ def test_b9_execution_writer_is_local_and_rejects_unsupported_path_mutations(
         assert Path.open is original_open
         assert Path.mkdir is original_mkdir
         leaf = capability.path("work/raw_history/association_records.csv")
-        assert str(leaf) == f"runs/{RUN_ID}/work/raw_history/association_records.csv"
+        token = str(leaf)
+        assert "\x00" in token
+        assert token == leaf.as_posix()
+        assert capability.resolve(token) == leaf
         with pytest.raises(ValueError):
             leaf.touch()
         with pytest.raises(ValueError):
@@ -1058,6 +1061,10 @@ def test_b9_execution_writer_is_local_and_rejects_unsupported_path_mutations(
         with pytest.raises(ValueError):
             Path(leaf).touch()
         with pytest.raises(ValueError):
+            Path(token).write_bytes(b"raw-path-bypass")
+        with pytest.raises(ValueError):
+            Path(leaf.as_posix()).write_bytes(b"raw-as-posix-bypass")
+        with pytest.raises(ValueError):
             leaf.resolve().touch()
         with leaf.open("wb") as handle:
             handle.write(b"buffered")
@@ -1065,6 +1072,168 @@ def test_b9_execution_writer_is_local_and_rejects_unsupported_path_mutations(
 
     assert Path.open is original_open
     assert Path.mkdir is original_mkdir
+
+
+def test_b9_relative_path_conversion_remains_a_controlled_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_b9()
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "sandbox"
+    successor = root / "runs" / RUN_ID
+    (successor / "work" / "raw_history").mkdir(parents=True)
+    writer = module._ExecutionWorkerWriter(
+        root,
+        RUN_ID,
+        frozenset(
+            {
+                "work",
+                "work/raw_history",
+                "work/raw_history/association_records.csv",
+            }
+        ),
+        (),
+    )
+
+    with writer as capability:
+        leaf = capability.path("work/raw_history/association_records.csv")
+        relative = leaf.relative_to(capability.root_path())
+        assert isinstance(relative, module._ExecutionWorkerPath)
+        assert "\x00" in relative.as_posix()
+        assert capability.resolve(relative.as_posix()) == relative
+        # A display-relative conversion is still routed back through the
+        # writer; it may buffer the authorized leaf, but it must not write via
+        # the process CWD or another raw Path object.
+        relative.write_bytes(b"buffered")
+        assert not leaf.exists()
+        assert not (tmp_path / relative.as_posix()).exists()
+
+
+def test_b9_worker_cannot_consume_snapshot_bytes_changed_after_handle_capture(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    module = _load_b9()
+    sealed = __import__("inspect").getclosurevars(
+        module.execute_resume_execution
+    ).nonlocals["execute"]
+    from orchestrator.agents.association_agent import AssociationAgent
+
+    handles: dict[str, object] = {}
+    original_bytes: dict[Path, bytes] = {}
+    worker_called = False
+
+    @contextmanager
+    def held_then_replace(project_root, input_snapshots):
+        try:
+            for item in input_snapshots:
+                path = project_root.joinpath(*item["snapshot_path"].split("/"))
+                handles[item["snapshot_path"]] = path.open("rb", buffering=0)
+            target = next(
+                project_root.joinpath(*item["snapshot_path"].split("/"))
+                for item in input_snapshots
+                if Path(item["snapshot_path"]).name == "frame_records.csv"
+            )
+            before = target.read_bytes()
+            changed = bytearray(before)
+            changed[0] ^= 1
+            original_bytes[target] = before
+            _overwrite_bytes(target, bytes(changed))
+            yield handles
+        finally:
+            for path, data in original_bytes.items():
+                _overwrite_bytes(path, data)
+            for handle in handles.values():
+                handle.close()
+
+    def must_not_run(self, context):
+        nonlocal worker_called
+        worker_called = True
+        raise AssertionError("worker consumed bytes after held snapshot drift")
+
+    monkeypatch.setitem(sealed.__globals__, "_hold_snapshot_objects", held_then_replace)
+    monkeypatch.setattr(AssociationAgent, "run", must_not_run)
+
+    result = _b9(root, handoff)
+
+    assert not worker_called
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+@pytest.mark.parametrize(
+    "target_kind",
+    [
+        "source_claim",
+        "b8_intent",
+        "activation_intent",
+        "successor_state",
+        "successor_context",
+        "successor_journal",
+        "successor_anchor",
+        "active_lock",
+    ],
+)
+def test_b9_final_success_fence_rebinds_all_authority_before_issuance(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+    target_kind: str,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    module = _load_b9()
+    sealed = __import__("inspect").getclosurevars(
+        module.execute_resume_execution
+    ).nonlocals["execute"]
+    successor = root / "runs" / handoff.successor_run_id
+    source = root / "runs" / handoff.source_run_id
+    if target_kind == "source_claim":
+        target = source / "artifacts" / "claim_decision.json"
+    elif target_kind == "b8_intent":
+        target = successor / "resume_execution_handoff.intent.json"
+    elif target_kind == "activation_intent":
+        target = next((source / "resume_activation").glob("*.intent.json"))
+    elif target_kind == "successor_state":
+        target = successor / "state.json"
+    elif target_kind == "successor_context":
+        target = successor / "state.json"
+    elif target_kind == "successor_journal":
+        target = successor / "state_journal.jsonl"
+    elif target_kind == "successor_anchor":
+        target = successor / "state_journal_tail.json"
+    else:
+        target = root / "runs" / ".active_run.lock"
+
+    original_bytes = target.read_bytes()
+    if target_kind == "successor_context":
+        changed_value = json.loads(original_bytes.decode("utf-8"))
+        changed_value["context"]["resume_activation"]["plan_fingerprint"] = "0" * 64
+        changed = module._canonical(changed_value)
+    else:
+        changed = bytearray(original_bytes)
+        changed[len(changed) // 2] ^= 1
+    attacked = False
+    original_validate = sealed.__globals__["_validate_execution_write_set"]
+
+    def drift_after_write_set(*args, **kwargs):
+        nonlocal attacked
+        result = original_validate(*args, **kwargs)
+        _overwrite_bytes(target, bytes(changed))
+        attacked = True
+        return result
+
+    monkeypatch.setitem(
+        sealed.__globals__, "_validate_execution_write_set", drift_after_write_set
+    )
+    try:
+        result = _b9(root, handoff)
+    finally:
+        _overwrite_bytes(target, original_bytes)
+
+    assert attacked
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
 
 
 def test_b9_execution_writer_rejects_leaf_swap_before_publication(
@@ -1126,13 +1295,17 @@ def test_b9_snapshot_changed_after_worker_returns_is_denied_by_held_object_fence
     def mutate_after_worker(self, context):
         nonlocal changed
         outcome = original(self, context)
-        relative = str(context["inputs"]["association"]["frame_records"])
-        # History-only execution invokes the same AssociationAgent for
-        # nested query rounds.  The seam belongs to the outer worker's
-        # bound snapshot, not to a still-buffered round input.
-        if "resume_execution_input" not in Path(relative).parts:
-            return outcome
-        path = root / relative
+        # History-only execution invokes the same AssociationAgent for nested
+        # query rounds.  Bind the seam to the known successor snapshot rather
+        # than rehydrating a controlled capability through a raw Path.
+        path = (
+            root
+            / "runs"
+            / handoff.successor_run_id
+            / "work"
+            / "resume_execution_input"
+            / "frame_records.csv"
+        )
         data = path.read_bytes()
         replacement = bytearray(data)
         replacement[len(replacement) // 2] ^= 1
@@ -1317,7 +1490,14 @@ def test_b9_snapshot_parent_aba_preserving_leaf_identity_is_denied(
     original = AssociationAgent.run
 
     def parent_aba(self, context):
-        frame = root / str(context["inputs"]["association"]["frame_records"])
+        frame = (
+            root
+            / "runs"
+            / handoff.successor_run_id
+            / "work"
+            / "resume_execution_input"
+            / "frame_records.csv"
+        )
         snapshot_dir = frame.parent
         displaced = snapshot_dir.with_name(snapshot_dir.name + "-old")
         snapshot_dir.rename(displaced)

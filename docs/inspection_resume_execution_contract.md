@@ -21,20 +21,30 @@ Before any B.9 write, the implementation performs the definition-time-bound
 B.8 core evidence fence and validates the exact input B.8 result. The fence
 re-reads the B.8 handoff intent, successor State/Journal/tail anchor, running
 ActiveRunLock, closed pre-execution entry set, and source State through the
-archived B.8 authority. The B.8 result’s source-admission SHA, plan,
-descriptor, task-plan, required-task, and token fields must match exactly.
+archived B.8 authority. It also re-reads the definition-time-bound B.6
+activation intent through its official validator and binds its bytes and
+`root/runs/source/resume_activation` identity chain. The B.8 result’s
+source-admission SHA, source State version, activation/handoff SHA, plan,
+descriptor, task-plan, required-task, and both token fields must match exactly.
 The current B.5 admission authority is executed before intent publication,
 after execution-input snapshot publication, immediately before the
 StateStore initialization CAS, on both sides of the official `task_started`
-checkpoint, before every later task checkpoint, and before success issuance.
+checkpoint, before every later task checkpoint, and at the final result
+publication-entry fence immediately before success bytes are constructed.
+That final fence also re-reads and exactly compares the original B.8 handoff
+intent bytes, B.6 activation intent bytes and directory chain, source State,
+successor State/Journal/tail anchor, running Lock, plan/descriptor/task-plan,
+source State version, activation SHA and both tokens. Any observable drift is
+denied before result issuance.
 The supported official first-layer `AssociationAgent` input channel never
-reopens source Run or successor snapshot input paths. It consumes the exact
-in-memory bytes returned by the existing
-ArtifactResolver guarded-read of each published successor snapshot; the
-snapshot file objects remain held through the final authority fence and
-successful result issuance. The final input fence reads those held objects
-again and requires their identity, single-link status, bytes, size and SHA to
-equal both the start intent and the bytes consumed by the worker. The start
+reopens source Run or successor snapshot input paths. It consumes immutable
+bytes captured from the same held successor-snapshot objects that remain open
+through the final authority fence and successful result issuance. If a held
+object differs from the earlier published snapshot before the worker is
+constructed, execution is denied before the worker runs. The final input
+fence reads those held objects again and requires their identity, single-link
+status, bytes, size and SHA to equal both the start intent and the bytes
+consumed by the worker. The start
 intent binds each source path, snapshot path, file identity, size and SHA-256, plus
 the complete `root/runs/successor/work/resume_execution_input` directory
 identity chain. That original chain is rechecked by the State/task fences and
@@ -56,7 +66,8 @@ The durable order is:
 1. B.8 current evidence fence and canonical DAG/task-plan derivation;
 2. controlled successor-local input snapshot publication; each immutable
    snapshot records the actual regular-file identity, size and SHA-256, and
-   the guarded bytes from that same published object become the worker input;
+   the bytes captured from the same held published object become the worker
+   input;
 3. fresh B.5 admission fence followed by durable
    `resume_execution_start.intent.json` publication, bound to the successor
    directory identity, every B.8 binding and the complete input snapshot;
@@ -68,21 +79,27 @@ The durable order is:
 5. official `DAGExecutor` execution of the first canonical DAG layer, with
    `task_started@4` and `task_succeeded@5` official checkpoints for the
    current one-task first layer;
-6. guarded State/Journal/anchor/Lock evidence read, final B.5 fence and
-   immutable result issue.
+6. guarded State/Journal/anchor/Lock evidence read, final B.5/B.8/B.6
+   currentness fence and immutable result issue.
 
 The existing StateStore requires a non-empty task map before the
 `PLANNED → RUNNING` transition. Therefore the real sequence is not a direct
 `PLANNED@1 → RUNNING@2`; B.9 does not bypass that rule.
 
-The B.8 evidence fence is intentionally before the B.9 intent publication:
-the archived B.8 authority owns a closed PLANNED entry set and correctly
-rejects the newly published B.9 start intent. After publication, the official
-StateStore CAS, exact intent/snapshot bytes, source State/admission binding,
-running Lock, successor directory identity and guarded authority snapshot are
-the observable mutation fence. The final State is rebound to allocation
-token, plan fingerprint, descriptor, task-plan SHA, resume activation and
-source admission before success. This contract does not claim cross-file
+The B.8 structural evidence fence is intentionally before the B.9 intent
+publication: the archived B.8 authority owns a closed PLANNED entry set and
+correctly rejects the newly published B.9 start intent. After publication,
+the official StateStore CAS, exact start-intent/snapshot bytes, source
+State/admission binding, running Lock, successor directory identity and
+guarded authority snapshot remain the observable mutation fence. The final
+publication-entry fence additionally re-reads the original B.8 handoff
+intent bytes and B.6 activation intent bytes/identity chain; it does not call
+the archived genesis-only B.8/B.6 evidence routine after task mutation. The
+final State is rebound to source State version, allocation token, plan
+fingerprint, descriptor, task-plan SHA, activation/handoff SHA, resume
+activation (including its source State version, plan fingerprint, descriptor,
+intent and admission fields), source admission and both tokens before
+success. This contract does not claim cross-file
 kernel atomicity, rollback of arbitrary writes attempted by a hostile
 in-process agent,
 or that no external process can change source files after the final observable
@@ -103,9 +120,15 @@ rejects `touch`, `unlink`, `rename`, `replace`, raw `os.open`/`shutil` path
 conversion and every path outside the successor work domain; unsupported
 filesystem APIs are not silently downgraded to ordinary writes. Nested
 History/Memory agents receive the same execution-local capability. The
-supported capability's string form is sandbox-relative canonical text so
-nested official contexts can resolve it again; converting an arbitrary
-absolute string back into a Path remains outside the supported boundary.
+supported capability's `str()`, `as_posix()` and `relative_to()` forms are
+writer-only capability tokens for nested official contexts; they are not
+valid filesystem path text. `relative_to()` returns another controlled
+capability, and its explicit write methods still route through the writer.
+`__fspath__`, raw `os.open`, and rebuilding a token with `Path(...)` fail
+closed (the token contains an invalid filesystem character); only the
+execution-local writer's `resolve()` accepts it. This closes the supported
+path-conversion boundary without relying on a process-global `Path`
+monkeypatch.
 complete successor `work/` entry set is checked against the deterministic
 first-layer write set; nested unknown files, links and reparse entries are
 rejected. Non-successor Run entries, project-root entries and the direct

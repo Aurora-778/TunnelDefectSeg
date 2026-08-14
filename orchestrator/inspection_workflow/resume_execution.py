@@ -413,6 +413,25 @@ _B8_VALIDATE_SNAPSHOT = _B8_MODULE.StateStore.validate_authority_snapshot_bytes
 _B8_SUCCESSOR_ENTRIES = _B8_MODULE._SUCCESSOR_ENTRIES
 _B8_TYPE = _B8_MODULE.ResumeExecutionHandoff
 
+# B.6 activation intent validation is captured independently of the visible
+# module symbols.  B.9 does not reproduce the activation schema; it only asks
+# the archived B.6 authority to validate the persisted intent bytes and binds
+# those bytes to the B.8 handoff fields at each execution fence.
+_B6_MODULE = __import__(
+    "orchestrator.inspection_workflow.explicit_resume_activation",
+    fromlist=["x"],
+)
+_B6_CANONICAL_JSON = _copy_function(_B6_MODULE._canonical_json_bytes)
+_B6_SHA = _copy_function(_B6_MODULE._sha256)
+_B6_INTENT_VALIDATE = _freeze_method(ExplicitResumeActivation._validate_intent)
+_B6_INTENT_PATH_FOR = _freeze_method(ExplicitResumeActivation._intent_path_for)
+_B6_DIRECTORY_CHAIN = _freeze_method(ExplicitResumeActivation._directory_chain)
+_B6_ASSERT_CHAIN = _freeze_method(ExplicitResumeActivation._assert_directory_chain)
+_B6_ASSERT_UNIQUE_INTENT = _freeze_method(
+    ExplicitResumeActivation._assert_unique_intent_entry
+)
+_B6_READ = _B1_READ_GUARDED
+
 _B5_TYPE = ExplicitResumeAdmission
 _B5_ADMIT = _freeze_method(ExplicitResumeAdmission.admit)
 _B5_RESULT_TYPE = ExplicitResumeAdmissionResult
@@ -480,6 +499,110 @@ def _b8_evidence(root: Path, intent: Mapping[str, Any], intent_bytes: bytes) -> 
     )
 
 
+def _validate_activation_intent_current(
+    root: Path,
+    handoff: ResumeExecutionHandoffResult,
+    source_state: Mapping[str, Any],
+    *,
+    expected_bytes: bytes | None = None,
+    expected_chain: tuple[Any, ...] | None = None,
+) -> tuple[dict[str, Any], bytes, tuple[Any, ...]]:
+    """Rebind the persisted B.6 intent without copying its validation rules."""
+
+    intent_path = _B6_INTENT_PATH_FOR(
+        root, handoff.source_run_id, handoff.source_admission_sha256
+    )
+    chain = _B6_DIRECTORY_CHAIN(
+        root, intent_path.parent, label="B.9 activation intent fence"
+    )
+    if expected_chain is not None and chain != expected_chain:
+        raise ValueError("activation intent directory identity changed")
+    _B6_ASSERT_CHAIN(chain, label="B.9 activation intent fence")
+    _B6_ASSERT_UNIQUE_INTENT(intent_path.parent, intent_path)
+    data, _ = _B6_READ(
+        root, intent_path.relative_to(root).as_posix()
+    )
+    if expected_bytes is not None and data != expected_bytes:
+        raise ValueError("activation intent bytes changed")
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+        if not isinstance(parsed, Mapping):
+            raise ValueError("activation intent is not an object")
+        intent = _B6_INTENT_VALIDATE(parsed)
+    except (UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise ValueError("activation intent is invalid") from exc
+    if _B6_CANONICAL_JSON(intent) != data:
+        raise ValueError("activation intent is not canonical")
+    if _B6_SHA(data) != handoff.activation_intent_sha256:
+        raise ValueError("activation intent checksum drifted")
+    expected = {
+        "source_run_id": handoff.source_run_id,
+        "successor_run_id": handoff.successor_run_id,
+        "allocation_token": handoff.allocation_token,
+        "lock_token": handoff.lock_token,
+        "source_admission_sha256": handoff.source_admission_sha256,
+        "plan_fingerprint": handoff.plan_fingerprint,
+        "input_descriptor_sha256": handoff.input_descriptor_sha256,
+        "source_state_version": handoff.source_state_version,
+    }
+    if any(intent.get(name) != value for name, value in expected.items()):
+        raise ValueError("activation intent bindings drifted")
+    context = source_state.get("context")
+    if (
+        source_state.get("state_version") != intent["source_state_version"]
+        or source_state.get("plan_fingerprint") != intent["plan_fingerprint"]
+        or not isinstance(context, Mapping)
+        or context.get("resolved_input_descriptor_sha256")
+        != intent["input_descriptor_sha256"]
+    ):
+        raise ValueError("activation source binding drifted")
+    return intent, data, chain
+
+
+def _validate_handoff_intent_current(
+    root: Path,
+    successor_run_id: str,
+    handoff: ResumeExecutionHandoffResult,
+    expected_intent: Mapping[str, Any],
+    expected_bytes: bytes,
+    source_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Re-read the exact B.8 intent at every post-handoff fence."""
+
+    relative = f"runs/{successor_run_id}/resume_execution_handoff.intent.json"
+    current, current_bytes = _read_json_guarded(root, relative)
+    if current_bytes != expected_bytes or _B8_SHA(current_bytes) != handoff.handoff_intent_sha256:
+        raise ValueError("B.8 handoff intent bytes changed")
+    validated = _b8_intent_validate(
+        current_bytes,
+        successor_run_id,
+        _B8_ACTIVATION_VIEW(current),
+        _B8_PREPARATION_VIEW(current),
+    )
+    if current != dict(expected_intent) or validated != current:
+        raise ValueError("B.8 handoff intent bindings drifted")
+    _B8_SOURCE_VALIDATE(source_state, _B8_PREPARATION_VIEW(current))
+    if (
+        current.get("source_run_id") != handoff.source_run_id
+        or current.get("successor_run_id") != handoff.successor_run_id
+        or current.get("activation_sha256") != handoff.activation_sha256
+        or current.get("activation_intent_sha256")
+        != handoff.activation_intent_sha256
+        or current.get("source_admission_sha256")
+        != handoff.source_admission_sha256
+        or current.get("source_state_version") != handoff.source_state_version
+        or source_state.get("state_version") != current.get("source_state_version")
+        or current.get("plan_fingerprint") != handoff.plan_fingerprint
+        or current.get("input_descriptor_sha256")
+        != handoff.input_descriptor_sha256
+        or current.get("task_plan_sha256") != handoff.task_plan_sha256
+        or current.get("allocation_token") != handoff.allocation_token
+        or current.get("lock_token") != handoff.lock_token
+    ):
+        raise ValueError("B.8 handoff binding drifted")
+    return current
+
+
 def _validate_b8_current(
     root: Path, successor_run_id: str, handoff: ResumeExecutionHandoffResult
 ) -> tuple[dict[str, Any], dict[str, Any], bytes, dict[str, Any]]:
@@ -490,7 +613,7 @@ def _validate_b8_current(
         raise ValueError("B.8 handoff is not successful")
     relative = f"runs/{successor_run_id}/resume_execution_handoff.intent.json"
     intent, intent_bytes = _read_json_guarded(root, relative)
-    if _sha(intent_bytes) != handoff.handoff_intent_sha256:
+    if _B8_SHA(intent_bytes) != handoff.handoff_intent_sha256:
         raise ValueError("B.8 intent SHA drifted")
     preparation_view = _B8_PREPARATION_VIEW(intent)
     source = _B8_STATE_LOAD(_B8_STATE_STORE(root), run_id=intent["source_run_id"])["canonical_state"]
@@ -504,6 +627,12 @@ def _validate_b8_current(
     for name in ("state_sha256", "journal_sha256", "journal_anchor_sha256", "lock_sha256"):
         if first[name] != getattr(handoff, name):
             raise ValueError("B.8 handoff evidence does not match")
+    _activation_intent, activation_intent_bytes, activation_chain = (
+        _validate_activation_intent_current(root, handoff, source)
+    )
+    first = dict(first)
+    first["_activation_intent_bytes"] = activation_intent_bytes
+    first["_activation_intent_chain"] = activation_chain
     return intent, source, intent_bytes, first
 
 
@@ -853,6 +982,46 @@ def _csv_rows_from_bytes(data: bytes) -> list[dict[str, str]]:
     return list(csv.DictReader(io.StringIO(text, newline="")))
 
 
+class _HeldSnapshotHandles(dict[str, Any]):
+    """Handle mapping carrying the bytes captured by those same handles."""
+
+    __slots__ = ("snapshot_bytes",)
+
+    def __init__(
+        self, handles: Mapping[str, Any], snapshot_bytes: Mapping[str, bytes]
+    ) -> None:
+        super().__init__(handles)
+        self.snapshot_bytes = types.MappingProxyType(
+            {key: bytes(value) for key, value in snapshot_bytes.items()}
+        )
+
+
+def _snapshot_bytes_from_held_handles(
+    held_snapshot_objects: Mapping[str, Any],
+    input_snapshots: tuple[Mapping[str, Any], ...],
+) -> Mapping[str, bytes]:
+    """Read worker bytes from the already-held objects, never from paths."""
+
+    sealed_capture = getattr(held_snapshot_objects, "snapshot_bytes", None)
+    if sealed_capture is not None and type(sealed_capture) is not types.MappingProxyType:
+        raise ValueError("held snapshot bytes are not sealed")
+    captured = {}
+    for item in input_snapshots:
+        path = item["snapshot_path"]
+        handle = held_snapshot_objects[path]
+        handle.seek(0)
+        data = handle.read()
+        if type(data) is not bytes:
+            raise ValueError("held snapshot bytes are not immutable")
+        if sealed_capture is not None and sealed_capture.get(path) != data:
+            raise ValueError("held snapshot capture does not match its handle")
+        captured[path] = bytes(data)
+    expected = {item["snapshot_path"] for item in input_snapshots}
+    if set(captured) != expected or any(type(value) is not bytes for value in captured.values()):
+        raise ValueError("held snapshot byte set is incomplete")
+    return types.MappingProxyType({key: bytes(captured[key]) for key in sorted(captured)})
+
+
 @contextmanager
 def _hold_snapshot_objects(
     root: Path,
@@ -865,6 +1034,7 @@ def _hold_snapshot_objects(
 ):
     handles: list[tuple[Any, int, bool]] = []
     held: dict[str, Any] = {}
+    captured: dict[str, bytes] = {}
     primary: BaseException | None = None
     try:
         for item in input_snapshots:
@@ -884,6 +1054,7 @@ def _hold_snapshot_objects(
                 data = handle.read()
                 if len(data) != item["size_bytes"] or _sha256(data) != item["sha256"]:
                     raise ValueError("execution input snapshot bytes changed")
+                captured[item["snapshot_path"]] = bytes(data)
                 lock_size = max(1, state.st_size)
                 if _os.name == "nt":
                     import msvcrt
@@ -896,7 +1067,7 @@ def _hold_snapshot_objects(
                 raise
             handles.append((handle, lock_size, locked))
             held[item["snapshot_path"]] = handle
-        yield _mapping_proxy(held)
+        yield _HeldSnapshotHandles(held, captured)
     except BaseException as exc:
         primary = exc
         raise
@@ -1003,36 +1174,62 @@ def _worker_direct_metadata(directory: Path, *, exclude: frozenset[str]) -> tupl
     return tuple(sorted(result))
 
 
+_WORKER_PATH_TOKEN_PREFIX = "\x00B9_EXECUTION_PATH\x00"
+
+
+def _worker_path_token(relative: str) -> str:
+    """Return a non-filesystem token accepted only by the local writer."""
+
+    return _WORKER_PATH_TOKEN_PREFIX + relative
+
+
+def _decode_worker_path_token(value: str) -> str | None:
+    if type(value) is not str or not value.startswith(_WORKER_PATH_TOKEN_PREFIX):
+        return None
+    return value[len(_WORKER_PATH_TOKEN_PREFIX) :]
+
+
 class _ExecutionWorkerPath:
     """Path-like view whose mutations are delegated to one writer instance."""
 
-    __slots__ = ("_writer", "_path")
+    __slots__ = ("_writer", "_path", "_relative")
 
-    def __init__(self, writer: "_ExecutionWorkerWriter", path: Path) -> None:
+    def __init__(
+        self,
+        writer: "_ExecutionWorkerWriter",
+        path: Path,
+        *,
+        relative: bool = False,
+    ) -> None:
         self._writer = writer
         self._path = path
+        self._relative = relative
 
     def __str__(self) -> str:
         # Official nested agents stringify paths into a second context before
         # resolving them again.  Keep that round-trip canonical and sandbox
-        # relative; exposing a Windows absolute string here would reintroduce
-        # drive-colon/backslash parsing and make the controlled capability
-        # unusable without a process-global Path monkeypatch.
+        # relative; an outside path has no supported string representation.
+        absolute = self._writer._absolute(self)
         try:
-            relative = self._path.absolute().relative_to(self._writer.root.absolute()).as_posix()
-        except ValueError:
-            return str(self._path)
-        return relative if relative != "." else "."
+            relative = absolute.relative_to(self._writer.root.absolute()).as_posix()
+        except ValueError as exc:
+            raise ValueError("worker path has no controlled string form") from exc
+        return _worker_path_token(relative if relative != "." else ".")
+
+    def as_posix(self) -> str:
+        """Return a writer-only token, never a rehydratable filesystem path."""
+
+        return str(self)
 
     def __repr__(self) -> str:
-        return f"_ExecutionWorkerPath({self._path!r})"
+        return "_ExecutionWorkerPath(<opaque>)"
 
     def __hash__(self) -> int:
         return hash(self._path)
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, _ExecutionWorkerPath):
-            return self._path == other._path
+            return self._writer._absolute(self) == other._writer._absolute(other)
         return self._path == other
 
     def __fspath__(self) -> str:
@@ -1052,73 +1249,80 @@ class _ExecutionWorkerPath:
 
     @property
     def parent(self) -> "_ExecutionWorkerPath":
-        return self._writer._wrap(self._path.parent)
+        return self._writer._wrap(self._path.parent, relative=self._relative)
 
     def __truediv__(self, value: str | os.PathLike[str]) -> "_ExecutionWorkerPath":
         if isinstance(value, _ExecutionWorkerPath):
             value = value._path
-        return self._writer._wrap(self._path / value)
+        return self._writer._wrap(self._path / value, relative=self._relative)
 
     def joinpath(self, *parts: str | os.PathLike[str]) -> "_ExecutionWorkerPath":
         unwrapped = [part._path if isinstance(part, _ExecutionWorkerPath) else part for part in parts]
-        return self._writer._wrap(self._path.joinpath(*unwrapped))
+        return self._writer._wrap(
+            self._path.joinpath(*unwrapped), relative=self._relative
+        )
 
     def with_name(self, name: str) -> "_ExecutionWorkerPath":
-        return self._writer._wrap(self._path.with_name(name))
+        return self._writer._wrap(self._path.with_name(name), relative=self._relative)
 
     def with_suffix(self, suffix: str) -> "_ExecutionWorkerPath":
-        return self._writer._wrap(self._path.with_suffix(suffix))
+        return self._writer._wrap(
+            self._path.with_suffix(suffix), relative=self._relative
+        )
 
     def absolute(self) -> "_ExecutionWorkerPath":
-        return self._writer._wrap(self._path.absolute())
+        return self._writer._wrap(self._writer._absolute(self).absolute())
 
     def resolve(self, strict: bool = False) -> "_ExecutionWorkerPath":
         # Keep the capability wrapper across resolution.  Returning a plain
         # Path here would make ``worker_path.resolve().touch()`` (or
         # ``os.open(worker_path.resolve(), ...)``) an unmediated mutation
         # escape hatch even though the original value was controlled.
-        return self._writer._wrap(self._path.resolve(strict=strict))
+        return self._writer._wrap(self._writer._absolute(self).resolve(strict=strict))
 
-    def relative_to(self, other: object) -> Path:
-        if isinstance(other, _ExecutionWorkerPath):
-            other = other._path
-        return self._path.relative_to(other)
+    def relative_to(self, other: object) -> "_ExecutionWorkerPath":
+        return self._writer._wrap(
+            self._writer._absolute(self).relative_to(
+                self._writer._absolute(other)
+            ),
+            relative=True,
+        )
 
     def exists(self) -> bool:
-        return self._writer.exists(self._path)
+        return self._writer.exists(self)
 
     def is_file(self) -> bool:
-        return self._writer.is_file(self._path)
+        return self._writer.is_file(self)
 
     def is_dir(self) -> bool:
-        return self._writer.is_dir(self._path)
+        return self._writer.is_dir(self)
 
     def lstat(self) -> os.stat_result:
-        return self._path.lstat()
+        return self._writer.lstat(self)
 
     def iterdir(self):
-        return tuple(self._writer._wrap(entry) for entry in self._path.iterdir())
+        return self._writer.iterdir(self)
 
     def glob(self, pattern: str):
-        return tuple(self._writer._wrap(entry) for entry in self._path.glob(pattern))
+        return self._writer.glob(self, pattern)
 
     def open(self, *args: Any, **kwargs: Any):
-        return self._writer.open(self._path, *args, **kwargs)
+        return self._writer.open(self, *args, **kwargs)
 
     def read_bytes(self) -> bytes:
-        return self._writer.read_bytes(self._path)
+        return self._writer.read_bytes(self)
 
     def read_text(self, *args: Any, **kwargs: Any) -> str:
-        return self._writer.read_text(self._path, *args, **kwargs)
+        return self._writer.read_text(self, *args, **kwargs)
 
     def write_bytes(self, data: bytes) -> int:
-        return self._writer.write_bytes(self._path, data)
+        return self._writer.write_bytes(self, data)
 
     def write_text(self, data: str, *args: Any, **kwargs: Any) -> int:
-        return self._writer.write_text(self._path, data, *args, **kwargs)
+        return self._writer.write_text(self, data, *args, **kwargs)
 
     def mkdir(self, *args: Any, **kwargs: Any) -> None:
-        self._writer.mkdir(self._path, *args, **kwargs)
+        self._writer.mkdir(self, *args, **kwargs)
 
     def touch(self, *args: Any, **kwargs: Any) -> None:
         self._writer.reject_mutation("touch")
@@ -1226,15 +1430,29 @@ class _ExecutionWorkerWriter:
             raise ValueError("execution writer path is invalid")
         return path.as_posix()
 
-    def _relative(self, path: Path) -> str:
+    def _absolute(self, value: object) -> Path:
+        if isinstance(value, _ExecutionWorkerPath):
+            if value._writer is not self:
+                raise ValueError("worker path belongs to another writer")
+            return (
+                self.root / value._path
+                if value._relative
+                else value._path
+            ).absolute()
+        if isinstance(value, Path):
+            return value if value.is_absolute() else (self.root / value).absolute()
+        raise ValueError("worker path is invalid")
+
+    def _relative(self, path: object) -> str:
+        absolute = self._absolute(path)
         try:
-            relative = path.absolute().relative_to(self.successor.absolute()).as_posix()
+            relative = absolute.relative_to(self.successor.absolute()).as_posix()
         except ValueError as exc:
             raise ValueError("worker path is outside the successor work domain") from exc
         return self._canonical_relative(relative)
 
-    def _wrap(self, path: Path) -> _ExecutionWorkerPath:
-        return _ExecutionWorkerPath(self, path)
+    def _wrap(self, path: Path, *, relative: bool = False) -> _ExecutionWorkerPath:
+        return _ExecutionWorkerPath(self, path, relative=relative)
 
     def path(self, relative: str) -> _ExecutionWorkerPath:
         return self._wrap(self.successor.joinpath(*self._canonical_relative(relative).split("/")))
@@ -1244,14 +1462,22 @@ class _ExecutionWorkerWriter:
 
     def resolve(self, value: object) -> _ExecutionWorkerPath:
         if isinstance(value, _ExecutionWorkerPath):
-            path = value._path
+            path = self._absolute(value)
         elif isinstance(value, Path):
-            path = value
+            path = self._absolute(value)
         elif type(value) is str:
-            if "\\" in value or ":" in value:
+            token_relative = _decode_worker_path_token(value)
+            if token_relative is not None:
+                if token_relative == ".":
+                    path = self.root
+                else:
+                    relative = self._canonical_relative(token_relative)
+                    path = self.root.joinpath(*relative.split("/"))
+            elif "\\" in value or ":" in value:
                 raise ValueError("worker path is not canonical")
-            candidate = Path(value)
-            path = candidate if candidate.is_absolute() else self.root / candidate
+            else:
+                candidate = Path(value)
+                path = candidate if candidate.is_absolute() else self.root / candidate
         else:
             raise ValueError("worker path is invalid")
         try:
@@ -1322,6 +1548,7 @@ class _ExecutionWorkerWriter:
         return relative
 
     def save(self, path: Path, data: bytes) -> None:
+        path = self._absolute(path)
         relative = self._assert_parent(path)
         if relative not in self.output_leaves:
             raise ValueError("worker output leaf is not authorized")
@@ -1343,6 +1570,7 @@ class _ExecutionWorkerWriter:
         newline: str | None = None,
     ):
         del buffering
+        path = self._absolute(path)
         writing = any(flag in mode for flag in "wax+")
         relative = self._relative(path)
         if writing:
@@ -1372,6 +1600,7 @@ class _ExecutionWorkerWriter:
         return io.StringIO(data.decode(selected_encoding, errors or "strict"), newline=newline)
 
     def read_bytes(self, path: Path) -> bytes:
+        path = self._absolute(path)
         absolute = path.absolute()
         if absolute in self.snapshot_bytes:
             return self.snapshot_bytes[absolute]
@@ -1412,6 +1641,7 @@ class _ExecutionWorkerWriter:
         return len(data)
 
     def exists(self, path: Path) -> bool:
+        path = self._absolute(path)
         absolute = path.absolute()
         if absolute in self.snapshot_bytes:
             return True
@@ -1421,19 +1651,33 @@ class _ExecutionWorkerWriter:
             return False
 
     def is_file(self, path: Path) -> bool:
+        path = self._absolute(path)
         try:
             return stat.S_ISREG(path.lstat().st_mode)
         except FileNotFoundError:
             return False
 
     def is_dir(self, path: Path) -> bool:
+        path = self._absolute(path)
         try:
             return stat.S_ISDIR(path.lstat().st_mode)
         except FileNotFoundError:
             return False
 
+    def lstat(self, path: Path) -> os.stat_result:
+        return self._absolute(path).lstat()
+
+    def iterdir(self, path: Path) -> tuple[_ExecutionWorkerPath, ...]:
+        absolute = self._absolute(path)
+        return tuple(self._wrap(entry) for entry in absolute.iterdir())
+
+    def glob(self, path: Path, pattern: str) -> tuple[_ExecutionWorkerPath, ...]:
+        absolute = self._absolute(path)
+        return tuple(self._wrap(entry) for entry in absolute.glob(pattern))
+
     def mkdir(self, path: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False) -> None:
         del mode, parents
+        path = self._absolute(path)
         relative = self._relative(path)
         if relative not in self.directories:
             raise ValueError("worker output directory is not authorized")
@@ -1918,6 +2162,9 @@ def _validate_running_fence(
     check_admission: bool = False,
     bound_snapshot_bytes: Mapping[str, bytes] | None = None,
     held_snapshot_objects: Mapping[str, Any] | None = None,
+    handoff_intent_bytes: bytes | None = None,
+    activation_intent_bytes: bytes | None = None,
+    activation_intent_chain: tuple[Any, ...] | None = None,
 ) -> Mapping[str, Any]:
     current_intent, current_bytes = _read_json_guarded(
         root, f"runs/{successor_run_id}/{_START_INTENT_NAME}"
@@ -1948,6 +2195,23 @@ def _validate_running_fence(
     _B8_SOURCE_VALIDATE(current_source, _B8_PREPARATION_VIEW(b8_intent))
     if current_source != source:
         raise ValueError("source State changed before task execution")
+    if handoff_intent_bytes is not None:
+        _validate_handoff_intent_current(
+            root,
+            successor_run_id,
+            handoff,
+            b8_intent,
+            handoff_intent_bytes,
+            current_source,
+        )
+    if activation_intent_bytes is not None:
+        _validate_activation_intent_current(
+            root,
+            handoff,
+            current_source,
+            expected_bytes=activation_intent_bytes,
+            expected_chain=activation_intent_chain,
+        )
     validate_active_run_control_entries(root)
     if check_admission:
         _validate_b5_current(root, handoff)
@@ -1971,6 +2235,8 @@ def _validate_running_fence(
         or state.get("plan_fingerprint") != handoff.plan_fingerprint
         or _sha(_canonical(_plain(state.get("task_plan")))) != handoff.task_plan_sha256
         or not isinstance(resume_activation, Mapping)
+        or resume_activation.get("source_state_version") != handoff.source_state_version
+        or resume_activation.get("plan_fingerprint") != handoff.plan_fingerprint
         or resume_activation.get("input_descriptor_sha256") != handoff.input_descriptor_sha256
         or resume_activation.get("intent_sha256") != handoff.activation_intent_sha256
         or resume_activation.get("source_admission_sha256") != handoff.source_admission_sha256
@@ -2013,6 +2279,9 @@ def _validate_planned_fence(
     expected_tasks: Mapping[str, Any],
     expected_task_plan: Any,
     bound_snapshot_bytes: Mapping[str, bytes] | None = None,
+    handoff_intent_bytes: bytes | None = None,
+    activation_intent_bytes: bytes | None = None,
+    activation_intent_chain: tuple[Any, ...] | None = None,
 ) -> Mapping[str, Any]:
     """Fence the exact pre-CAS State before Controller initialization writes."""
 
@@ -2047,6 +2316,23 @@ def _validate_planned_fence(
     _B8_SOURCE_VALIDATE(current_source, _B8_PREPARATION_VIEW(b8_intent))
     if current_source != source:
         raise ValueError("source State changed before State CAS")
+    if handoff_intent_bytes is not None:
+        _validate_handoff_intent_current(
+            root,
+            successor_run_id,
+            handoff,
+            b8_intent,
+            handoff_intent_bytes,
+            current_source,
+        )
+    if activation_intent_bytes is not None:
+        _validate_activation_intent_current(
+            root,
+            handoff,
+            current_source,
+            expected_bytes=activation_intent_bytes,
+            expected_chain=activation_intent_chain,
+        )
     _validate_b5_current(root, handoff)
     current_tasks, current_plan = _canonical_task_plan(root, current_source, handoff)
     if current_tasks != expected_tasks or current_plan != expected_task_plan:
@@ -2182,6 +2468,8 @@ def _execute(
     intent, source, handoff_intent_bytes, b8_evidence = _validate_b8_current(
         root, successor_run_id, handoff
     )
+    activation_intent_bytes = b8_evidence["_activation_intent_bytes"]
+    activation_intent_chain = b8_evidence["_activation_intent_chain"]
     _validate_b5_current(root, handoff)
     tasks, task_plan = _canonical_task_plan(root, source, handoff)
     successor = root / "runs" / successor_run_id
@@ -2229,6 +2517,7 @@ def _execute(
         input_snapshots,
         snapshot_directory_chain,
     )
+    worker_snapshot_bytes = bound_snapshot_bytes
     start_intent = _make_start_intent(
         handoff,
         timestamp,
@@ -2313,7 +2602,10 @@ def _execute(
             chain,
             tasks,
             task_plan,
-            bound_snapshot_bytes,
+            worker_snapshot_bytes,
+            handoff_intent_bytes,
+            activation_intent_bytes,
+            activation_intent_chain,
         ),
         lambda: (
             _validate_running_fence(
@@ -2327,7 +2619,10 @@ def _execute(
                 input_snapshots,
                 snapshot_directory_chain,
                 chain,
-                bound_snapshot_bytes=bound_snapshot_bytes,
+                bound_snapshot_bytes=worker_snapshot_bytes,
+                handoff_intent_bytes=handoff_intent_bytes,
+                activation_intent_bytes=activation_intent_bytes,
+                activation_intent_chain=activation_intent_chain,
             ),
         ),
     )
@@ -2344,7 +2639,10 @@ def _execute(
             snapshot_directory_chain,
             chain,
             check_admission=True,
-            bound_snapshot_bytes=bound_snapshot_bytes,
+            bound_snapshot_bytes=worker_snapshot_bytes,
+            handoff_intent_bytes=handoff_intent_bytes,
+            activation_intent_bytes=activation_intent_bytes,
+            activation_intent_chain=activation_intent_chain,
         )
     )
     sink.set_task_start_fence(
@@ -2360,23 +2658,16 @@ def _execute(
             snapshot_directory_chain,
             chain,
             check_admission=True,
-            bound_snapshot_bytes=bound_snapshot_bytes,
+            bound_snapshot_bytes=worker_snapshot_bytes,
+            handoff_intent_bytes=handoff_intent_bytes,
+            activation_intent_bytes=activation_intent_bytes,
+            activation_intent_chain=activation_intent_chain,
         )
     )
     context = _source_input_context(
         root, successor_run_id, source, handoff, input_snapshots
     )
     registry = _BUILD_REGISTRY()
-    expected_work_entries = _expected_work_entries(
-        successor_run_id, input_snapshots, bound_snapshot_bytes
-    )
-    worker_writer = _ExecutionWorkerWriter(
-        root,
-        successor_run_id,
-        expected_work_entries,
-        input_snapshots,
-        bound_snapshot_bytes,
-    )
     # Keep the original successor directory identity bound across every
     # official StateStore/CAS/checkpoint mutation.  The controlled filesystem
     # performs its last observable pre-write identity check at each mutation;
@@ -2384,6 +2675,34 @@ def _execute(
     with _BIND_DIRECTORIES(mutation_chain), _hold_snapshot_objects(
         root, input_snapshots
     ) as held_snapshot_objects:
+        held_snapshot_bytes = _snapshot_bytes_from_held_handles(
+            held_snapshot_objects, input_snapshots
+        )
+        # The held object is the worker's sole input authority.  If the
+        # object changed after its handle was established, reject before the
+        # executor is even constructed; do not fall back to the earlier path
+        # read used to publish the snapshot.
+        if held_snapshot_bytes != bound_snapshot_bytes:
+            raise ValueError("held execution input differs from published snapshot")
+        _validate_input_snapshots(
+            root,
+            successor_run_id,
+            input_snapshots,
+            snapshot_directory_chain,
+            held_snapshot_bytes,
+            held_snapshot_objects,
+        )
+        worker_snapshot_bytes = held_snapshot_bytes
+        expected_work_entries = _expected_work_entries(
+            successor_run_id, input_snapshots, worker_snapshot_bytes
+        )
+        worker_writer = _ExecutionWorkerWriter(
+            root,
+            successor_run_id,
+            expected_work_entries,
+            input_snapshots,
+            worker_snapshot_bytes,
+        )
         _ASSERT_DIRECTORY_CHAIN(chain, label="B.9 execution mutations")
         with worker_writer as controlled_writer, _bind_execution_worker_agents(
             registry, controlled_writer
@@ -2397,6 +2716,48 @@ def _execute(
             )
             executor.run(execution_tasks, context)
             worker_write_evidence = controlled_writer.publish()
+        _validate_running_fence(
+            root,
+            successor_run_id,
+            source,
+            handoff,
+            intent,
+            current_start,
+            current_start_bytes,
+            input_snapshots,
+            snapshot_directory_chain,
+            chain,
+            check_admission=True,
+            bound_snapshot_bytes=worker_snapshot_bytes,
+            held_snapshot_objects=held_snapshot_objects,
+            handoff_intent_bytes=handoff_intent_bytes,
+            activation_intent_bytes=activation_intent_bytes,
+            activation_intent_chain=activation_intent_chain,
+        )
+        if any(
+            _entry_exists(successor / name)
+            for name in ("publication_transaction.json", "final_summary.md", "publication_backup")
+        ):
+            raise ValueError("publication residue is not permitted")
+        _validate_execution_write_set(
+            root,
+            successor_run_id,
+            expected_work_entries,
+            formal_tree_evidence,
+            worker_write_evidence,
+        )
+        # This is the last observable publication-entry fence.  It re-reads
+        # B.8/B.6 intent bytes, source State/admission, successor
+        # State/Journal/anchor, running Lock and the held input objects before
+        # any success bytes or result object are built.
+        _validate_input_snapshots(
+            root,
+            successor_run_id,
+            input_snapshots,
+            snapshot_directory_chain,
+            worker_snapshot_bytes,
+            held_snapshot_objects,
+        )
         final = _validate_running_fence(
             root,
             successor_run_id,
@@ -2409,8 +2770,11 @@ def _execute(
             snapshot_directory_chain,
             chain,
             check_admission=True,
-            bound_snapshot_bytes=bound_snapshot_bytes,
+            bound_snapshot_bytes=worker_snapshot_bytes,
             held_snapshot_objects=held_snapshot_objects,
+            handoff_intent_bytes=handoff_intent_bytes,
+            activation_intent_bytes=activation_intent_bytes,
+            activation_intent_chain=activation_intent_chain,
         )
         state = final["state"]
         task_status = state.get("task_status")
@@ -2441,28 +2805,32 @@ def _execute(
             for row in events.values()
         ):
             raise ValueError("task skip or cache checkpoint is not permitted")
-        if any(
-            _entry_exists(successor / name)
-            for name in ("publication_transaction.json", "final_summary.md", "publication_backup")
-        ):
-            raise ValueError("publication residue is not permitted")
-        _validate_execution_write_set(
+        # Keep the real B.5/currentness fence at the actual success-issuance
+        # entry as well as the earlier evidence read.  No success bindings are
+        # derived from a merely older fence; every State/Journal/anchor/Lock,
+        # source admission, B.8/B.6 intent and held-input byte must still be
+        # identical immediately before the issuer receives its values.
+        issuance_final = _validate_running_fence(
             root,
             successor_run_id,
-            expected_work_entries,
-            formal_tree_evidence,
-            worker_write_evidence,
-        )
-        # Keep the actual snapshot objects live through issuance and make the
-        # last observable input check read those handles, not their pathnames.
-        _validate_input_snapshots(
-            root,
-            successor_run_id,
+            source,
+            handoff,
+            intent,
+            current_start,
+            current_start_bytes,
             input_snapshots,
             snapshot_directory_chain,
-            bound_snapshot_bytes,
-            held_snapshot_objects,
+            chain,
+            check_admission=True,
+            bound_snapshot_bytes=worker_snapshot_bytes,
+            held_snapshot_objects=held_snapshot_objects,
+            handoff_intent_bytes=handoff_intent_bytes,
+            activation_intent_bytes=activation_intent_bytes,
+            activation_intent_chain=activation_intent_chain,
         )
+        if issuance_final != final:
+            raise ValueError("authority changed at success issuance")
+        final = issuance_final
         start_sha = _sha(current_start_bytes)
         bindings = {
             "successor_run_id": successor_run_id,
@@ -2507,6 +2875,8 @@ def _seal_execution_authority() -> Any:
         "_read_json_guarded",
         "_b8_intent_validate",
         "_b8_evidence",
+        "_validate_activation_intent_current",
+        "_validate_handoff_intent_current",
         "_validate_b8_current",
         "_validate_b5_current",
         "_make_start_intent",
@@ -2515,6 +2885,7 @@ def _seal_execution_authority() -> Any:
         "_open_source_read_guard",
         "_held_source_snapshot_bytes",
         "_source_snapshot_spec",
+        "_snapshot_bytes_from_held_handles",
         "_directory_chain_binding",
         "_csv_rows_from_bytes",
         "_validate_input_snapshots",
