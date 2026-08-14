@@ -59,6 +59,70 @@ def _csv_bytes(association_id: str = ASSOCIATION_ID) -> bytes:
     return output.getvalue().encode()
 
 
+def _csv_record_with_exact_size(association_id: str, size: int) -> bytes:
+    """Build one valid 16-column ASCII record with an exact byte size."""
+
+    fields = ["inspection_source_reference_v1", association_id, "", *(["x"] * 13)]
+    base = ",".join(fields).encode() + b"\n"
+    padding = size - len(base)
+    assert 0 <= padding <= 65_536
+    fields[2] = "x" * padding
+    record = ",".join(fields).encode() + b"\n"
+    assert len(record) == size
+    return record
+
+
+def _valid_snapshot_with_exact_size(size: int) -> bytes:
+    header = b",".join(name.encode() for name in ASSOCIATION_PROJECTION_FIELDS) + b"\n"
+    assert size > len(header)
+    required = size - len(header)
+    row_count = 1
+    while True:
+        ids = [ASSOCIATION_ID, *(f"ASSOC-{index:05d}" for index in range(1, row_count))]
+        minimum_sizes = [len(
+            b",".join(
+                [b"inspection_source_reference_v1", association_id.encode(), b"", *([b"x"] * 13)]
+            ) + b"\n"
+        ) for association_id in ids]
+        minimum_total = sum(minimum_sizes)
+        if minimum_total <= required <= minimum_total + row_count * 65_536:
+            break
+        row_count += 1
+    padding = required - minimum_total
+    records: list[bytes] = []
+    for association_id, minimum in zip(ids, minimum_sizes, strict=True):
+        current = min(padding, 65_536)
+        records.append(_csv_record_with_exact_size(association_id, minimum + current))
+        padding -= current
+    assert padding == 0
+    snapshot = header + b"".join(records)
+    assert len(snapshot) == size
+    return snapshot
+
+
+def _utf8_payload_for_exact_bytes(size: int) -> str:
+    four_byte, remainder = divmod(size, 4)
+    suffix = {0: "", 1: "x", 2: "¢", 3: "€"}[remainder]
+    value = "🙂" * four_byte + suffix
+    assert len(value) <= 65_536 and len(value.encode("utf-8")) == size
+    return value
+
+
+def _logical_record_with_exact_size(size: int) -> bytes:
+    fields = ["inspection_source_reference_v1", ASSOCIATION_ID, *([""] * 14)]
+    base_size = len(",".join(fields).encode("utf-8") + b"\n")
+    remaining = size - base_size
+    assert remaining >= 0
+    for index in range(2, 16):
+        take = min(remaining, 65_536 * 4)
+        fields[index] = _utf8_payload_for_exact_bytes(take)
+        remaining -= take
+    assert remaining == 0
+    record = ",".join(fields).encode("utf-8") + b"\n"
+    assert len(record) == size
+    return record
+
+
 def _authority(private_key: Ed25519PrivateKey) -> tuple[bytes, str]:
     public = private_key.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
@@ -848,38 +912,43 @@ def test_snapshot_record_row_and_column_limits() -> None:
         _parse_association_snapshot(many, ASSOCIATION_ID)
 
 
-def test_exact_snapshot_row_record_and_memory_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
-    import orchestrator.inspection_review_admission as admission_module
-
-    # The total-byte guard accepts its exact boundary and rejects one more byte.
-    monkeypatch.setattr(admission_module, "_MAX_SNAPSHOT_BYTES", len(_csv_bytes()))
-    assert _parse_association_snapshot(_csv_bytes(), ASSOCIATION_ID)
-    with pytest.raises(ReviewDecisionContractError):
-        _parse_association_snapshot(_csv_bytes() + b"x", ASSOCIATION_ID)
-
-    # The logical-record guard counts a bare CR terminator at the exact edge.
+def test_exact_snapshot_row_record_and_memory_boundaries() -> None:
     header = b",".join(name.encode() for name in ASSOCIATION_PROJECTION_FIELDS) + b"\n"
-    base = b"inspection_source_reference_v1," + ASSOCIATION_ID.encode() + b"," + b",".join([b""] * 14)
-    limit = max(len(header), len(base) + 1)
-    insert_at = base.index(b",", base.index(b",") + 1) + 1
-    exact = base[:insert_at] + b"x" * (limit - 1 - len(base)) + base[insert_at:] + b"\r"
-    monkeypatch.setattr(admission_module, "_MAX_SNAPSHOT_BYTES", 8 * 1024 * 1024)
-    monkeypatch.setattr(admission_module, "_MAX_RECORD_BYTES", limit)
-    assert len(exact) == limit
-    assert _parse_association_chunks((header, exact), ASSOCIATION_ID)
-    with pytest.raises(ReviewDecisionContractError, match="too large"):
-        _parse_association_chunks((header, exact[:-1] + b"x\r"), ASSOCIATION_ID)
 
-    # Parser retention is bounded: an 8 MiB input does not cause 64 MiB amplification.
-    overwide = b",".join([b"x"] * 17) + b"z" * (8 * 1024 * 1024 - 34)
+    # Measure from before allocation: fixture construction plus parsing stays below 64 MiB.
     tracemalloc.start()
     try:
-        with pytest.raises(ReviewDecisionContractError, match="too many columns"):
-            _parse_association_snapshot(overwide, ASSOCIATION_ID)
+        exact_snapshot = _valid_snapshot_with_exact_size(8 * 1024 * 1024)
+        assert len(exact_snapshot) == 8 * 1024 * 1024
+        assert _parse_association_snapshot(exact_snapshot, ASSOCIATION_ID)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
     assert peak < 64 * 1024 * 1024
+    with pytest.raises(ReviewDecisionContractError):
+        _parse_association_snapshot(exact_snapshot + b"x", ASSOCIATION_ID)
+
+    exact_record = _logical_record_with_exact_size(1024 * 1024)
+    assert _parse_association_chunks((header, exact_record), ASSOCIATION_ID)
+    with pytest.raises(ReviewDecisionContractError, match="too large"):
+        _parse_association_chunks((header, exact_record[:-1] + b"x\n"), ASSOCIATION_ID)
+
+    exact_rows = header + b"".join(
+        b",".join(
+            [
+                b"inspection_source_reference_v1",
+                (ASSOCIATION_ID if index == 0 else f"ASSOC-{index:05d}").encode(),
+                *([b"x"] * 14),
+            ]
+        ) + b"\n"
+        for index in range(65_536)
+    )
+    assert _parse_association_snapshot(exact_rows, ASSOCIATION_ID)
+    with pytest.raises(ReviewDecisionContractError, match="too many rows"):
+        _parse_association_snapshot(
+            exact_rows + b",".join([b"inspection_source_reference_v1", b"ASSOC-extra", *([b"x"] * 14)]) + b"\n",
+            ASSOCIATION_ID,
+        )
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="native Windows clock/replay test")
@@ -1028,6 +1097,7 @@ def test_phase_c2_exact_diff_stays_inside_reviewed_scope() -> None:
     )
     allowed = {
         ".github/workflows/phase-c2-native.yml",
+        ".workflow/MasterPipeline.yml",
         "docs/inspection_association_review_decision_contract.md",
         "orchestrator/_inspection_review_fs_posix.py",
         "orchestrator/_inspection_review_fs_windows.py",
@@ -1038,6 +1108,8 @@ def test_phase_c2_exact_diff_stays_inside_reviewed_scope() -> None:
         "orchestrator/inspection_workflow/review_decision.py",
         "tests/test_inspection_review_admission.py",
         "tests/test_inspection_review_decision.py",
+        "tests/test_inspection_resume_execution.py",
+        "tests/test_inspection_explicit_resume_activation.py",
     }
     assert changed <= allowed, changed - allowed
 
@@ -1065,27 +1137,152 @@ def test_admission_clock_and_authority_factory_are_structurally_closed() -> None
     assert "clock" not in [arg.arg for arg in admission.args.kwonlyargs]
     assert sum(1 for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_authority_result") == 1
 
+    # The outer try is a straight-line dominance chain.  The clock cannot be
+    # reached until both bounded snapshot acquisition and all non-time evidence
+    # checks return, and its exception is caught by the same zero-authority handler.
+    outer_try = next(node for node in admission.body if isinstance(node, ast.Try))
 
-def test_fresh_process_import_and_execution_never_load_forbidden_modules() -> None:
+    def assigned_name(statement: ast.stmt) -> str | None:
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+            target = statement.targets[0]
+            if isinstance(target, ast.Name):
+                return target.id
+            if isinstance(target, (ast.Tuple, ast.List)):
+                return ",".join(
+                    item.id for item in target.elts if isinstance(item, ast.Name)
+                )
+        return None
+
+    positions = {assigned_name(statement): index for index, statement in enumerate(outer_try.body)}
+    assert positions["snapshot,expected_project_id"] < positions["evidence"] < positions["accepted_time"]
+    clock_statement = outer_try.body[positions["accepted_time"]]
+    assert clock_calls[0] in list(ast.walk(clock_statement))
+    authority_return = next(
+        (index, statement) for index, statement in enumerate(outer_try.body)
+        if isinstance(statement, ast.Return)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+        and statement.value.func.id == "_authority_result"
+    )
+    assert positions["accepted_time"] < authority_return[0]
+    assert len(outer_try.handlers) == 1
+    handler = outer_try.handlers[0]
+    assert isinstance(handler.type, ast.Name) and handler.type.id == "Exception"
+    assert len(handler.body) == 1 and isinstance(handler.body[0], ast.Return)
+    assert isinstance(handler.body[0].value, ast.Call)
+    assert isinstance(handler.body[0].value.func, ast.Name) and handler.body[0].value.func.id == "_invalid"
+
+    verifier = functions["_verify_non_time_evidence"]
+    verifier_calls = [
+        node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+        for node in ast.walk(verifier) if isinstance(node, ast.Call)
+        and isinstance(node.func, (ast.Name, ast.Attribute))
+    ]
+    for required in (
+        "_trusted_allowlist", "_validate_authority", "_validate_decision", "verify",
+        "_sha256", "_parse_association_snapshot",
+    ):
+        assert required in verifier_calls
+
+
+def test_fresh_process_import_and_execution_never_load_forbidden_modules(tmp_path: Path) -> None:
     root = Path(__file__).parents[1]
     dependency_root = Path(cryptography.__file__).parents[1]
+    if sys.platform == "linux":
+        nodev_root = os.environ.get("PHASE_C2_NODEV_ROOT")
+        if not nodev_root:
+            pytest.skip("real Linux capability audit requires PHASE_C2_NODEV_ROOT")
+        capability_root = Path(nodev_root) / f"phase-c2-audit-{os.getpid()}"
+    else:
+        capability_root = tmp_path / "audit-root"
+    project = capability_root / "project"
+    leaf = project / "runs" / RUN_ID / "work" / "association_records.csv"
+    leaf.parent.mkdir(parents=True)
+    snapshot = _csv_bytes()
+    leaf.write_bytes(snapshot)
+    key = Ed25519PrivateKey.generate()
+    authority, authority_hash = _authority(key)
+    decision = _decision(key, authority_hash, snapshot)
+    malformed_snapshot = b",".join([b"x"] * 17) + b"\n"
+    malformed_decision = _decision(key, authority_hash, malformed_snapshot)
+    denylist = {
+        "orchestrator.inspection_workflow.state.store",
+        "orchestrator.inspection_workflow.locking",
+        "orchestrator.inspection_workflow.resume_execution",
+        "orchestrator.inspection_workflow.claim_decision",
+        "orchestrator.inspection_workflow.claim_policy",
+        "orchestrator.inspection_workflow.publication",
+    }
+    denylist.update(
+        ".".join(path.relative_to(root).with_suffix("").parts)
+        for path in root.rglob("*.py") if "manifest" in path.name.lower()
+    )
     code = f"""
 import sys
-events=[]
-sys.addaudithook(lambda event,args: events.append((event,repr(args))) if event in ('import','exec') else None)
+sys.addaudithook(lambda event,args: sys.stdout.write('AUDIT:'+event+':'+str(args[0])+'\\n') if event in ('import','exec') else None)
 sys.path.insert(0,{str(dependency_root)!r})
 sys.path.insert(0,{str(root)!r})
+import base64, ctypes, json, os
 from orchestrator.inspection_review_root_capability import CONTEXT_UNAVAILABLE
 from orchestrator.inspection_review_admission import admit_review_decision
-r=admit_review_decision(project_context=CONTEXT_UNAVAILABLE,expected_run_id='run_001',expected_association_id='ASSOC-1',decision_bytes=b'{{}}',authority_evidence_bytes=b'{{}}',trusted_authority_sha256={{'0'*64}})
-assert r.status == 'review_invalid'
-forbidden=('state.store','inspection_workflow.locking','resume','manifest','publication','claim_decision','claim_policy')
+from orchestrator.inspection_review_root_launcher import establish_review_project_root
+container={str(capability_root)!r}
+if sys.platform == 'win32':
+    from ctypes import wintypes
+    kernel32=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel32.CreateFileW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,wintypes.LPVOID,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
+    kernel32.CreateFileW.restype=wintypes.HANDLE
+    kernel32.CloseHandle.argtypes=[wintypes.HANDLE]
+    trusted=int(kernel32.CreateFileW(container,0x0080|0x00100000,0x00000007,None,3,0x02000000,None))
+else:
+    trusted=os.open(container,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC)
+launcher=establish_review_project_root(trusted_root_handle=trusted,project_components=('project',),expected_project_id={PROJECT_ID!r},project_root={str(project)!r})
+context=launcher._transfer_context_for_local_admission()
+authority=base64.b64decode({base64.b64encode(authority).decode()!r})
+decision=base64.b64decode({base64.b64encode(decision).decode()!r})
+malformed_decision=base64.b64decode({base64.b64encode(malformed_decision).decode()!r})
+trusted_hash={authority_hash!r}
+def admit(ctx=context,run={RUN_ID!r},association={ASSOCIATION_ID!r},payload=decision,allow=None):
+    return admit_review_decision(project_context=ctx,expected_run_id=run,expected_association_id=association,decision_bytes=payload,authority_evidence_bytes=authority,trusted_authority_sha256={{trusted_hash}} if allow is None else allow).status
+branches={{}}
+branches['success']=admit()
+branches['malformed_context']=admit(ctx=CONTEXT_UNAVAILABLE)
+branches['signature']=admit(payload=decision[:-1]+bytes([decision[-1]^1]))
+branches['authority']=admit(allow={{'0'*64}})
+branches['subject']=admit(association='ASSOC-other')
+leaf={str(leaf)!r}
+os.unlink(leaf)
+branches['missing_path']=admit()
+with open(leaf,'wb') as stream: stream.write(b'x'*(8*1024*1024+1))
+branches['byte_limit']=admit()
+with open(leaf,'wb') as stream: stream.write({malformed_snapshot!r})
+branches['csv_width']=admit(payload=malformed_decision)
 loaded=tuple(name.lower() for name in sys.modules)
-assert not any(token in name for token in forbidden for name in loaded),(forbidden,loaded)
-attempted='\\n'.join(text.lower() for _,text in events)
-assert not any(token in attempted for token in forbidden),attempted
+for forbidden in {sorted(denylist)!r}:
+    assert forbidden.lower() not in loaded,(forbidden,loaded)
+print('RESULT:'+json.dumps(branches,sort_keys=True))
+context.close(); launcher.close()
+if sys.platform == 'win32': kernel32.CloseHandle(trusted)
+else: os.close(trusted)
 """
-    subprocess.run([sys.executable, "-I", "-S", "-c", code], cwd=root, check=True)
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-S", "-c", code], cwd=root,
+            check=True, capture_output=True, text=True, timeout=60,
+        )
+    finally:
+        shutil.rmtree(capability_root, ignore_errors=True)
+    audit_lines = [line for line in completed.stdout.splitlines() if line.startswith("AUDIT:")]
+    result_line = next(line for line in completed.stdout.splitlines() if line.startswith("RESULT:"))
+    assert audit_lines
+    attempted = "\n".join(audit_lines).lower()
+    assert not any(module.lower() in attempted for module in denylist), attempted
+    assert json.loads(result_line.removeprefix("RESULT:")) == {
+        "authority": "review_invalid", "byte_limit": "review_invalid",
+        "csv_width": "review_invalid", "malformed_context": "review_invalid",
+        "missing_path": "review_invalid", "signature": "review_invalid",
+        "subject": "review_invalid", "success": "human_verified",
+    }
 
 
 def test_no_path_based_snapshot_open_or_forbidden_dynamic_imports() -> None:

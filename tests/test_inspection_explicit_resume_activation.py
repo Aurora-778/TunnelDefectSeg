@@ -7,13 +7,14 @@ import inspect
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import uuid
 
 import pytest
 
-from test_inspection_artifact_resolver import RUN_ID, _tree_snapshot, completed_run
+from test_inspection_artifact_resolver import RUN_ID, _prepared_task, _tree_snapshot
 
 from orchestrator.inspection_workflow import explicit_resume_admission
 from orchestrator.inspection_workflow import controlled_fs
@@ -27,6 +28,27 @@ from orchestrator.inspection_workflow.explicit_resume_activation import (
 )
 from orchestrator.inspection_workflow.locking import read_active_run_lock
 from orchestrator.state.store import StateStore
+from orchestrator.inspection_workflow.controller import InspectionWorkflowController
+
+
+@pytest.fixture(scope="module")
+def _completed_run_cache(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    container = tmp_path_factory.mktemp("activation-completed-run")
+    root = container / "prepared-run"
+    root.mkdir()
+    request = _prepared_task(root)
+    InspectionWorkflowController.run_prepared_task(root, task_request=request, run_id=RUN_ID)
+    baseline = container / "prepared-run-baseline"
+    shutil.copytree(root, baseline)
+    return root, baseline
+
+
+@pytest.fixture
+def completed_run(_completed_run_cache: tuple[Path, Path]) -> Path:
+    root, baseline = _completed_run_cache
+    shutil.rmtree(root)
+    shutil.copytree(baseline, root)
+    return root
 
 
 def _real_admission(root: Path) -> ExplicitResumeAdmissionResult:

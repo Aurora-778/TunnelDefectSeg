@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -22,14 +23,25 @@ from orchestrator.inspection_workflow.resume_execution_handoff import (
 from orchestrator.state.store import StateStore
 
 
-@pytest.fixture
-def completed_run(tmp_path: Path) -> Path:
-    root = tmp_path / "prepared-run"
+@pytest.fixture(scope="module")
+def completed_run_template(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    container = tmp_path_factory.mktemp("prepared-run-template")
+    root = container / "prepared-run"
     root.mkdir()
     request = _prepared_task(root)
     InspectionWorkflowController.run_prepared_task(
         root, task_request=request, run_id=RUN_ID
     )
+    baseline = container / "prepared-run-baseline"
+    shutil.copytree(root, baseline)
+    return root, baseline
+
+
+@pytest.fixture
+def completed_run(completed_run_template: tuple[Path, Path]) -> Path:
+    root, baseline = completed_run_template
+    shutil.rmtree(root)
+    shutil.copytree(baseline, root)
     return root
 
 
