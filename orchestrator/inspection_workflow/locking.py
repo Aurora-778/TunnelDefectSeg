@@ -1100,6 +1100,126 @@ def acquire_active_run_lock(
         raise
 
 
+def acquire_waiting_review_lock(
+    project_root: Path,
+    *,
+    run_id: str,
+    allocation_token: str,
+    lock_token: str,
+    expected_state_version: int,
+    task_id: str,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Reacquire a running lock for a still-waiting review Run.
+
+    Ordinary ``mark_active_run_running`` is intentionally limited to the
+    genesis ``CREATED`` state.  A review decision is the one later workflow
+    operation that may reacquire a released lock, so it has a separate
+    preflight that binds the fresh lock to the immutable WAITING state cursor.
+    """
+
+    _validate_identifier(run_id, label="run_id")
+    _validate_identifier(task_id, label="task_id")
+    _validate_uuid(allocation_token, label="allocation_token")
+    _validate_uuid(lock_token, label="lock_token")
+    if type(expected_state_version) is not int or expected_state_version < 0:
+        raise ActiveRunLockError("expected review state version is invalid")
+    timestamp = canonical_utc_now() if created_at is None else created_at
+    _validate_timestamp(timestamp, label="review lock created_at")
+
+    root, runs, path = _lock_path(project_root)
+    _reject_recovery_or_release_entries(runs)
+    try:
+        from orchestrator.state.store import StateStore
+
+        state = StateStore(root).load(run_id=run_id)
+    except Exception as exc:
+        raise ActiveRunLockError(
+            "waiting review lock requires a readable canonical State"
+        ) from exc
+    canonical_state = state.get("canonical_state")
+    if (
+        state["run_id"] != run_id
+        or not isinstance(canonical_state, Mapping)
+        or canonical_state.get("allocation_token") != allocation_token
+        or state["status"] != "WAITING_FOR_REVIEW"
+        or state["state_version"] != expected_state_version
+    ):
+        raise ActiveRunLockError(
+            "waiting review lock preflight does not match canonical State"
+        )
+    context = canonical_state.get("context") if isinstance(canonical_state, Mapping) else None
+    if not isinstance(context, Mapping) or context.get("workflow_task_id") != task_id:
+        raise ActiveRunLockError(
+            "waiting review lock task identity does not match canonical State"
+        )
+
+    document = _validate_lock_document(
+        {
+            "schema_version": ACTIVE_RUN_LOCK_SCHEMA_VERSION,
+            "phase": "running",
+            "allocation_token": allocation_token,
+            "reserved_run_id": run_id,
+            "run_id": run_id,
+            "task_id": task_id,
+            "pid": os.getpid(),
+            "hostname": socket.gethostname(),
+            "lock_token": lock_token,
+            "recovery_of_lock_token": None,
+            "recovery_token": None,
+            "recovery_intent_path": None,
+            "recovery_intent_sha256": None,
+            "created_at": timestamp,
+        }
+    )
+    data = _canonical_json_bytes(document)
+    created_identity: tuple[int, int] | None = None
+    created = False
+    try:
+        created_identity = controlled_fs.write_exclusive(
+            root, path.relative_to(root).as_posix(), data
+        )
+        created = True
+        current, current_bytes = _read_lock(path)
+        if (
+            current_bytes != data
+            or current["lock_token"] != lock_token
+            or controlled_fs.file_identity(path) != created_identity
+        ):
+            raise ActiveRunLockError(
+                "waiting review lock changed during acquisition"
+            )
+        latest = StateStore(root).load(run_id=run_id)
+        if (
+            latest["status"] != "WAITING_FOR_REVIEW"
+            or latest["state_version"] != expected_state_version
+            or not isinstance(latest.get("canonical_state"), Mapping)
+            or latest["canonical_state"].get("allocation_token") != allocation_token
+        ):
+            raise ActiveRunLockError(
+                "canonical State changed during waiting review lock acquisition"
+            )
+        _remember_process_owned_lock_snapshot(
+            root,
+            allocation_token=allocation_token,
+            lock_token=lock_token,
+            lock_bytes=current_bytes,
+            lock_identity=created_identity,
+        )
+        return deepcopy(current)
+    except FileExistsError as exc:
+        raise ActiveRunLockError(
+            "a competing Active Run Lock already exists"
+        ) from exc
+    except BaseException as exc:
+        if created:
+            for diagnostic in _cleanup_failed_acquisition(
+                path, runs, data, created_identity, lock_token
+            ):
+                _add_exception_note(exc, diagnostic)
+        raise
+
+
 def _atomic_update_lock(
     project_root: Path,
     *,
