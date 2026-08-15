@@ -68,6 +68,10 @@ contracts remain authoritative; changes to their schemas or reducers are out
 of scope.  The adapter does not import or call Publication, Manifest, Claim
 Policy, or Resume modules; any later integration consumes the committed
 artifact through their existing public contracts.
+The production import graph is also transitive-isolated: importing and
+executing the C-3 entry in a fresh process must not load those modules through
+the ``inspection_workflow`` package initializer or the StateStore dependency
+chain.
 
 Tests must cover success, rejection, malformed/zero-authority admission,
 changed snapshot, changed authority, stale version, competing decision,

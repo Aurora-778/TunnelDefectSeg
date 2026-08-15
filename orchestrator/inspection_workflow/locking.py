@@ -1199,6 +1199,7 @@ def acquire_waiting_review_lock(
             raise ActiveRunLockError(
                 "canonical State changed during waiting review lock acquisition"
             )
+        _reject_recovery_or_release_entries(runs)
         _remember_process_owned_lock_snapshot(
             root,
             allocation_token=allocation_token,

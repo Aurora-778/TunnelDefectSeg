@@ -1,20 +1,40 @@
 import hashlib
 import ast
+import base64
+import csv
+import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import uuid
+from datetime import datetime, timezone
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from orchestrator.inspection_review_admission import ReviewDecisionValidation
+from orchestrator.inspection_review_admission import (
+    ASSOCIATION_PROJECTION_FIELDS,
+    REVIEW_ACTION_SCOPE,
+    REVIEW_AUTHORITY_SCHEMA_VERSION,
+    ReviewDecisionValidation,
+    admit_review_decision,
+    canonical_review_authority_bytes,
+    sign_review_decision,
+)
+from orchestrator.inspection_review_root_launcher import establish_review_project_root
 from orchestrator.inspection_workflow import review_commit
 from orchestrator.inspection_workflow.locking import (
     ActiveRunLockError,
+    ActiveRunRecoveryRequiredError,
     acquire_waiting_review_lock,
     acquire_active_run_lock,
     mark_active_run_running,
+    release_active_run_lock,
 )
-from orchestrator.state.store import StateStore
+from orchestrator.state.store import StateConflictError, StateStore
 
 
 RUN_ID = "run_001"
@@ -24,6 +44,77 @@ TIME = "2026-08-14T12:00:00.000000Z"
 PLAN_SHA = "a" * 64
 DECISION_BYTES = b"canonical signed decision bytes"
 AUTHORITY_BYTES = b"canonical authority evidence bytes"
+
+
+def _real_c2_snapshot() -> bytes:
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(ASSOCIATION_PROJECTION_FIELDS)
+    writer.writerow(["inspection_source_reference_v1", ASSOCIATION_ID, *("x" for _ in range(14))])
+    return output.getvalue().encode("utf-8")
+
+
+def _real_c2_material(snapshot: bytes) -> tuple[bytes, str, bytes]:
+    key = Ed25519PrivateKey.generate()
+    public_key = key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    authority = canonical_review_authority_bytes(
+        {
+            "schema_version": REVIEW_AUTHORITY_SCHEMA_VERSION,
+            "project_id": "c3-test-project",
+            "reviewer_id": "reviewer-01",
+            "key_id": "review-key-01",
+            "public_key_base64url": base64.urlsafe_b64encode(public_key).decode("ascii").rstrip("="),
+            "scopes": [REVIEW_ACTION_SCOPE],
+            "valid_from": "2020-01-01T00:00:00Z",
+            "valid_until": "2099-01-01T00:00:00Z",
+        }
+    )
+    authority_hash = hashlib.sha256(authority).hexdigest()
+    decided_at = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+    decision = sign_review_decision(
+        private_key=key,
+        run_id=RUN_ID,
+        association_id=ASSOCIATION_ID,
+        association_snapshot_sha256=hashlib.sha256(snapshot).hexdigest(),
+        reviewer_id="reviewer-01",
+        authority_evidence_sha256=authority_hash,
+        decided_at=decided_at,
+        decision="accept_association",
+        rationale="Reviewed against the fixed Association snapshot.",
+        key_id="review-key-01",
+    )
+    return authority, authority_hash, decision
+
+
+def _real_windows_context(tmp_path: Path, snapshot: bytes):
+    import ctypes
+    from ctypes import wintypes
+
+    project = tmp_path / "project"
+    leaf = project / "runs" / RUN_ID / "work" / "association_records.csv"
+    leaf.parent.mkdir(parents=True)
+    leaf.write_bytes(snapshot)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    root_handle = kernel32.CreateFileW(
+        str(tmp_path), 0x0080 | 0x00100000, 0x00000007, None, 3, 0x02000000, None
+    )
+    assert int(root_handle) not in (0, -1)
+    launcher = establish_review_project_root(
+        trusted_root_handle=int(root_handle),
+        project_components=("project",),
+        expected_project_id="c3-test-project",
+        project_root=str(project),
+    )
+    return launcher._transfer_context_for_local_admission(), launcher, kernel32, root_handle, project, leaf
 
 
 def _make_validation(status: str) -> ReviewDecisionValidation:
@@ -320,6 +411,196 @@ def test_lock_reacquisition_failure_leaves_artifact_and_zero_result(
     assert (tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json").is_file()
 
 
+@pytest.mark.parametrize("mutation", ["delete", "replace", "same_bytes_replacement"])
+def test_artifact_mutation_after_fresh_lock_is_zero_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    _, lock_token = _waiting_run(tmp_path)
+    real_acquire = review_commit.acquire_waiting_review_lock
+
+    def acquire_then_mutate(project_root: Path, **kwargs: object) -> object:
+        result = real_acquire(project_root, **kwargs)
+        artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
+        if mutation == "delete":
+            artifact.unlink()
+        elif mutation == "same_bytes_replacement":
+            data = artifact.read_bytes()
+            artifact.unlink()
+            artifact.write_bytes(data)
+        else:
+            artifact.write_bytes(b"replaced after fresh lock")
+        return result
+
+    monkeypatch.setattr(review_commit, "acquire_waiting_review_lock", acquire_then_mutate)
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
+    assert result.status == "review_commit_conflict"
+    assert result.denial_codes == ("review_artifact_changed",)
+    assert result.run_id is None
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+
+
+def test_artifact_write_failure_is_zero_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, lock_token = _waiting_run(tmp_path)
+
+    def fail_write(*args: object, **kwargs: object) -> object:
+        raise OSError("artifact write unavailable")
+
+    monkeypatch.setattr(review_commit.controlled_fs, "write_exclusive", fail_write)
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
+    assert result.status == "review_commit_conflict"
+    assert result.denial_codes == ("review_artifact_write_failed",)
+    assert result.run_id is None
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+
+
+def test_state_store_cas_conflict_is_zero_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, lock_token = _waiting_run(tmp_path)
+
+    def fail_transition(*args: object, **kwargs: object) -> object:
+        raise StateConflictError("simulated StateStore CAS conflict")
+
+    monkeypatch.setattr(StateStore, "transition_status", fail_transition)
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
+    assert result.status == "review_commit_conflict"
+    assert result.run_id is None
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+
+
+def test_waiting_lock_reacquisition_rechecks_recovery_residue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allocation_token, lock_token = _waiting_run(tmp_path)
+    release_active_run_lock(
+        tmp_path,
+        run_id=RUN_ID,
+        expected_allocation_token=allocation_token,
+        expected_lock_token=lock_token,
+    )
+    real_load = StateStore.load
+    load_calls = 0
+
+    def load_and_inject_residue(self: StateStore, *args: object, **kwargs: object):
+        nonlocal load_calls
+        result = real_load(self, *args, **kwargs)
+        load_calls += 1
+        if load_calls == 2:
+            (tmp_path / "runs" / ".active_run.recovery.lock").write_bytes(b"recovery")
+        return result
+
+    monkeypatch.setattr(StateStore, "load", load_and_inject_residue)
+    with pytest.raises(ActiveRunRecoveryRequiredError):
+        acquire_waiting_review_lock(
+            tmp_path,
+            run_id=RUN_ID,
+            allocation_token=allocation_token,
+            lock_token=str(uuid.uuid4()),
+            expected_state_version=4,
+            task_id=TASK_ID,
+        )
+
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+    assert (tmp_path / "runs" / ".active_run.recovery.lock").exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="real C2 capability test")
+def test_commit_real_c2_capability_and_revalidation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = _real_c2_snapshot()
+    context, launcher, kernel32, root_handle, project, _ = _real_windows_context(tmp_path, snapshot)
+    try:
+        _, waiting_lock = _waiting_run(project)
+        authority, authority_hash, decision = _real_c2_material(snapshot)
+        real_admit = admit_review_decision
+        first_result: list[ReviewDecisionValidation] = []
+
+        def admit_with_real_c2(**kwargs: object) -> ReviewDecisionValidation:
+            result = real_admit(**kwargs)
+            if not first_result:
+                first_result.append(result)
+            elif result.status == "human_verified":
+                # Keep this integration test deterministic when the two trusted
+                # wall-clock samples cross a second; the production C2 call is
+                # still used for every signature, snapshot, and allowlist check.
+                object.__setattr__(result, "accepted_at", first_result[0].accepted_at)
+            return result
+
+        monkeypatch.setattr(review_commit, "admit_review_decision", admit_with_real_c2)
+        result = review_commit.commit_review_decision(
+            project_root=project,
+            project_context=context,
+            run_id=RUN_ID,
+            association_id=ASSOCIATION_ID,
+            waiting_lock_token=waiting_lock,
+            decision_bytes=decision,
+            authority_evidence_bytes=authority,
+            trusted_authority_sha256={authority_hash},
+        )
+        assert result.status == "review_committed"
+        assert len(first_result) == 1
+        assert StateStore(project).load(run_id=RUN_ID)["status"] == "RUNNING"
+    finally:
+        context.close()
+        launcher.close()
+        kernel32.CloseHandle(root_handle)
+
+
+@pytest.mark.parametrize("mutation", ["authority", "snapshot", "accepted_at"])
+@pytest.mark.skipif(sys.platform != "win32", reason="real C2 capability test")
+def test_real_c2_revalidation_changes_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    snapshot = _real_c2_snapshot()
+    context, launcher, kernel32, root_handle, project, leaf = _real_windows_context(tmp_path, snapshot)
+    try:
+        _, waiting_lock = _waiting_run(project)
+        authority, authority_hash, decision = _real_c2_material(snapshot)
+        real_admit = admit_review_decision
+        calls = 0
+
+        def admit_with_mutation(**kwargs: object) -> ReviewDecisionValidation:
+            nonlocal calls
+            calls += 1
+            call_kwargs = dict(kwargs)
+            if calls == 2 and mutation == "authority":
+                call_kwargs["trusted_authority_sha256"] = {"0" * 64}
+            result = real_admit(**call_kwargs)
+            if calls == 2 and mutation == "snapshot":
+                leaf.write_bytes(snapshot.replace(ASSOCIATION_ID.encode(), b"ASSOC-002"))
+                result = real_admit(**kwargs)
+            if calls == 2 and mutation == "accepted_at" and result.status == "human_verified":
+                object.__setattr__(result, "accepted_at", "2000-01-01T00:00:00Z")
+            return result
+
+        monkeypatch.setattr(review_commit, "admit_review_decision", admit_with_mutation)
+        result = review_commit.commit_review_decision(
+            project_root=project,
+            project_context=context,
+            run_id=RUN_ID,
+            association_id=ASSOCIATION_ID,
+            waiting_lock_token=waiting_lock,
+            decision_bytes=decision,
+            authority_evidence_bytes=authority,
+            trusted_authority_sha256={authority_hash},
+        )
+        assert calls == 2
+        assert result.status == "review_commit_conflict"
+        assert result.denial_codes == ("review_authority_changed",)
+        assert result.run_id is None
+        assert StateStore(project).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+    finally:
+        context.close()
+        launcher.close()
+        kernel32.CloseHandle(root_handle)
+
+
 def test_second_request_after_commit_is_not_a_new_authority_issue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -373,6 +654,48 @@ def test_c3_adapter_has_no_direct_forbidden_module_imports() -> None:
             imported.append((node.module or "").lower())
     forbidden = ("publication", "manifest", "claim", "resume")
     assert not any(any(token in name for token in forbidden) for name in imported)
+
+
+def test_c3_fresh_process_import_and_execution_stays_out_of_forbidden_modules() -> None:
+    root = Path(__file__).parents[1]
+    code = """
+import json, sys, tempfile
+from pathlib import Path
+imports = []
+sys.addaudithook(lambda event, args: imports.append(args[0]) if event == 'import' else None)
+from orchestrator.inspection_workflow.review_commit import commit_review_decision
+with tempfile.TemporaryDirectory() as directory:
+    result = commit_review_decision(
+        project_root=Path(directory),
+        project_context=object(),
+        run_id='run_001',
+        association_id='ASSOC-001',
+        waiting_lock_token='00000000-0000-4000-8000-000000000000',
+        decision_bytes=b'',
+        authority_evidence_bytes=b'',
+        trusted_authority_sha256=frozenset({'0' * 64}),
+    )
+assert result.status == 'review_commit_conflict'
+loaded = sorted(sys.modules)
+for forbidden in ('claim', 'manifest', 'publication', 'resume'):
+    assert not any(forbidden in name.lower() for name in loaded), (forbidden, loaded)
+forbidden_attempts = [name for name in imports if any(
+    forbidden in str(name).lower() for forbidden in ('claim', 'manifest', 'publication', 'resume')
+)]
+assert not forbidden_attempts, forbidden_attempts
+assert imports
+print(json.dumps({'status': result.status, 'loaded': loaded, 'imports': imports}, sort_keys=True))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "review_commit_conflict"
 
 
 def test_accepted_at_is_not_a_callable_api_parameter(tmp_path: Path) -> None:
