@@ -694,7 +694,7 @@ def test_posix_artifact_directory_replacement_after_fresh_lock_is_zero_authority
 
     assert injected
     _assert_zero_authority(result)
-    assert result.denial_codes == ("review_control_entry_unavailable",)
+    assert result.denial_codes == ("review_artifact_changed",)
     assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
     assert journal.read_bytes() == journal_before
     assert not (tmp_path / "runs" / ".active_run.lock").exists()
