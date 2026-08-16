@@ -3,11 +3,14 @@
 ## Purpose
 
 Phase C-3 consumes the authority-bearing result from the isolated Phase C-2
-admission boundary and commits exactly one review decision into an existing
-Run.  This slice is the first Phase C slice allowed to use StateStore and the
-Active Run Lock.  It does not change Claim Policy semantics and it does not
-make `human_verified` evidence into registration, scale, comparability,
-ground-truth, growth, causality, or prediction evidence.
+admission boundary and prepares exactly one Run-local review artifact.  This
+slice is the first Phase C slice allowed to use StateStore and the Active Run
+Lock.  A StateStore transition is available only when a platform can supply a
+mandatory control-entry exclusion; the current adapter creates or reuses the
+artifact, then returns zero authority before CAS.  It does not change Claim
+Policy semantics and it does not make `human_verified` evidence into
+registration, scale, comparability, ground-truth, growth, causality, or
+prediction evidence.
 
 ## Required order
 
@@ -56,17 +59,22 @@ The production commit path is a linearized sequence:
    exclusion and therefore returns zero authority rather than trusting a moved
    `artifacts` descriptor.
 
-   A separate Active Run recovery/release control-entry fence is also required
-   at this exact boundary.  Neither POSIX advisory locks nor Windows directory
-   share modes supply a mandatory exclusion for creation of a sibling control
-   file, so the current production adapter fails closed with zero authority
-   before the pending journal descriptor is opened.  It does not substitute a
+   A separate Active Run recovery/release control-entry fence is acquired
+   before entering `StateStore.transition_status` and remains held through
+   recovery, pending/terminal journal writes, CAS, and verification.  Neither
+   POSIX advisory locks nor Windows directory share modes supply a mandatory
+   exclusion for creation of a sibling control file, so the current production
+   adapter fails closed with zero authority before it can begin StateStore
+   recovery or open a pending journal descriptor.  It does not substitute a
    check-then-use control-entry scan.  C-3 CAS availability is deliberately
    withheld until a platform primitive can prove this exclusion; this is an
    availability restriction, not a StateStore schema/reducer change.
-8. Release the fresh lock only after the CAS result is durably verified.  Any
-   transition or release uncertainty leaves blocking evidence and returns a
-   zero-authority commit result.
+8. Release the fresh lock after the outcome is known.  A future successful CAS
+   path releases it only after durable verification.  Before CAS, any
+   transition or release uncertainty returns zero authority.  After a verified
+   durable CAS, a fence or fresh-lock release failure cannot be reported as a
+   zero-authority retryable outcome: the future lease backend must preserve
+   recoverable blocking evidence, and the committed result remains truthful.
 
 The state transition metadata contains only bounded, canonical review
 bindings and the decision-artifact path/hash.  It never contains raw authority

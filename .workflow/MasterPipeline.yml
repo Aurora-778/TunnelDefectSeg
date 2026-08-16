@@ -1,40 +1,45 @@
 version: '1.0'
-name: phase-c2-linux-native
-displayName: Phase C-2 Linux x86-64 native acceptance
+name: phase-c2-c3-linux-native
+displayName: Phase C-2/C-3 Linux x86-64 native acceptance
 stages:
   - stage:
-    name: phase-c2-native
+    name: phase-c2-c3-native
     displayName: Linux x86-64 native
     steps:
       - step: build@python
-        name: phase-c2-linux-x86-64
-        displayName: Phase C-2 pytest (Linux x86-64)
+        name: phase-c2-c3-linux-x86-64
+        displayName: Phase C-2/C-3 pytest (Linux x86-64)
         pythonVersion: '3.11'
         artifacts:
-          - name: PHASE_C2_NATIVE_LOGS
+          - name: PHASE_C2_C3_NATIVE_LOGS
             path:
               - ./ci-artifacts
         commands:
           - mkdir -p ci-artifacts
           - echo "PHASE_C2_BASELINE=f385cac63549f5453fbf1a5ad698285f9f6cc972" | tee ci-artifacts/phase-c2-identity.log
+          - echo "PHASE_C3_REPAIR_BASE=18d9cc2cb6933ebd58b5509162aaa1227db5314e" | tee ci-artifacts/phase-c3-identity.log
           - echo "GIT_COMMIT=$(git rev-parse HEAD)" | tee -a ci-artifacts/phase-c2-identity.log
+          - echo "GIT_COMMIT=$(git rev-parse HEAD)" | tee -a ci-artifacts/phase-c3-identity.log
           - echo "ARCH=$(uname -m)" | tee -a ci-artifacts/phase-c2-identity.log
+          - echo "ARCH=$(uname -m)" | tee -a ci-artifacts/phase-c3-identity.log
           - test "$(uname -m)" = "x86_64"
           - git fetch --no-tags --depth=50 origin main
           - git merge-base --is-ancestor f385cac63549f5453fbf1a5ad698285f9f6cc972 HEAD
+          - git merge-base --is-ancestor 18d9cc2cb6933ebd58b5509162aaa1227db5314e HEAD
           - python3 -m pip install -r requirements-phase-c.txt
           - mkdir -p /dev/shm/phase-c2-nodev
           - findmnt -no OPTIONS /dev/shm | tee ci-artifacts/phase-c2-nodev-mount.log
           - findmnt -no OPTIONS /dev/shm | grep -Eq '(^|,)nodev(,|$)'
-          - PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -q -p no:cacheprovider | tee ci-artifacts/phase-c2-full.log
-          - PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -k native_linux -q -p no:cacheprovider | tee ci-artifacts/phase-c2-linux-native.log
+          - PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -q -p no:cacheprovider > ci-artifacts/phase-c2-full.log 2>&1; status=$?; cat ci-artifacts/phase-c2-full.log; exit $status
+          - PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -k native_linux -q -p no:cacheprovider > ci-artifacts/phase-c2-linux-native.log 2>&1; status=$?; cat ci-artifacts/phase-c2-linux-native.log; exit $status
+          - python3 -m pytest --rootdir . tests/test_inspection_review_commit.py -q -p no:cacheprovider > ci-artifacts/phase-c3-full.log 2>&1; status=$?; cat ci-artifacts/phase-c3-full.log; exit $status
       - step: publish@general_artifacts
-        name: publish-phase-c2-native-logs
-        displayName: Preserve SHA and pytest logs
-        dependArtifact: PHASE_C2_NATIVE_LOGS
+        name: publish-phase-c2-c3-native-logs
+        displayName: Preserve SHA and C-2/C-3 pytest logs
+        dependArtifact: PHASE_C2_C3_NATIVE_LOGS
         artifactRepository: default
-        artifactName: phase-c2-linux-native-logs
-        dependsOn: phase-c2-linux-x86-64
+        artifactName: phase-c2-c3-linux-native-logs
+        dependsOn: phase-c2-c3-linux-x86-64
 triggers:
   push:
     branches:

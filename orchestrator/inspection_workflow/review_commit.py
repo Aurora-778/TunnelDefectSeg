@@ -1,11 +1,11 @@
-"""Phase C-3 durable review-decision commit adapter.
+"""Phase C-3 review-decision preparation adapter.
 
 This module is the first Phase C layer allowed to cross into the existing
 StateStore and Active Run Lock contracts.  It deliberately keeps the C-2
 admission boundary unchanged: C-2 remains the only code that can turn signed
-bytes into an authority-bearing review validation.  This adapter only
-durably binds that result to a WAITING_FOR_REVIEW Run and performs the
-existing StateStore CAS transition.
+bytes into an authority-bearing review validation.  The current adapter can
+create or reuse an audit artifact, but always returns zero authority before a
+StateStore CAS until a mandatory control-entry exclusion is available.
 """
 
 from __future__ import annotations
@@ -61,6 +61,21 @@ class _ArtifactCommitFenceError(ValueError):
 
 class _ControlEntryCommitFenceError(ValueError):
     """Raised when the Active Run control-entry set cannot remain excluded."""
+
+
+class _ControlEntryCommitFence:
+    """A retained control-entry exclusion lease for a future capable backend.
+
+    Acquisition must happen before ``StateStore.transition_status`` so the
+    lease also covers StateStore recovery.  A concrete backend must retain the
+    exclusion until ``close`` returns after all journal, State, and CAS checks.
+    """
+
+    def verify(self) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -652,16 +667,25 @@ class _ArtifactCommitFence:
             ) from errors[0]
 
 
-def _require_mandatory_control_entry_exclusion() -> None:
-    """Fail closed unless the pending-journal boundary can exclude residues.
+def _acquire_mandatory_control_entry_exclusion(
+    project_root: Path,
+    *,
+    run_id: str,
+    allocation_token: str,
+    lock_token: str,
+) -> _ControlEntryCommitFence:
+    """Acquire a retained exclusion before any StateStore mutation work.
 
     A recovery lock or release tombstone is authority-blocking evidence.  The
     available portable filesystem APIs cannot make a sibling-entry snapshot
     atomic with a StateStore journal append: POSIX has no mandatory sibling
     entry lock, while Windows directory sharing does not stop sibling creates.
     Until a platform-specific mandatory primitive is supplied, this capability
-    gate fails closed before a pending record is opened.
+    gate fails closed before ``StateStore.transition_status`` can begin
+    recovery or open a pending record.
     """
+
+    del project_root, run_id, allocation_token, lock_token
 
     raise _ControlEntryCommitFenceError(
         "mandatory Active Run control-entry exclusion is unavailable"
@@ -739,11 +763,13 @@ def commit_review_decision(
     authority_evidence_bytes: bytes,
     trusted_authority_sha256: object,
 ) -> ReviewCommitResult:
-    """Commit one admitted review while preserving StateStore/lock fencing.
+    """Prepare one admitted review; commit only with a retained control lease.
 
     ``accepted_at`` is intentionally absent from this signature.  It is
     produced by the isolated C-2 admission clock and copied only after that
-    result has been independently checked here.
+    result has been independently checked here.  With the currently available
+    filesystem primitives, this function returns zero authority before any
+    StateStore CAS.
     """
 
     fresh_lock_token: str | None = None
@@ -896,91 +922,127 @@ def commit_review_decision(
                 ):
                     result = _zero("review_commit_conflict", "review_artifact_changed")
                 else:
-                    next_status = "RUNNING" if validation.status == "human_verified" else "BLOCKED"
-                    operation_id = (
-                        f"run:{run_id}:transition:v{expected_state_version}:"
-                        f"WAITING_FOR_REVIEW:{next_status}:decision:{decision_token}"
-                    )
-                    fence = _ArtifactCommitFence(
-                        project_root,
-                        relative,
-                        run_id=run_id,
-                        expected_bytes=artifact_bytes,
-                        expected_identity=artifact_identity,
-                        expected_sha256=artifact_sha256,
-                        expected_token=decision_token,
-                    )
-                    def pre_commit_guard() -> None:
-                        # Keep the artifact-specific denial precise, then fail
-                        # closed before ``os.open(O_APPEND)`` rather than
-                        # treating a returned directory scan as authority.
-                        fence.verify()
-                        _require_mandatory_control_entry_exclusion()
-
                     try:
+                        control_fence = _acquire_mandatory_control_entry_exclusion(
+                            project_root,
+                            run_id=run_id,
+                            allocation_token=allocation_token,
+                            lock_token=fresh_lock_token,
+                        )
+                    except _ControlEntryCommitFenceError:
+                        result = _zero(
+                            "review_commit_conflict",
+                            "review_control_entry_unavailable",
+                        )
+                    else:
+                        fence: _ArtifactCommitFence | None = None
                         try:
-                            mutation = store.transition_status(
-                                run_id=run_id,
-                                expected_lock_token=fresh_lock_token,
-                                expected_status="WAITING_FOR_REVIEW",
-                                expected_state_version=expected_state_version,
-                                operation_id=operation_id,
-                                mutation_timestamp=canonical_utc_now(),
-                                payload={
-                                    "next_status": next_status,
-                                    "metadata": {
-                                        "review_decision_artifact_path": relative,
-                                        "review_decision_artifact_sha256": artifact_sha256,
-                                        "decision_status": validation.status,
-                                        "decision_sha256": validation.decision_sha256,
-                                        "association_snapshot_sha256": validation.association_snapshot_sha256,
-                                        "authority_evidence_sha256": validation.authority_evidence_sha256,
-                                        "reviewer_id": validation.reviewer_id,
-                                        "accepted_at": validation.accepted_at,
-                                        "expected_state_sha256": expected_state_sha256,
-                                    },
-                                    "completion_evidence": None,
-                                    "transition_kind": "decision",
-                                    "decision_token": decision_token,
-                                },
-                                pre_commit_guard=pre_commit_guard,
+                            next_status = "RUNNING" if validation.status == "human_verified" else "BLOCKED"
+                            operation_id = (
+                                f"run:{run_id}:transition:v{expected_state_version}:"
+                                f"WAITING_FOR_REVIEW:{next_status}:decision:{decision_token}"
                             )
-                        except _ArtifactCommitFenceError:
-                            result = _zero("review_commit_conflict", "review_artifact_changed")
-                        except _ControlEntryCommitFenceError:
-                            result = _zero("review_commit_conflict", "review_control_entry_unavailable")
-                        else:
-                            try:
-                                # The exclusion remains live through both journal
-                                # records and canonical-State verification.
+                            fence = _ArtifactCommitFence(
+                                project_root,
+                                relative,
+                                run_id=run_id,
+                                expected_bytes=artifact_bytes,
+                                expected_identity=artifact_identity,
+                                expected_sha256=artifact_sha256,
+                                expected_token=decision_token,
+                            )
+
+                            def pre_commit_guard() -> None:
+                                # The retained control lease covers StateStore
+                                # recovery and this final pending-record boundary.
+                                control_fence.verify()
                                 fence.verify()
-                                _require_mandatory_control_entry_exclusion()
-                                persisted = store.load(run_id=run_id)
-                                expected_result = mutation.get("canonical_state")
-                                if (
-                                    not isinstance(expected_result, Mapping)
-                                    or _plain(expected_result) != _plain(persisted.get("canonical_state"))
-                                    or persisted["state_version"] != expected_state_version + 1
-                                    or persisted["status"] != next_status
-                                ):
-                                    result = _zero("review_commit_conflict", "review_state_commit_unverified")
-                                else:
-                                    result = _success(
-                                        validation,
-                                        relative=relative,
-                                        artifact_sha256=artifact_sha256,
-                                        state_version=persisted["state_version"],
-                                        state_sha256=_state_sha256(persisted),
-                                    )
+
+                            try:
+                                # Fail before StateStore can reconcile an
+                                # unresolved pending record.  The guard repeats
+                                # this check at the pending-write boundary.
+                                control_fence.verify()
+                                fence.verify()
+                                mutation = store.transition_status(
+                                    run_id=run_id,
+                                    expected_lock_token=fresh_lock_token,
+                                    expected_status="WAITING_FOR_REVIEW",
+                                    expected_state_version=expected_state_version,
+                                    operation_id=operation_id,
+                                    mutation_timestamp=canonical_utc_now(),
+                                    payload={
+                                        "next_status": next_status,
+                                        "metadata": {
+                                            "review_decision_artifact_path": relative,
+                                            "review_decision_artifact_sha256": artifact_sha256,
+                                            "decision_status": validation.status,
+                                            "decision_sha256": validation.decision_sha256,
+                                            "association_snapshot_sha256": validation.association_snapshot_sha256,
+                                            "authority_evidence_sha256": validation.authority_evidence_sha256,
+                                            "reviewer_id": validation.reviewer_id,
+                                            "accepted_at": validation.accepted_at,
+                                            "expected_state_sha256": expected_state_sha256,
+                                        },
+                                        "completion_evidence": None,
+                                        "transition_kind": "decision",
+                                        "decision_token": decision_token,
+                                    },
+                                    pre_commit_guard=pre_commit_guard,
+                                )
                             except _ArtifactCommitFenceError:
                                 result = _zero("review_commit_conflict", "review_artifact_changed")
                             except _ControlEntryCommitFenceError:
                                 result = _zero("review_commit_conflict", "review_control_entry_unavailable")
-                    finally:
-                        try:
-                            fence.close()
-                        except _ArtifactCommitFenceError:
-                            result = _zero("review_commit_conflict", "review_commit_guard_cleanup_failed")
+                            else:
+                                try:
+                                    # Both retained exclusions remain live through
+                                    # journal, State, and canonical-State checks.
+                                    control_fence.verify()
+                                    fence.verify()
+                                    persisted = store.load(run_id=run_id)
+                                    expected_result = mutation.get("canonical_state")
+                                    if (
+                                        not isinstance(expected_result, Mapping)
+                                        or _plain(expected_result) != _plain(persisted.get("canonical_state"))
+                                        or persisted["state_version"] != expected_state_version + 1
+                                        or persisted["status"] != next_status
+                                    ):
+                                        result = _zero("review_commit_conflict", "review_state_commit_unverified")
+                                    else:
+                                        result = _success(
+                                            validation,
+                                            relative=relative,
+                                            artifact_sha256=artifact_sha256,
+                                            state_version=persisted["state_version"],
+                                            state_sha256=_state_sha256(persisted),
+                                        )
+                                except _ArtifactCommitFenceError:
+                                    result = _zero("review_commit_conflict", "review_artifact_changed")
+                                except _ControlEntryCommitFenceError:
+                                    result = _zero("review_commit_conflict", "review_control_entry_unavailable")
+                        finally:
+                            cleanup_failed = False
+                            if fence is not None:
+                                try:
+                                    fence.close()
+                                except Exception:
+                                    cleanup_failed = True
+                            try:
+                                control_fence.close()
+                            except Exception:
+                                cleanup_failed = True
+                            # A lease release failure before CAS is a zero-authority
+                            # failure.  After a verified durable CAS, however, the
+                            # state cannot be rolled back; reporting a zero result
+                            # would lie about the committed decision.  A future
+                            # lease backend must therefore make post-CAS release
+                            # idempotent and recoverable without changing the
+                            # already committed result.
+                            if cleanup_failed and (
+                                result is None or result.status != "review_committed"
+                            ):
+                                result = _zero("review_commit_conflict", "review_commit_guard_cleanup_failed")
     except Exception:
         if result is None:
             result = _zero("review_commit_conflict", "review_commit_unavailable")
@@ -994,7 +1056,12 @@ def commit_review_decision(
                     expected_lock_token=fresh_lock_token,
                 )
             except Exception:
-                result = _zero("review_commit_conflict", "review_lock_release_uncertain")
+                # The StateStore transition is already durable.  Do not
+                # disguise an authority-bearing committed state as a retryable
+                # zero-authority failure merely because its post-CAS lock
+                # release is uncertain.
+                if result is None or result.status != "review_committed":
+                    result = _zero("review_commit_conflict", "review_lock_release_uncertain")
     if result is None:
         return _zero("review_commit_conflict", "review_commit_unavailable")
     return result
