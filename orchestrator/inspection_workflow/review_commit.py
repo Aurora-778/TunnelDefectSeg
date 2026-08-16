@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping
+import ctypes
+from ctypes import wintypes
 import hashlib
 import json
 from dataclasses import dataclass
@@ -33,6 +35,7 @@ from .locking import (
     acquire_waiting_review_lock,
     canonical_utc_now,
     release_active_run_lock,
+    validate_active_run_control_entries,
     validate_active_run_lock,
 )
 
@@ -272,9 +275,7 @@ def _same_validation(left: ReviewDecisionValidation, right: ReviewDecisionValida
     )
 
 
-def _read_existing_artifact(
-    root: Path, relative: str, *, run_id: str
-) -> _ArtifactSnapshot | None:
+def _artifact_parts(relative: str, *, run_id: str) -> tuple[str, ...]:
     parts = controlled_fs._parts(relative)
     if (
         len(parts) != 4
@@ -283,68 +284,159 @@ def _read_existing_artifact(
         or parts[2:] != ("artifacts", "review_decision.json")
     ):
         raise ValueError("review artifact path is not fixed")
+    return parts
 
-    def read_descriptor(descriptor: int) -> _ArtifactSnapshot:
-        state = os.fstat(descriptor)
-        if not stat.S_ISREG(state.st_mode):
-            raise ValueError("review artifact is not a regular file")
-        if os.name == "nt":
-            identity = controlled_fs._win_handle_identity(
-                controlled_fs.msvcrt.get_osfhandle(descriptor)
-            )
-        else:
-            identity = (state.st_dev, state.st_ino)
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = os.read(descriptor, 64 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > _MAX_REVIEW_ARTIFACT_BYTES:
-                raise ValueError("review artifact exceeds the bounded size")
-            chunks.append(chunk)
-        after = os.fstat(descriptor)
-        if (after.st_dev, after.st_ino) != (state.st_dev, state.st_ino):
-            raise ValueError("review artifact identity changed during read")
-        if os.name == "nt":
-            after_identity = controlled_fs._win_handle_identity(
-                controlled_fs.msvcrt.get_osfhandle(descriptor)
-            )
-            if after_identity != identity:
-                raise ValueError("review artifact handle identity changed during read")
-        return _ArtifactSnapshot(b"".join(chunks), identity)
 
-    def require_name_binding(parent: int, expected_identity: tuple[int, int]) -> None:
-        """Reject a leaf replacement that raced an otherwise stable read."""
+def _read_artifact_descriptor(descriptor: int) -> _ArtifactSnapshot:
+    """Read one bounded regular-file snapshot through an already-open handle."""
 
-        if os.name == "nt":
-            handle = controlled_fs._nt_open(
-                parent,
-                parts[-1],
-                disposition=controlled_fs._FILE_OPEN,
-                directory=False,
-                access=(
-                    controlled_fs._GENERIC_READ
-                    | controlled_fs._FILE_READ_ATTRIBUTES
-                ),
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    state = os.fstat(descriptor)
+    if not stat.S_ISREG(state.st_mode):
+        raise ValueError("review artifact is not a regular file")
+    if os.name == "nt":
+        identity = controlled_fs._win_handle_identity(
+            controlled_fs.msvcrt.get_osfhandle(descriptor)
+        )
+    else:
+        identity = (state.st_dev, state.st_ino)
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = os.read(descriptor, 64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > _MAX_REVIEW_ARTIFACT_BYTES:
+            raise ValueError("review artifact exceeds the bounded size")
+        chunks.append(chunk)
+    after = os.fstat(descriptor)
+    if (after.st_dev, after.st_ino) != (state.st_dev, state.st_ino):
+        raise ValueError("review artifact identity changed during read")
+    if os.name == "nt":
+        after_identity = controlled_fs._win_handle_identity(
+            controlled_fs.msvcrt.get_osfhandle(descriptor)
+        )
+        if after_identity != identity:
+            raise ValueError("review artifact handle identity changed during read")
+    return _ArtifactSnapshot(b"".join(chunks), identity)
+
+
+def _require_artifact_name_binding(
+    parent: int, leaf: str, expected_identity: tuple[int, int]
+) -> None:
+    """Reject a leaf replacement that raced an otherwise stable read."""
+
+    if os.name == "nt":
+        handle = controlled_fs._nt_open(
+            parent,
+            leaf,
+            disposition=controlled_fs._FILE_OPEN,
+            directory=False,
+            access=controlled_fs._GENERIC_READ | controlled_fs._FILE_READ_ATTRIBUTES,
+        )
+        named_descriptor = controlled_fs._win_fd_or_dispose(handle)
+        try:
+            named_identity = controlled_fs._win_handle_identity(
+                controlled_fs.msvcrt.get_osfhandle(named_descriptor)
             )
-            named_descriptor = controlled_fs._win_fd_or_dispose(handle)
-            try:
-                named_identity = controlled_fs._win_handle_identity(
-                    controlled_fs.msvcrt.get_osfhandle(named_descriptor)
-                )
-            finally:
-                os.close(named_descriptor)
-            if named_identity != expected_identity:
-                raise ValueError("review artifact name changed during read")
-            return
-        entry = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
-        if (
-            not stat.S_ISREG(entry.st_mode)
-            or (entry.st_dev, entry.st_ino) != expected_identity
-        ):
+        finally:
+            os.close(named_descriptor)
+        if named_identity != expected_identity:
             raise ValueError("review artifact name changed during read")
+        return
+    entry = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(entry.st_mode)
+        or (entry.st_dev, entry.st_ino) != expected_identity
+    ):
+        raise ValueError("review artifact name changed during read")
+
+
+def _win_open_artifact_exclusion(parent: int, leaf: str) -> int:
+    """Open one leaf relative to ``parent`` while denying write/delete sharing.
+
+    This deliberately lives in C-3 rather than extending C-2's controlled
+    filesystem import surface.  It mirrors the already-reviewed relative
+    ``NtCreateFile`` primitive and never falls back to a path-based open.
+    """
+
+    if os.name != "nt":
+        raise OSError("Windows artifact exclusion is unavailable")
+    buffer = ctypes.create_unicode_buffer(leaf)
+    encoded = leaf.encode("utf-16-le")
+    unicode_name = controlled_fs._UNICODE_STRING(
+        len(encoded), len(encoded), ctypes.cast(buffer, wintypes.LPWSTR)
+    )
+    attributes = controlled_fs._OBJECT_ATTRIBUTES(
+        ctypes.sizeof(controlled_fs._OBJECT_ATTRIBUTES),
+        wintypes.HANDLE(parent),
+        ctypes.pointer(unicode_name),
+        controlled_fs._OBJ_CASE_INSENSITIVE,
+        None,
+        None,
+    )
+    status_block = controlled_fs._IO_STATUS_BLOCK()
+    handle = wintypes.HANDLE()
+    options = (
+        controlled_fs._FILE_NON_DIRECTORY_FILE
+        | controlled_fs._FILE_SYNCHRONOUS_IO_NONALERT
+        | controlled_fs._FILE_OPEN_REPARSE_POINT
+    )
+    status = controlled_fs._ntdll.NtCreateFile(
+        ctypes.byref(handle),
+        controlled_fs._GENERIC_READ
+        | controlled_fs._FILE_READ_ATTRIBUTES
+        | controlled_fs._SYNCHRONIZE,
+        ctypes.byref(attributes),
+        ctypes.byref(status_block),
+        None,
+        controlled_fs._FILE_ATTRIBUTE_NORMAL,
+        0x00000001,  # FILE_SHARE_READ: deny writes and deletes until release.
+        controlled_fs._FILE_OPEN,
+        options,
+        None,
+        0,
+    )
+    if status < 0:
+        error = int(controlled_fs._ntdll.RtlNtStatusToDosError(status))
+        if error in {2, 3}:
+            raise FileNotFoundError(error, os.strerror(error), leaf)
+        raise OSError(error, os.strerror(error), leaf)
+    value = ctypes.cast(handle, ctypes.c_void_p).value
+    if value is None:
+        raise OSError("Windows artifact exclusion returned no handle")
+    try:
+        controlled_fs._assert_plain_handle(int(value), directory=False)
+    except BaseException:
+        controlled_fs._close_handle(int(value))
+        raise
+    try:
+        # ``controlled_fs._win_fd_or_dispose`` is deliberately write-oriented:
+        # its failure cleanup can mark an unpublished temporary file for
+        # deletion.  This retained exclusion handle is read-only, so transfer
+        # it directly to a read-only CRT descriptor instead.
+        return controlled_fs.msvcrt.open_osfhandle(
+            int(value), os.O_BINARY | os.O_RDONLY
+        )
+    except BaseException:
+        controlled_fs._close_handle(int(value))
+        raise
+
+
+def _read_existing_artifact(
+    root: Path, relative: str, *, run_id: str
+) -> _ArtifactSnapshot | None:
+    parts = _artifact_parts(relative, run_id=run_id)
+
+    def read_bound_descriptor(descriptor: int, parent: int) -> _ArtifactSnapshot:
+        first = _read_artifact_descriptor(descriptor)
+        _require_artifact_name_binding(parent, parts[-1], first.identity)
+        second = _read_artifact_descriptor(descriptor)
+        _require_artifact_name_binding(parent, parts[-1], second.identity)
+        if second != first:
+            raise ValueError("review artifact content changed during read")
+        return second
 
     if os.name == "nt":
         try:
@@ -358,8 +450,7 @@ def _read_existing_artifact(
                 )
                 descriptor = controlled_fs._win_fd_or_dispose(handle)
                 try:
-                    data = read_descriptor(descriptor)
-                    require_name_binding(parent, data.identity)
+                    data = read_bound_descriptor(descriptor, parent)
                 finally:
                     os.close(descriptor)
         except FileNotFoundError:
@@ -375,8 +466,7 @@ def _read_existing_artifact(
             with controlled_fs._posix_parent(Path(root), parts[:-1]) as parent:
                 descriptor = os.open(parts[-1], flags, dir_fd=parent)
                 try:
-                    data = read_descriptor(descriptor)
-                    require_name_binding(parent, data.identity)
+                    data = read_bound_descriptor(descriptor, parent)
                 finally:
                     os.close(descriptor)
         except FileNotFoundError:
@@ -399,36 +489,162 @@ def _artifact_snapshot_matches(
     )
 
 
-def _artifact_commit_fence_matches(
-    root: Path,
-    relative: str,
+def _artifact_snapshot_has_expected_token(
+    snapshot: _ArtifactSnapshot,
     *,
-    run_id: str,
-    expected_bytes: bytes,
-    expected_identity: tuple[int, int],
-    expected_sha256: str,
     expected_token: str,
 ) -> bool:
-    """Re-bind the fixed artifact at the StateStore's final mutation fence."""
-
     try:
-        snapshot = _read_existing_artifact(root, relative, run_id=run_id)
-        if not _artifact_snapshot_matches(
-            snapshot,
-            expected_bytes=expected_bytes,
-            expected_identity=expected_identity,
-            expected_sha256=expected_sha256,
-        ):
-            return False
-        assert snapshot is not None
         payload = json.loads(snapshot.data.decode("utf-8"))
         return (
             type(payload) is dict
             and _canonical_json_bytes(payload) == snapshot.data
             and payload.get("decision_token") == expected_token
         )
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+    except (UnicodeError, ValueError, json.JSONDecodeError):
         return False
+
+
+class _ArtifactCommitFence:
+    """Retain an OS-level exclusion from the pending append through State CAS.
+
+    The first verification occurs *inside* the StateStore journal append
+    primitive.  Windows retains a read-only, no-write/no-delete handle; POSIX
+    temporarily removes write permission from the artifact and its containing
+    directory.  Both variants re-bind the artifact name, canonical bytes,
+    identity, SHA-256, and decision token before the journal write.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        relative: str,
+        *,
+        run_id: str,
+        expected_bytes: bytes,
+        expected_identity: tuple[int, int],
+        expected_sha256: str,
+        expected_token: str,
+    ) -> None:
+        self._root = Path(root)
+        self._parts = _artifact_parts(relative, run_id=run_id)
+        self._expected_bytes = expected_bytes
+        self._expected_identity = expected_identity
+        self._expected_sha256 = expected_sha256
+        self._expected_token = expected_token
+        self._parent_context: Any | None = None
+        self._parent: int | None = None
+        self._descriptor: int | None = None
+        self._leaf_mode: int | None = None
+        self._parent_mode: int | None = None
+
+    def _open(self) -> None:
+        try:
+            if os.name == "nt":
+                self._parent_context = controlled_fs._win_parent(
+                    self._root, self._parts[:-1]
+                )
+                self._parent = self._parent_context.__enter__()
+                self._descriptor = _win_open_artifact_exclusion(
+                    self._parent, self._parts[-1]
+                )
+            else:
+                self._parent_context = controlled_fs._posix_parent(
+                    self._root, self._parts[:-1]
+                )
+                self._parent = self._parent_context.__enter__()
+                flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_NONBLOCK", 0)
+                )
+                self._descriptor = os.open(
+                    self._parts[-1], flags, dir_fd=self._parent
+                )
+                leaf_state = os.fstat(self._descriptor)
+                parent_state = os.fstat(self._parent)
+                if not stat.S_ISREG(leaf_state.st_mode) or not stat.S_ISDIR(parent_state.st_mode):
+                    raise ValueError("review artifact fence requires regular file and directory")
+                self._leaf_mode = stat.S_IMODE(leaf_state.st_mode)
+                self._parent_mode = stat.S_IMODE(parent_state.st_mode)
+                os.fchmod(self._descriptor, self._leaf_mode & ~0o222)
+                os.fchmod(self._parent, self._parent_mode & ~0o222)
+            self._verify_held()
+        except BaseException:
+            try:
+                self.close()
+            except Exception:
+                pass
+            raise
+
+    def _verify_held(self) -> None:
+        if self._descriptor is None or self._parent is None:
+            raise _ArtifactCommitFenceError("review artifact fence is not open")
+        snapshot = _read_artifact_descriptor(self._descriptor)
+        _require_artifact_name_binding(
+            self._parent, self._parts[-1], snapshot.identity
+        )
+        if not _artifact_snapshot_matches(
+            snapshot,
+            expected_bytes=self._expected_bytes,
+            expected_identity=self._expected_identity,
+            expected_sha256=self._expected_sha256,
+        ) or not _artifact_snapshot_has_expected_token(
+            snapshot, expected_token=self._expected_token
+        ):
+            raise _ArtifactCommitFenceError(
+                "review artifact changed before StateStore commit"
+            )
+
+    def verify(self) -> None:
+        try:
+            if self._descriptor is None:
+                self._open()
+            else:
+                self._verify_held()
+        except _ArtifactCommitFenceError:
+            raise
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            raise _ArtifactCommitFenceError(
+                "review artifact cannot be bound at StateStore commit"
+            ) from exc
+
+    def close(self) -> None:
+        errors: list[BaseException] = []
+        descriptor = self._descriptor
+        parent = self._parent
+        self._descriptor = None
+        self._parent = None
+        if os.name != "nt" and descriptor is not None:
+            if self._leaf_mode is not None:
+                try:
+                    os.fchmod(descriptor, self._leaf_mode)
+                except BaseException as exc:
+                    errors.append(exc)
+            if parent is not None and self._parent_mode is not None:
+                try:
+                    os.fchmod(parent, self._parent_mode)
+                except BaseException as exc:
+                    errors.append(exc)
+        self._leaf_mode = None
+        self._parent_mode = None
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except BaseException as exc:
+                errors.append(exc)
+        context = self._parent_context
+        self._parent_context = None
+        if context is not None:
+            try:
+                context.__exit__(None, None, None)
+            except BaseException as exc:
+                errors.append(exc)
+        if errors:
+            raise _ArtifactCommitFenceError(
+                f"review artifact fence cleanup failed: {errors[0]}"
+            ) from errors[0]
 
 
 def _reuse_existing_decision_token(
@@ -664,67 +880,82 @@ def commit_review_decision(
                         f"run:{run_id}:transition:v{expected_state_version}:"
                         f"WAITING_FOR_REVIEW:{next_status}:decision:{decision_token}"
                     )
+                    fence = _ArtifactCommitFence(
+                        project_root,
+                        relative,
+                        run_id=run_id,
+                        expected_bytes=artifact_bytes,
+                        expected_identity=artifact_identity,
+                        expected_sha256=artifact_sha256,
+                        expected_token=decision_token,
+                    )
+
                     def pre_commit_guard() -> None:
-                        if not _artifact_commit_fence_matches(
-                            project_root,
-                            relative,
-                            run_id=run_id,
-                            expected_bytes=artifact_bytes,
-                            expected_identity=artifact_identity,
-                            expected_sha256=artifact_sha256,
-                            expected_token=decision_token,
-                        ):
-                            raise _ArtifactCommitFenceError(
-                                "review artifact changed before StateStore commit"
-                            )
+                        # The lock receipt is non-authority transport evidence;
+                        # close its control-entry set again at the same internal
+                        # journal boundary that acquires the artifact exclusion.
+                        validate_active_run_control_entries(project_root)
+                        fence.verify()
 
                     try:
-                        mutation = store.transition_status(
-                            run_id=run_id,
-                            expected_lock_token=fresh_lock_token,
-                            expected_status="WAITING_FOR_REVIEW",
-                            expected_state_version=expected_state_version,
-                            operation_id=operation_id,
-                            mutation_timestamp=canonical_utc_now(),
-                            payload={
-                                "next_status": next_status,
-                                "metadata": {
-                                    "review_decision_artifact_path": relative,
-                                    "review_decision_artifact_sha256": artifact_sha256,
-                                    "decision_status": validation.status,
-                                    "decision_sha256": validation.decision_sha256,
-                                    "association_snapshot_sha256": validation.association_snapshot_sha256,
-                                    "authority_evidence_sha256": validation.authority_evidence_sha256,
-                                    "reviewer_id": validation.reviewer_id,
-                                    "accepted_at": validation.accepted_at,
-                                    "expected_state_sha256": expected_state_sha256,
+                        try:
+                            mutation = store.transition_status(
+                                run_id=run_id,
+                                expected_lock_token=fresh_lock_token,
+                                expected_status="WAITING_FOR_REVIEW",
+                                expected_state_version=expected_state_version,
+                                operation_id=operation_id,
+                                mutation_timestamp=canonical_utc_now(),
+                                payload={
+                                    "next_status": next_status,
+                                    "metadata": {
+                                        "review_decision_artifact_path": relative,
+                                        "review_decision_artifact_sha256": artifact_sha256,
+                                        "decision_status": validation.status,
+                                        "decision_sha256": validation.decision_sha256,
+                                        "association_snapshot_sha256": validation.association_snapshot_sha256,
+                                        "authority_evidence_sha256": validation.authority_evidence_sha256,
+                                        "reviewer_id": validation.reviewer_id,
+                                        "accepted_at": validation.accepted_at,
+                                        "expected_state_sha256": expected_state_sha256,
+                                    },
+                                    "completion_evidence": None,
+                                    "transition_kind": "decision",
+                                    "decision_token": decision_token,
                                 },
-                                "completion_evidence": None,
-                                "transition_kind": "decision",
-                                "decision_token": decision_token,
-                            },
-                            pre_commit_guard=pre_commit_guard,
-                        )
-                    except _ArtifactCommitFenceError:
-                        result = _zero("review_commit_conflict", "review_artifact_changed")
-                    else:
-                        persisted = store.load(run_id=run_id)
-                        expected_result = mutation.get("canonical_state")
-                        if (
-                            not isinstance(expected_result, Mapping)
-                            or _plain(expected_result) != _plain(persisted.get("canonical_state"))
-                            or persisted["state_version"] != expected_state_version + 1
-                            or persisted["status"] != next_status
-                        ):
-                            result = _zero("review_commit_conflict", "review_state_commit_unverified")
-                        else:
-                            result = _success(
-                                validation,
-                                relative=relative,
-                                artifact_sha256=artifact_sha256,
-                                state_version=persisted["state_version"],
-                                state_sha256=_state_sha256(persisted),
+                                pre_commit_guard=pre_commit_guard,
                             )
+                        except _ArtifactCommitFenceError:
+                            result = _zero("review_commit_conflict", "review_artifact_changed")
+                        else:
+                            try:
+                                # The exclusion remains live through both journal
+                                # records and canonical-State verification.
+                                fence.verify()
+                                persisted = store.load(run_id=run_id)
+                                expected_result = mutation.get("canonical_state")
+                                if (
+                                    not isinstance(expected_result, Mapping)
+                                    or _plain(expected_result) != _plain(persisted.get("canonical_state"))
+                                    or persisted["state_version"] != expected_state_version + 1
+                                    or persisted["status"] != next_status
+                                ):
+                                    result = _zero("review_commit_conflict", "review_state_commit_unverified")
+                                else:
+                                    result = _success(
+                                        validation,
+                                        relative=relative,
+                                        artifact_sha256=artifact_sha256,
+                                        state_version=persisted["state_version"],
+                                        state_sha256=_state_sha256(persisted),
+                                    )
+                            except _ArtifactCommitFenceError:
+                                result = _zero("review_commit_conflict", "review_artifact_changed")
+                    finally:
+                        try:
+                            fence.close()
+                        except _ArtifactCommitFenceError:
+                            result = _zero("review_commit_conflict", "review_artifact_changed")
     except Exception:
         if result is None:
             result = _zero("review_commit_conflict", "review_commit_unavailable")

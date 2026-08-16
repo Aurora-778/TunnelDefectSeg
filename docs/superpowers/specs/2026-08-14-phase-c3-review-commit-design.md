@@ -28,7 +28,15 @@ The production commit path is a linearized sequence:
 5. Reacquire a fresh `running` Active Run Lock only for the same allocation and
    Run whose canonical state is still `WAITING_FOR_REVIEW`.  The re-acquisition
    helper must reject a changed allocation, state version, status, Run ID,
-   existing lock, recovery residue, or non-regular lock entry.
+   existing lock, recovery residue, or non-regular lock entry.  It registers
+   process ownership only with an identity-bound return receipt: the closed
+   recovery/release entry set is checked before and after the final lock
+   identity read, which is the helper's non-authority linearization point.  A
+   residue discovered during receipt finalization identity-cleans the freshly
+   created active lock and leaves only recovery evidence.  C-3 checks the
+   control-entry set again at its authority-bearing StateStore write boundary;
+   a raw filesystem write after receipt publication is therefore never itself
+   authority to transition State.
 6. Re-read the state, re-run the C-2 admission against the same trusted
    capability, and require the complete authority binding (including the
    accepted timestamp) to be byte-for-byte equal to the artifact inputs.  A
@@ -38,10 +46,18 @@ The production commit path is a linearized sequence:
    expected `WAITING_FOR_REVIEW` status, expected state version, fresh lock
    token, and a canonical decision operation token.  `human_verified` resumes
    as `RUNNING`; `human_rejected` becomes `BLOCKED`.  A backwards-compatible
-   StateStore pre-commit guard runs inside the existing mutation lock immediately
-   before any pending journal or canonical-State write.  It re-reads the fixed
-   artifact through the handle-relative reader and requires canonical bytes,
-   decision token, identity, and SHA-256 to remain exact; failure starts no CAS.
+   StateStore pre-commit guard runs inside the actual pending-journal append
+   primitive, after all outer append-entry code has run and immediately before
+   the durable write.  Its first invocation establishes a retained artifact
+   exclusion that lasts through both journal records and canonical-State
+   verification: Windows holds a no-write/no-delete artifact handle; POSIX
+   temporarily removes write permission from the artifact and its containing
+   directory.  It requires canonical bytes, decision token, identity, and
+   SHA-256 to remain exact; an unavailable exclusion, changed artifact, or
+   uncertain read returns zero authority and starts no CAS.  The C-3 guard also
+   rechecks the Active Run recovery/release control-entry set at that same
+   internal write boundary, so residue observed at or before that boundary
+   cannot begin a journal/CAS transition.
 8. Release the fresh lock only after the CAS result is durably verified.  Any
    transition or release uncertainty leaves blocking evidence and returns a
    zero-authority commit result.
@@ -49,6 +65,12 @@ The production commit path is a linearized sequence:
 The state transition metadata contains only bounded, canonical review
 bindings and the decision-artifact path/hash.  It never contains raw authority
 material or a caller-selected acceptance timestamp.
+
+The trusted project capability controls the artifact's permission domain.  The
+temporary exclusion protects ordinary new filesystem opens, deletes, renames,
+and writes during the commit; a caller that can retain a writable descriptor or
+change the project access controls is outside this Phase C-3 filesystem trust
+boundary and must not be treated as an untrusted artifact writer.
 
 ## Replay and conflict rules
 

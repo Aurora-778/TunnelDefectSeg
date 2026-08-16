@@ -35,6 +35,7 @@ from orchestrator.inspection_workflow.locking import (
     mark_active_run_running,
     release_active_run_lock,
 )
+from orchestrator.state import store as state_store
 from orchestrator.state.store import StateConflictError, StateStore
 
 
@@ -476,6 +477,139 @@ def test_artifact_mutation_at_state_commit_fence_is_zero_authority(
     assert not (tmp_path / "runs" / ".active_run.lock").exists()
 
 
+@pytest.mark.parametrize("mutation", ["delete", "replace", "same_bytes_replacement"])
+def test_artifact_mutation_at_pending_journal_append_entry_is_zero_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """The final artifact fence runs inside, not merely before, journal append."""
+
+    _, lock_token = _waiting_run(tmp_path)
+    journal = tmp_path / "runs" / RUN_ID / "state_journal.jsonl"
+    journal_before = journal.read_bytes()
+    real_append = StateStore._append_record
+    injected = False
+
+    def mutate_then_append(self: StateStore, *args: object, **kwargs: object):
+        nonlocal injected
+        record = kwargs.get("record")
+        if record is None and len(args) >= 4:
+            record = args[3]
+        if (
+            not injected
+            and isinstance(record, dict)
+            and record.get("phase") == "pending"
+            and record.get("mutation_kind") == "status_transition"
+        ):
+            injected = True
+            artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
+            if mutation == "delete":
+                artifact.unlink()
+            elif mutation == "same_bytes_replacement":
+                data = artifact.read_bytes()
+                artifact.unlink()
+                artifact.write_bytes(data)
+            else:
+                artifact.write_bytes(b"replaced at pending journal append entry")
+        return real_append(self, *args, **kwargs)
+
+    monkeypatch.setattr(StateStore, "_append_record", mutate_then_append)
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
+    assert injected
+    assert result.status == "review_commit_conflict"
+    assert result.denial_codes == ("review_artifact_changed",)
+    assert result.run_id is None
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+    assert journal.read_bytes() == journal_before
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+
+
+@pytest.mark.parametrize("mutation", ["delete", "replace", "same_bytes_replacement"])
+def test_artifact_fence_excludes_mutation_after_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """The artifact remains protected between final verification and CAS."""
+
+    _, lock_token = _waiting_run(tmp_path)
+    journal = tmp_path / "runs" / RUN_ID / "state_journal.jsonl"
+    journal_before = journal.read_bytes()
+    real_verify = review_commit._ArtifactCommitFence._verify_held
+    injected = False
+
+    def verify_then_mutate(self: object) -> None:
+        nonlocal injected
+        real_verify(self)  # type: ignore[arg-type]
+        if not injected:
+            injected = True
+            artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
+            if mutation == "delete":
+                artifact.unlink()
+            elif mutation == "same_bytes_replacement":
+                data = artifact.read_bytes()
+                artifact.unlink()
+                artifact.write_bytes(data)
+            else:
+                artifact.write_bytes(b"replaced after fence binding")
+
+    monkeypatch.setattr(
+        review_commit._ArtifactCommitFence,
+        "_verify_held",
+        verify_then_mutate,
+    )
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
+    assert injected
+    assert result.status == "review_commit_conflict"
+    assert result.denial_codes == ("review_artifact_changed",)
+    assert result.run_id is None
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+    assert journal.read_bytes() == journal_before
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+
+
+@pytest.mark.parametrize("mutation", ["delete", "replace", "same_bytes_replacement"])
+def test_artifact_fence_blocks_mutation_after_guard_before_journal_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """The guard's exclusion remains live across its return-to-append gap."""
+
+    _, lock_token = _waiting_run(tmp_path)
+    artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
+    journal = tmp_path / "runs" / RUN_ID / "state_journal.jsonl"
+    real_open = state_store.os.open
+    injected = False
+    blocked: OSError | None = None
+
+    def open_after_guard(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal injected, blocked
+        if (
+            not injected
+            and Path(path).absolute() == journal.absolute()
+            and flags & os.O_APPEND
+        ):
+            injected = True
+            try:
+                if mutation == "delete":
+                    artifact.unlink()
+                elif mutation == "same_bytes_replacement":
+                    data = artifact.read_bytes()
+                    artifact.unlink()
+                    artifact.write_bytes(data)
+                else:
+                    artifact.write_bytes(b"replaced after guard before journal open")
+            except OSError as exc:
+                blocked = exc
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(state_store.os, "open", open_after_guard)
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
+    assert injected
+    assert blocked is not None
+    assert result.status == "review_committed"
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "RUNNING"
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX unlink-while-open race")
 def test_artifact_reader_rejects_same_content_leaf_replacement_during_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -500,6 +634,35 @@ def test_artifact_reader_rejects_same_content_leaf_replacement_during_read(
 
     monkeypatch.setattr(review_commit.os, "read", read_then_replace)
     with pytest.raises(ValueError, match="name changed during read"):
+        review_commit._read_existing_artifact(
+            tmp_path,
+            f"runs/{RUN_ID}/artifacts/review_decision.json",
+            run_id=RUN_ID,
+        )
+
+
+def test_artifact_reader_rejects_same_inode_content_rewrite_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Name identity alone cannot authenticate bytes read before an overwrite."""
+
+    artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
+    artifact.parent.mkdir(parents=True)
+    original = b"x" * (2 * 64 * 1024)
+    artifact.write_bytes(original)
+    real_read = review_commit.os.read
+    rewritten = False
+
+    def read_then_rewrite(descriptor: int, size: int) -> bytes:
+        nonlocal rewritten
+        chunk = real_read(descriptor, size)
+        if not rewritten:
+            rewritten = True
+            artifact.write_bytes(b"z" * len(original))
+        return chunk
+
+    monkeypatch.setattr(review_commit.os, "read", read_then_rewrite)
+    with pytest.raises(ValueError, match="content changed during read"):
         review_commit._read_existing_artifact(
             tmp_path,
             f"runs/{RUN_ID}/artifacts/review_decision.json",
@@ -618,6 +781,145 @@ def test_waiting_lock_reacquisition_cleans_residue_after_registration(
             allocation_token=allocation_token,
             lock_token=fresh_lock_token,
         )
+
+
+@pytest.mark.parametrize("kind", ["recovery", "release"])
+def test_waiting_lock_reacquisition_cleans_residue_after_final_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """No post-registration control residue may escape a successful return."""
+
+    allocation_token, lock_token = _waiting_run(tmp_path)
+    release_active_run_lock(
+        tmp_path,
+        run_id=RUN_ID,
+        expected_allocation_token=allocation_token,
+        expected_lock_token=lock_token,
+    )
+    fresh_lock_token = str(uuid.uuid4())
+    real_reject = workflow_locking._reject_recovery_or_release_entries
+    injected = False
+
+    def reject_then_inject(runs: Path, *, allow_owned_state_lock: bool = False) -> None:
+        nonlocal injected
+        real_reject(runs, allow_owned_state_lock=allow_owned_state_lock)
+        if not allow_owned_state_lock and not injected:
+            injected = True
+            if kind == "recovery":
+                target = runs / ".active_run.recovery.lock"
+            else:
+                target = runs / (
+                    f"{workflow_locking.ACTIVE_RUN_RELEASE_PREFIX}{fresh_lock_token}.json"
+                )
+            target.write_bytes(b"post-final-fence residue")
+
+    monkeypatch.setattr(
+        workflow_locking,
+        "_reject_recovery_or_release_entries",
+        reject_then_inject,
+    )
+    with pytest.raises(ActiveRunRecoveryRequiredError):
+        acquire_waiting_review_lock(
+            tmp_path,
+            run_id=RUN_ID,
+            allocation_token=allocation_token,
+            lock_token=fresh_lock_token,
+            expected_state_version=4,
+            task_id=TASK_ID,
+        )
+
+    assert injected
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+    assert not (tmp_path / "runs" / ".active_run.lock").is_file()
+    with pytest.raises(ActiveRunLockError):
+        workflow_locking.read_process_owned_active_run_lock_snapshot(
+            tmp_path,
+            allocation_token=allocation_token,
+            lock_token=fresh_lock_token,
+        )
+
+
+@pytest.mark.parametrize("kind", ["recovery", "release"])
+def test_post_reacquisition_residue_cannot_begin_c3_journal_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A residue arriving after fresh-lock receipt is still zero authority."""
+
+    _, lock_token = _waiting_run(tmp_path)
+    journal = tmp_path / "runs" / RUN_ID / "state_journal.jsonl"
+    journal_before = journal.read_bytes()
+    real_append = StateStore._append_record
+    injected = False
+
+    def inject_then_append(self: StateStore, *args: object, **kwargs: object):
+        nonlocal injected
+        record = kwargs.get("record")
+        if record is None and len(args) >= 4:
+            record = args[3]
+        if (
+            not injected
+            and isinstance(record, dict)
+            and record.get("phase") == "pending"
+            and record.get("mutation_kind") == "status_transition"
+        ):
+            injected = True
+            runs = tmp_path / "runs"
+            if kind == "recovery":
+                target = runs / ".active_run.recovery.lock"
+            else:
+                target = runs / ".active_run.release.post-reacquire.json"
+            target.write_bytes(b"post-reacquisition residue")
+        return real_append(self, *args, **kwargs)
+
+    monkeypatch.setattr(StateStore, "_append_record", inject_then_append)
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
+    assert injected
+    assert result.status == "review_commit_conflict"
+    assert result.run_id is None
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+    assert journal.read_bytes() == journal_before
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+
+
+@pytest.mark.parametrize("kind", ["recovery", "release"])
+def test_residue_after_waiting_lock_receipt_is_zero_before_c3_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A post-receipt residue cannot cross C-3's internal journal boundary."""
+
+    _, lock_token = _waiting_run(tmp_path)
+    journal = tmp_path / "runs" / RUN_ID / "state_journal.jsonl"
+    journal_before = journal.read_bytes()
+    real_finalize = workflow_locking._finalize_waiting_review_lock_acquisition
+    injected = False
+
+    def finalize_then_inject(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal injected
+        receipt = real_finalize(*args, **kwargs)
+        if not injected:
+            injected = True
+            runs = tmp_path / "runs"
+            if kind == "recovery":
+                target = runs / ".active_run.recovery.lock"
+            else:
+                target = runs / ".active_run.release.after-receipt.json"
+            target.write_bytes(b"residue after waiting-lock receipt")
+        return receipt
+
+    monkeypatch.setattr(
+        workflow_locking,
+        "_finalize_waiting_review_lock_acquisition",
+        finalize_then_inject,
+    )
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
+    assert injected
+    assert result.status == "review_commit_conflict"
+    assert result.run_id is None
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+    assert journal.read_bytes() == journal_before
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="real C2 capability test")

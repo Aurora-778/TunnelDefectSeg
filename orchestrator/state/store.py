@@ -1116,6 +1116,8 @@ class StateStore:
         allocation_token: str,
         records: list[dict[str, Any]],
         record: dict[str, Any],
+        *,
+        pre_write_guard: Callable[[], None] | None = None,
     ) -> list[dict[str, Any]]:
         if len(records) >= MAX_STATE_JOURNAL_RECORDS:
             raise StateStoreError("state journal exceeds the A3.1 pilot record limit")
@@ -1144,6 +1146,12 @@ class StateStore:
         descriptor: int | None = None
         primary: BaseException | None = None
         try:
+            # This is the final mutation boundary for the pending journal
+            # record.  Keep an optional external artifact guard inside this
+            # primitive so a caller cannot race it by changing the artifact
+            # between ``StateStore._mutate`` and journal append.
+            if pre_write_guard is not None:
+                pre_write_guard()
             descriptor = os.open(
                 paths["journal"],
                 os.O_CREAT | os.O_APPEND | os.O_WRONLY | _BINARY_FLAG,
@@ -2327,16 +2335,12 @@ class StateStore:
                 payload_sha256=payload_hash,
                 resulting_state_sha256=result_hash,
             )
-            # Callers that need to bind an external immutable artifact can
-            # re-check it only after the StateStore CAS preconditions and
-            # reducer have succeeded, while this mutation lock is held, and
-            # immediately before the pending journal record is written.  This
-            # hook intentionally changes neither the journal schema nor any
-            # reducer semantics.
-            if pre_commit_guard is not None:
-                pre_commit_guard()
             records = self._append_record(
-                run_id, state["allocation_token"], records, pending_record
+                run_id,
+                state["allocation_token"],
+                records,
+                pending_record,
+                pre_write_guard=pre_commit_guard,
             )
             self._atomic_replace(
                 self._paths(run_id)["state"],

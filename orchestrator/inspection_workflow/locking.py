@@ -915,6 +915,7 @@ def _cleanup_failed_acquisition(
         return [
             "failed Active Run Lock publication identity is uncertain; lock was preserved"
         ]
+    root = runs.parent
     tombstone = runs / f"{ACTIVE_RUN_RELEASE_PREFIX}{lock_token}.json"
     isolation_attempted = False
     try:
@@ -927,8 +928,17 @@ def _cleanup_failed_acquisition(
         if current_bytes != expected_bytes:
             return ["failed Active Run Lock ownership bytes changed and were preserved"]
         if _lstat(tombstone, label="failed Active Run Lock tombstone") is not None:
-            return ["failed Active Run Lock tombstone already exists; lock was preserved"]
-        root = runs.parent
+            # A post-publication release tombstone is recovery evidence, not
+            # ownership of this freshly created lock.  The active entry still
+            # has this acquisition's exact bytes and identity, so remove it
+            # directly and leave the tombstone for explicit recovery rather
+            # than returning with both control entries present.
+            controlled_fs.unlink(
+                root,
+                path.relative_to(root).as_posix(),
+                expected_identity=expected_identity,
+            )
+            return diagnostics
         isolation_attempted = True
         controlled_fs.rename(
             root,
@@ -988,6 +998,39 @@ def _remember_process_owned_lock_snapshot(
     key = _owned_lock_key(project_root, allocation_token, lock_token)
     _PROCESS_OWNED_ACTIVE_RUN_LOCK_IDENTITIES.add(key)
     _PROCESS_OWNED_ACTIVE_RUN_LOCK_SNAPSHOTS[key] = (lock_bytes, lock_identity)
+
+
+def _finalize_waiting_review_lock_acquisition(
+    root: Path,
+    runs: Path,
+    path: Path,
+    *,
+    allocation_token: str,
+    lock_token: str,
+    expected_bytes: bytes,
+    expected_identity: tuple[int, int],
+) -> dict[str, Any]:
+    """Publish a return receipt only while lock identity and control entries agree.
+
+    The first check closes the post-registration interval.  The second check,
+    after the final lock identity re-read, is this non-authority helper's
+    linearization point.  C-3 rechecks control entries again at its internal
+    StateStore mutation boundary before it can create authority-bearing state.
+    """
+
+    _reject_recovery_or_release_entries(runs)
+    current, current_bytes = _read_lock(path)
+    if (
+        current_bytes != expected_bytes
+        or current["allocation_token"] != allocation_token
+        or current["lock_token"] != lock_token
+        or controlled_fs.file_identity(path) != expected_identity
+    ):
+        raise ActiveRunLockError(
+            "waiting review lock changed before acquisition receipt publication"
+        )
+    _reject_recovery_or_release_entries(runs)
+    return deepcopy(current)
 
 
 def read_process_owned_active_run_lock_snapshot(
@@ -1257,7 +1300,15 @@ def acquire_waiting_review_lock(
         # below identity-cleans the newly created lock before propagating that
         # failure.
         _reject_recovery_or_release_entries(runs)
-        return acquired
+        return _finalize_waiting_review_lock_acquisition(
+            root,
+            runs,
+            path,
+            allocation_token=allocation_token,
+            lock_token=lock_token,
+            expected_bytes=current_bytes,
+            expected_identity=created_identity,
+        )
     except FileExistsError as exc:
         raise ActiveRunLockError(
             "a competing Active Run Lock already exists"
