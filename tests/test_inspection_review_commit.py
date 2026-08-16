@@ -271,30 +271,45 @@ def _call(root: Path, lock_token: str, *, monkeypatch: pytest.MonkeyPatch, statu
     )
 
 
-@pytest.mark.parametrize(
-    ("decision_status", "expected_status"),
-    [("human_verified", "RUNNING"), ("human_rejected", "BLOCKED")],
-)
-def test_commit_review_decision_persists_artifact_and_cas_transitions(
+def _assert_zero_authority(result: review_commit.ReviewCommitResult) -> None:
+    assert result.status != "review_committed"
+    assert result.denial_codes
+    assert all(
+        getattr(result, name) is None
+        for name in (
+            "artifact_path",
+            "artifact_sha256",
+            "decision_status",
+            "decision_sha256",
+            "association_snapshot_sha256",
+            "authority_evidence_sha256",
+            "run_id",
+            "association_id",
+            "reviewer_id",
+            "accepted_at",
+            "next_status",
+            "state_version",
+            "state_sha256",
+        )
+    )
+
+
+@pytest.mark.parametrize("decision_status", ["human_verified", "human_rejected"])
+def test_commit_review_decision_fails_closed_without_mandatory_control_exclusion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     decision_status: str,
-    expected_status: str,
 ) -> None:
     _, lock_token = _waiting_run(tmp_path)
     result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status=decision_status)
-    assert result.status == "review_committed"
-    assert result.decision_status == decision_status
-    assert result.next_status == expected_status
-    assert result.state_version == 5
-    assert result.artifact_path == f"runs/{RUN_ID}/artifacts/review_decision.json"
-    artifact = tmp_path / result.artifact_path
+    _assert_zero_authority(result)
+    artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
     assert artifact.is_file()
     payload = json.loads(artifact.read_bytes())
     assert payload["decision_status"] == decision_status
     assert "manifest" not in json.dumps(payload).lower()
     state = StateStore(tmp_path).load(run_id=RUN_ID)
-    assert state["status"] == expected_status
+    assert state["status"] == "WAITING_FOR_REVIEW"
     assert not (tmp_path / "runs" / ".active_run.lock").exists()
 
 
@@ -567,47 +582,122 @@ def test_artifact_fence_excludes_mutation_after_binding(
     assert not (tmp_path / "runs" / ".active_run.lock").exists()
 
 
-@pytest.mark.parametrize("mutation", ["delete", "replace", "same_bytes_replacement"])
-def test_artifact_fence_blocks_mutation_after_guard_before_journal_open(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+@pytest.mark.parametrize("kind", ["recovery", "release"])
+def test_control_entry_capability_gate_stops_before_pending_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
-    """The guard's exclusion remains live across its return-to-append gap."""
+    """No platform can reach the raw residue-injection seam without a fence."""
 
     _, lock_token = _waiting_run(tmp_path)
-    artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
     journal = tmp_path / "runs" / RUN_ID / "state_journal.jsonl"
+    journal_before = journal.read_bytes()
     real_open = state_store.os.open
     injected = False
-    blocked: OSError | None = None
+    target: Path | None = None
 
     def open_after_guard(path: object, flags: int, *args: object, **kwargs: object) -> int:
-        nonlocal injected, blocked
+        nonlocal injected, target
         if (
             not injected
             and Path(path).absolute() == journal.absolute()
             and flags & os.O_APPEND
         ):
             injected = True
-            try:
-                if mutation == "delete":
-                    artifact.unlink()
-                elif mutation == "same_bytes_replacement":
-                    data = artifact.read_bytes()
-                    artifact.unlink()
-                    artifact.write_bytes(data)
-                else:
-                    artifact.write_bytes(b"replaced after guard before journal open")
-            except OSError as exc:
-                blocked = exc
+            runs = tmp_path / "runs"
+            if kind == "recovery":
+                target = runs / ".active_run.recovery.lock"
+            else:
+                target = runs / ".active_run.release.after-guard.json"
+            target.write_bytes(b"residue at pending journal open")
         return real_open(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(state_store.os, "open", open_after_guard)
     result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
 
+    # A platform without a mandatory cross-entry exclusion never opens the
+    # pending journal.  The test hook is deliberately unreachable: allowing it
+    # to run would reintroduce the uncloseable guard-to-open race.
+    assert not injected
+    assert target is None
+    _assert_zero_authority(result)
+    assert result.denial_codes == ("review_control_entry_unavailable",)
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+    assert journal.read_bytes() == journal_before
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+
+
+@pytest.mark.parametrize("changed_index", range(4))
+def test_artifact_fence_rejects_each_pinned_ancestor_identity_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_index: int
+) -> None:
+    """A future capable backend must not validate only a moved artifacts FD."""
+
+    relative = f"runs/{RUN_ID}/artifacts/review_decision.json"
+    fence = review_commit._ArtifactCommitFence(
+        tmp_path,
+        relative,
+        run_id=RUN_ID,
+        expected_bytes=b"artifact",
+        expected_identity=(1, 2),
+        expected_sha256=hashlib.sha256(b"artifact").hexdigest(),
+        expected_token=str(uuid.uuid4()),
+    )
+    expected = tuple((index + 1, index + 101) for index in range(4))
+    observed = list(expected)
+    observed[changed_index] = (999, changed_index)
+    fence._ancestor_identities = expected
+
+    def fake_directory_identity(path: Path) -> tuple[int, int]:
+        return observed[fence._ancestor_paths.index(path)]
+
+    monkeypatch.setattr(
+        review_commit.controlled_fs, "directory_identity", fake_directory_identity
+    )
+    with pytest.raises(
+        review_commit._ArtifactCommitFenceError,
+        match="ancestor changed during commit",
+    ):
+        fence._verify_ancestor_bindings()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX ancestor-swap regression")
+@pytest.mark.parametrize("replacement", ["delete", "different_bytes", "same_bytes_new_inode"])
+def test_posix_artifact_directory_replacement_after_fresh_lock_is_zero_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str
+) -> None:
+    """A whole ``artifacts`` directory replacement can never authorize CAS."""
+
+    _, lock_token = _waiting_run(tmp_path)
+    journal = tmp_path / "runs" / RUN_ID / "state_journal.jsonl"
+    journal_before = journal.read_bytes()
+    real_acquire = review_commit.acquire_waiting_review_lock
+    injected = False
+
+    def acquire_then_replace(project_root: Path, **kwargs: object) -> object:
+        nonlocal injected
+        receipt = real_acquire(project_root, **kwargs)
+        injected = True
+        artifacts = tmp_path / "runs" / RUN_ID / "artifacts"
+        moved = artifacts.with_name("artifacts.replaced")
+        original = (artifacts / "review_decision.json").read_bytes()
+        artifacts.rename(moved)
+        if replacement != "delete":
+            artifacts.mkdir()
+            leaf = artifacts / "review_decision.json"
+            leaf.write_bytes(
+                original if replacement == "same_bytes_new_inode" else b"different artifact directory"
+            )
+        return receipt
+
+    monkeypatch.setattr(review_commit, "acquire_waiting_review_lock", acquire_then_replace)
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
     assert injected
-    assert blocked is not None
-    assert result.status == "review_committed"
-    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "RUNNING"
+    _assert_zero_authority(result)
+    assert result.denial_codes == ("review_control_entry_unavailable",)
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+    assert journal.read_bytes() == journal_before
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX unlink-while-open race")
@@ -956,9 +1046,9 @@ def test_commit_real_c2_capability_and_revalidation(
             authority_evidence_bytes=authority,
             trusted_authority_sha256={authority_hash},
         )
-        assert result.status == "review_committed"
+        _assert_zero_authority(result)
         assert len(first_result) == 1
-        assert StateStore(project).load(run_id=RUN_ID)["status"] == "RUNNING"
+        assert StateStore(project).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
     finally:
         context.close()
         launcher.close()
@@ -1014,16 +1104,16 @@ def test_real_c2_revalidation_changes_fail_closed(
         kernel32.CloseHandle(root_handle)
 
 
-def test_second_request_after_commit_is_not_a_new_authority_issue(
+def test_repeated_request_without_mandatory_control_exclusion_is_zero_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, lock_token = _waiting_run(tmp_path)
     first = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
-    assert first.status == "review_committed"
+    _assert_zero_authority(first)
     second = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
     assert second.status == "review_commit_conflict"
     assert second.run_id is None
-    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "RUNNING"
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
 
 
 def test_crash_residue_reuses_only_the_internal_decision_token(
@@ -1052,8 +1142,8 @@ def test_crash_residue_reuses_only_the_internal_decision_token(
     )
     monkeypatch.setattr(StateStore, "transition_status", real_transition)
     second = _call(tmp_path, retry_lock, monkeypatch=monkeypatch, status="human_verified")
-    assert second.status == "review_committed"
-    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "RUNNING"
+    _assert_zero_authority(second)
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
 
 
 def test_c3_adapter_has_no_direct_forbidden_module_imports() -> None:

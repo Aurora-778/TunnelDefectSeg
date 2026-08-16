@@ -35,7 +35,6 @@ from .locking import (
     acquire_waiting_review_lock,
     canonical_utc_now,
     release_active_run_lock,
-    validate_active_run_control_entries,
     validate_active_run_lock,
 )
 
@@ -58,6 +57,10 @@ class _ArtifactSnapshot:
 
 class _ArtifactCommitFenceError(ValueError):
     """Raised when the artifact cannot be bound at the StateStore commit fence."""
+
+
+class _ControlEntryCommitFenceError(ValueError):
+    """Raised when the Active Run control-entry set cannot remain excluded."""
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -509,10 +512,10 @@ class _ArtifactCommitFence:
     """Retain an OS-level exclusion from the pending append through State CAS.
 
     The first verification occurs *inside* the StateStore journal append
-    primitive.  Windows retains a read-only, no-write/no-delete handle; POSIX
-    temporarily removes write permission from the artifact and its containing
-    directory.  Both variants re-bind the artifact name, canonical bytes,
-    identity, SHA-256, and decision token before the journal write.
+    primitive.  Windows retains a read-only, no-write/no-delete handle and
+    rechecks every canonical ancestor.  POSIX has no equivalent mandatory
+    directory-entry exclusion, so it refuses an authority-bearing commit
+    rather than trusting a moved ``artifacts`` descriptor.
     """
 
     def __init__(
@@ -526,7 +529,7 @@ class _ArtifactCommitFence:
         expected_sha256: str,
         expected_token: str,
     ) -> None:
-        self._root = Path(root)
+        self._root = Path(root).absolute()
         self._parts = _artifact_parts(relative, run_id=run_id)
         self._expected_bytes = expected_bytes
         self._expected_identity = expected_identity
@@ -535,41 +538,49 @@ class _ArtifactCommitFence:
         self._parent_context: Any | None = None
         self._parent: int | None = None
         self._descriptor: int | None = None
-        self._leaf_mode: int | None = None
-        self._parent_mode: int | None = None
+        current = self._root
+        paths = [current]
+        for part in self._parts[:-1]:
+            current = current / part
+            paths.append(current)
+        self._ancestor_paths = tuple(paths)
+        self._ancestor_identities: tuple[tuple[int, int], ...] | None = None
+
+    def _capture_ancestor_identities(self) -> None:
+        self._ancestor_identities = tuple(
+            controlled_fs.directory_identity(path) for path in self._ancestor_paths
+        )
+
+    def _verify_ancestor_bindings(self) -> None:
+        expected = self._ancestor_identities
+        if expected is None or len(expected) != len(self._ancestor_paths):
+            raise _ArtifactCommitFenceError("review artifact ancestor binding is unavailable")
+        observed = tuple(
+            controlled_fs.directory_identity(path) for path in self._ancestor_paths
+        )
+        if observed != expected:
+            raise _ArtifactCommitFenceError("review artifact ancestor changed during commit")
+        if self._parent is not None and controlled_fs._win_handle_identity(self._parent) != expected[-1]:
+            raise _ArtifactCommitFenceError("review artifact directory handle changed during commit")
 
     def _open(self) -> None:
         try:
-            if os.name == "nt":
-                self._parent_context = controlled_fs._win_parent(
-                    self._root, self._parts[:-1]
+            self._capture_ancestor_identities()
+            if os.name != "nt":
+                raise _ArtifactCommitFenceError(
+                    "POSIX lacks mandatory artifact-ancestor exclusion"
                 )
-                self._parent = self._parent_context.__enter__()
-                self._descriptor = _win_open_artifact_exclusion(
-                    self._parent, self._parts[-1]
+            self._parent_context = controlled_fs._win_parent(
+                self._root, self._parts[:-1]
+            )
+            self._parent = self._parent_context.__enter__()
+            if controlled_fs._win_handle_identity(self._parent) != self._ancestor_identities[-1]:
+                raise _ArtifactCommitFenceError(
+                    "review artifact ancestor handle changed during commit"
                 )
-            else:
-                self._parent_context = controlled_fs._posix_parent(
-                    self._root, self._parts[:-1]
-                )
-                self._parent = self._parent_context.__enter__()
-                flags = (
-                    os.O_RDONLY
-                    | getattr(os, "O_CLOEXEC", 0)
-                    | getattr(os, "O_NOFOLLOW", 0)
-                    | getattr(os, "O_NONBLOCK", 0)
-                )
-                self._descriptor = os.open(
-                    self._parts[-1], flags, dir_fd=self._parent
-                )
-                leaf_state = os.fstat(self._descriptor)
-                parent_state = os.fstat(self._parent)
-                if not stat.S_ISREG(leaf_state.st_mode) or not stat.S_ISDIR(parent_state.st_mode):
-                    raise ValueError("review artifact fence requires regular file and directory")
-                self._leaf_mode = stat.S_IMODE(leaf_state.st_mode)
-                self._parent_mode = stat.S_IMODE(parent_state.st_mode)
-                os.fchmod(self._descriptor, self._leaf_mode & ~0o222)
-                os.fchmod(self._parent, self._parent_mode & ~0o222)
+            self._descriptor = _win_open_artifact_exclusion(
+                self._parent, self._parts[-1]
+            )
             self._verify_held()
         except BaseException:
             try:
@@ -581,6 +592,7 @@ class _ArtifactCommitFence:
     def _verify_held(self) -> None:
         if self._descriptor is None or self._parent is None:
             raise _ArtifactCommitFenceError("review artifact fence is not open")
+        self._verify_ancestor_bindings()
         snapshot = _read_artifact_descriptor(self._descriptor)
         _require_artifact_name_binding(
             self._parent, self._parts[-1], snapshot.identity
@@ -605,7 +617,13 @@ class _ArtifactCommitFence:
                 self._verify_held()
         except _ArtifactCommitFenceError:
             raise
-        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        except (
+            OSError,
+            UnicodeError,
+            ValueError,
+            json.JSONDecodeError,
+            controlled_fs.ControlledFilesystemError,
+        ) as exc:
             raise _ArtifactCommitFenceError(
                 "review artifact cannot be bound at StateStore commit"
             ) from exc
@@ -613,22 +631,9 @@ class _ArtifactCommitFence:
     def close(self) -> None:
         errors: list[BaseException] = []
         descriptor = self._descriptor
-        parent = self._parent
         self._descriptor = None
         self._parent = None
-        if os.name != "nt" and descriptor is not None:
-            if self._leaf_mode is not None:
-                try:
-                    os.fchmod(descriptor, self._leaf_mode)
-                except BaseException as exc:
-                    errors.append(exc)
-            if parent is not None and self._parent_mode is not None:
-                try:
-                    os.fchmod(parent, self._parent_mode)
-                except BaseException as exc:
-                    errors.append(exc)
-        self._leaf_mode = None
-        self._parent_mode = None
+        self._ancestor_identities = None
         if descriptor is not None:
             try:
                 os.close(descriptor)
@@ -645,6 +650,22 @@ class _ArtifactCommitFence:
             raise _ArtifactCommitFenceError(
                 f"review artifact fence cleanup failed: {errors[0]}"
             ) from errors[0]
+
+
+def _require_mandatory_control_entry_exclusion() -> None:
+    """Fail closed unless the pending-journal boundary can exclude residues.
+
+    A recovery lock or release tombstone is authority-blocking evidence.  The
+    available portable filesystem APIs cannot make a sibling-entry snapshot
+    atomic with a StateStore journal append: POSIX has no mandatory sibling
+    entry lock, while Windows directory sharing does not stop sibling creates.
+    Until a platform-specific mandatory primitive is supplied, this capability
+    gate fails closed before a pending record is opened.
+    """
+
+    raise _ControlEntryCommitFenceError(
+        "mandatory Active Run control-entry exclusion is unavailable"
+    )
 
 
 def _reuse_existing_decision_token(
@@ -889,13 +910,12 @@ def commit_review_decision(
                         expected_sha256=artifact_sha256,
                         expected_token=decision_token,
                     )
-
                     def pre_commit_guard() -> None:
-                        # The lock receipt is non-authority transport evidence;
-                        # close its control-entry set again at the same internal
-                        # journal boundary that acquires the artifact exclusion.
-                        validate_active_run_control_entries(project_root)
+                        # Keep the artifact-specific denial precise, then fail
+                        # closed before ``os.open(O_APPEND)`` rather than
+                        # treating a returned directory scan as authority.
                         fence.verify()
+                        _require_mandatory_control_entry_exclusion()
 
                     try:
                         try:
@@ -927,11 +947,14 @@ def commit_review_decision(
                             )
                         except _ArtifactCommitFenceError:
                             result = _zero("review_commit_conflict", "review_artifact_changed")
+                        except _ControlEntryCommitFenceError:
+                            result = _zero("review_commit_conflict", "review_control_entry_unavailable")
                         else:
                             try:
                                 # The exclusion remains live through both journal
                                 # records and canonical-State verification.
                                 fence.verify()
+                                _require_mandatory_control_entry_exclusion()
                                 persisted = store.load(run_id=run_id)
                                 expected_result = mutation.get("canonical_state")
                                 if (
@@ -951,11 +974,13 @@ def commit_review_decision(
                                     )
                             except _ArtifactCommitFenceError:
                                 result = _zero("review_commit_conflict", "review_artifact_changed")
+                            except _ControlEntryCommitFenceError:
+                                result = _zero("review_commit_conflict", "review_control_entry_unavailable")
                     finally:
                         try:
                             fence.close()
                         except _ArtifactCommitFenceError:
-                            result = _zero("review_commit_conflict", "review_artifact_changed")
+                            result = _zero("review_commit_conflict", "review_commit_guard_cleanup_failed")
     except Exception:
         if result is None:
             result = _zero("review_commit_conflict", "review_commit_unavailable")
