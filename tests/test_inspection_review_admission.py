@@ -1108,6 +1108,7 @@ def test_phase_c2_exact_diff_stays_inside_reviewed_scope() -> None:
         "orchestrator/inspection_workflow/locking.py",
         "orchestrator/inspection_workflow/review_commit.py",
         "orchestrator/inspection_workflow/review_decision.py",
+        "orchestrator/state/store.py",
         "docs/superpowers/specs/2026-08-14-phase-c3-review-commit-design.md",
         "tests/test_inspection_review_admission.py",
         "tests/test_inspection_review_commit.py",

@@ -7,7 +7,7 @@ registry, CLI, or publication flow in A3.1.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
@@ -2230,6 +2230,7 @@ class StateStore:
         mutation_kind: str,
         payload: Mapping[str, Any],
         reducer: Any,
+        pre_commit_guard: Callable[[], None] | None = None,
     ) -> StateMutationResult:
         _validate_operation_id(operation_id)
         if not isinstance(expected_status, str) or expected_status not in STATUSES:
@@ -2241,6 +2242,8 @@ class StateStore:
             _validate_timestamp(mutation_timestamp, label="mutation_timestamp")
         except ActiveRunLockError as exc:
             raise StateStoreError(str(exc)) from exc
+        if pre_commit_guard is not None and not callable(pre_commit_guard):
+            raise StateStoreError("pre_commit_guard must be callable or null")
         payload_hash = _sha256(_canonical_json_bytes(payload))
         with self._state_lock(run_id):
             state, records = self._recover_unfinished_operations_locked(
@@ -2324,6 +2327,14 @@ class StateStore:
                 payload_sha256=payload_hash,
                 resulting_state_sha256=result_hash,
             )
+            # Callers that need to bind an external immutable artifact can
+            # re-check it only after the StateStore CAS preconditions and
+            # reducer have succeeded, while this mutation lock is held, and
+            # immediately before the pending journal record is written.  This
+            # hook intentionally changes neither the journal schema nor any
+            # reducer semantics.
+            if pre_commit_guard is not None:
+                pre_commit_guard()
             records = self._append_record(
                 run_id, state["allocation_token"], records, pending_record
             )
@@ -2467,6 +2478,7 @@ class StateStore:
         operation_id: str,
         mutation_timestamp: str,
         payload: Mapping[str, Any],
+        pre_commit_guard: Callable[[], None] | None = None,
     ) -> StateMutationResult:
         state, _ = self._read_state(run_id)
         normalized = self._validate_transition_payload(
@@ -2487,4 +2499,5 @@ class StateStore:
             mutation_kind="status_transition",
             payload=normalized,
             reducer=self._reduce_transition,
+            pre_commit_guard=pre_commit_guard,
         )

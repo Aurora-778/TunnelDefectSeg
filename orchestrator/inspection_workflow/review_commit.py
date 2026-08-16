@@ -53,6 +53,10 @@ class _ArtifactSnapshot:
     identity: tuple[int, int]
 
 
+class _ArtifactCommitFenceError(ValueError):
+    """Raised when the artifact cannot be bound at the StateStore commit fence."""
+
+
 def _canonical_json_bytes(value: Any) -> bytes:
     return (
         json.dumps(
@@ -311,6 +315,37 @@ def _read_existing_artifact(
                 raise ValueError("review artifact handle identity changed during read")
         return _ArtifactSnapshot(b"".join(chunks), identity)
 
+    def require_name_binding(parent: int, expected_identity: tuple[int, int]) -> None:
+        """Reject a leaf replacement that raced an otherwise stable read."""
+
+        if os.name == "nt":
+            handle = controlled_fs._nt_open(
+                parent,
+                parts[-1],
+                disposition=controlled_fs._FILE_OPEN,
+                directory=False,
+                access=(
+                    controlled_fs._GENERIC_READ
+                    | controlled_fs._FILE_READ_ATTRIBUTES
+                ),
+            )
+            named_descriptor = controlled_fs._win_fd_or_dispose(handle)
+            try:
+                named_identity = controlled_fs._win_handle_identity(
+                    controlled_fs.msvcrt.get_osfhandle(named_descriptor)
+                )
+            finally:
+                os.close(named_descriptor)
+            if named_identity != expected_identity:
+                raise ValueError("review artifact name changed during read")
+            return
+        entry = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(entry.st_mode)
+            or (entry.st_dev, entry.st_ino) != expected_identity
+        ):
+            raise ValueError("review artifact name changed during read")
+
     if os.name == "nt":
         try:
             with controlled_fs._win_parent(Path(root), parts[:-1]) as parent:
@@ -324,6 +359,7 @@ def _read_existing_artifact(
                 descriptor = controlled_fs._win_fd_or_dispose(handle)
                 try:
                     data = read_descriptor(descriptor)
+                    require_name_binding(parent, data.identity)
                 finally:
                     os.close(descriptor)
         except FileNotFoundError:
@@ -340,6 +376,7 @@ def _read_existing_artifact(
                 descriptor = os.open(parts[-1], flags, dir_fd=parent)
                 try:
                     data = read_descriptor(descriptor)
+                    require_name_binding(parent, data.identity)
                 finally:
                     os.close(descriptor)
         except FileNotFoundError:
@@ -360,6 +397,38 @@ def _artifact_snapshot_matches(
         and snapshot.identity == expected_identity
         and _sha256(snapshot.data) == expected_sha256
     )
+
+
+def _artifact_commit_fence_matches(
+    root: Path,
+    relative: str,
+    *,
+    run_id: str,
+    expected_bytes: bytes,
+    expected_identity: tuple[int, int],
+    expected_sha256: str,
+    expected_token: str,
+) -> bool:
+    """Re-bind the fixed artifact at the StateStore's final mutation fence."""
+
+    try:
+        snapshot = _read_existing_artifact(root, relative, run_id=run_id)
+        if not _artifact_snapshot_matches(
+            snapshot,
+            expected_bytes=expected_bytes,
+            expected_identity=expected_identity,
+            expected_sha256=expected_sha256,
+        ):
+            return False
+        assert snapshot is not None
+        payload = json.loads(snapshot.data.decode("utf-8"))
+        return (
+            type(payload) is dict
+            and _canonical_json_bytes(payload) == snapshot.data
+            and payload.get("decision_token") == expected_token
+        )
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        return False
 
 
 def _reuse_existing_decision_token(
@@ -595,48 +664,67 @@ def commit_review_decision(
                         f"run:{run_id}:transition:v{expected_state_version}:"
                         f"WAITING_FOR_REVIEW:{next_status}:decision:{decision_token}"
                     )
-                    mutation = store.transition_status(
-                        run_id=run_id,
-                        expected_lock_token=fresh_lock_token,
-                        expected_status="WAITING_FOR_REVIEW",
-                        expected_state_version=expected_state_version,
-                        operation_id=operation_id,
-                        mutation_timestamp=canonical_utc_now(),
-                        payload={
-                            "next_status": next_status,
-                            "metadata": {
-                                "review_decision_artifact_path": relative,
-                                "review_decision_artifact_sha256": artifact_sha256,
-                                "decision_status": validation.status,
-                                "decision_sha256": validation.decision_sha256,
-                                "association_snapshot_sha256": validation.association_snapshot_sha256,
-                                "authority_evidence_sha256": validation.authority_evidence_sha256,
-                                "reviewer_id": validation.reviewer_id,
-                                "accepted_at": validation.accepted_at,
-                                "expected_state_sha256": expected_state_sha256,
+                    def pre_commit_guard() -> None:
+                        if not _artifact_commit_fence_matches(
+                            project_root,
+                            relative,
+                            run_id=run_id,
+                            expected_bytes=artifact_bytes,
+                            expected_identity=artifact_identity,
+                            expected_sha256=artifact_sha256,
+                            expected_token=decision_token,
+                        ):
+                            raise _ArtifactCommitFenceError(
+                                "review artifact changed before StateStore commit"
+                            )
+
+                    try:
+                        mutation = store.transition_status(
+                            run_id=run_id,
+                            expected_lock_token=fresh_lock_token,
+                            expected_status="WAITING_FOR_REVIEW",
+                            expected_state_version=expected_state_version,
+                            operation_id=operation_id,
+                            mutation_timestamp=canonical_utc_now(),
+                            payload={
+                                "next_status": next_status,
+                                "metadata": {
+                                    "review_decision_artifact_path": relative,
+                                    "review_decision_artifact_sha256": artifact_sha256,
+                                    "decision_status": validation.status,
+                                    "decision_sha256": validation.decision_sha256,
+                                    "association_snapshot_sha256": validation.association_snapshot_sha256,
+                                    "authority_evidence_sha256": validation.authority_evidence_sha256,
+                                    "reviewer_id": validation.reviewer_id,
+                                    "accepted_at": validation.accepted_at,
+                                    "expected_state_sha256": expected_state_sha256,
+                                },
+                                "completion_evidence": None,
+                                "transition_kind": "decision",
+                                "decision_token": decision_token,
                             },
-                            "completion_evidence": None,
-                            "transition_kind": "decision",
-                            "decision_token": decision_token,
-                        },
-                    )
-                    persisted = store.load(run_id=run_id)
-                    expected_result = mutation.get("canonical_state")
-                    if (
-                        not isinstance(expected_result, Mapping)
-                        or _plain(expected_result) != _plain(persisted.get("canonical_state"))
-                        or persisted["state_version"] != expected_state_version + 1
-                        or persisted["status"] != next_status
-                    ):
-                        result = _zero("review_commit_conflict", "review_state_commit_unverified")
-                    else:
-                        result = _success(
-                            validation,
-                            relative=relative,
-                            artifact_sha256=artifact_sha256,
-                            state_version=persisted["state_version"],
-                            state_sha256=_state_sha256(persisted),
+                            pre_commit_guard=pre_commit_guard,
                         )
+                    except _ArtifactCommitFenceError:
+                        result = _zero("review_commit_conflict", "review_artifact_changed")
+                    else:
+                        persisted = store.load(run_id=run_id)
+                        expected_result = mutation.get("canonical_state")
+                        if (
+                            not isinstance(expected_result, Mapping)
+                            or _plain(expected_result) != _plain(persisted.get("canonical_state"))
+                            or persisted["state_version"] != expected_state_version + 1
+                            or persisted["status"] != next_status
+                        ):
+                            result = _zero("review_commit_conflict", "review_state_commit_unverified")
+                        else:
+                            result = _success(
+                                validation,
+                                relative=relative,
+                                artifact_sha256=artifact_sha256,
+                                state_version=persisted["state_version"],
+                                state_sha256=_state_sha256(persisted),
+                            )
     except Exception:
         if result is None:
             result = _zero("review_commit_conflict", "review_commit_unavailable")

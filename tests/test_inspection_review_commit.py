@@ -26,6 +26,7 @@ from orchestrator.inspection_review_admission import (
 )
 from orchestrator.inspection_review_root_launcher import establish_review_project_root
 from orchestrator.inspection_workflow import review_commit
+import orchestrator.inspection_workflow.locking as workflow_locking
 from orchestrator.inspection_workflow.locking import (
     ActiveRunLockError,
     ActiveRunRecoveryRequiredError,
@@ -440,6 +441,72 @@ def test_artifact_mutation_after_fresh_lock_is_zero_authority(
     assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
 
 
+@pytest.mark.parametrize("mutation", ["delete", "replace", "same_bytes_replacement"])
+def test_artifact_mutation_at_state_commit_fence_is_zero_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    """The StateStore-side guard catches changes after C3's fresh reread."""
+
+    _, lock_token = _waiting_run(tmp_path)
+    journal = tmp_path / "runs" / RUN_ID / "state_journal.jsonl"
+    journal_before = journal.read_bytes()
+    real_transition = StateStore.transition_status
+
+    def mutate_then_transition(self: StateStore, *args: object, **kwargs: object):
+        if kwargs.get("expected_status") == "WAITING_FOR_REVIEW":
+            artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
+            if mutation == "delete":
+                artifact.unlink()
+            elif mutation == "same_bytes_replacement":
+                data = artifact.read_bytes()
+                artifact.unlink()
+                artifact.write_bytes(data)
+            else:
+                artifact.write_bytes(b"replaced at state commit fence")
+        return real_transition(self, *args, **kwargs)
+
+    monkeypatch.setattr(StateStore, "transition_status", mutate_then_transition)
+    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
+
+    assert result.status == "review_commit_conflict"
+    assert result.denial_codes == ("review_artifact_changed",)
+    assert result.run_id is None
+    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
+    assert journal.read_bytes() == journal_before
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX unlink-while-open race")
+def test_artifact_reader_rejects_same_content_leaf_replacement_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stable descriptor is insufficient when its final name was replaced."""
+
+    artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
+    artifact.parent.mkdir(parents=True)
+    original = b"x" * (2 * 64 * 1024)
+    artifact.write_bytes(original)
+    real_read = review_commit.os.read
+    replaced = False
+
+    def read_then_replace(descriptor: int, size: int) -> bytes:
+        nonlocal replaced
+        chunk = real_read(descriptor, size)
+        if not replaced:
+            replaced = True
+            artifact.unlink()
+            artifact.write_bytes(original)
+        return chunk
+
+    monkeypatch.setattr(review_commit.os, "read", read_then_replace)
+    with pytest.raises(ValueError, match="name changed during read"):
+        review_commit._read_existing_artifact(
+            tmp_path,
+            f"runs/{RUN_ID}/artifacts/review_decision.json",
+            run_id=RUN_ID,
+        )
+
+
 def test_artifact_write_failure_is_zero_authority(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -507,6 +574,50 @@ def test_waiting_lock_reacquisition_rechecks_recovery_residue(
 
     assert not (tmp_path / "runs" / ".active_run.lock").exists()
     assert (tmp_path / "runs" / ".active_run.recovery.lock").exists()
+
+
+def test_waiting_lock_reacquisition_cleans_residue_after_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A marker injected after the in-mutex check cannot escape with a lock."""
+
+    allocation_token, lock_token = _waiting_run(tmp_path)
+    release_active_run_lock(
+        tmp_path,
+        run_id=RUN_ID,
+        expected_allocation_token=allocation_token,
+        expected_lock_token=lock_token,
+    )
+    fresh_lock_token = str(uuid.uuid4())
+    real_remember = workflow_locking._remember_process_owned_lock_snapshot
+
+    def remember_then_inject(*args: object, **kwargs: object) -> None:
+        real_remember(*args, **kwargs)
+        (tmp_path / "runs" / ".active_run.recovery.lock").write_bytes(b"recovery")
+
+    monkeypatch.setattr(
+        workflow_locking,
+        "_remember_process_owned_lock_snapshot",
+        remember_then_inject,
+    )
+    with pytest.raises(ActiveRunRecoveryRequiredError):
+        acquire_waiting_review_lock(
+            tmp_path,
+            run_id=RUN_ID,
+            allocation_token=allocation_token,
+            lock_token=fresh_lock_token,
+            expected_state_version=4,
+            task_id=TASK_ID,
+        )
+
+    assert not (tmp_path / "runs" / ".active_run.lock").exists()
+    assert (tmp_path / "runs" / ".active_run.recovery.lock").exists()
+    with pytest.raises(ActiveRunLockError):
+        workflow_locking.read_process_owned_active_run_lock_snapshot(
+            tmp_path,
+            allocation_token=allocation_token,
+            lock_token=fresh_lock_token,
+        )
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="real C2 capability test")

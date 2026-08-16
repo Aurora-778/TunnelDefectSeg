@@ -37,7 +37,11 @@ The production commit path is a linearized sequence:
 7. Perform one StateStore CAS transition using the
    expected `WAITING_FOR_REVIEW` status, expected state version, fresh lock
    token, and a canonical decision operation token.  `human_verified` resumes
-   as `RUNNING`; `human_rejected` becomes `BLOCKED`.
+   as `RUNNING`; `human_rejected` becomes `BLOCKED`.  A backwards-compatible
+   StateStore pre-commit guard runs inside the existing mutation lock immediately
+   before any pending journal or canonical-State write.  It re-reads the fixed
+   artifact through the handle-relative reader and requires canonical bytes,
+   decision token, identity, and SHA-256 to remain exact; failure starts no CAS.
 8. Release the fresh lock only after the CAS result is durably verified.  Any
    transition or release uncertainty leaves blocking evidence and returns a
    zero-authority commit result.
@@ -62,12 +66,14 @@ material or a caller-selected acceptance timestamp.
 ## Scope and exclusions
 
 Only the C-3 integration adapter, its lock re-acquisition primitive, its
-handle-relative Run-local artifact reader, its contract documentation, and
-focused tests may change in this slice.  Existing StateStore and Claim Policy
-contracts remain authoritative; changes to their schemas or reducers are out
-of scope.  The adapter does not import or call Publication, Manifest, Claim
-Policy, or Resume modules; any later integration consumes the committed
-artifact through their existing public contracts.
+handle-relative Run-local artifact reader, the ``inspection_workflow`` package
+initializer needed for import isolation, the backwards-compatible StateStore
+pre-commit guard, its contract documentation, and focused tests may change in
+this slice.  Existing StateStore and Claim Policy contracts remain
+authoritative; StateStore schemas and reducers are out of scope and unchanged.
+The adapter does not import or call Publication, Manifest, Claim Policy, or
+Resume modules; any later integration consumes the committed artifact through
+their existing public contracts.
 The production import graph is also transitive-isolated: importing and
 executing the C-3 entry in a fresh process must not load those modules through
 the ``inspection_workflow`` package initializer or the StateStore dependency

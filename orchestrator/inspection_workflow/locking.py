@@ -766,9 +766,24 @@ def _validate_recovery_outcome_document(value: Any) -> dict[str, Any]:
     return document
 
 
-def _reject_recovery_or_release_entries(runs: Path) -> None:
+def _reject_recovery_or_release_entries(
+    runs: Path, *, allow_owned_state_lock: bool = False
+) -> None:
+    """Reject recovery/control residue outside one owned state-lock section.
+
+    ``_active_run_state_lock`` is the publication mutex for cooperating Active
+    Run operations.  A caller holding that mutex needs to inspect the rest of
+    the closed control-entry set without treating its own mutex as foreign
+    residue.  The context manager still verifies the mutex bytes and identity
+    before it releases it, so this exemption never authorizes a replaced or
+    leaked state lock.
+    """
+
     state_lock = runs / _ACTIVE_RUN_STATE_LOCK_NAME
-    if _lstat(state_lock, label="Active Run state lock") is not None:
+    if (
+        not allow_owned_state_lock
+        and _lstat(state_lock, label="Active Run state lock") is not None
+    ):
         raise ActiveRunLockError(
             "Active Run Lock state transition is handled by another worker"
         )
@@ -785,6 +800,9 @@ def _reject_recovery_or_release_entries(runs: Path) -> None:
         raise ActiveRunRecoveryRequiredError(
             "Active Run release tombstone exists; cleanup recovery is required"
         )
+    known_entries = {Path(ACTIVE_RUN_LOCK_PATH).name}
+    if allow_owned_state_lock:
+        known_entries.add(_ACTIVE_RUN_STATE_LOCK_NAME)
     unknown = {
         entry.name
         for entry in entries
@@ -792,7 +810,7 @@ def _reject_recovery_or_release_entries(runs: Path) -> None:
             entry.name.startswith(".active_run.")
             or entry.name.startswith("..active_run.")
         )
-        and entry.name != Path(ACTIVE_RUN_LOCK_PATH).name
+        and entry.name not in known_entries
     }
     if unknown:
         raise ActiveRunRecoveryRequiredError(
@@ -1128,32 +1146,6 @@ def acquire_waiting_review_lock(
     _validate_timestamp(timestamp, label="review lock created_at")
 
     root, runs, path = _lock_path(project_root)
-    _reject_recovery_or_release_entries(runs)
-    try:
-        from orchestrator.state.store import StateStore
-
-        state = StateStore(root).load(run_id=run_id)
-    except Exception as exc:
-        raise ActiveRunLockError(
-            "waiting review lock requires a readable canonical State"
-        ) from exc
-    canonical_state = state.get("canonical_state")
-    if (
-        state["run_id"] != run_id
-        or not isinstance(canonical_state, Mapping)
-        or canonical_state.get("allocation_token") != allocation_token
-        or state["status"] != "WAITING_FOR_REVIEW"
-        or state["state_version"] != expected_state_version
-    ):
-        raise ActiveRunLockError(
-            "waiting review lock preflight does not match canonical State"
-        )
-    context = canonical_state.get("context") if isinstance(canonical_state, Mapping) else None
-    if not isinstance(context, Mapping) or context.get("workflow_task_id") != task_id:
-        raise ActiveRunLockError(
-            "waiting review lock task identity does not match canonical State"
-        )
-
     document = _validate_lock_document(
         {
             "schema_version": ACTIVE_RUN_LOCK_SCHEMA_VERSION,
@@ -1175,31 +1167,82 @@ def acquire_waiting_review_lock(
     data = _canonical_json_bytes(document)
     created_identity: tuple[int, int] | None = None
     created = False
+    acquired: dict[str, Any] | None = None
+    current_bytes: bytes | None = None
     try:
-        created_identity = controlled_fs.write_exclusive(
-            root, path.relative_to(root).as_posix(), data
-        )
-        created = True
-        current, current_bytes = _read_lock(path)
-        if (
-            current_bytes != data
-            or current["lock_token"] != lock_token
-            or controlled_fs.file_identity(path) != created_identity
-        ):
-            raise ActiveRunLockError(
-                "waiting review lock changed during acquisition"
+        # Hold the same transaction mutex used by release and recovery-marker
+        # publication until the new active lock and the closed residue set have
+        # been observed together.  A cooperating writer cannot add a recovery
+        # marker or release tombstone after this check without first observing
+        # the freshly published lock.
+        with _active_run_state_lock(root):
+            _reject_recovery_or_release_entries(
+                runs, allow_owned_state_lock=True
             )
-        latest = StateStore(root).load(run_id=run_id)
-        if (
-            latest["status"] != "WAITING_FOR_REVIEW"
-            or latest["state_version"] != expected_state_version
-            or not isinstance(latest.get("canonical_state"), Mapping)
-            or latest["canonical_state"].get("allocation_token") != allocation_token
-        ):
-            raise ActiveRunLockError(
-                "canonical State changed during waiting review lock acquisition"
+            try:
+                from orchestrator.state.store import StateStore
+
+                state = StateStore(root).load(run_id=run_id)
+            except Exception as exc:
+                raise ActiveRunLockError(
+                    "waiting review lock requires a readable canonical State"
+                ) from exc
+            canonical_state = state.get("canonical_state")
+            if (
+                state["run_id"] != run_id
+                or not isinstance(canonical_state, Mapping)
+                or canonical_state.get("allocation_token") != allocation_token
+                or state["status"] != "WAITING_FOR_REVIEW"
+                or state["state_version"] != expected_state_version
+            ):
+                raise ActiveRunLockError(
+                    "waiting review lock preflight does not match canonical State"
+                )
+            context = (
+                canonical_state.get("context")
+                if isinstance(canonical_state, Mapping)
+                else None
             )
-        _reject_recovery_or_release_entries(runs)
+            if (
+                not isinstance(context, Mapping)
+                or context.get("workflow_task_id") != task_id
+            ):
+                raise ActiveRunLockError(
+                    "waiting review lock task identity does not match canonical State"
+                )
+
+            created_identity = controlled_fs.write_exclusive(
+                root, path.relative_to(root).as_posix(), data
+            )
+            created = True
+            current, current_bytes = _read_lock(path)
+            if (
+                current_bytes != data
+                or current["lock_token"] != lock_token
+                or controlled_fs.file_identity(path) != created_identity
+            ):
+                raise ActiveRunLockError(
+                    "waiting review lock changed during acquisition"
+                )
+            latest = StateStore(root).load(run_id=run_id)
+            if (
+                latest["status"] != "WAITING_FOR_REVIEW"
+                or latest["state_version"] != expected_state_version
+                or not isinstance(latest.get("canonical_state"), Mapping)
+                or latest["canonical_state"].get("allocation_token") != allocation_token
+            ):
+                raise ActiveRunLockError(
+                    "canonical State changed during waiting review lock acquisition"
+                )
+            _reject_recovery_or_release_entries(
+                runs, allow_owned_state_lock=True
+            )
+            acquired = deepcopy(current)
+
+        if acquired is None or created_identity is None or current_bytes is None:
+            raise ActiveRunLockError(
+                "waiting review lock acquisition did not retain publication evidence"
+            )
         _remember_process_owned_lock_snapshot(
             root,
             allocation_token=allocation_token,
@@ -1207,13 +1250,28 @@ def acquire_waiting_review_lock(
             lock_bytes=current_bytes,
             lock_identity=created_identity,
         )
-        return deepcopy(current)
+        # ``_active_run_state_lock`` can only serialize cooperating writers
+        # while it is held.  Fence once more after its release and after local
+        # ownership registration so residue injected after the in-mutex check
+        # cannot turn into a successful reacquisition.  The exception handler
+        # below identity-cleans the newly created lock before propagating that
+        # failure.
+        _reject_recovery_or_release_entries(runs)
+        return acquired
     except FileExistsError as exc:
         raise ActiveRunLockError(
             "a competing Active Run Lock already exists"
         ) from exc
     except BaseException as exc:
         if created:
+            # The publication mutex can still fail while leaving its critical
+            # section.  Do not retain process-local ownership evidence when
+            # that turns the fresh lock into a failed acquisition.
+            forget_process_owned_active_run_lock_snapshot(
+                root,
+                allocation_token=allocation_token,
+                lock_token=lock_token,
+            )
             for diagnostic in _cleanup_failed_acquisition(
                 path, runs, data, created_identity, lock_token
             ):
@@ -1439,6 +1497,13 @@ def _acquire_recovery_mutex(
     target_lock_sha256: str,
     created_at: str,
 ) -> tuple[Path, bytes]:
+    """Publish recovery residue only while the Active Run mutex is held.
+
+    The target lock is checked again inside the mutex so a stale-recovery
+    caller that lost a race to a fresh waiting-review lock cannot leave a
+    recovery marker beside that newly published lock.
+    """
+
     document = _validate_recovery_lock_document(
         {
             "schema_version": ACTIVE_RUN_RECOVERY_LOCK_SCHEMA_VERSION,
@@ -1453,7 +1518,21 @@ def _acquire_recovery_mutex(
     )
     data = _canonical_json_bytes(document)
     path = _recovery_mutex_path(runs)
-    _write_exclusive_document(path, data, label="Active Run recovery lock")
+    root = runs.parent
+    with _active_run_state_lock(root):
+        _, protected_runs, active_path = _lock_path(root)
+        if protected_runs != runs:
+            raise ActiveRunLockError("Active Run recovery lock path is not stable")
+        current, current_bytes = _read_lock(active_path)
+        if (
+            current["run_id"] != run_id
+            or current["lock_token"] != target_lock_token
+            or _sha256(current_bytes) != target_lock_sha256
+        ):
+            raise ActiveRunLockError(
+                "Active Run Lock changed before recovery mutex publication"
+            )
+        _write_exclusive_document(path, data, label="Active Run recovery lock")
     return path, data
 
 
