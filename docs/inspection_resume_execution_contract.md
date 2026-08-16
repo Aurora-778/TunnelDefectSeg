@@ -36,6 +36,11 @@ intent bytes, B.6 activation intent bytes and directory chain, source State,
 successor State/Journal/tail anchor, running Lock, plan/descriptor/task-plan,
 source State version, activation SHA and both tokens. Any observable drift is
 denied before result issuance.
+At the actual result-issuer entry it runs the complete execution write-set
+proof again, including every worker leaf, the recursive successor-work closed
+set and unknown-residue check, plus formal `outputs/` and `staging/`
+directory/file identity, size and SHA evidence. No earlier write-set snapshot
+is used as the issuer's proof.
 The supported official first-layer `AssociationAgent` input channel never
 reopens source Run or successor snapshot input paths. It consumes immutable
 bytes captured from the same held successor-snapshot objects that remain open
@@ -124,11 +129,13 @@ supported capability's `str()`, `as_posix()` and `relative_to()` forms are
 writer-only capability tokens for nested official contexts; they are not
 valid filesystem path text. `relative_to()` returns another controlled
 capability, and its explicit write methods still route through the writer.
-`__fspath__`, raw `os.open`, and rebuilding a token with `Path(...)` fail
-closed (the token contains an invalid filesystem character); only the
-execution-local writer's `resolve()` accepts it. This closes the supported
-path-conversion boundary without relying on a process-global `Path`
-monkeypatch.
+The supported view exposes no filesystem-valued `parts` or `_path` field, and
+its `repr()` is also an invalid opaque token rather than a POSIX-rehydratable
+path. `__fspath__`, raw `os.open`, `Path(*view.parts)`, `Path(repr(view))`,
+and rebuilding a token with `Path(...)` fail closed (the token contains an
+invalid filesystem character); only the execution-local writer's `resolve()`
+accepts supported string tokens. This closes the supported path-conversion
+boundary without relying on a process-global `Path` monkeypatch.
 complete successor `work/` entry set is checked against the deterministic
 first-layer write set; nested unknown files, links and reparse entries are
 rejected. Non-successor Run entries, project-root entries and the direct

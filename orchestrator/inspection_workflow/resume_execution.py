@@ -1192,7 +1192,7 @@ def _decode_worker_path_token(value: str) -> str | None:
 class _ExecutionWorkerPath:
     """Path-like view whose mutations are delegated to one writer instance."""
 
-    __slots__ = ("_writer", "_path", "_relative")
+    __slots__ = ("_writer", "__path", "_relative")
 
     def __init__(
         self,
@@ -1202,7 +1202,7 @@ class _ExecutionWorkerPath:
         relative: bool = False,
     ) -> None:
         self._writer = writer
-        self._path = path
+        self.__path = path
         self._relative = relative
 
     def __str__(self) -> str:
@@ -1222,15 +1222,17 @@ class _ExecutionWorkerPath:
         return str(self)
 
     def __repr__(self) -> str:
-        return "_ExecutionWorkerPath(<opaque>)"
+        # ``repr`` is diagnostic-only.  It must not become a POSIX/Windows
+        # path that an agent can feed to ``Path(...)`` or ``os.open``.
+        return _WORKER_PATH_TOKEN_PREFIX
 
     def __hash__(self) -> int:
-        return hash(self._path)
+        return hash(self.__path)
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, _ExecutionWorkerPath):
             return self._writer._absolute(self) == other._writer._absolute(other)
-        return self._path == other
+        return self.__path == other
 
     def __fspath__(self) -> str:
         # Passing a controlled worker path to os.open/shutil/pathlib is an
@@ -1241,33 +1243,36 @@ class _ExecutionWorkerPath:
 
     @property
     def name(self) -> str:
-        return self._path.name
+        return self.__path.name
 
     @property
     def parts(self) -> tuple[str, ...]:
-        return self._path.parts
+        raise ValueError("worker path components are not a filesystem capability")
 
     @property
     def parent(self) -> "_ExecutionWorkerPath":
-        return self._writer._wrap(self._path.parent, relative=self._relative)
+        return self._writer._wrap(self.__path.parent, relative=self._relative)
 
     def __truediv__(self, value: str | os.PathLike[str]) -> "_ExecutionWorkerPath":
         if isinstance(value, _ExecutionWorkerPath):
-            value = value._path
-        return self._writer._wrap(self._path / value, relative=self._relative)
+            value = value.__path
+        return self._writer._wrap(self.__path / value, relative=self._relative)
 
     def joinpath(self, *parts: str | os.PathLike[str]) -> "_ExecutionWorkerPath":
-        unwrapped = [part._path if isinstance(part, _ExecutionWorkerPath) else part for part in parts]
+        unwrapped = [
+            part.__path if isinstance(part, _ExecutionWorkerPath) else part
+            for part in parts
+        ]
         return self._writer._wrap(
-            self._path.joinpath(*unwrapped), relative=self._relative
+            self.__path.joinpath(*unwrapped), relative=self._relative
         )
 
     def with_name(self, name: str) -> "_ExecutionWorkerPath":
-        return self._writer._wrap(self._path.with_name(name), relative=self._relative)
+        return self._writer._wrap(self.__path.with_name(name), relative=self._relative)
 
     def with_suffix(self, suffix: str) -> "_ExecutionWorkerPath":
         return self._writer._wrap(
-            self._path.with_suffix(suffix), relative=self._relative
+            self.__path.with_suffix(suffix), relative=self._relative
         )
 
     def absolute(self) -> "_ExecutionWorkerPath":
@@ -1434,10 +1439,13 @@ class _ExecutionWorkerWriter:
         if isinstance(value, _ExecutionWorkerPath):
             if value._writer is not self:
                 raise ValueError("worker path belongs to another writer")
+            raw_path = object.__getattribute__(
+                value, "_ExecutionWorkerPath__path"
+            )
             return (
-                self.root / value._path
+                self.root / raw_path
                 if value._relative
-                else value._path
+                else raw_path
             ).absolute()
         if isinstance(value, Path):
             return value if value.is_absolute() else (self.root / value).absolute()
@@ -1731,11 +1739,19 @@ class _ExecutionWorkerWriter:
         return result
 
     def read_csv(self, path: object) -> list[dict[str, str]]:
-        candidate = path._path if isinstance(path, _ExecutionWorkerPath) else self.resolve(path)._path
+        candidate = (
+            object.__getattribute__(path, "_ExecutionWorkerPath__path")
+            if isinstance(path, _ExecutionWorkerPath)
+            else self._absolute(self.resolve(path))
+        )
         return _csv_rows_from_bytes(self.read_bytes(candidate))
 
     def write_csv(self, path: object, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
-        candidate = path._path if isinstance(path, _ExecutionWorkerPath) else self.resolve(path)._path
+        candidate = (
+            object.__getattribute__(path, "_ExecutionWorkerPath__path")
+            if isinstance(path, _ExecutionWorkerPath)
+            else self._absolute(self.resolve(path))
+        )
         output = io.StringIO(newline="")
         writer = csv.DictWriter(output, fieldnames=fieldnames)
         writer.writeheader()
@@ -1744,7 +1760,11 @@ class _ExecutionWorkerWriter:
         self.write_bytes(candidate, output.getvalue().encode("utf-8-sig"))
 
     def write_markdown(self, path: object, title: str, lines: list[str]) -> None:
-        candidate = path._path if isinstance(path, _ExecutionWorkerPath) else self.resolve(path)._path
+        candidate = (
+            object.__getattribute__(path, "_ExecutionWorkerPath__path")
+            if isinstance(path, _ExecutionWorkerPath)
+            else self._absolute(self.resolve(path))
+        )
         content = [f"# {title}", "", *lines]
         self.write_text(candidate, "\n".join(content) + "\n", encoding="utf-8")
 
@@ -2831,6 +2851,18 @@ def _execute(
         if issuance_final != final:
             raise ValueError("authority changed at success issuance")
         final = issuance_final
+        # Re-run the complete write-set proof at the actual issuer entry.  A
+        # worker leaf, an unknown successor residue, or any formal
+        # outputs/staging identity/size/hash drift must be caught here as well
+        # as immediately after publication; the issuer receives no older
+        # write-set evidence.
+        _validate_execution_write_set(
+            root,
+            successor_run_id,
+            expected_work_entries,
+            formal_tree_evidence,
+            worker_write_evidence,
+        )
         start_sha = _sha(current_start_bytes)
         bindings = {
             "successor_run_id": successor_run_id,

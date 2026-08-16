@@ -909,26 +909,76 @@ def test_b9_same_bytes_snapshot_path_replacement_is_denied(
 
     root, activation, preparation, handoff = activated_prepared_successor
     original = AssociationAgent.run
-    replaced = False
+    snapshot_path: Path | None = None
+    attack = {
+        "entered": False,
+        "prepared": False,
+        "replace_attempted": False,
+        "replaced": False,
+        "blocked": False,
+        "candidate_paths": (),
+        "path_is_file": False,
+    }
 
     def replace_snapshot(self, context):
-        nonlocal replaced
-        if not replaced:
-            path = Path(context["inputs"]["association"]["frame_records"])
-            if not path.is_absolute():
-                path = root / path
-            data = path.read_bytes()
-            replacement = path.with_name("replacement.csv")
-            replacement.write_bytes(data)
-            replacement.replace(path)
-            replaced = True
+        nonlocal snapshot_path
+        if not attack["replace_attempted"]:
+            attack["entered"] = True
+            candidates = tuple(
+                (root / "runs" / handoff.successor_run_id / "work").rglob(
+                    "frame_records.csv"
+                )
+            )
+            attack["candidate_paths"] = tuple(path.as_posix() for path in candidates)
+            if len(candidates) != 1:
+                raise RuntimeError("snapshot path discovery did not find one leaf")
+            snapshot_path = candidates[0]
+            attack["path_is_file"] = snapshot_path.is_file()
+            if not attack["path_is_file"]:
+                raise RuntimeError("discovered snapshot leaf is not a file")
+            attack["prepared"] = True
+            attack["replace_attempted"] = True
+            try:
+                data = snapshot_path.read_bytes()
+            except BaseException as exc:
+                attack["blocked"] = True
+                raise RuntimeError("test snapshot replacement read was blocked") from exc
+            replacement = snapshot_path.with_name("replacement.csv")
+            try:
+                replacement.write_bytes(data)
+            except BaseException as exc:
+                attack["blocked"] = True
+                raise RuntimeError("test snapshot replacement write was blocked") from exc
+            try:
+                replacement.replace(snapshot_path)
+            except BaseException as exc:
+                attack["blocked"] = True
+                raise RuntimeError("test snapshot replacement was blocked") from exc
+            else:
+                attack["replaced"] = True
         return original(self, context)
 
-    monkeypatch.setattr(AssociationAgent, "run", replace_snapshot)
-    result = _b9(root, handoff)
+    try:
+        monkeypatch.setattr(AssociationAgent, "run", replace_snapshot)
+        result = _b9(root, handoff)
+    finally:
+        if snapshot_path is not None:
+            replacement = snapshot_path.with_name("replacement.csv")
+            if replacement.exists():
+                replacement.unlink()
+    assert attack["entered"]
+    assert len(attack["candidate_paths"]) == 1, attack["candidate_paths"]
+    assert attack["path_is_file"], attack["candidate_paths"]
+    assert attack["prepared"]
+    assert attack["replace_attempted"]
+    assert attack["replaced"] or attack["blocked"]
     assert not result.resume_execution_executed
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows snapshot sharing locks are exercised by the explicit lock tests",
+)
 @pytest.mark.parametrize("case_name", ["activated_prepared_successor", "real_b5_case"])
 def test_b9_snapshot_leaf_content_aba_is_denied_and_worker_uses_bound_bytes(
     request: pytest.FixtureRequest,
@@ -940,24 +990,39 @@ def test_b9_snapshot_leaf_content_aba_is_denied_and_worker_uses_bound_bytes(
 
     original = AssociationAgent.run
     attack_reached = False
+    snapshot_path: Path | None = None
+    worker_consumed_held_bytes = False
 
     def content_aba(self, context):
-        nonlocal attack_reached
+        nonlocal attack_reached, snapshot_path, worker_consumed_held_bytes
         attack_reached = True
-        frame_path = root / str(context["inputs"]["association"]["frame_records"])
-        before = frame_path.read_bytes()
-        changed = before.replace(b"0", b"1", 1)
+        candidates = tuple(
+            (root / "runs" / handoff.successor_run_id / "work").rglob(
+                "frame_records.csv"
+            )
+        )
+        assert len(candidates) == 1
+        snapshot_path = candidates[0]
+        before = snapshot_path.read_bytes()
+        changed = b"!" * len(before)
         assert changed != before and len(changed) == len(before)
-        _overwrite_bytes(frame_path, changed)
+        _overwrite_bytes(snapshot_path, changed)
         try:
-            return original(self, context)
+            result = original(self, context)
+            worker_consumed_held_bytes = True
+            return result
         finally:
-            _overwrite_bytes(frame_path, before)
+            _overwrite_bytes(snapshot_path, before)
 
     monkeypatch.setattr(AssociationAgent, "run", content_aba)
     result = _b9(root, handoff)
 
+    # The separate snapshot-consumption regression rejects any worker path
+    # reopen. This seam proves the real successor snapshot was the object
+    # attacked after the worker entered, rather than a NUL-token conversion
+    # failing before the adversarial action.
     assert attack_reached
+    assert worker_consumed_held_bytes
     assert not result.resume_execution_executed
     assert result.successor_run_id is None
 
@@ -1050,6 +1115,19 @@ def test_b9_execution_writer_is_local_and_rejects_unsupported_path_mutations(
         assert "\x00" in token
         assert token == leaf.as_posix()
         assert capability.resolve(token) == leaf
+        root_view = capability.root_path()
+        with pytest.raises(ValueError):
+            Path(*root_view.parts)
+        with pytest.raises(ValueError):
+            Path(*root_view.parts).joinpath("outputs", "forged.bin").write_bytes(
+                b"raw-parts-bypass"
+            )
+        with pytest.raises(AttributeError):
+            _ = leaf._path
+        representation = repr(leaf)
+        assert "\x00" in representation
+        with pytest.raises(ValueError):
+            Path(representation).write_bytes(b"raw-repr-bypass")
         with pytest.raises(ValueError):
             leaf.touch()
         with pytest.raises(ValueError):
@@ -1232,6 +1310,69 @@ def test_b9_final_success_fence_rebinds_all_authority_before_issuance(
         _overwrite_bytes(target, original_bytes)
 
     assert attacked
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+
+
+@pytest.mark.parametrize("target_kind", ["worker_leaf", "outputs", "staging"])
+def test_b9_write_set_is_rechecked_at_final_issuer_entry(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+    target_kind: str,
+) -> None:
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    module = _load_b9()
+    sealed = __import__("inspect").getclosurevars(
+        module.execute_resume_execution
+    ).nonlocals["execute"]
+    if target_kind == "worker_leaf":
+        target = (
+            root
+            / "runs"
+            / handoff.successor_run_id
+            / "work"
+            / "raw_history"
+            / "association_records.csv"
+        )
+        original_bytes = None
+        changed_bytes = None
+    else:
+        target = root / target_kind / "late-after-write-set.bin"
+        original_bytes = None
+        changed_bytes = b"late-after-write-set"
+    calls = 0
+    attacked = False
+    original_validate = sealed.__globals__["_validate_execution_write_set"]
+
+    def drift_after_first_write_set(*args, **kwargs):
+        nonlocal calls, attacked, original_bytes, changed_bytes
+        calls += 1
+        result = original_validate(*args, **kwargs)
+        if calls == 1:
+            if target_kind == "worker_leaf":
+                original_bytes = target.read_bytes()
+                changed = bytearray(original_bytes)
+                changed[len(changed) // 2] ^= 1
+                changed_bytes = bytes(changed)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(changed_bytes)
+            attacked = True
+        return result
+
+    monkeypatch.setitem(
+        sealed.__globals__, "_validate_execution_write_set", drift_after_first_write_set
+    )
+    try:
+        result = _b9(root, handoff)
+    finally:
+        if original_bytes is None:
+            if target.exists():
+                target.unlink()
+        else:
+            _overwrite_bytes(target, original_bytes)
+
+    assert attacked
+    assert calls >= 2
     assert not result.resume_execution_executed
     assert result.successor_run_id is None
 
