@@ -161,6 +161,26 @@ def _sandbox_fixture(tmp_path: Path):
     return project_root, files, hashes, context
 
 
+SUCCESSOR_RUN_ID = "run_002"
+SOURCE_RUN_ID = RUN_ID
+SUCCESSOR_MARKER_BINDINGS = {
+    "source_admission_sha256": "a" * 64,
+    "activation_intent_sha256": "b" * 64,
+    "plan_fingerprint": "c" * 64,
+}
+
+
+def _initialize_successor_sandbox(project_root: Path) -> Path:
+    return a1_artifacts.initialize_phase_b10_successor_a1_sandbox(
+        project_root,
+        successor_run_id=SUCCESSOR_RUN_ID,
+        source_run_id=SOURCE_RUN_ID,
+        execution_profile="phase_a1_sandbox",
+        evidence_source_mode="normalized_records",
+        **SUCCESSOR_MARKER_BINDINGS,
+    )
+
+
 def _run_evidence_and_claim(context):
     evidence_result = ComparisonEvidenceAgent().run(context)
     claim_result = ClaimGateAgent().run(context)
@@ -902,6 +922,283 @@ def test_phase_a1_requires_explicit_sandbox_marker(tmp_path):
 
     with pytest.raises(PhaseA1ArtifactError, match="sandbox marker is missing"):
         ComparisonEvidenceAgent().run(context)
+
+
+def test_phase_a1_legacy_root_marker_remains_the_baseline(tmp_path):
+    project_root = tmp_path / "legacy"
+    project_root.mkdir()
+    marker_path = initialize_phase_a1_sandbox(project_root, run_id=RUN_ID)
+
+    assert a1_artifacts.validate_phase_a1_sandbox(
+        project_root,
+        run_id=RUN_ID,
+        execution_profile="phase_a1_sandbox",
+    ) == project_root
+    assert marker_path == project_root / ".phase_a1_sandbox.json"
+
+
+def test_phase_b10_successor_marker_validates_for_exact_run(tmp_path):
+    project_root = tmp_path / "successor"
+    project_root.mkdir()
+
+    marker_path = _initialize_successor_sandbox(project_root)
+
+    assert marker_path == project_root / "runs" / SUCCESSOR_RUN_ID / ".phase_a1_sandbox.json"
+    assert a1_artifacts.validate_phase_a1_sandbox(
+        project_root,
+        run_id=SUCCESSOR_RUN_ID,
+        execution_profile="phase_a1_sandbox",
+        source_run_id=SOURCE_RUN_ID,
+        **SUCCESSOR_MARKER_BINDINGS,
+    ) == project_root
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("successor_run_id", "run_003", "run binding"),
+        ("source_run_id", "run_003", "source_run_id binding"),
+        ("source_admission_sha256", "d" * 64, "source_admission_sha256 binding"),
+        ("activation_intent_sha256", "e" * 64, "activation_intent_sha256 binding"),
+        ("plan_fingerprint", "f" * 64, "plan_fingerprint binding"),
+    ],
+)
+def test_phase_b10_rejects_wrong_run_source_or_binding(
+    tmp_path,
+    field,
+    value,
+    message,
+):
+    project_root = tmp_path / "wrong-binding"
+    project_root.mkdir()
+    marker_path = _initialize_successor_sandbox(project_root)
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker[field] = value
+    marker_path.write_bytes(a1_artifacts._canonical_json_bytes(marker))
+
+    with pytest.raises(PhaseA1ArtifactError, match=message):
+        a1_artifacts.validate_phase_a1_sandbox(
+            project_root,
+            run_id=SUCCESSOR_RUN_ID,
+            execution_profile="phase_a1_sandbox",
+            source_run_id=SOURCE_RUN_ID,
+            **SUCCESSOR_MARKER_BINDINGS,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("successor_run_id", "run_2", "canonical run_NNN"),
+        ("source_run_id", "source", "canonical run_NNN"),
+        ("source_admission_sha256", "A" * 64, "lowercase SHA-256"),
+        ("activation_intent_sha256", "not-a-sha", "lowercase SHA-256"),
+        ("plan_fingerprint", "0" * 63, "lowercase SHA-256"),
+    ],
+)
+def test_phase_b10_initializer_rejects_noncanonical_bindings(
+    tmp_path,
+    field,
+    value,
+    message,
+):
+    project_root = tmp_path / "invalid-binding"
+    project_root.mkdir()
+    kwargs = {
+        "successor_run_id": SUCCESSOR_RUN_ID,
+        "source_run_id": SOURCE_RUN_ID,
+        "execution_profile": "phase_a1_sandbox",
+        "evidence_source_mode": "normalized_records",
+        **SUCCESSOR_MARKER_BINDINGS,
+    }
+    kwargs[field] = value
+
+    with pytest.raises(PhaseA1ArtifactError, match=message):
+        a1_artifacts.initialize_phase_b10_successor_a1_sandbox(
+            project_root,
+            **kwargs,
+        )
+
+
+def test_phase_b10_conflicting_marker_fails_closed_and_same_bytes_are_idempotent(tmp_path):
+    project_root = tmp_path / "conflict"
+    project_root.mkdir()
+    marker_path = _initialize_successor_sandbox(project_root)
+    marker_bytes = marker_path.read_bytes()
+
+    assert _initialize_successor_sandbox(project_root) == marker_path
+    assert marker_path.read_bytes() == marker_bytes
+
+    marker_path.write_bytes(marker_bytes.replace(b"run_001", b"run_003"))
+    with pytest.raises(PhaseA1ArtifactError, match="overwrite changed"):
+        _initialize_successor_sandbox(project_root)
+
+
+def test_phase_b10_exclusive_write_does_not_replace_a_concurrent_marker(
+    tmp_path,
+    monkeypatch,
+):
+    project_root = tmp_path / "exclusive-race"
+    project_root.mkdir()
+    marker_path = project_root / "runs" / SUCCESSOR_RUN_ID / ".phase_a1_sandbox.json"
+    concurrent_bytes = b"concurrent-marker\n"
+
+    def create_competing_marker(_root, _relative, _data):
+        marker_path.write_bytes(concurrent_bytes)
+        raise FileExistsError(marker_path)
+
+    monkeypatch.setattr(
+        a1_artifacts.controlled_fs,
+        "write_exclusive",
+        create_competing_marker,
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="atomically write"):
+        _initialize_successor_sandbox(project_root)
+
+    assert marker_path.read_bytes() == concurrent_bytes
+    assert not list(marker_path.parent.glob("*.tmp"))
+
+
+def test_phase_b10_marker_publication_rejects_same_bytes_parent_aba(
+    tmp_path,
+    monkeypatch,
+):
+    project_root = tmp_path / "marker-parent-aba"
+    project_root.mkdir()
+    run_dir = project_root / "runs" / SUCCESSOR_RUN_ID
+    displaced = project_root / "displaced-successor"
+    original_write = a1_artifacts.controlled_fs.write_exclusive
+    attacked = {"done": False}
+
+    def replace_parent_then_write(root, relative, data):
+        assert run_dir.is_dir()
+        run_dir.rename(displaced)
+        run_dir.mkdir()
+        attacked["done"] = True
+        return original_write(root, relative, data)
+
+    monkeypatch.setattr(
+        a1_artifacts.controlled_fs,
+        "write_exclusive",
+        replace_parent_then_write,
+    )
+
+    with pytest.raises((PhaseA1ArtifactError, ValueError, OSError)):
+        _initialize_successor_sandbox(project_root)
+
+    assert attacked["done"]
+    assert not (run_dir / ".phase_a1_sandbox.json").exists()
+    assert not (displaced / ".phase_a1_sandbox.json").exists()
+
+
+def test_phase_b10_marker_fallback_rejects_same_bytes_replaced_parent(
+    tmp_path,
+    monkeypatch,
+):
+    project_root = tmp_path / "marker-parent-same-bytes"
+    project_root.mkdir()
+    run_dir = project_root / "runs" / SUCCESSOR_RUN_ID
+    displaced = project_root / "displaced-successor"
+    original_write = a1_artifacts.controlled_fs.write_exclusive
+
+    def replace_parent_with_same_marker(root, relative, data):
+        run_dir.rename(displaced)
+        run_dir.mkdir()
+        (run_dir / ".phase_a1_sandbox.json").write_bytes(data)
+        return original_write(root, relative, data)
+
+    monkeypatch.setattr(
+        a1_artifacts.controlled_fs,
+        "write_exclusive",
+        replace_parent_with_same_marker,
+    )
+
+    with pytest.raises(PhaseA1ArtifactError, match="atomically write"):
+        _initialize_successor_sandbox(project_root)
+
+    assert (run_dir / ".phase_a1_sandbox.json").is_file()
+    assert not (displaced / ".phase_a1_sandbox.json").exists()
+
+
+def test_phase_b10_rejects_conflicting_legacy_root_marker(tmp_path):
+    project_root = tmp_path / "root-conflict"
+    project_root.mkdir()
+    initialize_phase_a1_sandbox(project_root, run_id="run_003")
+
+    with pytest.raises(PhaseA1ArtifactError, match="conflicts with the legacy root marker"):
+        _initialize_successor_sandbox(project_root)
+
+
+def test_phase_b10_marker_is_canonical_and_legacy_root_bytes_remain_unchanged(tmp_path):
+    project_root = tmp_path / "canonical"
+    project_root.mkdir()
+    root_marker = initialize_phase_a1_sandbox(project_root, run_id=SOURCE_RUN_ID)
+    root_bytes = root_marker.read_bytes()
+
+    marker_path = _initialize_successor_sandbox(project_root)
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+
+    assert marker_path.read_bytes() == a1_artifacts._canonical_json_bytes(marker)
+    assert marker_path.read_bytes().endswith(b"\n")
+    assert root_marker.read_bytes() == root_bytes
+    assert a1_artifacts.validate_phase_a1_sandbox(
+        project_root,
+        run_id=SUCCESSOR_RUN_ID,
+        execution_profile="phase_a1_sandbox",
+    ) == project_root
+
+
+def test_phase_b10_rejects_same_byte_hardlinked_successor_marker(tmp_path):
+    project_root = tmp_path / "hardlink-marker"
+    project_root.mkdir()
+    marker_path = _initialize_successor_sandbox(project_root)
+    data = marker_path.read_bytes()
+    backing = project_root / "marker-backing.json"
+    backing.write_bytes(data)
+    marker_path.unlink()
+    try:
+        a1_artifacts.os.link(backing, marker_path)
+    except (OSError, NotImplementedError):
+        pytest.skip("hard links are unavailable")
+
+    with pytest.raises(PhaseA1ArtifactError, match="isolated regular file"):
+        _initialize_successor_sandbox(project_root)
+    with pytest.raises(PhaseA1ArtifactError, match="missing or unsafe"):
+        a1_artifacts.validate_phase_a1_sandbox(
+            project_root,
+            run_id=SUCCESSOR_RUN_ID,
+            execution_profile="phase_a1_sandbox",
+            source_run_id=SOURCE_RUN_ID,
+            **SUCCESSOR_MARKER_BINDINGS,
+        )
+
+
+def test_phase_b10_rejects_symlinked_successor_marker_path(tmp_path):
+    project_root = tmp_path / "symlink"
+    project_root.mkdir()
+    external = tmp_path / "external"
+    external.mkdir()
+    run_dir = project_root / "runs" / SUCCESSOR_RUN_ID
+    run_dir.parent.mkdir()
+    try:
+        run_dir.symlink_to(external, target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            pytest.skip("directory symlinks are unavailable on this platform")
+        completed = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(run_dir), str(external)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            pytest.skip("directory junctions are unavailable on this filesystem")
+    try:
+        with pytest.raises(PhaseA1ArtifactError, match="symlink|reparse point"):
+            _initialize_successor_sandbox(project_root)
+    finally:
+        run_dir.rmdir()
 
 
 def test_phase_a1_rejects_existing_directory_outside_configured_temp_root(

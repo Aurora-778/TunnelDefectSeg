@@ -23,9 +23,11 @@ from .a1_artifacts import (
     COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION,
     PHASE_A1_EXECUTION_PROFILE,
     PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION,
+    PHASE_B10_SUCCESSOR_A1_MARKER_SCHEMA_VERSION,
     SOURCE_VALIDATION_SCOPE,
     PhaseA1ArtifactError,
     initialize_phase_a1_sandbox,
+    initialize_phase_b10_successor_a1_sandbox,
     load_validated_claim_artifacts,
     parse_comparison_evidence_csv,
     validate_comparison_evidence_bundle,
@@ -126,6 +128,26 @@ from .resume_execution_handoff import (
 )
 from .resume_execution import ResumeExecutionResult, execute_resume_execution
 
+
+_B10_LAZY_EXPORTS = frozenset(
+    {
+        "RESUME_LAYER_PROGRESSION_INTENT_SCHEMA_VERSION",
+        "RESUME_LAYER_PROGRESSION_SCHEMA_VERSION",
+        "ResumeLayerProgressionResult",
+        "progress_resume_layer",
+    }
+)
+
+
+def __getattr__(name):
+    if name not in _B10_LAZY_EXPORTS:
+        raise AttributeError(name)
+    from . import resume_layer_progression
+
+    value = getattr(resume_layer_progression, name)
+    globals()[name] = value
+    return value
+
 __all__ = [
     "ACTIVE_RUN_LOCK_PATH",
     "ACTIVE_RUN_LOCK_SCHEMA_VERSION",
@@ -159,6 +181,7 @@ __all__ = [
     "ObservationIdentityError",
     "PHASE_A1_EXECUTION_PROFILE",
     "PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION",
+    "PHASE_B10_SUCCESSOR_A1_MARKER_SCHEMA_VERSION",
     "PhaseA1ArtifactError",
     "PublicationTransactionError",
     "PUBLICATION_EXECUTION_PROFILE",
@@ -174,6 +197,7 @@ __all__ = [
     "build_claim_decision_document",
     "legacy_source_record_fingerprint",
     "initialize_phase_a1_sandbox",
+    "initialize_phase_b10_successor_a1_sandbox",
     "load_validated_claim_artifacts",
     "load_task_request",
     "load_workflow_policy",
@@ -226,4 +250,8 @@ __all__ = [
     "handoff_resume_execution",
     "ResumeExecutionResult",
     "execute_resume_execution",
+    "RESUME_LAYER_PROGRESSION_INTENT_SCHEMA_VERSION",
+    "RESUME_LAYER_PROGRESSION_SCHEMA_VERSION",
+    "ResumeLayerProgressionResult",
+    "progress_resume_layer",
 ]
