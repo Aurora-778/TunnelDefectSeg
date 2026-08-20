@@ -105,6 +105,21 @@ write State/Journal, acquire locks, recover, resume, publish, or connect to the
 CLI, Web, Executor, or Controller. The detailed contract is in
 `docs/inspection_safe_reuse_contract.md`.
 
+The Phase B.10 prerequisite exposes the direct internal initializer
+`initialize_phase_b10_successor_a1_sandbox(...)` in
+`orchestrator.inspection_workflow.a1_artifacts`. It writes the canonical,
+exclusive Run-local marker
+`runs/<successor_run_id>/.phase_a1_sandbox.json` with the distinct
+`phase_b10_successor_a1_marker_v1` schema and exactly these bindings:
+`successor_run_id`, `source_run_id`, `execution_profile`,
+`evidence_source_mode`, `source_admission_sha256`,
+`activation_intent_sha256`, and `plan_fingerprint`. All IDs and SHA-256
+bindings are strict. `validate_phase_a1_sandbox(...)` selects that marker only
+for the exact successor Run; without it, legacy root-marker behavior remains
+unchanged. A valid legacy root marker for the bound source Run may coexist, but
+an unsafe or conflicting root marker, recovery marker, path, or existing local
+marker fails closed.
+
 The prepared task object contains exactly `schema_version`, `task_id`, `task_type`, `input`, and `requested_outputs`. Its input contains exactly `input_mode=prepared_dataset` and a safe `dataset_id`; paths, URIs, GT labels, split fields, review fields, and audit fields are not accepted.
 
 `config/inspection_workflow.yaml` is intentionally JSON-compatible YAML so the Phase 0 contract can be parsed deterministically with the Python standard library. It contains output mapping and validation/path/lock/publication policy only. It must not copy DAG dependencies or retry settings from `config/dag.yaml`.

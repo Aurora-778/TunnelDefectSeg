@@ -14,6 +14,8 @@ import stat
 import tempfile
 from typing import Any
 
+from . import controlled_fs
+
 from .claim_decision import (
     build_claim_decision_document,
     validate_claim_decision_document,
@@ -28,6 +30,7 @@ from .comparison_evidence import (
 COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION = "comparison_evidence_manifest_v4"
 PHASE_A1_EXECUTION_PROFILE = "phase_a1_sandbox"
 PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION = "phase_a1_sandbox_marker_v2"
+PHASE_B10_SUCCESSOR_A1_MARKER_SCHEMA_VERSION = "phase_b10_successor_a1_marker_v1"
 A1_RECOVERY_MARKER_SCHEMA_VERSION = "phase_a1_recovery_marker_v1"
 SOURCE_VALIDATION_SCOPE = "byte_binding_only"
 
@@ -105,6 +108,16 @@ _SANDBOX_MARKER_FIELDS = {
     "execution_profile",
     "evidence_source_mode",
 }
+_SUCCESSOR_A1_MARKER_FIELDS = {
+    "schema_version",
+    "successor_run_id",
+    "source_run_id",
+    "execution_profile",
+    "evidence_source_mode",
+    "source_admission_sha256",
+    "activation_intent_sha256",
+    "plan_fingerprint",
+}
 _MAX_JSON_BYTES = 1024 * 1024
 _MAX_A1_WORK_ARTIFACT_BYTES = 8 * 1024 * 1024
 PHASE_A1_SOURCE_ARTIFACT_LIMIT = 256
@@ -178,20 +191,97 @@ def validate_phase_a1_sandbox(
     *,
     run_id: str,
     execution_profile: str,
+    source_run_id: str | None = None,
+    source_admission_sha256: str | None = None,
+    activation_intent_sha256: str | None = None,
+    plan_fingerprint: str | None = None,
 ) -> Path:
     """Return the sandbox root after enforcing the A1 activation boundary."""
 
     _validate_run_identity(run_id=run_id, execution_profile=execution_profile)
+    _validate_optional_successor_bindings(
+        source_run_id=source_run_id,
+        source_admission_sha256=source_admission_sha256,
+        activation_intent_sha256=activation_intent_sha256,
+        plan_fingerprint=plan_fingerprint,
+    )
     root = _controlled_temporary_root(project_root)
     _load_phase_a1_sandbox_marker(
         root,
         run_id=run_id,
         execution_profile=execution_profile,
+        expected_source_run_id=source_run_id,
+        expected_source_admission_sha256=source_admission_sha256,
+        expected_activation_intent_sha256=activation_intent_sha256,
+        expected_plan_fingerprint=plan_fingerprint,
     )
     return root
 
 
 def _load_phase_a1_sandbox_marker(
+    root: Path,
+    *,
+    run_id: str,
+    execution_profile: str,
+    expected_source_run_id: str | None = None,
+    expected_source_admission_sha256: str | None = None,
+    expected_activation_intent_sha256: str | None = None,
+    expected_plan_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    local_marker_path = root / "runs" / run_id / _SANDBOX_MARKER_NAME
+    _assert_path_is_contained_and_plain(
+        root,
+        local_marker_path,
+        include_leaf=True,
+        label="Phase B.10 successor A1 sandbox marker",
+    )
+    try:
+        local_marker_path.lstat()
+    except FileNotFoundError:
+        local_marker_exists = False
+    except OSError as exc:
+        raise PhaseA1ArtifactError(
+            "unable to inspect Phase B.10 successor A1 sandbox marker"
+        ) from exc
+    else:
+        local_marker_exists = True
+
+    if local_marker_exists:
+        marker = _load_successor_a1_sandbox_marker(
+            marker_path=local_marker_path,
+            run_id=run_id,
+            execution_profile=execution_profile,
+            expected_source_run_id=expected_source_run_id,
+            expected_source_admission_sha256=expected_source_admission_sha256,
+            expected_activation_intent_sha256=expected_activation_intent_sha256,
+            expected_plan_fingerprint=expected_plan_fingerprint,
+        )
+        _assert_successor_root_marker_compatibility(root, marker)
+        for area in ("work", "artifacts", "staging"):
+            _reject_recovery_marker(root, run_id, area)
+        return marker
+
+    if any(
+        value is not None
+        for value in (
+            expected_source_run_id,
+            expected_source_admission_sha256,
+            expected_activation_intent_sha256,
+            expected_plan_fingerprint,
+        )
+    ):
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker is missing or unsafe"
+        )
+
+    return _load_legacy_phase_a1_sandbox_marker(
+        root,
+        run_id=run_id,
+        execution_profile=execution_profile,
+    )
+
+
+def _load_legacy_phase_a1_sandbox_marker(
     root: Path,
     *,
     run_id: str,
@@ -216,6 +306,164 @@ def _load_phase_a1_sandbox_marker(
     ):
         raise PhaseA1ArtifactError("Phase A1 sandbox marker identity does not match")
     return marker
+
+
+def _validate_optional_successor_bindings(
+    *,
+    source_run_id: str | None,
+    source_admission_sha256: str | None,
+    activation_intent_sha256: str | None,
+    plan_fingerprint: str | None,
+) -> None:
+    values = (
+        source_run_id,
+        source_admission_sha256,
+        activation_intent_sha256,
+        plan_fingerprint,
+    )
+    if any(value is not None for value in values) and not all(
+        value is not None for value in values
+    ):
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 bindings must be supplied together"
+        )
+    if source_run_id is not None and (
+        not isinstance(source_run_id, str)
+        or _RUN_ID_RE.fullmatch(source_run_id) is None
+    ):
+        raise PhaseA1ArtifactError("source_run_id must use canonical run_NNN format")
+    for field, value in (
+        ("source_admission_sha256", source_admission_sha256),
+        ("activation_intent_sha256", activation_intent_sha256),
+        ("plan_fingerprint", plan_fingerprint),
+    ):
+        if value is not None:
+            _require_sha256(value, field=field)
+
+
+def _validate_successor_a1_marker(
+    marker: Mapping[str, Any],
+    *,
+    run_id: str,
+    execution_profile: str,
+    expected_source_run_id: str | None,
+    expected_source_admission_sha256: str | None,
+    expected_activation_intent_sha256: str | None,
+    expected_plan_fingerprint: str | None,
+) -> dict[str, Any]:
+    if set(marker) != _SUCCESSOR_A1_MARKER_FIELDS:
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker fields are invalid"
+        )
+    if marker["schema_version"] != PHASE_B10_SUCCESSOR_A1_MARKER_SCHEMA_VERSION:
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker schema is invalid"
+        )
+    if marker["successor_run_id"] != run_id:
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker run binding does not match"
+        )
+    if marker["source_run_id"] == run_id:
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker source must differ from successor"
+        )
+    if (
+        not isinstance(marker["source_run_id"], str)
+        or _RUN_ID_RE.fullmatch(marker["source_run_id"]) is None
+        or marker["execution_profile"] != execution_profile
+        or not isinstance(marker["evidence_source_mode"], str)
+        or marker["evidence_source_mode"] not in _SOURCE_BUNDLE_KINDS
+    ):
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker identity is invalid"
+        )
+    for field in (
+        "source_admission_sha256",
+        "activation_intent_sha256",
+        "plan_fingerprint",
+    ):
+        _require_sha256(marker[field], field=field)
+    expected = {
+        "source_run_id": expected_source_run_id,
+        "source_admission_sha256": expected_source_admission_sha256,
+        "activation_intent_sha256": expected_activation_intent_sha256,
+        "plan_fingerprint": expected_plan_fingerprint,
+    }
+    for field, value in expected.items():
+        if value is not None and marker[field] != value:
+            raise PhaseA1ArtifactError(
+                f"Phase B.10 successor A1 sandbox marker {field} binding does not match"
+            )
+    return dict(marker)
+
+
+def _load_successor_a1_sandbox_marker(
+    *,
+    marker_path: Path,
+    run_id: str,
+    execution_profile: str,
+    expected_source_run_id: str | None,
+    expected_source_admission_sha256: str | None,
+    expected_activation_intent_sha256: str | None,
+    expected_plan_fingerprint: str | None,
+) -> dict[str, Any]:
+    marker_state = marker_path.lstat()
+    if (
+        not stat.S_ISREG(marker_state.st_mode)
+        or marker_state.st_nlink != 1
+        or _path_is_reparse_point(marker_path)
+    ):
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker is missing or unsafe"
+        )
+    data = _read_file_bytes(marker_path, label="Phase B.10 successor A1 sandbox marker")
+    marker = _parse_json_object_bytes(
+        data,
+        label="Phase B.10 successor A1 sandbox marker",
+    )
+    validated = _validate_successor_a1_marker(
+        marker,
+        run_id=run_id,
+        execution_profile=execution_profile,
+        expected_source_run_id=expected_source_run_id,
+        expected_source_admission_sha256=expected_source_admission_sha256,
+        expected_activation_intent_sha256=expected_activation_intent_sha256,
+        expected_plan_fingerprint=expected_plan_fingerprint,
+    )
+    if _canonical_json_bytes(validated) != data:
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker is not canonical"
+        )
+    return validated
+
+
+def _assert_successor_root_marker_compatibility(
+    root: Path,
+    marker: Mapping[str, Any],
+) -> None:
+    root_marker_path = root / _SANDBOX_MARKER_NAME
+    try:
+        root_marker_path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise PhaseA1ArtifactError(
+            "unable to inspect conflicting legacy Phase A1 sandbox marker"
+        ) from exc
+    try:
+        legacy = _load_legacy_phase_a1_sandbox_marker(
+            root,
+            run_id=marker["source_run_id"],
+            execution_profile=marker["execution_profile"],
+        )
+    except (PhaseA1ArtifactError, TypeError) as exc:
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker conflicts with the legacy root marker"
+        ) from exc
+    if legacy["evidence_source_mode"] != marker["evidence_source_mode"]:
+        raise PhaseA1ArtifactError(
+            "Phase B.10 successor A1 sandbox marker conflicts with the legacy root marker"
+        )
 
 
 def _require_sha256(value: Any, *, field: str) -> str:
@@ -318,6 +566,7 @@ def _atomic_write_idempotent(
     data: bytes,
     *,
     allowed_root: Path,
+    exclusive: bool = False,
 ) -> bool:
     _assert_path_is_contained_and_plain(
         allowed_root,
@@ -368,7 +617,31 @@ def _atomic_write_idempotent(
             label=f"A1 artifact {path.name}",
         )
         replace_attempted = True
-        os.replace(temporary_path, path)
+        if exclusive:
+            try:
+                os.link(temporary_path, path)
+            except FileExistsError:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError as cleanup_exc:
+                    error = PhaseA1ArtifactError(
+                        f"unable to atomically write A1 artifact: {path.name}; "
+                        f"temporary cleanup also failed: {cleanup_exc}"
+                    )
+                    error.write_state_uncertain = True
+                    raise error from cleanup_exc
+                temporary_path = None
+                _preflight_idempotent_target(path, data)
+                return False
+            _assert_path_is_contained_and_plain(
+                allowed_root,
+                path,
+                include_leaf=True,
+                label=f"A1 artifact {path.name}",
+            )
+            temporary_path.unlink(missing_ok=True)
+        else:
+            os.replace(temporary_path, path)
         temporary_path = None
     except (OSError, PhaseA1ArtifactError) as exc:
         cleanup_error: OSError | None = None
@@ -391,6 +664,138 @@ def _atomic_write_idempotent(
 
 def _write_failure_requires_recovery(error: Exception) -> bool:
     return bool(getattr(error, "write_state_uncertain", False))
+
+
+def _write_b10_successor_marker(
+    root: Path, marker_path: Path, marker_bytes: bytes
+) -> None:
+    """Publish the B.10 marker through the handle-relative filesystem API."""
+
+    relative = marker_path.relative_to(root).as_posix()
+    parent = marker_path.parent
+    cursor = root
+    for part in parent.relative_to(root).parts:
+        cursor /= part
+        try:
+            state = cursor.lstat()
+        except FileNotFoundError:
+            try:
+                controlled_fs.make_directory(
+                    root, cursor.relative_to(root).as_posix()
+                )
+            except Exception as exc:
+                raise PhaseA1ArtifactError(
+                    "unable to create Phase B.10 successor marker directory"
+                ) from exc
+        else:
+            if (
+                not stat.S_ISDIR(state.st_mode)
+                or stat.S_ISLNK(state.st_mode)
+                or _path_is_reparse_point(cursor)
+            ):
+                raise PhaseA1ArtifactError(
+                    "Phase B.10 successor marker parent is unsafe"
+                )
+    chain: list[tuple[Path, int, int]] = []
+    cursor = root
+    for part in (Path("."), *parent.relative_to(root).parts):
+        if part != Path("."):
+            cursor /= part
+        state = cursor.lstat()
+        if (
+            not stat.S_ISDIR(state.st_mode)
+            or stat.S_ISLNK(state.st_mode)
+            or _path_is_reparse_point(cursor)
+        ):
+            raise PhaseA1ArtifactError(
+                "Phase B.10 successor marker parent is unsafe"
+            )
+        device, inode = controlled_fs.directory_identity(cursor)
+        chain.append((cursor, device, inode))
+
+    def validate_chain() -> None:
+        if any(
+            controlled_fs.directory_identity(path) != (device, inode)
+            for path, device, inode in chain
+        ):
+            raise PhaseA1ArtifactError(
+                "Phase B.10 successor marker parent identity changed"
+            )
+
+    def validate_existing() -> bool:
+        validate_chain()
+        try:
+            before = marker_path.lstat()
+        except FileNotFoundError:
+            return False
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+            or before.st_nlink != 1
+            or _path_is_reparse_point(marker_path)
+        ):
+            raise PhaseA1ArtifactError(
+                "Phase B.10 successor marker is not an isolated regular file"
+            )
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                marker_path,
+                os.O_RDONLY
+                | getattr(os, "O_BINARY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            with os.fdopen(descriptor, "rb") as handle:
+                descriptor = None
+                opened = os.fstat(handle.fileno())
+                data = handle.read()
+                after = os.fstat(handle.fileno())
+        except OSError as exc:
+            raise PhaseA1ArtifactError(
+                "unable to read Phase B.10 successor marker"
+            ) from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        current = marker_path.lstat()
+        validate_chain()
+        if (
+            len(
+                {
+                    (before.st_dev, before.st_ino),
+                    (opened.st_dev, opened.st_ino),
+                    (after.st_dev, after.st_ino),
+                    (current.st_dev, current.st_ino),
+                }
+            )
+            != 1
+            or opened.st_nlink != 1
+            or after.st_nlink != 1
+            or current.st_nlink != 1
+        ):
+            raise PhaseA1ArtifactError(
+                "Phase B.10 successor marker is not an isolated regular file"
+            )
+        if data != marker_bytes:
+            raise PhaseA1ArtifactError(
+                "refusing to overwrite changed Phase B.10 successor marker"
+            )
+        return True
+
+    if validate_existing():
+        return
+    try:
+        with controlled_fs.bind_directory_identities(tuple(chain)):
+            controlled_fs.write_exclusive(root, relative, marker_bytes)
+    except Exception as exc:
+        try:
+            if validate_existing():
+                return
+        except PhaseA1ArtifactError:
+            pass
+        raise PhaseA1ArtifactError(
+            "unable to atomically write Phase B.10 successor marker"
+        ) from exc
 
 
 def initialize_phase_a1_sandbox(
@@ -418,6 +823,69 @@ def initialize_phase_a1_sandbox(
         _canonical_json_bytes(marker),
         allowed_root=root,
     )
+    return marker_path
+
+
+def initialize_phase_b10_successor_a1_sandbox(
+    project_root: Path,
+    *,
+    successor_run_id: str,
+    source_run_id: str,
+    execution_profile: str,
+    evidence_source_mode: str,
+    source_admission_sha256: str,
+    activation_intent_sha256: str,
+    plan_fingerprint: str,
+) -> Path:
+    """Persist the B.10-only successor Run-local A1 activation marker."""
+
+    _validate_run_identity(
+        run_id=successor_run_id,
+        execution_profile=execution_profile,
+    )
+    if (
+        not isinstance(source_run_id, str)
+        or _RUN_ID_RE.fullmatch(source_run_id) is None
+    ):
+        raise PhaseA1ArtifactError("source_run_id must use canonical run_NNN format")
+    if source_run_id == successor_run_id:
+        raise PhaseA1ArtifactError(
+            "source_run_id must differ from successor_run_id"
+        )
+    if (
+        not isinstance(evidence_source_mode, str)
+        or evidence_source_mode not in _SOURCE_BUNDLE_KINDS
+    ):
+        raise PhaseA1ArtifactError("evidence_source_mode is invalid")
+    for field, value in (
+        ("source_admission_sha256", source_admission_sha256),
+        ("activation_intent_sha256", activation_intent_sha256),
+        ("plan_fingerprint", plan_fingerprint),
+    ):
+        _require_sha256(value, field=field)
+
+    root = _controlled_temporary_root(project_root)
+    marker = {
+        "schema_version": PHASE_B10_SUCCESSOR_A1_MARKER_SCHEMA_VERSION,
+        "successor_run_id": successor_run_id,
+        "source_run_id": source_run_id,
+        "execution_profile": execution_profile,
+        "evidence_source_mode": evidence_source_mode,
+        "source_admission_sha256": source_admission_sha256,
+        "activation_intent_sha256": activation_intent_sha256,
+        "plan_fingerprint": plan_fingerprint,
+    }
+    marker_path = root / "runs" / successor_run_id / _SANDBOX_MARKER_NAME
+    _assert_path_is_contained_and_plain(
+        root,
+        marker_path,
+        include_leaf=True,
+        label="Phase B.10 successor A1 sandbox marker",
+    )
+    _assert_successor_root_marker_compatibility(root, marker)
+    for area in ("work", "artifacts", "staging"):
+        _reject_recovery_marker(root, successor_run_id, area)
+    _write_b10_successor_marker(root, marker_path, _canonical_json_bytes(marker))
     return marker_path
 
 
@@ -1765,10 +2233,12 @@ __all__ = [
     "COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION",
     "PHASE_A1_EXECUTION_PROFILE",
     "PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION",
+    "PHASE_B10_SUCCESSOR_A1_MARKER_SCHEMA_VERSION",
     "SOURCE_VALIDATION_SCOPE",
     "PhaseA1ArtifactError",
     "comparison_evidence_csv_bytes",
     "initialize_phase_a1_sandbox",
+    "initialize_phase_b10_successor_a1_sandbox",
     "load_validated_claim_artifacts",
     "parse_comparison_evidence_csv",
     "validate_comparison_evidence_bundle",

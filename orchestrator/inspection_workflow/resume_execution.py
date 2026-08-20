@@ -824,13 +824,18 @@ def _source_snapshot_spec(
     }
     mode = context.get("workflow_input_mode")
     names = (
-        ("frame_records.csv", "preparation_manifest.json")
+        (
+            "frame_records.csv",
+            "observation_records.csv",
+            "preparation_manifest.json",
+        )
         if mode == "prepared_dataset"
         else ("robot_kict_frame_records.csv",)
     )
     expected = (
         {
             "frame_records.csv": f"runs/{handoff.source_run_id}/work/raw_prepared/frame_records.csv",
+            "observation_records.csv": f"runs/{handoff.source_run_id}/work/raw_prepared/observation_records.csv",
             "preparation_manifest.json": f"runs/{handoff.source_run_id}/work/raw_prepared/preparation_manifest.json",
         }
         if mode == "prepared_dataset"
@@ -1567,6 +1572,31 @@ class _ExecutionWorkerWriter:
             # No replace is part of this worker contract.  A pre-existing or
             # concurrently created leaf is a failed CAS, never an overwrite.
             raise ValueError("worker output leaf was replaced")
+        if relative == "work/raw_history/association_manifest.json":
+            try:
+                document = json.loads(data.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("association manifest is not valid JSON") from exc
+
+            def portable(value: Any) -> Any:
+                if isinstance(value, dict):
+                    return {key: portable(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [portable(item) for item in value]
+                decoded = _decode_worker_path_token(value) if type(value) is str else None
+                if decoded is None:
+                    return value
+                prefix = f"runs/{self.successor_run_id}/"
+                if not decoded.startswith(prefix):
+                    raise ValueError("association manifest path token is outside successor Run")
+                successor_relative = decoded[len(prefix) :]
+                if successor_relative not in self.expected:
+                    raise ValueError("association manifest path token is not authorized")
+                return decoded
+
+            data = json.dumps(
+                portable(document), ensure_ascii=False, indent=2
+            ).encode("utf-8")
         self.buffered[relative] = data
 
     def open(
