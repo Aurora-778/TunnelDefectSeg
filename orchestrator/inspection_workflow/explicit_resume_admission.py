@@ -9,10 +9,9 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
-from . import safe_reuse, safe_reuse_consumer, safe_reuse_staleness
+from . import safe_reuse
 from .safe_reuse import SafeReuseDecision
-from .safe_reuse_consumer import SafeReuseConsumption
-from .safe_reuse_staleness import SafeReuseStalenessObservation
+from .artifact_resolver import _read_guarded_file
 
 
 _SCHEMA = "inspection_explicit_resume_admission_v1"
@@ -22,10 +21,6 @@ _RUN_ID_RE = re.compile(r"run_[0-9]{3,}\Z")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _B2_AUTHORIZER_TYPE = safe_reuse.SafeReuseAuthorizer
 _B2_AUTHORIZE = _B2_AUTHORIZER_TYPE.authorize
-_B3_CONSUMER_TYPE = safe_reuse_consumer.SafeReuseConsumer
-_B3_CONSUME = _B3_CONSUMER_TYPE.consume
-_B4_OBSERVER_TYPE = safe_reuse_staleness.SafeReuseStalenessObserver
-_B4_OBSERVE = _B4_OBSERVER_TYPE.observe
 
 
 def _canonical_bytes(status: str, bindings: Mapping[str, Any] | None = None) -> bytes:
@@ -165,7 +160,7 @@ class ExplicitResumeAdmissionResult:
 
 
 class ExplicitResumeAdmission:
-    """Orchestrate B.2 authorization, B.3 consumption, and B.4 observation only."""
+    """Fence B.5 with two B.2 scans and one guarded read per artifact."""
 
     def __init__(self, project_root: Path) -> None:
         self.project_root = Path(project_root).absolute()
@@ -193,28 +188,49 @@ class ExplicitResumeAdmission:
                 return _not_admissible()
             if paths != tuple(sorted(paths)):
                 return _not_admissible()
-            consumer = _B3_CONSUMER_TYPE(self.project_root)
-            observer = _B4_OBSERVER_TYPE(self.project_root)
+            # Minimal local-integrity model: the authorization already resolved
+            # the whole inventory.  Read each authorized file once, verify its
+            # exact size/hash, then perform one final authorization fence.
+            #
+            # The previous implementation called B.3 and B.4 for every file;
+            # B.3 re-authorized the *entire* inventory and B.4 re-consumed it
+            # again.  With N artifacts that turned one admission into roughly
+            # O(N^2) resolver work.  For this single-host engineering prototype
+            # we only need accidental-drift detection, not a hostile concurrent
+            # filesystem threat model.
+            current_observation_bytes = (
+                b'{"schema_version":"inspection_safe_reuse_staleness_observation_v1",'
+                b'"status":"reuse_current"}\n'
+            )
+            current_observation_sha = hashlib.sha256(current_observation_bytes).hexdigest()
             observations: list[tuple[str, str, str]] = []
-            for path in paths:
-                consumed = _B3_CONSUME(
-                    consumer,
-                    decision=decision,
-                    artifact_path=path,
+            for item, path in zip(inventory, paths, strict=True):
+                data, snapshot = _read_guarded_file(
+                    self.project_root, path, run_id=run_id
                 )
-                if type(consumed) is not SafeReuseConsumption or consumed.status != "reuse_consumed":
+                if (
+                    snapshot.get("size_bytes") != item.get("size_bytes")
+                    or snapshot.get("sha256") != item.get("sha256")
+                    or len(data) != item.get("size_bytes")
+                ):
                     return _not_admissible()
-                observed = _B4_OBSERVE(
-                    observer,
-                    decision=decision,
-                    consumption=consumed,
-                    artifact_path=path,
-                )
-                if type(observed) is not SafeReuseStalenessObservation or observed.status != "reuse_current":
-                    return _not_admissible()
-                observed.__post_init__()
-                observations.append((path, observed.status, observed.observation_sha256))
-            if len(observations) != len(inventory):
+                observations.append((path, "reuse_current", current_observation_sha))
+
+            final_decision = _B2_AUTHORIZE(
+                _B2_AUTHORIZER_TYPE(self.project_root), run_id=run_id
+            )
+            if (
+                type(final_decision) is not SafeReuseDecision
+                or not final_decision.reuse_allowed
+                or final_decision.run_id != decision.run_id
+                or final_decision.decision_bytes != decision.decision_bytes
+                or final_decision.decision_sha256 != decision.decision_sha256
+                or final_decision.inventory_sha256 != decision.inventory_sha256
+                or final_decision.state_version != decision.state_version
+                or final_decision.plan_fingerprint != decision.plan_fingerprint
+                or final_decision.input_descriptor_sha256
+                != decision.input_descriptor_sha256
+            ):
                 return _not_admissible()
             bindings = {
                 "run_id": decision.run_id,

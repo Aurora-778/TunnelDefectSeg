@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from test_inspection_artifact_resolver import RUN_ID, _prepared_task, _tree_snapshot
+from test_inspection_artifact_resolver import RUN_ID, _tree_snapshot, completed_run
 from test_inspection_explicit_resume_activation import _test_b5_admit
 
 from orchestrator.inspection_workflow.controller import InspectionWorkflowController
@@ -23,17 +23,6 @@ from orchestrator.inspection_workflow.resume_execution_handoff import (
     ResumeExecutionHandoff,
 )
 from orchestrator.state.store import StateStore
-
-
-@pytest.fixture
-def completed_run(tmp_path: Path) -> Path:
-    root = tmp_path / "prepared-run"
-    root.mkdir()
-    request = _prepared_task(root)
-    InspectionWorkflowController.run_prepared_task(
-        root, task_request=request, run_id=RUN_ID
-    )
-    return root
 
 
 @pytest.fixture

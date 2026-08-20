@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import shutil
 from types import MappingProxyType, SimpleNamespace
 import uuid
 
@@ -91,12 +92,42 @@ def _prepared_task(root: Path) -> dict[str, object]:
     }
 
 
+_COMPLETED_RUN_CACHE: tuple[Path, Path] | None = None
+
+
+def _completed_run_cache(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, Path]:
+    """Build one canonical completed Run, then restore it in place per test.
+
+    Several workflow bindings contain the original project-root path, so a
+    completed Run cannot be copied to a different root and remain canonical.
+    Restoring the same root from a side baseline avoids rebuilding Phase A for
+    every Phase-B test while preserving those bindings.
+    """
+
+    global _COMPLETED_RUN_CACHE
+    if _COMPLETED_RUN_CACHE is None:
+        container = tmp_path_factory.mktemp("phase-b-completed-run-cache")
+        root = container / "prepared-run"
+        root.mkdir()
+        request = _prepared_task(root)
+        InspectionWorkflowController.run_prepared_task(
+            root, task_request=request, run_id=RUN_ID
+        )
+        baseline = container / "prepared-run-baseline"
+        shutil.copytree(root, baseline)
+        _COMPLETED_RUN_CACHE = (root, baseline)
+    return _COMPLETED_RUN_CACHE
+
+
 @pytest.fixture
-def completed_run(tmp_path: Path) -> Path:
-    root = tmp_path / "prepared-run"
-    root.mkdir()
-    request = _prepared_task(root)
-    InspectionWorkflowController.run_prepared_task(root, task_request=request, run_id=RUN_ID)
+def completed_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Return the same canonical root, reset to pristine bytes per test."""
+
+    root, baseline = _completed_run_cache(tmp_path_factory)
+    shutil.rmtree(root)
+    shutil.copytree(baseline, root)
     return root
 
 
