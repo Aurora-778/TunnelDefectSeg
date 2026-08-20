@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import ctypes
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -1800,6 +1801,86 @@ def test_b9_preexisting_formal_tree_change_is_denied(
 
     assert not result.resume_execution_executed
     assert result.successor_run_id is None
+
+
+@pytest.mark.parametrize("tree_name", ["outputs", "staging"])
+def test_b9_formal_snapshot_a_b_a_swap_is_denied_before_execution(
+    activated_prepared_successor,
+    monkeypatch: pytest.MonkeyPatch,
+    tree_name: str,
+) -> None:
+    """The formal-tree digest must come from the same opened object as its identity."""
+
+    root, _activation, _preparation, handoff = activated_prepared_successor
+    from orchestrator.inspection_workflow import artifact_resolver
+
+    target = root / tree_name / "formal-snapshot.bin"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    original_bytes = b"A" * 32
+    replacement_bytes = b"B" * 32
+    target.write_bytes(original_bytes)
+    original_identity = controlled_fs.file_identity(target)
+    successor_before = _source_tree_snapshot(root, handoff.successor_run_id)
+    original_open = artifact_resolver.os.open
+    attacked = False
+
+    def open_replacement(path, flags, *args, **kwargs):
+        if os.name != "nt":
+            return original_open(path, flags, *args, **kwargs)
+        import msvcrt
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = (
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        )
+        create_file.restype = wintypes.HANDLE
+        handle = create_file(
+            str(path),
+            0x80000000,  # GENERIC_READ
+            0x00000001 | 0x00000002 | 0x00000004,  # FILE_SHARE_ALL
+            None,
+            3,  # OPEN_EXISTING
+            0,
+            None,
+        )
+        if handle == wintypes.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+
+    def swap_after_path_check(path, flags, *args, **kwargs):
+        nonlocal attacked
+        if (
+            not attacked
+            and Path(path).absolute() == target.absolute()
+        ):
+            attacked = True
+            backup = target.with_name("formal-snapshot.backup")
+            target.replace(backup)  # A moves away; the pathname now resolves to B.
+            target.write_bytes(replacement_bytes)
+            descriptor = open_replacement(path, flags, *args, **kwargs)
+            target.unlink()
+            backup.replace(target)  # Restore the original A identity at the pathname.
+            _overwrite_bytes(target, replacement_bytes)  # A now contains B bytes.
+            return descriptor
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(artifact_resolver.os, "open", swap_after_path_check)
+    result = _b9(root, handoff)
+
+    assert attacked
+    assert controlled_fs.file_identity(target) == original_identity
+    assert target.read_bytes() == replacement_bytes
+    assert not result.resume_execution_executed
+    assert result.successor_run_id is None
+    assert _source_tree_snapshot(root, handoff.successor_run_id) == successor_before
 
 
 def _real_b9_handoff(root: Path):

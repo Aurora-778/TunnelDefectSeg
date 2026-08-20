@@ -39,8 +39,14 @@ denied before result issuance.
 At the actual result-issuer entry it runs the complete execution write-set
 proof again, including every worker leaf, the recursive successor-work closed
 set and unknown-residue check, plus formal `outputs/` and `staging/`
-directory/file identity, size and SHA evidence. No earlier write-set snapshot
-is used as the issuer's proof.
+directory/file identity, size and SHA evidence. Each formal-file tuple is
+derived from one guarded opened regular-file object: its descriptor identity,
+size and chunked SHA-256 are captured together, and the pathname plus its
+complete parent directory identity chain must still bind that object both
+before and after the read. Links, reparse points, hard links, leaf replacement
+and observable parent replacement deny the result. mtime is never used as an
+integrity conclusion. No earlier write-set snapshot is used as the issuer's
+proof.
 The supported official first-layer `AssociationAgent` input channel never
 reopens source Run or successor snapshot input paths. It consumes immutable
 bytes captured from the same held successor-snapshot objects that remain open
@@ -142,7 +148,9 @@ rejected. Non-successor Run entries, project-root entries and the direct
 sandbox-parent boundary are compared before and after worker publication.
 The pre-existing project `outputs/` and `staging/` trees must retain their
 pre-execution directory/file identities, sizes and content hashes at the final
-fence.
+fence. A formal-file identity is never sampled before opening one object and
+combined with bytes read from another; an A→B→A pathname swap is rejected when
+observed by the guarded read or directory-chain fence.
 
 The writer intentionally does not implement replacement of an already existing
 worker leaf. This is the B.9 leaf-CAS rule: a leaf that appears after the

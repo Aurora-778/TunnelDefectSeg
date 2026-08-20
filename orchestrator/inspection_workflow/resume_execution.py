@@ -77,6 +77,7 @@ _SUCCESSOR_BEFORE_EXECUTION = frozenset(
 )
 _START_INTENT_NAME = "resume_execution_start.intent.json"
 _INPUT_SNAPSHOT_DIR = "work/resume_execution_input"
+_FORMAL_READ_CHUNK_SIZE = 1024 * 1024
 
 
 def _copy_function(function: Any) -> Any:
@@ -1999,15 +2000,100 @@ def _execution_work_entries(root: Path, successor_run_id: str) -> frozenset[str]
     return frozenset(result)
 
 
+def _formal_file_snapshot(
+    root: Path,
+    entry: Path,
+    *,
+    parent_chain: tuple[tuple[Path, int, int], ...],
+    _directory_chain: Any = _DIRECTORY_CHAIN,
+    _directory_identity: Any = _DIRECTORY_IDENTITY,
+    _os: Any = os,
+    _stat: Any = stat,
+    _hashlib: Any = hashlib,
+) -> tuple[int, int, int, str]:
+    """Bind one formal-tree file's identity and digest to one opened object."""
+
+    def plain_file(state: os.stat_result) -> None:
+        reparse = bool(
+            getattr(state, "st_file_attributes", 0)
+            & getattr(_stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+        )
+        if (
+            reparse
+            or not _stat.S_ISREG(state.st_mode)
+            or state.st_nlink != 1
+        ):
+            raise ValueError("formal tree contains an unsafe file")
+
+    def same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+        return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+    relative = entry.relative_to(root).as_posix()
+    before = entry.lstat()
+    plain_file(before)
+    if _directory_chain(root, entry.parent, label="B.9 formal tree file") != parent_chain:
+        raise ValueError("formal tree parent directory changed before read")
+
+    descriptor: int | None = None
+    try:
+        descriptor = _os.open(
+            entry,
+            _os.O_RDONLY | getattr(_os, "O_BINARY", 0) | getattr(_os, "O_NOFOLLOW", 0),
+        )
+        with _os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            opened = _os.fstat(handle.fileno())
+            plain_file(opened)
+            if not same_identity(before, opened):
+                raise ValueError("formal tree path changed before open")
+            digest = _hashlib.sha256()
+            size = 0
+            while True:
+                chunk = handle.read(_FORMAL_READ_CHUNK_SIZE)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                size += len(chunk)
+            after_read = _os.fstat(handle.fileno())
+            plain_file(after_read)
+            if (
+                not same_identity(opened, after_read)
+                or after_read.st_size != opened.st_size
+                or size != opened.st_size
+            ):
+                raise ValueError("formal tree file changed during read")
+    except OSError as exc:
+        raise ValueError(f"unable to read formal tree file {relative}") from exc
+    finally:
+        if descriptor is not None:
+            _os.close(descriptor)
+
+    after = entry.lstat()
+    plain_file(after)
+    if (
+        not same_identity(before, after)
+        or not same_identity(opened, after)
+        or _directory_identity(entry.parent) != (parent_chain[-1][1], parent_chain[-1][2])
+        or _directory_chain(root, entry.parent, label="B.9 formal tree file") != parent_chain
+    ):
+        raise ValueError("formal tree path changed during snapshot")
+    return opened.st_dev, opened.st_ino, size, digest.hexdigest()
+
+
 def _external_tree_snapshot(root: Path, name: str) -> tuple[tuple[Any, ...], ...]:
     target = root / name
     if not _entry_exists(target):
         return ()
     result: list[tuple[Any, ...]] = []
+    observed_directories: list[tuple[Path, tuple[int, int], tuple[tuple[Path, int, int], ...]]] = []
     pending = [target]
     while pending:
         directory = pending.pop()
+        directory_chain = _DIRECTORY_CHAIN(
+            root, directory, label="B.9 formal tree directory"
+        )
         device, inode = _DIRECTORY_IDENTITY(directory)
+        observed_directories.append((directory, (device, inode), directory_chain))
         relative_dir = directory.relative_to(root).as_posix()
         result.append(("directory", relative_dir, device, inode))
         for entry in directory.iterdir():
@@ -2017,39 +2103,28 @@ def _external_tree_snapshot(root: Path, name: str) -> tuple[tuple[Any, ...], ...
             if stat.S_ISDIR(state.st_mode):
                 pending.append(entry)
             elif stat.S_ISREG(state.st_mode):
-                identity = _FILE_IDENTITY(entry)
-                with entry.open("rb") as handle:
-                    before = os.fstat(handle.fileno())
-                    data = handle.read()
-                    after = os.fstat(handle.fileno())
-                before_key = (
-                    before.st_dev,
-                    before.st_ino,
-                    before.st_size,
-                    before.st_mtime_ns,
-                    before.st_ctime_ns,
+                device, inode, size, digest = _formal_file_snapshot(
+                    root, entry, parent_chain=directory_chain
                 )
-                after_key = (
-                    after.st_dev,
-                    after.st_ino,
-                    after.st_size,
-                    after.st_mtime_ns,
-                    after.st_ctime_ns,
-                )
-                if before_key != after_key:
-                    raise ValueError("formal tree file changed during snapshot")
                 result.append(
                     (
                         "file",
                         entry.relative_to(root).as_posix(),
-                        identity[0],
-                        identity[1],
-                        len(data),
-                        _sha(data),
+                        device,
+                        inode,
+                        size,
+                        digest,
                     )
                 )
             else:
                 raise ValueError("formal tree contains an unsupported entry")
+    for directory, identity, directory_chain in observed_directories:
+        if (
+            _DIRECTORY_IDENTITY(directory) != identity
+            or _DIRECTORY_CHAIN(root, directory, label="B.9 formal tree directory")
+            != directory_chain
+        ):
+            raise ValueError("formal tree directory changed during snapshot")
     return tuple(sorted(result))
 
 
@@ -2924,6 +2999,7 @@ def _seal_execution_authority() -> Any:
         "_entry_exists",
         "_expected_work_entries",
         "_execution_work_entries",
+        "_formal_file_snapshot",
         "_external_tree_snapshot",
         "_validate_execution_write_set",
         "_source_input_context",
