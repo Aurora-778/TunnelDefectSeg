@@ -128,6 +128,28 @@ def test_final_authority_drift_is_denied(
     assert calls == 2
 
 
+def test_guarded_read_snapshot_hash_mismatch_is_denied(
+    completed_run: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_read = explicit_resume_admission._read_guarded_file
+    reads: list[str] = []
+
+    def report_wrong_hash(root: Path, relative: str, *, run_id: str | None = None):
+        data, snapshot = original_read(root, relative, run_id=run_id)
+        reads.append(relative)
+        wrong_snapshot = dict(snapshot)
+        wrong_snapshot["sha256"] = (
+            "0" * 64 if snapshot["sha256"] != "0" * 64 else "1" * 64
+        )
+        return data, wrong_snapshot
+
+    monkeypatch.setattr(
+        explicit_resume_admission, "_read_guarded_file", report_wrong_hash
+    )
+    _assert_not_admissible(ExplicitResumeAdmission(completed_run).admit(run_id=RUN_ID))
+    assert len(reads) == 1
+
+
 def test_guarded_read_failure_is_denied(
     completed_run: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
