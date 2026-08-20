@@ -30,9 +30,10 @@ stages:
           - mkdir -p /dev/shm/phase-c2-nodev
           - findmnt -no OPTIONS /dev/shm | tee ci-artifacts/phase-c2-nodev-mount.log
           - findmnt -no OPTIONS /dev/shm | grep -Eq '(^|,)nodev(,|$)'
-          - PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -q -p no:cacheprovider > ci-artifacts/phase-c2-full.log 2>&1; status=$?; cat ci-artifacts/phase-c2-full.log; exit $status
-          - PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -k native_linux -q -p no:cacheprovider > ci-artifacts/phase-c2-linux-native.log 2>&1; status=$?; cat ci-artifacts/phase-c2-linux-native.log; exit $status
-          - python3 -m pytest --rootdir . tests/test_inspection_review_commit.py -q -p no:cacheprovider > ci-artifacts/phase-c3-full.log 2>&1; status=$?; cat ci-artifacts/phase-c3-full.log; exit $status
+          - status=0; PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -q -p no:cacheprovider > ci-artifacts/phase-c2-full.log 2>&1 || status=$?; cat ci-artifacts/phase-c2-full.log; if [ "$status" -ne 0 ]; then exit "$status"; fi
+          - status=0; PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -k native_linux -q -p no:cacheprovider > ci-artifacts/phase-c2-linux-native.log 2>&1 || status=$?; cat ci-artifacts/phase-c2-linux-native.log; if [ "$status" -ne 0 ]; then exit "$status"; fi
+          - status=0; PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_commit.py -q -p no:cacheprovider > ci-artifacts/phase-c3-full.log 2>&1 || status=$?; cat ci-artifacts/phase-c3-full.log; if [ "$status" -ne 0 ]; then exit "$status"; fi
+          - status=0; PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_commit.py -k fresh_process_import_and_execution -q -p no:cacheprovider > ci-artifacts/phase-c3-linux-native.log 2>&1 || status=$?; cat ci-artifacts/phase-c3-linux-native.log; if [ "$status" -ne 0 ]; then exit "$status"; fi
       - step: publish@general_artifacts
         name: publish-phase-c2-c3-native-logs
         displayName: Preserve SHA and C-2/C-3 pytest logs
@@ -45,3 +46,4 @@ triggers:
     branches:
       include:
         - main
+        - codex/fix-phase-c3-review-commit

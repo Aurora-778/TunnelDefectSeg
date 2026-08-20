@@ -363,6 +363,126 @@ def test_post_cas_control_lease_cleanup_cannot_mask_committed_state(
     assert not (tmp_path / "runs" / ".active_run.lock").exists()
 
 
+@pytest.mark.parametrize(
+    "failure_mode",
+    (
+        "control_verify",
+        "artifact_verify",
+        "state_load",
+        "control_close",
+        "artifact_close",
+        "fresh_lock_release",
+    ),
+)
+@pytest.mark.parametrize(
+    ("decision_status", "expected_status"),
+    (("human_verified", "RUNNING"), ("human_rejected", "BLOCKED")),
+)
+def test_post_cas_failures_preserve_truthful_committed_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+    decision_status: str,
+    expected_status: str,
+) -> None:
+    """Nothing after the durable StateStore return may fabricate zero authority."""
+
+    injected_events: list[str] = []
+
+    class TestingControlFence(_TestingControlEntryFence):
+        def __init__(self, project_root: Path) -> None:
+            super().__init__(project_root)
+            self.verify_calls = 0
+
+        def verify(self) -> None:
+            self.verify_calls += 1
+            if failure_mode == "control_verify" and self.verify_calls == 3:
+                injected_events.append(failure_mode)
+                raise review_commit._ControlEntryCommitFenceError(
+                    "injected post-CAS control verification failure"
+                )
+            super().verify()
+
+        def close(self) -> None:
+            if failure_mode == "control_close":
+                injected_events.append(failure_mode)
+                raise OSError("injected post-CAS control close failure")
+
+    class TestingArtifactFence:
+        def __init__(self, *_: object, **__: object) -> None:
+            self.verify_calls = 0
+
+        def verify(self) -> None:
+            self.verify_calls += 1
+            if failure_mode == "artifact_verify" and self.verify_calls == 3:
+                injected_events.append(failure_mode)
+                raise review_commit._ArtifactCommitFenceError(
+                    "injected post-CAS artifact verification failure"
+                )
+
+        def close(self) -> None:
+            if failure_mode == "artifact_close":
+                injected_events.append(failure_mode)
+                raise OSError("injected post-CAS artifact close failure")
+
+    _, lock_token = _waiting_run(tmp_path)
+    monkeypatch.setattr(
+        review_commit,
+        "_acquire_mandatory_control_entry_exclusion",
+        lambda project_root, **_: TestingControlFence(project_root),
+    )
+    monkeypatch.setattr(review_commit, "_ArtifactCommitFence", TestingArtifactFence)
+
+    real_load = StateStore.load
+
+    def load_with_post_cas_failure(self: StateStore, *, run_id: str):
+        loaded = real_load(self, run_id=run_id)
+        if failure_mode == "state_load" and loaded["status"] == expected_status:
+            injected_events.append(failure_mode)
+            raise StateStoreError("injected post-CAS StateStore.load failure")
+        return loaded
+
+    monkeypatch.setattr(StateStore, "load", load_with_post_cas_failure)
+
+    real_release = review_commit.release_active_run_lock
+
+    def release_with_post_cas_failure(*args: object, **kwargs: object) -> None:
+        is_fresh_release = kwargs.get("expected_lock_token") != lock_token
+        if failure_mode == "fresh_lock_release" and is_fresh_release:
+            injected_events.append(failure_mode)
+            raise OSError("injected post-CAS fresh-lock release failure")
+        real_release(*args, **kwargs)
+
+    monkeypatch.setattr(
+        review_commit, "release_active_run_lock", release_with_post_cas_failure
+    )
+
+    result = _call(
+        tmp_path,
+        lock_token,
+        monkeypatch=monkeypatch,
+        status=decision_status,
+    )
+
+    persisted = json.loads(
+        (tmp_path / "runs" / RUN_ID / "state.json").read_text(encoding="utf-8")
+    )
+    assert result.status == "review_committed"
+    assert result.denial_codes == ()
+    assert result.run_id == RUN_ID
+    assert result.next_status == expected_status
+    assert result.state_version == 5
+    assert result.state_sha256 == review_commit._state_sha256(
+        {"canonical_state": persisted}
+    )
+    assert persisted["status"] == expected_status
+    assert persisted["state_version"] == 5
+    assert injected_events == [failure_mode]
+    assert (tmp_path / "runs" / ".active_run.lock").exists() is (
+        failure_mode == "fresh_lock_release"
+    )
+
+
 def test_invalid_admission_is_zero_authority_and_does_not_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1336,7 +1456,7 @@ def test_c3_adapter_has_no_direct_forbidden_module_imports() -> None:
 def test_c3_fresh_process_import_and_execution_stays_out_of_forbidden_modules() -> None:
     root = Path(__file__).parents[1]
     code = """
-import base64, csv, hashlib, io, json, sys, tempfile, uuid
+import base64, csv, hashlib, io, json, os, sys, tempfile, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1349,7 +1469,6 @@ from orchestrator.inspection_review_admission import (
     ASSOCIATION_PROJECTION_FIELDS,
     REVIEW_ACTION_SCOPE,
     REVIEW_AUTHORITY_SCHEMA_VERSION,
-    ReviewDecisionValidation,
     canonical_review_authority_bytes,
     sign_review_decision,
 )
@@ -1365,20 +1484,6 @@ from orchestrator.state.store import StateStore
 RUN_ID = 'run_001'
 TASK_ID = 'review_task'
 TIME = '2026-08-14T12:00:00.000000Z'
-
-def validation():
-    result = object.__new__(ReviewDecisionValidation)
-    object.__setattr__(result, 'status', 'human_verified')
-    object.__setattr__(result, 'denial_codes', ())
-    object.__setattr__(result, 'decision_sha256', hashlib.sha256(b'decision').hexdigest())
-    object.__setattr__(result, 'association_snapshot_sha256', 'b' * 64)
-    object.__setattr__(result, 'authority_evidence_sha256', hashlib.sha256(b'authority').hexdigest())
-    object.__setattr__(result, 'run_id', RUN_ID)
-    object.__setattr__(result, 'association_id', 'ASSOC-001')
-    object.__setattr__(result, 'reviewer_id', 'reviewer-01')
-    object.__setattr__(result, 'accepted_at', '2026-08-14T12:00:00Z')
-    result.__post_init__()
-    return result
 
 def transition(store, lock_token, version, current, next_status, second):
     store.transition_status(
@@ -1397,29 +1502,32 @@ def transition(store, lock_token, version, current, next_status, second):
         },
     )
 
-with tempfile.TemporaryDirectory() as directory:
+nodev_parent = None
+if sys.platform == 'linux':
+    nodev_value = os.environ.get('PHASE_C2_NODEV_ROOT')
+    assert nodev_value, 'PHASE_C2_NODEV_ROOT is required for Linux C3 import audit'
+    nodev_parent = nodev_value
+
+with tempfile.TemporaryDirectory(dir=nodev_parent) as directory:
     root = Path(directory)
-    project_context = object()
-    decision_bytes = b'decision'
-    authority_evidence_bytes = b'authority'
-    trusted_authority_sha256 = frozenset({'0' * 64})
-    real_c2 = sys.platform == 'win32'
+    real_c2 = sys.platform in ('win32', 'linux')
+    assert real_c2, 'fresh-process C3 audit requires a native C2 capability backend'
     launcher = None
     kernel32 = None
     root_handle = None
-    if real_c2:
+    project = root / 'project'
+    snapshot_output = io.StringIO(newline='')
+    snapshot_writer = csv.writer(snapshot_output, lineterminator='\\n')
+    snapshot_writer.writerow(ASSOCIATION_PROJECTION_FIELDS)
+    snapshot_writer.writerow(['inspection_source_reference_v1', 'ASSOC-001', *('x' for _ in range(14))])
+    snapshot = snapshot_output.getvalue().encode('utf-8')
+    leaf = project / 'runs' / RUN_ID / 'work' / 'association_records.csv'
+    leaf.parent.mkdir(parents=True)
+    leaf.write_bytes(snapshot)
+    if sys.platform == 'win32':
         import ctypes
         from ctypes import wintypes
 
-        project = root / 'project'
-        snapshot_output = io.StringIO(newline='')
-        snapshot_writer = csv.writer(snapshot_output, lineterminator='\\n')
-        snapshot_writer.writerow(ASSOCIATION_PROJECTION_FIELDS)
-        snapshot_writer.writerow(['inspection_source_reference_v1', 'ASSOC-001', *('x' for _ in range(14))])
-        snapshot = snapshot_output.getvalue().encode('utf-8')
-        leaf = project / 'runs' / RUN_ID / 'work' / 'association_records.csv'
-        leaf.parent.mkdir(parents=True)
-        leaf.write_bytes(snapshot)
         kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
         kernel32.CreateFileW.argtypes = [
             wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
@@ -1432,43 +1540,45 @@ with tempfile.TemporaryDirectory() as directory:
             str(root), 0x0080 | 0x00100000, 0x00000007, None, 3, 0x02000000, None
         )
         assert int(root_handle) not in (0, -1)
-        launcher = establish_review_project_root(
-            trusted_root_handle=int(root_handle),
-            project_components=('project',),
-            expected_project_id='c3-test-project',
-            project_root=str(project),
-        )
-        project_context = launcher._transfer_context_for_local_admission()
-        key = Ed25519PrivateKey.generate()
-        public_key = key.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw
-        )
-        authority_evidence_bytes = canonical_review_authority_bytes({
-            'schema_version': REVIEW_AUTHORITY_SCHEMA_VERSION,
-            'project_id': 'c3-test-project',
-            'reviewer_id': 'reviewer-01',
-            'key_id': 'review-key-01',
-            'public_key_base64url': base64.urlsafe_b64encode(public_key).decode('ascii').rstrip('='),
-            'scopes': [REVIEW_ACTION_SCOPE],
-            'valid_from': '2020-01-01T00:00:00Z',
-            'valid_until': '2099-01-01T00:00:00Z',
-        })
-        authority_sha256 = hashlib.sha256(authority_evidence_bytes).hexdigest()
-        decided_at = datetime.now(timezone.utc).replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%SZ')
-        decision_bytes = sign_review_decision(
-            private_key=key,
-            run_id=RUN_ID,
-            association_id='ASSOC-001',
-            association_snapshot_sha256=hashlib.sha256(snapshot).hexdigest(),
-            reviewer_id='reviewer-01',
-            authority_evidence_sha256=authority_sha256,
-            decided_at=decided_at,
-            decision='accept_association',
-            rationale='Fresh-process C-3 import isolation test.',
-            key_id='review-key-01',
-        )
-        trusted_authority_sha256 = frozenset({authority_sha256})
-        root = project
+    else:
+        root_handle = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    launcher = establish_review_project_root(
+        trusted_root_handle=int(root_handle),
+        project_components=('project',),
+        expected_project_id='c3-test-project',
+        project_root=str(project),
+    )
+    project_context = launcher._transfer_context_for_local_admission()
+    key = Ed25519PrivateKey.generate()
+    public_key = key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    authority_evidence_bytes = canonical_review_authority_bytes({
+        'schema_version': REVIEW_AUTHORITY_SCHEMA_VERSION,
+        'project_id': 'c3-test-project',
+        'reviewer_id': 'reviewer-01',
+        'key_id': 'review-key-01',
+        'public_key_base64url': base64.urlsafe_b64encode(public_key).decode('ascii').rstrip('='),
+        'scopes': [REVIEW_ACTION_SCOPE],
+        'valid_from': '2020-01-01T00:00:00Z',
+        'valid_until': '2099-01-01T00:00:00Z',
+    })
+    authority_sha256 = hashlib.sha256(authority_evidence_bytes).hexdigest()
+    decided_at = datetime.now(timezone.utc).replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%SZ')
+    decision_bytes = sign_review_decision(
+        private_key=key,
+        run_id=RUN_ID,
+        association_id='ASSOC-001',
+        association_snapshot_sha256=hashlib.sha256(snapshot).hexdigest(),
+        reviewer_id='reviewer-01',
+        authority_evidence_sha256=authority_sha256,
+        decided_at=decided_at,
+        decision='accept_association',
+        rationale='Fresh-process C-3 import isolation test.',
+        key_id='review-key-01',
+    )
+    trusted_authority_sha256 = frozenset({authority_sha256})
+    root = project
     allocation_token = str(uuid.uuid4())
     waiting_lock_token = str(uuid.uuid4())
     acquire_active_run_lock(
@@ -1531,21 +1641,12 @@ with tempfile.TemporaryDirectory() as directory:
     transition(store, waiting_lock_token, 3, 'RUNNING', 'WAITING_FOR_REVIEW', 4)
 
     admissions = []
-    if real_c2:
-        real_admit = review_commit.admit_review_decision
-        def admit_with_stable_acceptance(**kwargs):
-            result = real_admit(**kwargs)
-            if admissions and result.status == 'human_verified':
-                object.__setattr__(result, 'accepted_at', admissions[0].accepted_at)
-            admissions.append(result)
-            return result
-        review_commit.admit_review_decision = admit_with_stable_acceptance
-    else:
-        def admit_with_typed_validation(**_):
-            result = validation()
-            admissions.append(result)
-            return result
-        review_commit.admit_review_decision = admit_with_typed_validation
+    real_admit = review_commit.admit_review_decision
+    def record_real_admission(**kwargs):
+        result = real_admit(**kwargs)
+        admissions.append(result)
+        return result
+    review_commit.admit_review_decision = record_real_admission
     result = review_commit.commit_review_decision(
         project_root=root,
         project_context=project_context,
@@ -1557,8 +1658,11 @@ with tempfile.TemporaryDirectory() as directory:
         trusted_authority_sha256=trusted_authority_sha256,
     )
     assert len(admissions) == 2
-    assert result.status == 'review_commit_conflict'
-    assert result.denial_codes == ('review_control_entry_unavailable',)
+    assert all(admission.status == 'human_verified' for admission in admissions)
+    clock_rollover = admissions[0].accepted_at != admissions[1].accepted_at
+    if not clock_rollover:
+        assert result.status == 'review_commit_conflict'
+        assert result.denial_codes == ('review_control_entry_unavailable',)
     assert all(getattr(result, name) is None for name in (
         'artifact_path', 'artifact_sha256', 'decision_status', 'decision_sha256',
         'association_snapshot_sha256', 'authority_evidence_sha256', 'run_id',
@@ -1568,10 +1672,12 @@ with tempfile.TemporaryDirectory() as directory:
     assert (root / 'runs' / RUN_ID / 'artifacts' / 'review_decision.json').is_file()
     assert not (root / 'runs' / '.active_run.lock').exists()
     assert StateStore(root).load(run_id=RUN_ID)['status'] == 'WAITING_FOR_REVIEW'
-    if real_c2:
-        project_context.close()
-        launcher.close()
+    project_context.close()
+    launcher.close()
+    if sys.platform == 'win32':
         assert kernel32.CloseHandle(root_handle)
+    else:
+        os.close(root_handle)
 
 loaded = sorted(sys.modules)
 for forbidden in ('claim', 'manifest', 'publication', 'resume'):
@@ -1581,19 +1687,29 @@ forbidden_attempts = [name for name in imports if any(
 )]
 assert not forbidden_attempts, forbidden_attempts
 assert imports
-print(json.dumps({'status': result.status, 'real_c2': real_c2, 'loaded': loaded, 'imports': imports}, sort_keys=True))
+print(json.dumps({
+    'status': 'retry_clock_rollover' if clock_rollover else result.status,
+    'real_c2': real_c2,
+    'loaded': loaded,
+    'imports': imports,
+}, sort_keys=True))
 """
-    completed = subprocess.run(
-        [sys.executable, "-c", code],
-        cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    payload = json.loads(completed.stdout)
+    payload = None
+    for _ in range(3):
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        payload = json.loads(completed.stdout)
+        if payload["status"] != "retry_clock_rollover":
+            break
+    assert payload is not None
     assert payload["status"] == "review_commit_conflict"
-    assert payload["real_c2"] is (sys.platform == "win32")
+    assert payload["real_c2"] is True
 
 
 def test_accepted_at_is_not_a_callable_api_parameter(tmp_path: Path) -> None:

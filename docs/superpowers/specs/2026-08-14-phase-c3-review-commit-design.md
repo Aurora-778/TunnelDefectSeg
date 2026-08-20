@@ -69,6 +69,12 @@ The production commit path is a linearized sequence:
    check-then-use control-entry scan.  C-3 CAS availability is deliberately
    withheld until a platform primitive can prove this exclusion; this is an
    availability restriction, not a StateStore schema/reducer change.
+   A successful `StateStore.transition_status` return is the irreversible
+   durable-commit boundary: C-3 constructs `review_committed` directly from
+   the returned, already verified `canonical_state`.  Any later diagnostic
+   fence verification, StateStore read, fence close, or fresh-lock release
+   failure may leave blocking evidence, but cannot be reported as a
+   zero-authority retryable result for the already committed transition.
 8. Release the fresh lock after the outcome is known.  A future successful CAS
    path releases it only after durable verification.  Before CAS, any
    transition or release uncertainty returns zero authority.  After a verified

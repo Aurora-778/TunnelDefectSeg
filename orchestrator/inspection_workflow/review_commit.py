@@ -995,32 +995,30 @@ def commit_review_decision(
                             except _ControlEntryCommitFenceError:
                                 result = _zero("review_commit_conflict", "review_control_entry_unavailable")
                             else:
+                                # ``transition_status`` returns only after the
+                                # canonical State and committed journal record
+                                # have been durably verified.  That return is
+                                # the irreversible authority boundary: derive
+                                # the result from its frozen canonical State
+                                # before performing any best-effort observation.
+                                committed_state = mutation["canonical_state"]
+                                result = _success(
+                                    validation,
+                                    relative=relative,
+                                    artifact_sha256=artifact_sha256,
+                                    state_version=committed_state["state_version"],
+                                    state_sha256=_state_sha256(mutation),
+                                )
                                 try:
-                                    # Both retained exclusions remain live through
-                                    # journal, State, and canonical-State checks.
+                                    # These observations can retain blocking
+                                    # evidence or aid diagnostics, but no failure
+                                    # after the durable return may fabricate a
+                                    # zero-authority/retryable outcome.
                                     control_fence.verify()
                                     fence.verify()
-                                    persisted = store.load(run_id=run_id)
-                                    expected_result = mutation.get("canonical_state")
-                                    if (
-                                        not isinstance(expected_result, Mapping)
-                                        or _plain(expected_result) != _plain(persisted.get("canonical_state"))
-                                        or persisted["state_version"] != expected_state_version + 1
-                                        or persisted["status"] != next_status
-                                    ):
-                                        result = _zero("review_commit_conflict", "review_state_commit_unverified")
-                                    else:
-                                        result = _success(
-                                            validation,
-                                            relative=relative,
-                                            artifact_sha256=artifact_sha256,
-                                            state_version=persisted["state_version"],
-                                            state_sha256=_state_sha256(persisted),
-                                        )
-                                except _ArtifactCommitFenceError:
-                                    result = _zero("review_commit_conflict", "review_artifact_changed")
-                                except _ControlEntryCommitFenceError:
-                                    result = _zero("review_commit_conflict", "review_control_entry_unavailable")
+                                    store.load(run_id=run_id)
+                                except Exception:
+                                    pass
                         finally:
                             cleanup_failed = False
                             if fence is not None:
