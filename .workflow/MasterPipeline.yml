@@ -23,11 +23,11 @@ stages:
           - echo "ARCH=$(uname -m)" | tee -a ci-artifacts/phase-c2-identity.log
           - echo "ARCH=$(uname -m)" | tee -a ci-artifacts/phase-c3-identity.log
           - test "$(uname -m)" = "x86_64"
-          - git fetch --no-tags --depth=50 origin main
-          - git merge-base --is-ancestor f385cac63549f5453fbf1a5ad698285f9f6cc972 HEAD
-          - git merge-base --is-ancestor 18d9cc2cb6933ebd58b5509162aaa1227db5314e HEAD
-          - status=0; python3 -m pip install --disable-pip-version-check --only-binary=:all: -i https://pypi.tuna.tsinghua.edu.cn/simple cryptography > ci-artifacts/phase-c2-dependencies.log 2>&1 || status=$?; cat ci-artifacts/phase-c2-dependencies.log; if [ "$status" -ne 0 ]; then exit "$status"; fi
-          - python3 -c "import cryptography; print('cryptography=' + cryptography.__version__)" | tee -a ci-artifacts/phase-c2-dependencies.log
+          - git fetch --no-tags --depth=100 origin main codex/fix-phase-c3-review-commit
+          - git merge-base --is-ancestor f385cac63549f5453fbf1a5ad698285f9f6cc972 HEAD || exit $?
+          - git merge-base --is-ancestor 18d9cc2cb6933ebd58b5509162aaa1227db5314e HEAD || exit $?
+          - 'status=0; python3 -m pip install --disable-pip-version-check --only-binary=:all: -i https://pypi.tuna.tsinghua.edu.cn/simple cryptography > ci-artifacts/phase-c2-dependencies.log 2>&1 || status=$?; cat ci-artifacts/phase-c2-dependencies.log; if [ "$status" -ne 0 ]; then exit "$status"; fi'
+          - 'status=0; python3 -c "import cryptography; print(''cryptography='' + cryptography.__version__)" >> ci-artifacts/phase-c2-dependencies.log 2>&1 || status=$?; tail -n 1 ci-artifacts/phase-c2-dependencies.log; if [ "$status" -ne 0 ]; then exit "$status"; fi'
           - mkdir -p /dev/shm/phase-c2-nodev
           - findmnt -no OPTIONS /dev/shm | tee ci-artifacts/phase-c2-nodev-mount.log
           - findmnt -no OPTIONS /dev/shm | grep -Eq '(^|,)nodev(,|$)'
