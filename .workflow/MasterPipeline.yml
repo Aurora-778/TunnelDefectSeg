@@ -28,9 +28,10 @@ stages:
           - git merge-base --is-ancestor 18d9cc2cb6933ebd58b5509162aaa1227db5314e HEAD || exit $?
           - 'status=0; python3 -m pip install --disable-pip-version-check --only-binary=:all: -i https://pypi.tuna.tsinghua.edu.cn/simple cryptography > ci-artifacts/phase-c2-dependencies.log 2>&1 || status=$?; cat ci-artifacts/phase-c2-dependencies.log; if [ "$status" -ne 0 ]; then exit "$status"; fi'
           - 'status=0; python3 -c "import cryptography; print(''cryptography='' + cryptography.__version__)" >> ci-artifacts/phase-c2-dependencies.log 2>&1 || status=$?; tail -n 1 ci-artifacts/phase-c2-dependencies.log; if [ "$status" -ne 0 ]; then exit "$status"; fi'
-          - mkdir -p /dev/shm/phase-c2-nodev
           - findmnt -no OPTIONS /dev/shm | tee ci-artifacts/phase-c2-nodev-mount.log
-          - findmnt -no OPTIONS /dev/shm | grep -Eq '(^|,)nodev(,|$)'
+          - 'status=0; mount -o remount,nodev /dev/shm >> ci-artifacts/phase-c2-nodev-mount.log 2>&1 || status=$?; findmnt -no OPTIONS /dev/shm | tee -a ci-artifacts/phase-c2-nodev-mount.log; if [ "$status" -ne 0 ]; then exit "$status"; fi'
+          - 'status=0; findmnt -no OPTIONS /dev/shm | grep -Eq ''(^|,)nodev(,|$)'' || status=$?; if [ "$status" -ne 0 ]; then exit "$status"; fi'
+          - mkdir -p /dev/shm/phase-c2-nodev
           - status=0; PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -q -p no:cacheprovider > ci-artifacts/phase-c2-full.log 2>&1 || status=$?; cat ci-artifacts/phase-c2-full.log; if [ "$status" -ne 0 ]; then exit "$status"; fi
           - status=0; PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_admission.py -k native_linux -q -p no:cacheprovider > ci-artifacts/phase-c2-linux-native.log 2>&1 || status=$?; cat ci-artifacts/phase-c2-linux-native.log; if [ "$status" -ne 0 ]; then exit "$status"; fi
           - status=0; PHASE_C2_NODEV_ROOT=/dev/shm/phase-c2-nodev python3 -m pytest --rootdir . tests/test_inspection_review_commit.py -q -p no:cacheprovider > ci-artifacts/phase-c3-full.log 2>&1 || status=$?; cat ci-artifacts/phase-c3-full.log; if [ "$status" -ne 0 ]; then exit "$status"; fi
