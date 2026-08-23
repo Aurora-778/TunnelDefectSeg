@@ -12,6 +12,10 @@ Policy semantics and it does not make `human_verified` evidence into
 registration, scale, comparability, ground-truth, growth, causality, or
 prediction evidence.
 
+Phase C-3 inherits the Windows-x64-only production boundary from C-2.
+Unsupported platforms cannot obtain a C-2 authority-bearing result and fail
+closed before this adapter can transition State.
+
 ## Required order
 
 The production commit path is a linearized sequence:
@@ -55,15 +59,14 @@ The production commit path is a linearized sequence:
    write.  The artifact fence pins and rechecks the exact
    `root → runs → run_id → artifacts` identity chain, canonical bytes,
    decision token, leaf identity, and SHA-256.  Windows retains a
-   no-write/no-delete artifact handle; POSIX has no mandatory ancestor-entry
-   exclusion and therefore returns zero authority rather than trusting a moved
-   `artifacts` descriptor.
+   no-write/no-delete artifact handle. Unsupported platforms cannot enter this
+   authority-bearing path.
 
    A separate Active Run recovery/release control-entry fence is acquired
    before entering `StateStore.transition_status` and remains held through
    recovery, pending/terminal journal writes, CAS, and verification.  Neither
-   POSIX advisory locks nor Windows directory share modes supply a mandatory
-   exclusion for creation of a sibling control file, so the current production
+   Windows directory share modes do not supply a mandatory exclusion for
+   creation of a sibling control file, so the current production
    adapter fails closed with zero authority before it can begin StateStore
    recovery or open a pending journal descriptor.  It does not substitute a
    check-then-use control-entry scan.  C-3 CAS availability is deliberately

@@ -15,6 +15,13 @@ Phase A/B API. Phase C is imported directly from the isolated
 `orchestrator.inspection_review_admission` module; it is deliberately not
 re-exported from `orchestrator.inspection_workflow`.
 
+Phase C-2 production admission is supported only on Windows x64. Its trusted
+filesystem boundary uses handle-relative Windows native opens, rejects every
+reparse point, and binds stable volume/file identity. Other platforms return
+the complete zero-authority result before reading project files. The removed
+POSIX backend and Linux-native CI are not part of the supported product or its
+security claims.
+
 The validator may return `human_verified` only when all trusted bindings pass.
 An input field, unsigned JSON document, reviewer name, or SHA-256 alone cannot
 establish human identity or review authority.

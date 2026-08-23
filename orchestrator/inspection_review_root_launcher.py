@@ -1,4 +1,4 @@
-"""Trusted service-side project-root establishment for Phase C-2."""
+"""Trusted Windows-x64 project-root establishment for Phase C-2."""
 
 from __future__ import annotations
 
@@ -20,8 +20,6 @@ from orchestrator.inspection_review_root_capability import (
 
 if sys.platform == "win32":
     from orchestrator import _inspection_review_fs_windows as _fs
-elif sys.platform == "linux":
-    from orchestrator import _inspection_review_fs_posix as _fs
 else:
     _fs = None
 
@@ -55,9 +53,9 @@ def _readline_bounded(stream: Any, deadline: float) -> bytes:
 
 
 def _identity_payload(value: Any) -> dict[str, object]:
-    if sys.platform == "win32":
-        return {"volume_serial": value.volume_serial, "file_id": value.file_id.hex()}
-    return {"device": value.device, "inode": value.inode}
+    if sys.platform != "win32":
+        raise ValueError("Phase C-2 production admission requires Windows x64")
+    return {"volume_serial": value.volume_serial, "file_id": value.file_id.hex()}
 
 
 def _trusted_hashes(value: object) -> frozenset[str]:
@@ -185,15 +183,13 @@ class _TrustedProjectRootLauncher:
         validation: bytes | None = None
         committing = False
         try:
-            startupinfo = None
-            popen_kwargs: dict[str, object] = {"close_fds": True}
-            if sys.platform == "win32":
-                os.set_handle_inheritable(transfer, True)
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.lpAttributeList = {"handle_list": [transfer]}
-                popen_kwargs["startupinfo"] = startupinfo
-            else:
-                popen_kwargs["pass_fds"] = (transfer,)
+            os.set_handle_inheritable(transfer, True)
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.lpAttributeList = {"handle_list": [transfer]}
+            popen_kwargs: dict[str, object] = {
+                "close_fds": True,
+                "startupinfo": startupinfo,
+            }
             process = subprocess.Popen(
                 [sys.executable, "-m", "orchestrator.inspection_review_admission"],
                 stdin=subprocess.PIPE,
@@ -201,8 +197,7 @@ class _TrustedProjectRootLauncher:
                 stderr=subprocess.PIPE,
                 **popen_kwargs,
             )
-            if sys.platform == "win32":
-                os.set_handle_inheritable(transfer, False)
+            os.set_handle_inheritable(transfer, False)
             assert process.stdin is not None and process.stdout is not None
             setup = {
                 "handle": transfer,

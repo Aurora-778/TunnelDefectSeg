@@ -8,7 +8,6 @@ import io
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import threading
@@ -36,7 +35,6 @@ from orchestrator.inspection_review_admission import (
     sign_review_decision,
 )
 from orchestrator.inspection_review_root_capability import CONTEXT_UNAVAILABLE
-from orchestrator.inspection_review_root_capability import FORK_GUARD_EXIT_CODE
 from orchestrator.inspection_review_root_launcher import establish_review_project_root
 
 
@@ -198,33 +196,6 @@ def _windows_context(tmp_path: Path, snapshot: bytes) -> tuple[object, object, o
     return launcher._transfer_context_for_local_admission(), launcher, kernel32, root_handle
 
 
-def _linux_context(nodev_root: Path, snapshot: bytes) -> tuple[object, object, int]:
-    project = nodev_root / "project"
-    work = project / "runs" / RUN_ID / "work"
-    work.mkdir(parents=True, exist_ok=True)
-    (work / "association_records.csv").write_bytes(snapshot)
-    root_fd = os.open(nodev_root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    launcher = establish_review_project_root(
-        trusted_root_handle=root_fd,
-        project_components=("project",),
-        expected_project_id=PROJECT_ID,
-        project_root=str(project),
-    )
-    return launcher._transfer_context_for_local_admission(), launcher, root_fd
-
-
-@pytest.fixture
-def linux_nodev_root() -> Path:
-    if sys.platform != "linux":
-        pytest.skip("native Linux handle test")
-    value = os.environ.get("PHASE_C2_NODEV_ROOT")
-    if not value:
-        pytest.fail("PHASE_C2_NODEV_ROOT is required for native Linux Phase C-2 tests")
-    root = Path(value)
-    assert root.is_dir()
-    return root
-
-
 def test_unavailable_context_and_api_misuse_boundary() -> None:
     _zero(
         admit_review_decision(
@@ -246,6 +217,45 @@ def test_unavailable_context_and_api_misuse_boundary() -> None:
             trusted_authority_sha256=set(),
             accepted_at="2025-01-01T00:00:00Z",  # type: ignore[call-arg]
         )
+
+
+def test_non_windows_platform_is_unconditionally_zero_authority() -> None:
+    root = Path(__file__).parents[1]
+    code = """
+import sys
+sys.path.insert(0, __REPO_ROOT__)
+sys.platform = 'linux'
+from orchestrator.inspection_review_admission import admit_review_decision
+from orchestrator.inspection_review_root_capability import CONTEXT_UNAVAILABLE
+from orchestrator.inspection_review_root_launcher import (
+    LAUNCHER_UNAVAILABLE, establish_review_project_root,
+)
+launcher = establish_review_project_root(
+    trusted_root_handle=123,
+    project_components=('project',),
+    expected_project_id='project',
+    project_root='/must/not/be/opened',
+)
+assert launcher is LAUNCHER_UNAVAILABLE
+result = admit_review_decision(
+    project_context=CONTEXT_UNAVAILABLE,
+    expected_run_id='run_001',
+    expected_association_id='assoc_001',
+    decision_bytes=b'{}',
+    authority_evidence_bytes=b'{}',
+    trusted_authority_sha256={'0' * 64},
+)
+assert result.status == 'review_invalid'
+assert result.denial_codes == ('review_decision_invalid',)
+assert all(getattr(result, name) is None for name in (
+    'decision_sha256', 'association_snapshot_sha256',
+    'authority_evidence_sha256', 'run_id', 'association_id',
+    'reviewer_id', 'accepted_at',
+))
+assert 'orchestrator._inspection_review_fs_posix' not in sys.modules
+"""
+    code = code.replace("__REPO_ROOT__", repr(str(root)))
+    subprocess.run([sys.executable, "-I", "-c", code], cwd=root, check=True)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="native Windows handle test")
@@ -331,128 +341,6 @@ def test_native_windows_launcher_close_is_owner_thread_only(tmp_path: Path) -> N
         kernel32.CloseHandle(root_handle)
 
 
-def test_native_linux_fixed_snapshot_and_fork_fail_stop(linux_nodev_root: Path) -> None:
-    snapshot = _csv_bytes()
-    context, launcher, root_fd = _linux_context(linux_nodev_root, snapshot)
-    key = Ed25519PrivateKey.generate()
-    authority, authority_hash = _authority(key)
-    try:
-        result = admit_review_decision(
-            project_context=context,
-            expected_run_id=RUN_ID,
-            expected_association_id=ASSOCIATION_ID,
-            decision_bytes=_decision(key, authority_hash, snapshot),
-            authority_evidence_bytes=authority,
-            trusted_authority_sha256={authority_hash},
-        )
-        assert result.status == "human_verified"
-        child = os.fork()
-        if child == 0:
-            os._exit(0)
-        _, status = os.waitpid(child, 0)
-        assert os.waitstatus_to_exitcode(status) == FORK_GUARD_EXIT_CODE
-    finally:
-        context.close()
-        launcher.close()
-        os.close(root_fd)
-
-
-def test_native_linux_child_ready_commit_admission(linux_nodev_root: Path) -> None:
-    snapshot = _csv_bytes()
-    context, launcher, root_fd = _linux_context(linux_nodev_root, snapshot)
-    context.close()
-    key = Ed25519PrivateKey.generate()
-    authority, authority_hash = _authority(key)
-    try:
-        validation = launcher._run_child_admission(
-            expected_run_id=RUN_ID,
-            expected_association_id=ASSOCIATION_ID,
-            decision_bytes=_decision(key, authority_hash, snapshot),
-            authority_evidence_bytes=authority,
-            trusted_authority_sha256={authority_hash},
-        )
-        assert validation is not None
-        assert json.loads(validation)["status"] == "human_verified"
-    finally:
-        launcher.close()
-        os.close(root_fd)
-
-
-@pytest.mark.parametrize("leaf_kind", ["fifo", "socket", "directory"])
-def test_native_linux_nonregular_leaf_fails_bounded(
-    linux_nodev_root: Path, leaf_kind: str
-) -> None:
-    snapshot = _csv_bytes()
-    context, launcher, root_fd = _linux_context(linux_nodev_root, snapshot)
-    leaf = linux_nodev_root / "project" / "runs" / RUN_ID / "work" / "association_records.csv"
-    leaf.unlink()
-    listener: socket.socket | None = None
-    if leaf_kind == "fifo":
-        os.mkfifo(leaf)
-    elif leaf_kind == "socket":
-        listener = socket.socket(socket.AF_UNIX)
-        listener.bind(str(leaf))
-    else:
-        leaf.mkdir()
-    started = datetime.now(timezone.utc)
-    try:
-        result = admit_review_decision(
-            project_context=context,
-            expected_run_id=RUN_ID,
-            expected_association_id=ASSOCIATION_ID,
-            decision_bytes=b"{}",
-            authority_evidence_bytes=b"{}",
-            trusted_authority_sha256={"0" * 64},
-        )
-        _zero(result)
-        assert datetime.now(timezone.utc) - started < timedelta(seconds=2)
-    finally:
-        if listener is not None:
-            listener.close()
-        if leaf_kind == "directory":
-            leaf.rmdir()
-        else:
-            leaf.unlink(missing_ok=True)
-        context.close()
-        launcher.close()
-        os.close(root_fd)
-
-
-def test_native_linux_nodev_capability_failures(
-    linux_nodev_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import orchestrator._inspection_review_fs_posix as posix_fs
-
-    ordinary = tmp_path / "ordinary"
-    (ordinary / "project").mkdir(parents=True)
-    ordinary_fd = os.open(ordinary, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    try:
-        from orchestrator.inspection_review_root_launcher import LAUNCHER_UNAVAILABLE
-
-        flags = os.fstatvfs(ordinary_fd).f_flag
-        assert not flags & os.ST_NODEV, "CI ordinary filesystem unexpectedly has nodev"
-        assert establish_review_project_root(
-            trusted_root_handle=ordinary_fd,
-            project_components=("project",),
-            expected_project_id=PROJECT_ID,
-            project_root=str(ordinary / "project"),
-        ) is LAUNCHER_UNAVAILABLE
-    finally:
-        os.close(ordinary_fd)
-
-    nodev_fd = os.open(linux_nodev_root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    monkeypatch.setattr(posix_fs, "_ST_NODEV", None)
-    try:
-        assert establish_review_project_root(
-            trusted_root_handle=nodev_fd,
-            project_components=("project",),
-            expected_project_id=PROJECT_ID,
-            project_root=str(linux_nodev_root / "project"),
-        ) is LAUNCHER_UNAVAILABLE
-    finally:
-        os.close(nodev_fd)
-
-
 @pytest.mark.skipif(sys.platform != "win32", reason="native Windows handle test")
 def test_native_windows_allowlist_exact_types_and_replay_fail_closed(tmp_path: Path) -> None:
     class EvilSet(set):
@@ -520,7 +408,7 @@ def test_native_windows_allowlist_exact_types_and_replay_fail_closed(tmp_path: P
 
 def test_capability_close_failure_is_structurally_fail_stop() -> None:
     root = Path(__file__).parents[1]
-    for backend in ("_inspection_review_fs_windows.py", "_inspection_review_fs_posix.py"):
+    for backend in ("_inspection_review_fs_windows.py",):
         tree = ast.parse((root / "orchestrator" / backend).read_text(encoding="utf-8"))
         function = next(
             node for node in tree.body
@@ -539,21 +427,14 @@ def test_capability_close_failure_is_structurally_fail_stop() -> None:
 
 
 def test_native_close_failure_exits_isolated_process_with_fixed_code() -> None:
+    if sys.platform != "win32":
+        pytest.skip("Phase C-2 production admission is Windows-only")
     root = Path(__file__).parents[1]
-    if sys.platform == "win32":
-        body = """
+    body = """
 import orchestrator._inspection_review_fs_windows as backend
 backend.close = lambda handle: (_ for _ in ()).throw(OSError('injected'))
 backend.close_capability(123)
 """
-    elif sys.platform == "linux":
-        body = """
-import orchestrator._inspection_review_fs_posix as backend
-backend.os.close = lambda handle: (_ for _ in ()).throw(OSError('injected'))
-backend.close_capability(123)
-"""
-    else:
-        pytest.skip("unsupported Phase C-2 platform")
     code = f"import sys; sys.path.insert(0, {str(root)!r})\n{body}"
     completed = subprocess.run([sys.executable, "-I", "-c", code], cwd=root, check=False)
     assert completed.returncode == 198
@@ -1024,7 +905,6 @@ def test_production_modules_do_not_reference_forbidden_boundaries() -> None:
         root / "orchestrator/inspection_review_admission.py",
         root / "orchestrator/inspection_review_root_capability.py",
         root / "orchestrator/inspection_review_root_launcher.py",
-        root / "orchestrator/_inspection_review_fs_posix.py",
         root / "orchestrator/_inspection_review_fs_windows.py",
     ]
     forbidden = ("state", "locking", "resume", "manifest", "publication", "claim")
@@ -1047,20 +927,15 @@ def test_production_import_graph_has_an_explicit_top_level_allowlist() -> None:
             "unicodedata", "dataclasses", "datetime", "typing",
             "orchestrator.inspection_review_root_capability",
             "orchestrator._inspection_review_fs_windows",
-            "orchestrator._inspection_review_fs_posix",
             "cryptography.hazmat.primitives.asymmetric.ed25519",
         },
         "orchestrator.inspection_review_root_capability": {
-            "__future__", "os", "sys", "threading", "typing", "orchestrator",
+            "__future__", "sys", "threading", "typing", "orchestrator",
         },
         "orchestrator.inspection_review_root_launcher": {
             "__future__", "_thread", "base64", "json", "os", "re", "subprocess",
             "sys", "time", "typing", "orchestrator",
             "orchestrator.inspection_review_root_capability",
-        },
-        "orchestrator._inspection_review_fs_posix": {
-            "__future__", "ctypes", "errno", "fcntl", "os", "platform", "select",
-            "stat", "dataclasses",
         },
         "orchestrator._inspection_review_fs_windows": {
             "__future__", "ctypes", "errno", "msvcrt", "os", "platform", "dataclasses",
@@ -1097,9 +972,10 @@ def test_phase_c2_exact_diff_stays_inside_reviewed_scope() -> None:
     )
     allowed = {
         ".github/workflows/phase-c2-native.yml",
-        ".workflow/MasterPipeline.yml",
-        "docs/inspection_association_review_decision_contract.md",
-        "orchestrator/_inspection_review_fs_posix.py",
+            ".workflow/MasterPipeline.yml",
+            "docs/inspection_association_review_decision_contract.md",
+            "docs/superpowers/specs/2026-08-13-phase-c2-read-only-review-admission-design.md",
+            "orchestrator/_inspection_review_fs_posix.py",
         "orchestrator/_inspection_review_fs_windows.py",
         "orchestrator/inspection_review_admission.py",
         "orchestrator/inspection_review_root_capability.py",
@@ -1190,16 +1066,11 @@ def test_admission_clock_and_authority_factory_are_structurally_closed() -> None
         assert required in verifier_calls
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="production admission is Windows-only")
 def test_fresh_process_import_and_execution_never_load_forbidden_modules(tmp_path: Path) -> None:
     root = Path(__file__).parents[1]
     dependency_root = Path(cryptography.__file__).parents[1]
-    if sys.platform == "linux":
-        nodev_root = os.environ.get("PHASE_C2_NODEV_ROOT")
-        if not nodev_root:
-            pytest.skip("real Linux capability audit requires PHASE_C2_NODEV_ROOT")
-        capability_root = Path(nodev_root) / f"phase-c2-audit-{os.getpid()}"
-    else:
-        capability_root = tmp_path / "audit-root"
+    capability_root = tmp_path / "audit-root"
     project = capability_root / "project"
     leaf = project / "runs" / RUN_ID / "work" / "association_records.csv"
     leaf.parent.mkdir(parents=True)
@@ -1232,15 +1103,12 @@ from orchestrator.inspection_review_root_capability import CONTEXT_UNAVAILABLE
 from orchestrator.inspection_review_admission import admit_review_decision
 from orchestrator.inspection_review_root_launcher import establish_review_project_root
 container={str(capability_root)!r}
-if sys.platform == 'win32':
-    from ctypes import wintypes
-    kernel32=ctypes.WinDLL('kernel32',use_last_error=True)
-    kernel32.CreateFileW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,wintypes.LPVOID,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
-    kernel32.CreateFileW.restype=wintypes.HANDLE
-    kernel32.CloseHandle.argtypes=[wintypes.HANDLE]
-    trusted=int(kernel32.CreateFileW(container,0x0080|0x00100000,0x00000007,None,3,0x02000000,None))
-else:
-    trusted=os.open(container,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC)
+from ctypes import wintypes
+kernel32=ctypes.WinDLL('kernel32',use_last_error=True)
+kernel32.CreateFileW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD,wintypes.LPVOID,wintypes.DWORD,wintypes.DWORD,wintypes.HANDLE]
+kernel32.CreateFileW.restype=wintypes.HANDLE
+kernel32.CloseHandle.argtypes=[wintypes.HANDLE]
+trusted=int(kernel32.CreateFileW(container,0x0080|0x00100000,0x00000007,None,3,0x02000000,None))
 launcher=establish_review_project_root(trusted_root_handle=trusted,project_components=('project',),expected_project_id={PROJECT_ID!r},project_root={str(project)!r})
 context=launcher._transfer_context_for_local_admission()
 authority=base64.b64decode({base64.b64encode(authority).decode()!r})
@@ -1266,9 +1134,7 @@ loaded=tuple(name.lower() for name in sys.modules)
 for forbidden in {sorted(denylist)!r}:
     assert forbidden.lower() not in loaded,(forbidden,loaded)
 print('RESULT:'+json.dumps(branches,sort_keys=True))
-context.close(); launcher.close()
-if sys.platform == 'win32': kernel32.CloseHandle(trusted)
-else: os.close(trusted)
+context.close(); launcher.close(); kernel32.CloseHandle(trusted)
 """
     try:
         completed = subprocess.run(
@@ -1296,7 +1162,6 @@ def test_no_path_based_snapshot_open_or_forbidden_dynamic_imports() -> None:
         root / "orchestrator/inspection_review_admission.py",
         root / "orchestrator/inspection_review_root_capability.py",
         root / "orchestrator/inspection_review_root_launcher.py",
-        root / "orchestrator/_inspection_review_fs_posix.py",
         root / "orchestrator/_inspection_review_fs_windows.py",
     ]
     forbidden_calls = {"open", "eval", "exec", "__import__"}

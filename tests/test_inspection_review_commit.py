@@ -952,77 +952,6 @@ def test_artifact_fence_rejects_each_pinned_ancestor_identity_change(
         fence._verify_ancestor_bindings()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX ancestor-swap regression")
-@pytest.mark.parametrize("replacement", ["delete", "different_bytes", "same_bytes_new_inode"])
-def test_posix_artifact_directory_replacement_after_fresh_lock_is_zero_authority(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str
-) -> None:
-    """A whole ``artifacts`` directory replacement can never authorize CAS."""
-
-    _, lock_token = _waiting_run(tmp_path)
-    journal = tmp_path / "runs" / RUN_ID / "state_journal.jsonl"
-    journal_before = journal.read_bytes()
-    real_acquire = review_commit.acquire_waiting_review_lock
-    injected = False
-
-    def acquire_then_replace(project_root: Path, **kwargs: object) -> object:
-        nonlocal injected
-        receipt = real_acquire(project_root, **kwargs)
-        injected = True
-        artifacts = tmp_path / "runs" / RUN_ID / "artifacts"
-        moved = artifacts.with_name("artifacts.replaced")
-        original = (artifacts / "review_decision.json").read_bytes()
-        artifacts.rename(moved)
-        if replacement != "delete":
-            artifacts.mkdir()
-            leaf = artifacts / "review_decision.json"
-            leaf.write_bytes(
-                original if replacement == "same_bytes_new_inode" else b"different artifact directory"
-            )
-        return receipt
-
-    monkeypatch.setattr(review_commit, "acquire_waiting_review_lock", acquire_then_replace)
-    result = _call(tmp_path, lock_token, monkeypatch=monkeypatch, status="human_verified")
-
-    assert injected
-    _assert_zero_authority(result)
-    assert result.denial_codes == ("review_artifact_changed",)
-    assert StateStore(tmp_path).load(run_id=RUN_ID)["status"] == "WAITING_FOR_REVIEW"
-    assert journal.read_bytes() == journal_before
-    assert not (tmp_path / "runs" / ".active_run.lock").exists()
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX unlink-while-open race")
-def test_artifact_reader_rejects_same_content_leaf_replacement_during_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A stable descriptor is insufficient when its final name was replaced."""
-
-    artifact = tmp_path / "runs" / RUN_ID / "artifacts" / "review_decision.json"
-    artifact.parent.mkdir(parents=True)
-    original = b"x" * (2 * 64 * 1024)
-    artifact.write_bytes(original)
-    real_read = review_commit.os.read
-    replaced = False
-
-    def read_then_replace(descriptor: int, size: int) -> bytes:
-        nonlocal replaced
-        chunk = real_read(descriptor, size)
-        if not replaced:
-            replaced = True
-            artifact.unlink()
-            artifact.write_bytes(original)
-        return chunk
-
-    monkeypatch.setattr(review_commit.os, "read", read_then_replace)
-    with pytest.raises(ValueError, match="name changed during read"):
-        review_commit._read_existing_artifact(
-            tmp_path,
-            f"runs/{RUN_ID}/artifacts/review_decision.json",
-            run_id=RUN_ID,
-        )
-
-
 def test_artifact_reader_rejects_same_inode_content_rewrite_during_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1453,6 +1382,7 @@ def test_c3_adapter_has_no_direct_forbidden_module_imports() -> None:
     assert not any(any(token in name for token in forbidden) for name in imported)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="production admission is Windows-only")
 def test_c3_fresh_process_import_and_execution_stays_out_of_forbidden_modules() -> None:
     root = Path(__file__).parents[1]
     code = """
@@ -1502,16 +1432,10 @@ def transition(store, lock_token, version, current, next_status, second):
         },
     )
 
-nodev_parent = None
-if sys.platform == 'linux':
-    nodev_value = os.environ.get('PHASE_C2_NODEV_ROOT')
-    assert nodev_value, 'PHASE_C2_NODEV_ROOT is required for Linux C3 import audit'
-    nodev_parent = nodev_value
-
-with tempfile.TemporaryDirectory(dir=nodev_parent) as directory:
+with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
-    real_c2 = sys.platform in ('win32', 'linux')
-    assert real_c2, 'fresh-process C3 audit requires a native C2 capability backend'
+    real_c2 = sys.platform == 'win32'
+    assert real_c2, 'fresh-process C3 audit requires Windows x64'
     launcher = None
     kernel32 = None
     root_handle = None
@@ -1524,24 +1448,21 @@ with tempfile.TemporaryDirectory(dir=nodev_parent) as directory:
     leaf = project / 'runs' / RUN_ID / 'work' / 'association_records.csv'
     leaf.parent.mkdir(parents=True)
     leaf.write_bytes(snapshot)
-    if sys.platform == 'win32':
-        import ctypes
-        from ctypes import wintypes
+    import ctypes
+    from ctypes import wintypes
 
-        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-        kernel32.CreateFileW.argtypes = [
-            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
-            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
-        ]
-        kernel32.CreateFileW.restype = wintypes.HANDLE
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
-        root_handle = kernel32.CreateFileW(
-            str(root), 0x0080 | 0x00100000, 0x00000007, None, 3, 0x02000000, None
-        )
-        assert int(root_handle) not in (0, -1)
-    else:
-        root_handle = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    root_handle = kernel32.CreateFileW(
+        str(root), 0x0080 | 0x00100000, 0x00000007, None, 3, 0x02000000, None
+    )
+    assert int(root_handle) not in (0, -1)
     launcher = establish_review_project_root(
         trusted_root_handle=int(root_handle),
         project_components=('project',),
@@ -1674,10 +1595,7 @@ with tempfile.TemporaryDirectory(dir=nodev_parent) as directory:
     assert StateStore(root).load(run_id=RUN_ID)['status'] == 'WAITING_FOR_REVIEW'
     project_context.close()
     launcher.close()
-    if sys.platform == 'win32':
-        assert kernel32.CloseHandle(root_handle)
-    else:
-        os.close(root_handle)
+    assert kernel32.CloseHandle(root_handle)
 
 loaded = sorted(sys.modules)
 for forbidden in ('claim', 'manifest', 'publication', 'resume'):

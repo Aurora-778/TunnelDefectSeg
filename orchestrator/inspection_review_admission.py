@@ -1,9 +1,10 @@
-"""Isolated Phase C-2 fixed-snapshot review admission.
+"""Windows-x64 Phase C-2 fixed-snapshot review admission.
 
 This module deliberately does not mutate workflow State, locks, Manifests, or
 Claim Policy.  It validates immutable bytes and returns a zero-authority result
 on every failure.  A caller may use ``human_verified`` only from a successful
 result produced here; input JSON can never assert that state directly.
+Unsupported platforms fail closed before any project-file access.
 """
 
 from __future__ import annotations
@@ -28,8 +29,6 @@ from orchestrator.inspection_review_root_capability import (
 
 if sys.platform == "win32":
     from orchestrator import _inspection_review_fs_windows as _fs
-elif sys.platform == "linux":
-    from orchestrator import _inspection_review_fs_posix as _fs
 else:
     _fs = None
 
@@ -785,17 +784,13 @@ def _write_control_message(value: dict[str, object]) -> None:
 
 
 def _decode_identity(value: object) -> object:
-    if sys.platform == "win32":
-        if type(value) is not dict or set(value) != {"volume_serial", "file_id"}:
-            raise ValueError("Windows handle identity is invalid")
-        if type(value["volume_serial"]) is not int or type(value["file_id"]) is not str:
-            raise ValueError("Windows handle identity is invalid")
-        return _fs.HandleIdentity(value["volume_serial"], bytes.fromhex(value["file_id"]))
-    if type(value) is not dict or set(value) != {"device", "inode"}:
-        raise ValueError("POSIX handle identity is invalid")
-    if type(value["device"]) is not int or type(value["inode"]) is not int:
-        raise ValueError("POSIX handle identity is invalid")
-    return _fs.HandleIdentity(value["device"], value["inode"])
+    if sys.platform != "win32" or _fs is None:
+        raise ValueError("Phase C-2 production admission requires Windows x64")
+    if type(value) is not dict or set(value) != {"volume_serial", "file_id"}:
+        raise ValueError("Windows handle identity is invalid")
+    if type(value["volume_serial"]) is not int or type(value["file_id"]) is not str:
+        raise ValueError("Windows handle identity is invalid")
+    return _fs.HandleIdentity(value["volume_serial"], bytes.fromhex(value["file_id"]))
 
 
 def _validation_payload(result: ReviewDecisionValidation) -> dict[str, object]:

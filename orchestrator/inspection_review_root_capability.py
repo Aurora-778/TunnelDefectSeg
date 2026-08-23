@@ -1,35 +1,19 @@
-"""Opaque child-owned project-root capability for Phase C-2 admission."""
+"""Opaque Windows-x64 project-root capability for Phase C-2 admission."""
 
 from __future__ import annotations
 
-import os
 import sys
 import threading
 from typing import Any
 
 if sys.platform == "win32":
     from orchestrator import _inspection_review_fs_windows as _fs
-elif sys.platform == "linux":
-    from orchestrator import _inspection_review_fs_posix as _fs
 else:
     _fs = None
 
 
-FORK_GUARD_EXIT_CODE = 197
 _CONTEXT_TOKEN = object()
 _READY_TOKEN = object()
-_FORK_GUARD_INSTALLED = False
-
-
-def _fork_child_exit() -> None:
-    os._exit(FORK_GUARD_EXIT_CODE)
-
-
-def _install_fork_guard() -> None:
-    global _FORK_GUARD_INSTALLED
-    if sys.platform == "linux" and not _FORK_GUARD_INSTALLED:
-        os.register_at_fork(after_in_child=_fork_child_exit)
-        _FORK_GUARD_INSTALLED = True
 
 
 class _UnavailableContext:
@@ -157,7 +141,6 @@ def _bootstrap_review_project_context(
     owned: int | None = None
     source_open = True
     try:
-        _install_fork_guard()
         project_id = _safe_text(expected_project_id, maximum=128)
         descriptive_root = _safe_text(project_root, maximum=4096)
         owned = _fs.duplicate(source_handle)

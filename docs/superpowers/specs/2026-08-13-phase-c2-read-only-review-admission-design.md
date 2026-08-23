@@ -1,5 +1,13 @@
 # Phase C-2 Read-Only Review Admission Design
 
+> **Current platform decision (supersedes every platform statement below):**
+> Phase C-2 production admission is Windows x64 only. The POSIX backend and
+> Linux-native CI were removed during scope convergence. On Linux, macOS, BSD,
+> and every other unsupported platform, launcher establishment returns the
+> unavailable capability and admission returns complete zero authority before
+> project-file access. The remaining POSIX/Linux text is retained only as a
+> non-normative historical design record and does not describe supported code.
+
 ## Objective
 
 Turn the Phase C signed-review foundation into a production-shaped, read-only
