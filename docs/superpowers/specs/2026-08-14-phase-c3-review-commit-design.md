@@ -13,14 +13,16 @@ registration, scale, comparability, ground-truth, growth, causality, or
 prediction evidence.
 
 Phase C-3 inherits the Windows-x64-only production boundary from C-2.
-Unsupported platforms cannot obtain a C-2 authority-bearing result and fail
-closed before this adapter can transition State.
+The public entry checks that boundary before constructing `StateStore`, reading
+State, validating an Active Run Lock, or accessing an artifact. Unsupported
+platforms return a complete zero-authority `review_platform_unavailable` result.
 
 ## Required order
 
 The production commit path is a linearized sequence:
 
-1. Read the canonical state and require `WAITING_FOR_REVIEW`.
+1. Require the Windows x64 platform capability, then read the canonical state
+   and require `WAITING_FOR_REVIEW`.
 2. Run the sole C-2 `admit_review_decision` entry point against the trusted
    project capability, exact Run/Association subject, current authority
    allowlist, and signed bytes.  Any invalid result returns a zero-authority
@@ -49,7 +51,7 @@ The production commit path is a linearized sequence:
    accepted timestamp) to be byte-for-byte equal to the artifact inputs.  A
    changed CSV snapshot, authority allowlist, signature, scope, validity
    window, revocation decision, or acceptance second therefore fails closed.
-7. If a future platform supplies a mandatory control-entry exclusion, perform
+7. If a future Windows x64 backend supplies a mandatory control-entry exclusion, perform
    one StateStore CAS transition using the expected `WAITING_FOR_REVIEW`
    status, expected state version, fresh lock token, and a canonical decision
    operation token.  `human_verified` then resumes as `RUNNING`;
@@ -64,8 +66,8 @@ The production commit path is a linearized sequence:
 
    A separate Active Run recovery/release control-entry fence is acquired
    before entering `StateStore.transition_status` and remains held through
-   recovery, pending/terminal journal writes, CAS, and verification.  Neither
-   Windows directory share modes do not supply a mandatory exclusion for
+   recovery, pending/terminal journal writes, CAS, and verification.  Windows
+   directory share modes do not supply a mandatory exclusion for
    creation of a sibling control file, so the current production
    adapter fails closed with zero authority before it can begin StateStore
    recovery or open a pending journal descriptor.  It does not substitute a
@@ -112,12 +114,13 @@ writer.
 
 ## Scope and exclusions
 
-Only the C-3 integration adapter, its lock re-acquisition primitive, its
-handle-relative Run-local artifact reader, the ``inspection_workflow`` package
-initializer needed for import isolation, the backwards-compatible StateStore
-pre-commit guard, its contract documentation, and focused tests may change in
-this slice.  Existing StateStore and Claim Policy contracts remain
-authoritative; StateStore schemas and reducers are out of scope and unchanged.
+This Windows-only repair may change only the C-3 integration adapter, the C-2
+Windows backend support probe and child entry gate, the C-2 and C-3 design
+documents, the dedicated Windows CI workflow, and focused C-2/C-3 tests.
+StateStore (including its schema and reducer), Active Run Lock, the
+``inspection_workflow`` package initializer, Claim Policy, Manifest,
+Publication, and Resume are zero-change boundaries. Their existing contracts
+remain authoritative.
 The adapter does not import or call Publication, Manifest, Claim Policy, or
 Resume modules; any later integration consumes the committed artifact through
 their existing public contracts.

@@ -1371,7 +1371,8 @@ def test_crash_residue_reuses_only_the_internal_decision_token(
 
 def test_c3_adapter_has_no_direct_forbidden_module_imports() -> None:
     path = Path(__file__).parents[1] / "orchestrator/inspection_workflow/review_commit.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"))
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
     imported = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -1380,6 +1381,88 @@ def test_c3_adapter_has_no_direct_forbidden_module_imports() -> None:
             imported.append((node.module or "").lower())
     forbidden = ("publication", "manifest", "claim", "resume")
     assert not any(any(token in name for token in forbidden) for name in imported)
+    assert "_posix_parent" not in source
+    assert "os.open(" not in source
+    assert "POSIX" not in source
+    assert source.count("os.name") == 1
+
+
+def test_non_windows_c3_gate_precedes_state_lock_and_artifact_access() -> None:
+    root = Path(__file__).parents[1]
+    code = f"""
+import sys
+sys.path.insert(0, {str(root)!r})
+sys.platform = 'linux'
+from orchestrator.inspection_workflow import review_commit
+
+def forbidden(*args, **kwargs):
+    raise AssertionError('unsupported Phase C reached protected project state')
+
+review_commit.StateStore = forbidden
+review_commit.validate_active_run_lock = forbidden
+review_commit.admit_review_decision = forbidden
+review_commit._read_existing_artifact = forbidden
+result = review_commit.commit_review_decision(
+    project_root='must-not-be-read',
+    project_context=object(),
+    run_id='run_001',
+    association_id='ASSOC-001',
+    waiting_lock_token='must-not-be-validated',
+    decision_bytes=b'{{}}',
+    authority_evidence_bytes=b'{{}}',
+    trusted_authority_sha256={{'0' * 64}},
+)
+assert result.status == 'review_commit_invalid'
+assert result.denial_codes == ('review_platform_unavailable',)
+assert all(getattr(result, name) is None for name in (
+    'artifact_path', 'artifact_sha256', 'decision_status', 'decision_sha256',
+    'association_snapshot_sha256', 'authority_evidence_sha256', 'run_id',
+    'association_id', 'reviewer_id', 'accepted_at', 'next_status',
+    'state_version', 'state_sha256',
+))
+"""
+    subprocess.run([sys.executable, "-I", "-c", code], cwd=root, check=True)
+
+
+def test_c3_platform_probe_exception_is_zero_authority() -> None:
+    root = Path(__file__).parents[1]
+    code = f"""
+import sys
+sys.path.insert(0, {str(root)!r})
+from orchestrator.inspection_workflow import review_commit
+
+def forbidden(*args, **kwargs):
+    raise AssertionError('failed platform probe reached protected project state')
+
+review_commit.sys.platform = 'win32'
+review_commit.os.name = 'nt'
+def broken_machine():
+    raise OSError('platform probe unavailable')
+review_commit.platform.machine = broken_machine
+review_commit.StateStore = forbidden
+review_commit.validate_active_run_lock = forbidden
+review_commit.admit_review_decision = forbidden
+review_commit._read_existing_artifact = forbidden
+result = review_commit.commit_review_decision(
+    project_root='must-not-be-read',
+    project_context=object(),
+    run_id='run_001',
+    association_id='ASSOC-001',
+    waiting_lock_token='must-not-be-validated',
+    decision_bytes=b'{{}}',
+    authority_evidence_bytes=b'{{}}',
+    trusted_authority_sha256={{'0' * 64}},
+)
+assert result.status == 'review_commit_invalid'
+assert result.denial_codes == ('review_platform_unavailable',)
+assert all(getattr(result, name) is None for name in (
+    'artifact_path', 'artifact_sha256', 'decision_status', 'decision_sha256',
+    'association_snapshot_sha256', 'authority_evidence_sha256', 'run_id',
+    'association_id', 'reviewer_id', 'accepted_at', 'next_status',
+    'state_version', 'state_sha256',
+))
+"""
+    subprocess.run([sys.executable, "-I", "-c", code], cwd=root, check=True)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="production admission is Windows-only")

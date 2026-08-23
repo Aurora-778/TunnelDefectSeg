@@ -1,4 +1,4 @@
-"""Phase C-3 review-decision preparation adapter.
+"""Windows-x64 Phase C-3 review-decision preparation adapter.
 
 This module is the first Phase C layer allowed to cross into the existing
 StateStore and Active Run Lock contracts.  It deliberately keeps the C-2
@@ -18,9 +18,11 @@ import hashlib
 import json
 from dataclasses import dataclass
 import os
+import platform
 from pathlib import Path
 import re
 import stat
+import sys
 from typing import Any
 import uuid
 
@@ -47,6 +49,17 @@ _SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _ACCEPTED_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 _MAX_REVIEW_ARTIFACT_BYTES = 128 * 1024
+
+
+def _windows_x64_available() -> bool:
+    try:
+        return (
+            sys.platform == "win32"
+            and os.name == "nt"
+            and platform.machine().upper() in {"AMD64", "X86_64"}
+        )
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,12 +325,9 @@ def _read_artifact_descriptor(descriptor: int) -> _ArtifactSnapshot:
     state = os.fstat(descriptor)
     if not stat.S_ISREG(state.st_mode):
         raise ValueError("review artifact is not a regular file")
-    if os.name == "nt":
-        identity = controlled_fs._win_handle_identity(
-            controlled_fs.msvcrt.get_osfhandle(descriptor)
-        )
-    else:
-        identity = (state.st_dev, state.st_ino)
+    identity = controlled_fs._win_handle_identity(
+        controlled_fs.msvcrt.get_osfhandle(descriptor)
+    )
     chunks: list[bytes] = []
     total = 0
     while True:
@@ -331,12 +341,11 @@ def _read_artifact_descriptor(descriptor: int) -> _ArtifactSnapshot:
     after = os.fstat(descriptor)
     if (after.st_dev, after.st_ino) != (state.st_dev, state.st_ino):
         raise ValueError("review artifact identity changed during read")
-    if os.name == "nt":
-        after_identity = controlled_fs._win_handle_identity(
-            controlled_fs.msvcrt.get_osfhandle(descriptor)
-        )
-        if after_identity != identity:
-            raise ValueError("review artifact handle identity changed during read")
+    after_identity = controlled_fs._win_handle_identity(
+        controlled_fs.msvcrt.get_osfhandle(descriptor)
+    )
+    if after_identity != identity:
+        raise ValueError("review artifact handle identity changed during read")
     return _ArtifactSnapshot(b"".join(chunks), identity)
 
 
@@ -345,29 +354,21 @@ def _require_artifact_name_binding(
 ) -> None:
     """Reject a leaf replacement that raced an otherwise stable read."""
 
-    if os.name == "nt":
-        handle = controlled_fs._nt_open(
-            parent,
-            leaf,
-            disposition=controlled_fs._FILE_OPEN,
-            directory=False,
-            access=controlled_fs._GENERIC_READ | controlled_fs._FILE_READ_ATTRIBUTES,
+    handle = controlled_fs._nt_open(
+        parent,
+        leaf,
+        disposition=controlled_fs._FILE_OPEN,
+        directory=False,
+        access=controlled_fs._GENERIC_READ | controlled_fs._FILE_READ_ATTRIBUTES,
+    )
+    named_descriptor = controlled_fs._win_fd_or_dispose(handle)
+    try:
+        named_identity = controlled_fs._win_handle_identity(
+            controlled_fs.msvcrt.get_osfhandle(named_descriptor)
         )
-        named_descriptor = controlled_fs._win_fd_or_dispose(handle)
-        try:
-            named_identity = controlled_fs._win_handle_identity(
-                controlled_fs.msvcrt.get_osfhandle(named_descriptor)
-            )
-        finally:
-            os.close(named_descriptor)
-        if named_identity != expected_identity:
-            raise ValueError("review artifact name changed during read")
-        return
-    entry = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
-    if (
-        not stat.S_ISREG(entry.st_mode)
-        or (entry.st_dev, entry.st_ino) != expected_identity
-    ):
+    finally:
+        os.close(named_descriptor)
+    if named_identity != expected_identity:
         raise ValueError("review artifact name changed during read")
 
 
@@ -379,8 +380,6 @@ def _win_open_artifact_exclusion(parent: int, leaf: str) -> int:
     ``NtCreateFile`` primitive and never falls back to a path-based open.
     """
 
-    if os.name != "nt":
-        raise OSError("Windows artifact exclusion is unavailable")
     buffer = ctypes.create_unicode_buffer(leaf)
     encoded = leaf.encode("utf-16-le")
     unicode_name = controlled_fs._UNICODE_STRING(
@@ -456,39 +455,22 @@ def _read_existing_artifact(
             raise ValueError("review artifact content changed during read")
         return second
 
-    if os.name == "nt":
-        try:
-            with controlled_fs._win_parent(Path(root), parts[:-1]) as parent:
-                handle = controlled_fs._nt_open(
-                    parent,
-                    parts[-1],
-                    disposition=controlled_fs._FILE_OPEN,
-                    directory=False,
-                    access=controlled_fs._GENERIC_READ | controlled_fs._FILE_READ_ATTRIBUTES,
-                )
-                descriptor = controlled_fs._win_fd_or_dispose(handle)
-                try:
-                    data = read_bound_descriptor(descriptor, parent)
-                finally:
-                    os.close(descriptor)
-        except FileNotFoundError:
-            return None
-    else:
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0)
-        )
-        try:
-            with controlled_fs._posix_parent(Path(root), parts[:-1]) as parent:
-                descriptor = os.open(parts[-1], flags, dir_fd=parent)
-                try:
-                    data = read_bound_descriptor(descriptor, parent)
-                finally:
-                    os.close(descriptor)
-        except FileNotFoundError:
-            return None
+    try:
+        with controlled_fs._win_parent(Path(root), parts[:-1]) as parent:
+            handle = controlled_fs._nt_open(
+                parent,
+                parts[-1],
+                disposition=controlled_fs._FILE_OPEN,
+                directory=False,
+                access=controlled_fs._GENERIC_READ | controlled_fs._FILE_READ_ATTRIBUTES,
+            )
+            descriptor = controlled_fs._win_fd_or_dispose(handle)
+            try:
+                data = read_bound_descriptor(descriptor, parent)
+            finally:
+                os.close(descriptor)
+    except FileNotFoundError:
+        return None
     return data
 
 
@@ -528,9 +510,7 @@ class _ArtifactCommitFence:
 
     The first verification occurs *inside* the StateStore journal append
     primitive.  Windows retains a read-only, no-write/no-delete handle and
-    rechecks every canonical ancestor.  POSIX has no equivalent mandatory
-    directory-entry exclusion, so it refuses an authority-bearing commit
-    rather than trusting a moved ``artifacts`` descriptor.
+    rechecks every canonical ancestor.
     """
 
     def __init__(
@@ -581,10 +561,6 @@ class _ArtifactCommitFence:
     def _open(self) -> None:
         try:
             self._capture_ancestor_identities()
-            if os.name != "nt":
-                raise _ArtifactCommitFenceError(
-                    "POSIX lacks mandatory artifact-ancestor exclusion"
-                )
             self._parent_context = controlled_fs._win_parent(
                 self._root, self._parts[:-1]
             )
@@ -677,9 +653,8 @@ def _acquire_mandatory_control_entry_exclusion(
     """Acquire a retained exclusion before any StateStore mutation work.
 
     A recovery lock or release tombstone is authority-blocking evidence.  The
-    available portable filesystem APIs cannot make a sibling-entry snapshot
-    atomic with a StateStore journal append: POSIX has no mandatory sibling
-    entry lock, while Windows directory sharing does not stop sibling creates.
+    Windows directory sharing cannot make a sibling-entry snapshot atomic with
+    a StateStore journal append because it does not stop sibling creates.
     Until a platform-specific mandatory primitive is supplied, this capability
     gate fails closed before ``StateStore.transition_status`` can begin
     recovery or open a pending record.
@@ -771,6 +746,9 @@ def commit_review_decision(
     filesystem primitives, this function returns zero authority before any
     StateStore CAS.
     """
+
+    if not _windows_x64_available():
+        return _zero("review_commit_invalid", "review_platform_unavailable")
 
     fresh_lock_token: str | None = None
     fresh_allocation_token: str | None = None

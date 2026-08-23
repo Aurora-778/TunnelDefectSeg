@@ -11,7 +11,14 @@ from ctypes import wintypes
 from dataclasses import dataclass
 
 
-_SUPPORTED = os.name == "nt" and platform.machine().upper() in {"AMD64", "X86_64"}
+def _platform_supported() -> bool:
+    try:
+        return os.name == "nt" and platform.machine().upper() in {"AMD64", "X86_64"}
+    except Exception:
+        return False
+
+
+_SUPPORTED = _platform_supported()
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 _FILE_READ_DATA = 0x0001
 _FILE_READ_ATTRIBUTES = 0x0080

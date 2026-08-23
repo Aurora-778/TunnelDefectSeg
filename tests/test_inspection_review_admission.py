@@ -222,14 +222,41 @@ def test_unavailable_context_and_api_misuse_boundary() -> None:
 def test_non_windows_platform_is_unconditionally_zero_authority() -> None:
     root = Path(__file__).parents[1]
     code = """
+import builtins
+import io
+import os
 import sys
 sys.path.insert(0, __REPO_ROOT__)
 sys.platform = 'linux'
-from orchestrator.inspection_review_admission import admit_review_decision
-from orchestrator.inspection_review_root_capability import CONTEXT_UNAVAILABLE
+import_trace = []
+def audit_imports(event, args):
+    if event == 'import' and args:
+        import_trace.append(str(args[0]))
+sys.addaudithook(audit_imports)
+from orchestrator.inspection_review_admission import _child_main, admit_review_decision
+from orchestrator.inspection_review_root_capability import (
+    CONTEXT_UNAVAILABLE, _bootstrap_review_project_context,
+)
 from orchestrator.inspection_review_root_launcher import (
     LAUNCHER_UNAVAILABLE, establish_review_project_root,
 )
+def forbidden_open(*args, **kwargs):
+    raise AssertionError('unsupported Phase C attempted path-based project access')
+builtins.open = forbidden_open
+io.open = forbidden_open
+os.open = forbidden_open
+project_access_events = []
+def audit_project_access(event, args):
+    if event == 'open' and args and 'must/not/be' in str(args[0]).replace('\\\\', '/'):
+        project_access_events.append((event, str(args[0])))
+sys.addaudithook(audit_project_access)
+bootstrap = _bootstrap_review_project_context(
+    source_handle=123,
+    expected_identity=object(),
+    expected_project_id='project',
+    project_root='/must/not/be-opened',
+)
+assert bootstrap is CONTEXT_UNAVAILABLE
 launcher = establish_review_project_root(
     trusted_root_handle=123,
     project_components=('project',),
@@ -252,9 +279,107 @@ assert all(getattr(result, name) is None for name in (
     'authority_evidence_sha256', 'run_id', 'association_id',
     'reviewer_id', 'accepted_at',
 ))
+control_output = io.BytesIO()
+class ForbiddenInput:
+    @property
+    def buffer(self):
+        raise AssertionError('unsupported child consumed control input')
+sys.stdin = ForbiddenInput()
+sys.stdout = io.TextIOWrapper(control_output, encoding='utf-8')
+assert _child_main() != 0
+sys.stdout.flush()
+assert control_output.getvalue() == b''
+assert project_access_events == []
+assert 'orchestrator._inspection_review_fs_windows' not in sys.modules
 assert 'orchestrator._inspection_review_fs_posix' not in sys.modules
+assert 'orchestrator._inspection_review_fs_windows' not in import_trace
+assert 'orchestrator._inspection_review_fs_posix' not in import_trace
 """
     code = code.replace("__REPO_ROOT__", repr(str(root)))
+    subprocess.run([sys.executable, "-I", "-c", code], cwd=root, check=True)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows import-time probe test")
+def test_windows_backend_probe_exception_fails_closed_before_project_access() -> None:
+    root = Path(__file__).parents[1]
+    code = f"""
+import builtins
+import io
+import os
+import platform
+import sys
+sys.path.insert(0, {str(root)!r})
+def broken_machine():
+    raise OSError('architecture probe unavailable')
+platform.machine = broken_machine
+from orchestrator import _inspection_review_fs_windows as fs
+assert not fs.supported()
+from orchestrator.inspection_review_admission import _child_main, admit_review_decision
+from orchestrator.inspection_review_root_capability import (
+    CONTEXT_UNAVAILABLE, _bootstrap_review_project_context,
+)
+from orchestrator.inspection_review_root_launcher import (
+    LAUNCHER_UNAVAILABLE, establish_review_project_root,
+)
+from orchestrator.inspection_workflow import review_commit
+def forbidden(*args, **kwargs):
+    raise AssertionError('failed platform probe reached project state')
+builtins.open = forbidden
+io.open = forbidden
+os.open = forbidden
+assert _bootstrap_review_project_context(
+    source_handle=123,
+    expected_identity=object(),
+    expected_project_id='project',
+    project_root='must-not-be-read',
+) is CONTEXT_UNAVAILABLE
+assert establish_review_project_root(
+    trusted_root_handle=123,
+    project_components=('project',),
+    expected_project_id='project',
+    project_root='must-not-be-read',
+) is LAUNCHER_UNAVAILABLE
+admission = admit_review_decision(
+    project_context=CONTEXT_UNAVAILABLE,
+    expected_run_id='run_001',
+    expected_association_id='assoc_001',
+    decision_bytes=b'{{}}',
+    authority_evidence_bytes=b'{{}}',
+    trusted_authority_sha256={{'0' * 64}},
+)
+assert all(getattr(admission, name) is None for name in (
+    'decision_sha256', 'association_snapshot_sha256',
+    'authority_evidence_sha256', 'run_id', 'association_id',
+    'reviewer_id', 'accepted_at',
+))
+class ForbiddenInput:
+    @property
+    def buffer(self):
+        raise AssertionError('unsupported child consumed control input')
+sys.stdin = ForbiddenInput()
+assert _child_main() != 0
+review_commit.StateStore = forbidden
+review_commit.validate_active_run_lock = forbidden
+review_commit.admit_review_decision = forbidden
+review_commit._read_existing_artifact = forbidden
+commit = review_commit.commit_review_decision(
+    project_root='must-not-be-read',
+    project_context=object(),
+    run_id='run_001',
+    association_id='ASSOC-001',
+    waiting_lock_token='must-not-be-validated',
+    decision_bytes=b'{{}}',
+    authority_evidence_bytes=b'{{}}',
+    trusted_authority_sha256={{'0' * 64}},
+)
+assert commit.denial_codes == ('review_platform_unavailable',)
+assert all(getattr(commit, name) is None for name in (
+    'artifact_path', 'artifact_sha256', 'decision_status', 'decision_sha256',
+    'association_snapshot_sha256', 'authority_evidence_sha256', 'run_id',
+    'association_id', 'reviewer_id', 'accepted_at', 'next_status',
+    'state_version', 'state_sha256',
+))
+"""
     subprocess.run([sys.executable, "-I", "-c", code], cwd=root, check=True)
 
 
@@ -962,35 +1087,23 @@ def test_production_import_graph_has_an_explicit_top_level_allowlist() -> None:
         assert local_edges <= reviewed.keys(), (module, local_edges - reviewed.keys())
 
 
-def test_phase_c2_exact_diff_stays_inside_reviewed_scope() -> None:
+def test_windows_only_repair_diff_stays_inside_reviewed_scope() -> None:
     root = Path(__file__).parents[1]
     changed = set(
         subprocess.run(
-            ["git", "diff", "--name-only", "530258b", "--"],
+            ["git", "diff", "--name-only", "de2d9e7", "--"],
             cwd=root, check=True, capture_output=True, text=True,
         ).stdout.splitlines()
     )
     allowed = {
         ".github/workflows/phase-c2-native.yml",
-            ".workflow/MasterPipeline.yml",
-            "docs/inspection_association_review_decision_contract.md",
-            "docs/superpowers/specs/2026-08-13-phase-c2-read-only-review-admission-design.md",
-            "orchestrator/_inspection_review_fs_posix.py",
+        "docs/superpowers/specs/2026-08-13-phase-c2-read-only-review-admission-design.md",
+        "docs/superpowers/specs/2026-08-14-phase-c3-review-commit-design.md",
         "orchestrator/_inspection_review_fs_windows.py",
         "orchestrator/inspection_review_admission.py",
-        "orchestrator/inspection_review_root_capability.py",
-        "orchestrator/inspection_review_root_launcher.py",
-        "orchestrator/inspection_workflow/__init__.py",
-        "orchestrator/inspection_workflow/locking.py",
         "orchestrator/inspection_workflow/review_commit.py",
-        "orchestrator/inspection_workflow/review_decision.py",
-        "orchestrator/state/store.py",
-        "docs/superpowers/specs/2026-08-14-phase-c3-review-commit-design.md",
         "tests/test_inspection_review_admission.py",
         "tests/test_inspection_review_commit.py",
-        "tests/test_inspection_review_decision.py",
-        "tests/test_inspection_resume_execution.py",
-        "tests/test_inspection_explicit_resume_activation.py",
     }
     assert changed <= allowed, changed - allowed
 

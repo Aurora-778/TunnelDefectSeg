@@ -1,9 +1,14 @@
 name: phase-c2-c3-windows-native
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, "codex/fix-phase-c3-review-commit"]
   pull_request:
+
+permissions:
+  actions: read
+  contents: read
 
 jobs:
   windows-x64:
@@ -13,8 +18,53 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install -r requirements-phase-c.txt
+      - name: Capture Windows runner identity
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ci-artifacts | Out-Null
+          "commit_sha=$env:GITHUB_SHA" | Tee-Object -FilePath ci-artifacts/runner-identity.log
+          "runner_name=$env:RUNNER_NAME" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          "runner_os=$env:RUNNER_OS" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          "runner_arch=$env:RUNNER_ARCH" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          "machine=$([System.Runtime.InteropServices.RuntimeInformation]::OSDescription)" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github+json" }
+          $job = $null
+          for ($attempt = 1; $attempt -le 6 -and -not $job; $attempt++) {
+            try {
+              $jobs = Invoke-RestMethod -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs"
+              $job = $jobs.jobs | Where-Object { $_.name -eq "windows-x64" } | Select-Object -First 1
+            } catch {
+              "job_url_lookup_attempt_${attempt}=$($_.Exception.Message)" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+            }
+            if (-not $job) { Start-Sleep -Seconds 2 }
+          }
+          if ($job.html_url) {
+            "job_url=$($job.html_url)" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          } else {
+            throw "current Windows job URL is unavailable after bounded retries"
+          }
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Install Phase C dependencies
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements-phase-c.txt 2>&1 | Tee-Object -FilePath ci-artifacts/dependency-install.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run Phase C-2/C-3 Windows acceptance
-        run: python -m pytest --rootdir . tests/test_inspection_review_admission.py tests/test_inspection_review_commit.py -q -p no:cacheprovider
+        shell: pwsh
+        run: |
+          python -m pytest --rootdir . tests/test_inspection_review_admission.py tests/test_inspection_review_commit.py -q -p no:cacheprovider 2>&1 | Tee-Object -FilePath ci-artifacts/phase-c2-c3-pytest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Require every Windows-native Phase C-2 test
-        run: python -m pytest --rootdir . tests/test_inspection_review_admission.py -k native_windows -q -p no:cacheprovider
+        shell: pwsh
+        run: |
+          python -m pytest --rootdir . tests/test_inspection_review_admission.py -k native_windows -q -p no:cacheprovider 2>&1 | Tee-Object -FilePath ci-artifacts/phase-c2-native-pytest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain Windows Phase C acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-c-windows-${{ github.sha }}
+          path: ci-artifacts/
+          if-no-files-found: error

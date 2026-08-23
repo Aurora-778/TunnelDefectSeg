@@ -808,6 +808,11 @@ def _validation_payload(result: ReviewDecisionValidation) -> dict[str, object]:
 
 
 def _child_main() -> int:
+    try:
+        if _fs is None or not _fs.supported():
+            return 2
+    except Exception:
+        return 2
     pending: object = CONTEXT_UNAVAILABLE
     context: object = CONTEXT_UNAVAILABLE
     try:
