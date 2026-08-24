@@ -999,6 +999,8 @@ def test_export_surface_and_phase_ab_import_without_crypto() -> None:
     assert "admit_review_decision" in admission.__all__
     assert "validate_review_decision" not in admission.__all__
     assert not any("REVIEW_" in name or "ReviewDecision" in name for name in workflow.__all__)
+    assert "initialize_phase_b10_successor_a1_sandbox" in workflow.__all__
+    assert "progress_resume_layer" in workflow.__all__
     root = Path(__file__).parents[1]
     code = f"""
 import builtins
@@ -1014,6 +1016,8 @@ def blocked(name, *args, **kwargs):
 builtins.__import__ = blocked
 import orchestrator.inspection_workflow as workflow
 assert workflow.validate_task_request
+assert workflow.initialize_phase_b10_successor_a1_sandbox
+assert workflow.progress_resume_layer
 try:
     import orchestrator.inspection_review_admission
 except ModuleNotFoundError as exc:
@@ -1091,7 +1095,11 @@ def test_windows_only_repair_diff_stays_inside_reviewed_scope() -> None:
     root = Path(__file__).parents[1]
     changed = set(
         subprocess.run(
-            ["git", "diff", "--name-only", "de2d9e7", "--"],
+            [
+                "git", "diff", "--name-only",
+                "de2d9e70f80742b028cffd0a97a1bcf30b5166b5",
+                "2cb01227ae1b1f0fe570d5e5d8168771ae0769fd", "--",
+            ],
             cwd=root, check=True, capture_output=True, text=True,
         ).stdout.splitlines()
     )

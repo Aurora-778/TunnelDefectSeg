@@ -25,8 +25,10 @@ _LAZY_EXPORTS = {
         ),
         "a1_artifacts": (
             "COMPARISON_EVIDENCE_MANIFEST_SCHEMA_VERSION", "PHASE_A1_EXECUTION_PROFILE",
-            "PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION", "SOURCE_VALIDATION_SCOPE",
+            "PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION",
+            "PHASE_B10_SUCCESSOR_A1_MARKER_SCHEMA_VERSION", "SOURCE_VALIDATION_SCOPE",
             "PhaseA1ArtifactError", "initialize_phase_a1_sandbox",
+            "initialize_phase_b10_successor_a1_sandbox",
             "load_validated_claim_artifacts", "parse_comparison_evidence_csv",
             "validate_comparison_evidence_bundle", "validate_phase_a1_sandbox",
             "write_claim_decision_artifact", "write_comparison_evidence_bundle",
@@ -91,6 +93,11 @@ _LAZY_EXPORTS = {
             "ResumeExecutionHandoffResult", "handoff_resume_execution",
         ),
         "resume_execution": ("ResumeExecutionResult", "execute_resume_execution"),
+        "resume_layer_progression": (
+            "RESUME_LAYER_PROGRESSION_INTENT_SCHEMA_VERSION",
+            "RESUME_LAYER_PROGRESSION_SCHEMA_VERSION",
+            "ResumeLayerProgressionResult", "progress_resume_layer",
+        ),
     }.items()
     for name in names
 }
@@ -143,6 +150,7 @@ __all__ = [
     "ObservationIdentityError",
     "PHASE_A1_EXECUTION_PROFILE",
     "PHASE_A1_SANDBOX_MARKER_SCHEMA_VERSION",
+    "PHASE_B10_SUCCESSOR_A1_MARKER_SCHEMA_VERSION",
     "PhaseA1ArtifactError",
     "PublicationTransactionError",
     "PUBLICATION_EXECUTION_PROFILE",
@@ -158,6 +166,7 @@ __all__ = [
     "build_claim_decision_document",
     "legacy_source_record_fingerprint",
     "initialize_phase_a1_sandbox",
+    "initialize_phase_b10_successor_a1_sandbox",
     "load_validated_claim_artifacts",
     "load_task_request",
     "load_workflow_policy",
@@ -210,4 +219,8 @@ __all__ = [
     "handoff_resume_execution",
     "ResumeExecutionResult",
     "execute_resume_execution",
+    "RESUME_LAYER_PROGRESSION_INTENT_SCHEMA_VERSION",
+    "RESUME_LAYER_PROGRESSION_SCHEMA_VERSION",
+    "ResumeLayerProgressionResult",
+    "progress_resume_layer",
 ]

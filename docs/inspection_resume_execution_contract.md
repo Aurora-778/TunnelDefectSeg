@@ -21,24 +21,64 @@ Before any B.9 write, the implementation performs the definition-time-bound
 B.8 core evidence fence and validates the exact input B.8 result. The fence
 re-reads the B.8 handoff intent, successor State/Journal/tail anchor, running
 ActiveRunLock, closed pre-execution entry set, and source State through the
-archived B.8 authority. The B.8 result’s source-admission SHA, plan,
-descriptor, task-plan, required-task, and token fields must match exactly.
+archived B.8 authority. It also re-reads the definition-time-bound B.6
+activation intent through its official validator and binds its bytes and
+`root/runs/source/resume_activation` identity chain. The B.8 result’s
+source-admission SHA, source State version, activation/handoff SHA, plan,
+descriptor, task-plan, required-task, and both token fields must match exactly.
 The current B.5 admission authority is executed before intent publication,
 after execution-input snapshot publication, immediately before the
 StateStore initialization CAS, on both sides of the official `task_started`
-checkpoint, before every later task checkpoint, and before success issuance.
-The first-layer worker never reopens source Run input paths. It consumes only
-successor-local immutable bytes captured with the existing ArtifactResolver
-guarded-read primitive; the start intent binds each source path, snapshot
-path, size and SHA-256. A source artifact that is deleted or changed,
+checkpoint, before every later task checkpoint, and at the final result
+publication-entry fence immediately before success bytes are constructed.
+That final fence also re-reads and exactly compares the original B.8 handoff
+intent bytes, B.6 activation intent bytes and directory chain, source State,
+successor State/Journal/tail anchor, running Lock, plan/descriptor/task-plan,
+source State version, activation SHA and both tokens. Any observable drift is
+denied before result issuance.
+At the actual result-issuer entry it runs the complete execution write-set
+proof again, including every worker leaf, the recursive successor-work closed
+set and unknown-residue check, plus formal `outputs/` and `staging/`
+directory/file identity, size and SHA evidence. Each formal-file tuple is
+derived from one guarded opened regular-file object: its descriptor identity,
+size and chunked SHA-256 are captured together, and the pathname plus its
+complete parent directory identity chain must still bind that object both
+before and after the read. Links, reparse points, hard links, leaf replacement
+and observable parent replacement deny the result. mtime is never used as an
+integrity conclusion. No earlier write-set snapshot is used as the issuer's
+proof.
+The supported official first-layer `AssociationAgent` input channel never
+reopens source Run or successor snapshot input paths. It consumes immutable
+bytes captured from the same held successor-snapshot objects that remain open
+through the final authority fence and successful result issuance. If a held
+object differs from the earlier published snapshot before the worker is
+constructed, execution is denied before the worker runs. The final input
+fence reads those held objects again and requires their identity, single-link
+status, bytes, size and SHA to equal both the start intent and the bytes
+consumed by the worker. The start
+intent binds each source path, snapshot path, file identity, size and SHA-256, plus
+the complete `root/runs/successor/work/resume_execution_input` directory
+identity chain. That original chain is rechecked by the State/task fences and
+again before result issuance. A source artifact that is deleted or changed,
 including a same-size replacement, cannot change the bytes consumed by the
 worker and prevents a successful B.9 result at the final observable fence.
+During source capture, B.9 holds the actual regular source objects read-only
+(and, on Windows, denies concurrent write/delete sharing), executes the real
+B.5 admission while those objects remain held, and requires the B.1
+guarded-read bytes to equal the held-object bytes before publication. Thus a
+source replacement or any source bytes visible at a guarded fence cannot be
+silently substituted. Windows additionally denies concurrent write/delete
+sharing for the held source objects. On non-Windows platforms this boundary
+does not claim detection of an unobservable same-inode A→B→A that completes
+entirely between observable fences.
 
 The durable order is:
 
 1. B.8 current evidence fence and canonical DAG/task-plan derivation;
 2. controlled successor-local input snapshot publication; each immutable
-   snapshot records the actual regular-file identity, size and SHA-256;
+   snapshot records the actual regular-file identity, size and SHA-256, and
+   the bytes captured from the same held published object become the worker
+   input;
 3. fresh B.5 admission fence followed by durable
    `resume_execution_start.intent.json` publication, bound to the successor
    directory identity, every B.8 binding and the complete input snapshot;
@@ -50,23 +90,76 @@ The durable order is:
 5. official `DAGExecutor` execution of the first canonical DAG layer, with
    `task_started@4` and `task_succeeded@5` official checkpoints for the
    current one-task first layer;
-6. guarded State/Journal/anchor/Lock evidence read, final B.5 fence and
-   immutable result issue.
+6. guarded State/Journal/anchor/Lock evidence read, final B.5/B.8/B.6
+   currentness fence and immutable result issue.
 
 The existing StateStore requires a non-empty task map before the
 `PLANNED → RUNNING` transition. Therefore the real sequence is not a direct
 `PLANNED@1 → RUNNING@2`; B.9 does not bypass that rule.
 
-The B.8 evidence fence is intentionally before the B.9 intent publication:
-the archived B.8 authority owns a closed PLANNED entry set and correctly
-rejects the newly published B.9 start intent. After publication, the official
-StateStore CAS, exact intent/snapshot bytes, source State/admission binding,
-running Lock, successor directory identity and guarded authority snapshot are
-the observable mutation fence. The final State is rebound to allocation
-token, plan fingerprint, descriptor, task-plan SHA, resume activation and
-source admission before success. This contract does not claim cross-file
-kernel atomicity or that no external process can change source files after
-the final observable authority fence.
+The B.8 structural evidence fence is intentionally before the B.9 intent
+publication: the archived B.8 authority owns a closed PLANNED entry set and
+correctly rejects the newly published B.9 start intent. After publication,
+the official StateStore CAS, exact start-intent/snapshot bytes, source
+State/admission binding, running Lock, successor directory identity and
+guarded authority snapshot remain the observable mutation fence. The final
+publication-entry fence additionally re-reads the original B.8 handoff
+intent bytes and B.6 activation intent bytes/identity chain; it does not call
+the archived genesis-only B.8/B.6 evidence routine after task mutation. The
+final State is rebound to source State version, allocation token, plan
+fingerprint, descriptor, task-plan SHA, activation/handoff SHA, resume
+activation (including its source State version, plan fingerprint, descriptor,
+intent and admission fields), source admission and both tokens before
+success. This contract does not claim cross-file
+kernel atomicity, rollback of arbitrary writes attempted by a hostile
+in-process agent,
+or that no external process can change source files after the final observable
+authority fence. This is not a sandbox against a hostile replacement agent
+that uses arbitrary Python filesystem calls; such in-process monkeypatching
+and reflection are outside the supported API boundary. On Windows the
+published snapshot objects are additionally byte-range locked through success
+issuance; other platforms rely on bound in-memory consumption plus held-object
+identity/content fences rather than claiming an external-process kernel lock.
+Official Association/History writes run through an execution-local writer
+capability; B.9 no longer replaces process-global `Path.open` or `Path.mkdir`.
+The writer buffers only deterministic new successor-work leaves and publishes
+them once, through the existing controlled-filesystem exclusive primitive,
+after a complete pre-publication boundary check. Existing files, hard links
+(`st_nlink != 1`), links, junctions/reparse points and parent identity
+replacements are rejected before publication. The controlled path view also
+rejects `touch`, `unlink`, `rename`, `replace`, raw `os.open`/`shutil` path
+conversion and every path outside the successor work domain; unsupported
+filesystem APIs are not silently downgraded to ordinary writes. Nested
+History/Memory agents receive the same execution-local capability. The
+supported capability's `str()`, `as_posix()` and `relative_to()` forms are
+writer-only capability tokens for nested official contexts; they are not
+valid filesystem path text. `relative_to()` returns another controlled
+capability, and its explicit write methods still route through the writer.
+The supported view exposes no filesystem-valued `parts` or `_path` field, and
+its `repr()` is also an invalid opaque token rather than a POSIX-rehydratable
+path. `__fspath__`, raw `os.open`, `Path(*view.parts)`, `Path(repr(view))`,
+and rebuilding a token with `Path(...)` fail closed (the token contains an
+invalid filesystem character); only the execution-local writer's `resolve()`
+accepts supported string tokens. This closes the supported path-conversion
+boundary without relying on a process-global `Path` monkeypatch.
+complete successor `work/` entry set is checked against the deterministic
+first-layer write set; nested unknown files, links and reparse entries are
+rejected. Non-successor Run entries, project-root entries and the direct
+sandbox-parent boundary are compared before and after worker publication.
+The pre-existing project `outputs/` and `staging/` trees must retain their
+pre-execution directory/file identities, sizes and content hashes at the final
+fence. A formal-file identity is never sampled before opening one object and
+combined with bytes read from another; an A→B→A pathname swap is rejected when
+observed by the guarded read or directory-chain fence.
+
+The writer intentionally does not implement replacement of an already existing
+worker leaf. This is the B.9 leaf-CAS rule: a leaf that appears after the
+worker opens a buffered output but before publication causes denial, so there
+is no `atomic_replace` check/use window in the supported path. The final
+contract remains a last-observable fence, not a cross-file kernel transaction;
+arbitrary hostile in-process code that converts a plain string into raw OS
+calls is outside the supported public API and is caught only when its mutation
+falls inside the observed Run/sandbox boundary.
 
 ## Result and failure semantics
 
@@ -98,7 +191,7 @@ further execution.
 | No start intent, coherent PLANNED@1 handoff | May publish the unique start intent after the B.8 fence. |
 | Start intent only, PLANNED@1 | Deny; no automatic recovery or retry is performed. |
 | Snapshot-only or partial snapshot, PLANNED@1 | Deny; do not complete or replace the snapshot automatically. |
-| Start intent plus missing/replaced input snapshot, PLANNED@1 | Deny; file identity, size and SHA must all remain bound. |
+| Start intent plus missing/replaced input snapshot or changed snapshot-directory chain, PLANNED@1 | Deny; directory identity, file identity, size and SHA must all remain bound. |
 | StateStore pending Journal or unknown temporary/recovery residue | Deny; StateStore recovery is an explicit later operation. |
 | `run_initialized@2` or `RUNNING@3` without a complete B.9 execution result | Deny; do not guess a task or restore point. |
 | Partial task checkpoint, failed task, or in-flight task | Deny; no automatic retry, skip or resume. |
@@ -112,8 +205,12 @@ point, or call publication. Task State, attempts and checkpoints are changed
 only by the existing Controller/StateStore transaction path. A task failure
 can therefore leave an official failed or in-flight checkpoint and run-local
 work bytes; B.9 reports the uniform denial and will not retry that residue.
-The permitted first-layer agent writes only its configured successor-local
-work artifact. It does not write the repository's formal `outputs/` tree.
+The permitted first-layer agent writes only the exact deterministic
+successor-local `work/raw_history` set for the committed frame snapshot.
+Unknown files anywhere under `work/`, including nested `raw_history` residue,
+deny success. It does not write the repository's formal `outputs/` or
+`staging/` trees; those trees must match their pre-execution evidence at the
+final observable fence.
 Every canonical B.9 task must declare `retries=0` and `cache=false` before
 intent publication; this policy is not deferred to a post-execution check.
 Forbidden publication entries are detected by entry identity inspection, so
