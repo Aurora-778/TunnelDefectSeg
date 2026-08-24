@@ -1116,6 +1116,47 @@ def test_windows_only_repair_diff_stays_inside_reviewed_scope() -> None:
     assert changed <= allowed, changed - allowed
 
 
+_PHASE_C_REVIEWED_HEAD = "2cb01227ae1b1f0fe570d5e5d8168771ae0769fd"
+_SYNCED_MAIN_HEAD = "fc909870e8ec5261507bb4a1f900050220e08e8e"
+_MAIN_SYNC_MERGE = "31f1af9e8f1fbd4cad59eeca399952f286407773"
+_MAIN_SYNC_RESOLUTION_ALLOWLIST = {
+    "orchestrator/inspection_workflow/__init__.py",
+    "tests/test_inspection_review_admission.py",
+}
+
+
+def _assert_main_sync_resolution_scope(
+    changed_from_phase_c: set[str], changed_from_main: set[str]
+) -> None:
+    changed_from_both_parents = changed_from_phase_c & changed_from_main
+    assert changed_from_both_parents <= _MAIN_SYNC_RESOLUTION_ALLOWLIST, (
+        changed_from_both_parents - _MAIN_SYNC_RESOLUTION_ALLOWLIST
+    )
+
+
+def test_main_sync_merge_resolution_stays_inside_reviewed_scope() -> None:
+    root = Path(__file__).parents[1]
+
+    def changed_between(parent: str) -> set[str]:
+        return set(
+            subprocess.run(
+                ["git", "diff", "--name-only", parent, _MAIN_SYNC_MERGE, "--"],
+                cwd=root, check=True, capture_output=True, text=True,
+            ).stdout.splitlines()
+        )
+
+    _assert_main_sync_resolution_scope(
+        changed_between(_PHASE_C_REVIEWED_HEAD),
+        changed_between(_SYNCED_MAIN_HEAD),
+    )
+
+
+def test_main_sync_resolution_scope_rejects_forbidden_shared_change() -> None:
+    forbidden = "orchestrator/state/store.py"
+    with pytest.raises(AssertionError, match="orchestrator/state/store.py"):
+        _assert_main_sync_resolution_scope({forbidden}, {forbidden})
+
+
 def test_admission_clock_and_authority_factory_are_structurally_closed() -> None:
     path = Path(__file__).parents[1] / "orchestrator/inspection_review_admission.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
