@@ -399,7 +399,7 @@ def test_pending_cleanup_cancel_io_exception_fail_stops_with_all_owners_retained
     with pytest.raises(_InjectedProcessTermination) as terminated:
         probe.close()
 
-    assert terminated.value.exit_code == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert terminated.value.exit_code == 86
     assert fake.closed == []
     assert probe._handle == 301
     assert probe._event == 302
@@ -426,7 +426,7 @@ def test_pending_cleanup_wait_exception_fail_stops_with_all_owners_retained(
     with pytest.raises(_InjectedProcessTermination) as terminated:
         probe.close()
 
-    assert terminated.value.exit_code == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert terminated.value.exit_code == 86
     assert fake.closed == []
     assert probe._handle == 301
     assert probe._event == 302
@@ -616,6 +616,10 @@ def test_assess_cleanup_failure_is_observed_only_as_process_fail_stop(
     assert retained[0]._pending
 
 
+def test_cleanup_failstop_exit_code_is_reserved_literal() -> None:
+    assert probe_module._CLEANUP_FAILSTOP_EXIT_CODE == 86
+
+
 def test_actual_fail_stop_terminates_dedicated_child_with_reserved_exit_code() -> None:
     root = Path(__file__).parents[1]
     code = f"""
@@ -634,7 +638,7 @@ raise AssertionError('fail-stop returned')
         text=True,
         timeout=10,
     )
-    assert completed.returncode == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert completed.returncode == 86
     print(f"cleanup_failstop_child_exit={completed.returncode}")
 
 
