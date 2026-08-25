@@ -383,6 +383,60 @@ def test_pending_cleanup_keeps_native_resources_until_terminal_completion(
     assert retained == [probe]
 
 
+def test_pending_cleanup_cancel_io_exception_fail_stops_with_all_owners_retained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeCloseKernel()
+
+    def raise_cancel(*args: object) -> bool:
+        raise RuntimeError("injected CancelIoEx failure")
+
+    fake.CancelIoEx = raise_cancel  # type: ignore[method-assign]
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    retained = _capture_fail_stop(monkeypatch)
+    probe = _fake_probe()
+
+    with pytest.raises(_InjectedProcessTermination) as terminated:
+        probe.close()
+
+    assert terminated.value.exit_code == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert fake.closed == []
+    assert probe._handle == 301
+    assert probe._event == 302
+    assert probe._overlapped is not None
+    assert probe._request is not None
+    assert probe._output is not None
+    assert probe._pending
+    assert retained == [probe]
+
+
+def test_pending_cleanup_wait_exception_fail_stops_with_all_owners_retained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeCloseKernel()
+
+    def raise_wait(*args: object) -> int:
+        raise RuntimeError("injected WaitForSingleObject failure")
+
+    fake.WaitForSingleObject = raise_wait  # type: ignore[method-assign]
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    retained = _capture_fail_stop(monkeypatch)
+    probe = _fake_probe()
+
+    with pytest.raises(_InjectedProcessTermination) as terminated:
+        probe.close()
+
+    assert terminated.value.exit_code == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert fake.closed == []
+    assert probe._handle == 301
+    assert probe._event == 302
+    assert probe._overlapped is not None
+    assert probe._request is not None
+    assert probe._output is not None
+    assert probe._pending
+    assert retained == [probe]
+
+
 def test_create_event_failure_is_fail_closed_and_closes_only_completed_resources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
