@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import ctypes
+import json
 import os
 import subprocess
 import sys
@@ -12,6 +14,34 @@ import orchestrator._phase_c4_control_exclusion_probe_windows as probe_module
 
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="native Windows x64 probe")
+
+
+@pytest.fixture(autouse=True)
+def _dedicated_probe_process_boundary(monkeypatch: pytest.MonkeyPatch):
+    """Mark this dedicated test process without leaking retained owners."""
+
+    original_registry = probe_module._UNRECLAIMED_PROBES
+    assert not original_registry
+    monkeypatch.setenv(probe_module._DISPOSABLE_PROBE_PROCESS_ENV, "1")
+    yield
+    assert not original_registry
+
+
+class _InjectedProcessTermination(BaseException):
+    def __init__(self, exit_code: int) -> None:
+        super().__init__(exit_code)
+        self.exit_code = exit_code
+
+
+def _capture_fail_stop(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    retained: list[object] = []
+
+    def terminate(exit_code: int) -> None:
+        raise _InjectedProcessTermination(exit_code)
+
+    monkeypatch.setattr(probe_module, "_UNRECLAIMED_PROBES", retained)
+    monkeypatch.setattr(probe_module, "_TERMINATE_PROCESS", terminate)
+    return retained
 
 
 def _mutate(directory: Path, operation: str) -> subprocess.CompletedProcess[str]:
@@ -204,4 +234,424 @@ def test_verdict_remains_infeasible_on_native_ntfs(tmp_path: Path) -> None:
     print(
         "native_ntfs=true directory_oplock=true mandatory_exclusion=false "
         "c3_authority_success=false"
+    )
+
+
+class _FakeAcquireKernel:
+    def __init__(self, *, close_result: bool = True) -> None:
+        self.bytes_returned = object()
+        self.overlapped = None
+        self.closed: list[int] = []
+        self.close_result = close_result
+
+    def CreateFileW(self, *args: object) -> int:
+        return 101
+
+    def GetFileInformationByHandleEx(
+        self, handle: object, info_class: int, attributes: object, size: int
+    ) -> bool:
+        value = ctypes.cast(
+            attributes, ctypes.POINTER(probe_module._FileAttributeTagInfo)
+        ).contents
+        value.FileAttributes = probe_module._FILE_ATTRIBUTE_DIRECTORY
+        return True
+
+    def CreateEventW(self, *args: object) -> int:
+        return 202
+
+    def DeviceIoControl(self, *args: object) -> bool:
+        self.bytes_returned = args[6]
+        self.overlapped = args[7]
+        ctypes.set_last_error(probe_module._ERROR_IO_PENDING)
+        return False
+
+    def CancelIoEx(self, *args: object) -> bool:
+        return True
+
+    def WaitForSingleObject(self, *args: object) -> int:
+        return probe_module._WAIT_OBJECT_0
+
+    def GetOverlappedResult(self, *args: object) -> bool:
+        ctypes.set_last_error(probe_module._ERROR_OPERATION_ABORTED)
+        return False
+
+    def CloseHandle(self, handle: object) -> bool:
+        self.closed.append(int(getattr(handle, "value", handle)))
+        if not self.close_result:
+            ctypes.set_last_error(5)
+        return self.close_result
+
+
+def _fake_probe() -> probe_module._DirectoryOplockProbe:
+    probe = probe_module._DirectoryOplockProbe(301)
+    probe._event = 302
+    probe._overlapped = probe_module._Overlapped()
+    probe._request = probe_module._RequestOplockInput()
+    probe._output = probe_module._RequestOplockOutput()
+    probe.filesystem = "NTFS"
+    probe._pending = True
+    return probe
+
+
+class _FakeCloseKernel:
+    def __init__(
+        self,
+        *,
+        cancel: bool = True,
+        cancel_error: int = 0,
+        wait_status: int = probe_module._WAIT_OBJECT_0,
+        get_result: str = "aborted",
+    ) -> None:
+        self.cancel = cancel
+        self.cancel_error = cancel_error
+        self.wait_status = wait_status
+        self.get_result = get_result
+        self.closed: list[int] = []
+
+    def CancelIoEx(self, *args: object) -> bool:
+        if not self.cancel:
+            ctypes.set_last_error(self.cancel_error)
+        return self.cancel
+
+    def WaitForSingleObject(self, *args: object) -> int:
+        return self.wait_status
+
+    def GetOverlappedResult(self, *args: object) -> bool:
+        if self.get_result == "raise":
+            raise RuntimeError("injected GetOverlappedResult failure")
+        if self.get_result == "incomplete":
+            ctypes.set_last_error(probe_module._ERROR_IO_INCOMPLETE)
+            return False
+        if self.get_result == "not_found":
+            ctypes.set_last_error(probe_module._ERROR_NOT_FOUND)
+            return False
+        ctypes.set_last_error(probe_module._ERROR_OPERATION_ABORTED)
+        return False
+
+    def CloseHandle(self, handle: object) -> bool:
+        self.closed.append(int(getattr(handle, "value", handle)))
+        return True
+
+
+def test_pending_device_io_uses_null_bytes_returned_and_probe_owns_buffers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel()
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    monkeypatch.setattr(probe_module, "_filesystem_name", lambda handle: "NTFS")
+
+    probe = probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    assert fake.bytes_returned is None
+    assert fake.overlapped is not None
+    assert probe._request is not None
+    assert probe._output is not None
+    assert probe._overlapped is not None
+    probe.close()
+    assert fake.closed == [202, 101]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"cancel": False, "cancel_error": 5},
+        {"wait_status": probe_module._WAIT_TIMEOUT},
+        {"wait_status": 0xFFFFFFFF},
+        {"get_result": "raise"},
+        {"get_result": "incomplete"},
+        {"get_result": "not_found"},
+    ],
+)
+def test_pending_cleanup_keeps_native_resources_until_terminal_completion(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, object]
+) -> None:
+    fake = _FakeCloseKernel(**kwargs)
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    retained = _capture_fail_stop(monkeypatch)
+    probe = _fake_probe()
+
+    with pytest.raises(_InjectedProcessTermination) as terminated:
+        probe.close()
+
+    assert terminated.value.exit_code == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert fake.closed == []
+    assert probe._handle == 301
+    assert probe._event == 302
+    assert probe._overlapped is not None
+    assert probe._output is not None
+    assert probe._request is not None
+    assert retained == [probe]
+
+
+def test_create_event_failure_is_fail_closed_and_closes_only_completed_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel()
+    fake.CreateEventW = lambda *args: 0  # type: ignore[method-assign]
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    monkeypatch.setattr(probe_module, "_filesystem_name", lambda handle: "NTFS")
+
+    with pytest.raises(probe_module.ControlExclusionUnavailable, match="CreateEventW"):
+        probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    assert fake.closed == [101]
+
+
+def test_device_io_grant_failure_is_fail_closed_without_pending_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel()
+
+    def fail_grant(*args: object) -> bool:
+        ctypes.set_last_error(5)
+        return False
+
+    fake.DeviceIoControl = fail_grant  # type: ignore[method-assign]
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    monkeypatch.setattr(probe_module, "_filesystem_name", lambda handle: "NTFS")
+
+    with pytest.raises(probe_module.ControlExclusionUnavailable, match="asynchronously"):
+        probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    assert fake.closed == [202, 101]
+
+
+def test_device_io_exception_retains_owner_when_terminal_cleanup_is_unproven(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel()
+
+    def raise_device_io(*args: object) -> bool:
+        raise RuntimeError("injected DeviceIoControl failure")
+
+    fake.DeviceIoControl = raise_device_io  # type: ignore[method-assign]
+    fake.WaitForSingleObject = (  # type: ignore[method-assign]
+        lambda *args: probe_module._WAIT_TIMEOUT
+    )
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    monkeypatch.setattr(probe_module, "_filesystem_name", lambda handle: "NTFS")
+    retained = _capture_fail_stop(monkeypatch)
+
+    with pytest.raises(_InjectedProcessTermination) as terminated:
+        probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    assert terminated.value.exit_code == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert fake.closed == []
+    assert len(retained) == 1
+    owner = retained[0]
+    assert owner._handle == 101
+    assert owner._event == 202
+    assert owner._request is not None
+    assert owner._output is not None
+    assert owner._overlapped is not None
+
+
+def test_probe_refuses_native_open_without_disposable_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel()
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    monkeypatch.delenv(probe_module._DISPOSABLE_PROBE_PROCESS_ENV, raising=False)
+
+    with pytest.raises(
+        probe_module.ControlExclusionUnavailable,
+        match="requires a disposable probe process",
+    ):
+        probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    assert fake.closed == []
+
+
+def test_synchronous_device_io_success_is_rejected_after_terminal_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel()
+    fake.DeviceIoControl = lambda *args: True  # type: ignore[method-assign]
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    monkeypatch.setattr(probe_module, "_filesystem_name", lambda handle: "NTFS")
+
+    with pytest.raises(probe_module.ControlExclusionUnavailable, match="asynchronously"):
+        probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    assert fake.closed == [202, 101]
+
+
+def test_close_handle_failure_fail_stops_with_owner_retained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel(close_result=False)
+    fake.CreateEventW = lambda *args: 0  # type: ignore[method-assign]
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    monkeypatch.setattr(probe_module, "_filesystem_name", lambda handle: "NTFS")
+    retained = _capture_fail_stop(monkeypatch)
+
+    with pytest.raises(_InjectedProcessTermination) as terminated:
+        probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    assert terminated.value.exit_code == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert fake.closed == [101]
+    assert len(retained) == 1
+    assert retained[0]._handle == 101
+
+
+def test_create_file_exception_is_normalized_before_owner_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel()
+
+    def raise_create_file(*args: object) -> int:
+        raise RuntimeError("injected CreateFileW failure")
+
+    fake.CreateFileW = raise_create_file  # type: ignore[method-assign]
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+
+    with pytest.raises(probe_module.ControlExclusionUnavailable, match="CreateFileW raised"):
+        probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    assert fake.closed == []
+
+
+@pytest.mark.parametrize("failure", ["file_info", "filesystem", "event"])
+def test_post_open_setup_exceptions_close_through_immediate_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    fake = _FakeAcquireKernel()
+    if failure == "file_info":
+        fake.GetFileInformationByHandleEx = (  # type: ignore[method-assign]
+            lambda *args: (_ for _ in ()).throw(RuntimeError("file info failure"))
+        )
+        expected = "GetFileInformationByHandleEx raised"
+    elif failure == "filesystem":
+        monkeypatch.setattr(
+            probe_module,
+            "_filesystem_name",
+            lambda handle: (_ for _ in ()).throw(RuntimeError("filesystem failure")),
+        )
+        expected = "filesystem capability check raised"
+    else:
+        fake.CreateEventW = (  # type: ignore[method-assign]
+            lambda *args: (_ for _ in ()).throw(RuntimeError("event failure"))
+        )
+        expected = "CreateEventW raised"
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    if failure != "filesystem":
+        monkeypatch.setattr(probe_module, "_filesystem_name", lambda handle: "NTFS")
+
+    with pytest.raises(probe_module.ControlExclusionUnavailable, match=expected):
+        probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    assert fake.closed == [101]
+
+
+def test_assess_cleanup_failure_is_observed_only_as_process_fail_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel()
+    fake.WaitForSingleObject = (  # type: ignore[method-assign]
+        lambda *args: probe_module._WAIT_TIMEOUT
+    )
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    monkeypatch.setattr(probe_module, "_filesystem_name", lambda handle: "NTFS")
+    retained = _capture_fail_stop(monkeypatch)
+
+    with pytest.raises(_InjectedProcessTermination) as terminated:
+        probe_module._assess(tmp_path)
+    assert terminated.value.exit_code == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert len(retained) == 1
+    assert retained[0]._pending
+
+
+def test_actual_fail_stop_terminates_dedicated_child_with_reserved_exit_code() -> None:
+    root = Path(__file__).parents[1]
+    code = f"""
+import os
+import sys
+sys.path.insert(0, {str(root)!r})
+import orchestrator._phase_c4_control_exclusion_probe_windows as probe
+os.environ[probe._DISPOSABLE_PROBE_PROCESS_ENV] = '1'
+probe._fail_stop_unproven_cleanup(object(), RuntimeError('injected'))
+raise AssertionError('fail-stop returned')
+"""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    print(f"cleanup_failstop_child_exit={completed.returncode}")
+
+
+def test_owner_cleanup_fail_stop_does_not_rely_on_environment_after_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAcquireKernel()
+    monkeypatch.setattr(probe_module, "_kernel32", fake)
+    monkeypatch.setattr(probe_module, "_SUPPORTED", True)
+    monkeypatch.setattr(probe_module, "_filesystem_name", lambda handle: "NTFS")
+    probe = probe_module._DirectoryOplockProbe.acquire(tmp_path)
+    fake.WaitForSingleObject = (  # type: ignore[method-assign]
+        lambda *args: probe_module._WAIT_TIMEOUT
+    )
+    retained = _capture_fail_stop(monkeypatch)
+    monkeypatch.delenv(probe_module._DISPOSABLE_PROBE_PROCESS_ENV, raising=False)
+
+    with pytest.raises(_InjectedProcessTermination) as terminated:
+        probe.close()
+    assert terminated.value.exit_code == probe_module._CLEANUP_FAILSTOP_EXIT_CODE
+    assert retained == [probe]
+    assert fake.closed == []
+
+
+def test_c3_runtime_import_trace_never_loads_phase_c4_probe() -> None:
+    root = Path(__file__).parents[1]
+    source = (root / "tests" / "test_inspection_review_commit.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(source)
+    execution_code = None
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name != "test_c3_fresh_process_import_and_execution_stays_out_of_forbidden_modules":
+            continue
+        for statement in node.body:
+            if not isinstance(statement, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "code"
+                for target in statement.targets
+            ):
+                continue
+            if isinstance(statement.value, ast.Constant) and isinstance(
+                statement.value.value, str
+            ):
+                execution_code = statement.value.value
+                break
+    assert execution_code is not None, "fresh-process C3 execution fixture is unavailable"
+
+    payload = None
+    for _ in range(3):
+        completed = subprocess.run(
+            [sys.executable, "-c", execution_code],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        payload = json.loads(completed.stdout)
+        if payload["status"] != "retry_clock_rollover":
+            break
+    assert payload is not None
+    assert payload["status"] == "review_commit_conflict"
+    assert payload["real_c2"] is True
+    forbidden = "phase_c4_control_exclusion"
+    assert not any(forbidden in str(name).lower() for name in payload["loaded"])
+    assert not any(forbidden in str(name).lower() for name in payload["imports"])
+    print(
+        "c3_fresh_process_called=true c4_probe_loaded=false "
+        "c4_probe_import_attempted=false"
     )

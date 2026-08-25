@@ -94,9 +94,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run native exclusion feasibility probe
         shell: pwsh
+        env:
+          PHASE_C4_DISPOSABLE_PROBE: "1"
         run: |
-          python -m pytest --rootdir . tests/test_phase_c4_control_entry_exclusion.py -vv -s -p no:cacheprovider 2>&1 | Tee-Object -FilePath ci-artifacts/phase-c4-native-pytest.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $stdout = Join-Path $PWD 'ci-artifacts/phase-c4-native-pytest.stdout.log'
+          $stderr = Join-Path $PWD 'ci-artifacts/phase-c4-native-pytest.stderr.log'
+          $python = (Get-Command python).Source
+          $arguments = @(
+            '-m', 'pytest', '--rootdir', '.',
+            'tests/test_phase_c4_control_entry_exclusion.py',
+            '-vv', '-s', '-p', 'no:cacheprovider'
+          )
+          $process = Start-Process -FilePath $python -ArgumentList $arguments `
+            -WorkingDirectory $PWD.Path -WindowStyle Hidden -Wait -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          Get-Content $stdout, $stderr | Tee-Object -FilePath ci-artifacts/phase-c4-native-pytest.log
+          "pytest_exit_code=$($process.ExitCode)" | Tee-Object -FilePath ci-artifacts/phase-c4-native-pytest.log -Append
+          if ($process.ExitCode -ne 0) { exit $process.ExitCode }
       - name: Preserve C2 and C3 audit-only boundary
         shell: pwsh
         run: |

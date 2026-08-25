@@ -37,9 +37,26 @@ Primary semantics reference:
    state and cannot preserve exclusion for recovery.
 6. Reject junction/reparse roots and fail closed when Windows x64, NTFS, the
    asynchronous handle, event, or oplock grant is unavailable.
-7. Run C-2/C-3 regression tests and statically prove the probe is absent from
+7. Keep the overlapped request input, output buffer, `OVERLAPPED`, completion
+   event, and directory handle owned by one probe object until
+   `GetOverlappedResult` proves terminal completion.  `CancelIoEx` is only a
+   cancellation request; `WAIT_TIMEOUT`, `WAIT_FAILED`, cancellation failure,
+   or a completion-query exception must leave those owners live and fail
+   closed.  When `GetOverlappedResult` returns false, only
+   `ERROR_OPERATION_ABORTED` proves terminal cancellation; `ERROR_NOT_FOUND`,
+   `ERROR_IO_INCOMPLETE`, and every other error are unproven.  The probe
+   refuses to open a native handle unless the dedicated process carries
+   `PHASE_C4_DISPOSABLE_PROBE=1`.  That marker is checked only before
+   `CreateFileW`; after ownership transfers, unproven cleanup unconditionally
+   retains every owner and immediately fail-stops with exit code 86 even if
+   the environment changes.  The workflow runs pytest as a dedicated child
+   and propagates that nonzero exit code.
+8. Run C-2/C-3 regression tests and statically prove the probe is absent from
    the production import graph.  C-3 must continue to return zero authority
-   before StateStore recovery, journal open, or CAS.
+   before StateStore recovery, durable journal append, or CAS.  A fresh
+   process must also import and execute the real C-3 fail-closed path while
+   recording audit imports and `sys.modules`; neither trace may contain this
+   C-4 probe.
 
 ## Scope
 
@@ -81,4 +98,10 @@ On the development Windows x64 NTFS volume, the break output carried flag
 its create/delete/replace/rename effect was visible before the owner closed
 its handle or issued any acknowledgement.  The feasibility decision therefore
 rests on the observable exclusion property, not on interpreting that flag as
-a promise that the sibling mutation was held.
+a promise that the sibling mutation was held.  The probe also passes `NULL`
+for overlapped `lpBytesReturned` and retains all native I/O owners through
+terminal cancellation; it does not treat `CancelIoEx` as proof that cleanup
+has completed.  `CreateFileW` success transfers the directory handle to the
+owner object before attribute, filesystem, event, or oplock setup.  A failure
+to close any owned handle is therefore a disposable-process fail-stop, not a
+recoverable cleanup result.
