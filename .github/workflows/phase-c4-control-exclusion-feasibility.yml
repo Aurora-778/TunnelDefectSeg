@@ -1,0 +1,111 @@
+name: phase-c4-windows-control-exclusion-feasibility
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["codex/phase-c4-control-exclusion-feasibility"]
+  pull_request:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Capture runner and filesystem identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force ci-artifacts | Out-Null
+          "commit_sha=$env:GITHUB_SHA" | Tee-Object -FilePath ci-artifacts/runner-identity.log
+          "checked_out_sha=$(git rev-parse HEAD)" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          "runner_name=$env:RUNNER_NAME" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          "runner_os=$env:RUNNER_OS" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          "runner_arch=$env:RUNNER_ARCH" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          "machine=$([System.Runtime.InteropServices.RuntimeInformation]::OSDescription)" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          $driveLetter = [System.IO.Path]::GetPathRoot($PWD.Path).TrimEnd('\').TrimEnd(':')
+          "filesystem=$((Get-Volume -DriveLetter $driveLetter).FileSystem)" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github+json" }
+          $job = $null
+          for ($attempt = 1; $attempt -le 6 -and -not $job; $attempt++) {
+            try {
+              $jobs = Invoke-RestMethod -Headers $headers -Uri "${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs"
+              $job = $jobs.jobs | Where-Object { $_.name -eq "windows-x64" } | Select-Object -First 1
+            } catch {
+              "job_url_lookup_attempt_${attempt}=$($_.Exception.Message)" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+            }
+            if (-not $job) { Start-Sleep -Seconds 2 }
+          }
+          if ($job.html_url) {
+            "job_url=$($job.html_url)" | Tee-Object -FilePath ci-artifacts/runner-identity.log -Append
+          } else {
+            throw "current Windows job URL is unavailable after bounded retries"
+          }
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Verify C4 diff scope and C3 audit-only boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $baseline = '83ba683c313c81ef9a8e31599ff90e9b85055d7c'
+          $allowed = @(
+            '.github/workflows/phase-c4-control-exclusion-feasibility.yml',
+            'docs/superpowers/specs/2026-08-25-phase-c4-windows-control-entry-exclusion-feasibility.md',
+            'orchestrator/_phase_c4_control_exclusion_probe_windows.py',
+            'tests/test_phase_c4_control_entry_exclusion.py'
+          )
+          $changed = @(git diff --name-only "$baseline..$env:GITHUB_SHA")
+          if ($LASTEXITCODE -ne 0) { throw "unable to inspect fixed baseline $baseline" }
+          $unexpected = @($changed | Where-Object { $allowed -notcontains $_ })
+          if ($unexpected.Count -gt 0) {
+            $unexpected | ForEach-Object { "unexpected_path=$_" | Tee-Object -FilePath ci-artifacts/scope-audit.log -Append }
+            throw 'C4 change set is outside the four allowed paths'
+          }
+          $protected = @(
+            'orchestrator/state',
+            'orchestrator/inspection_workflow/locking.py',
+            'orchestrator/inspection_workflow/review_commit.py',
+            'orchestrator/inspection_workflow/__init__.py',
+            'orchestrator/inspection_review_admission.py',
+            'orchestrator/_inspection_review_fs_windows.py'
+          )
+          foreach ($path in $protected) {
+            git diff --quiet "$baseline..$env:GITHUB_SHA" -- $path
+            if ($LASTEXITCODE -ne 0) { throw "protected path changed: $path" }
+          }
+          "baseline=$baseline" | Tee-Object -FilePath ci-artifacts/scope-audit.log
+          "head=$env:GITHUB_SHA" | Tee-Object -FilePath ci-artifacts/scope-audit.log -Append
+          "changed_paths=$($changed.Count)" | Tee-Object -FilePath ci-artifacts/scope-audit.log -Append
+          "allowed_paths_only=true" | Tee-Object -FilePath ci-artifacts/scope-audit.log -Append
+          "protected_paths_unchanged=true" | Tee-Object -FilePath ci-artifacts/scope-audit.log -Append
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install pytest cryptography 2>&1 | Tee-Object -FilePath ci-artifacts/dependency-install.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run native exclusion feasibility probe
+        shell: pwsh
+        run: |
+          python -m pytest --rootdir . tests/test_phase_c4_control_entry_exclusion.py -vv -s -p no:cacheprovider 2>&1 | Tee-Object -FilePath ci-artifacts/phase-c4-native-pytest.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve C2 and C3 audit-only boundary
+        shell: pwsh
+        run: |
+          python -m pytest --rootdir . tests/test_inspection_review_admission.py tests/test_inspection_review_commit.py -q -p no:cacheprovider 2>&1 | Tee-Object -FilePath ci-artifacts/phase-c2-c3-regression.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain Phase C-4 negative feasibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase-c4-control-exclusion-${{ github.sha }}
+          path: ci-artifacts/
+          if-no-files-found: error
