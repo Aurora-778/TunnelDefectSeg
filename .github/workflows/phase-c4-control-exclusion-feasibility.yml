@@ -87,10 +87,10 @@ jobs:
           "changed_paths=$($changed.Count)" | Tee-Object -FilePath ci-artifacts/scope-audit.log -Append
           "allowed_paths_only=true" | Tee-Object -FilePath ci-artifacts/scope-audit.log -Append
           "protected_paths_unchanged=true" | Tee-Object -FilePath ci-artifacts/scope-audit.log -Append
-      - name: Install test dependencies
+      - name: Install Phase C dependencies
         shell: pwsh
         run: |
-          python -m pip install pytest cryptography 2>&1 | Tee-Object -FilePath ci-artifacts/dependency-install.log
+          python -m pip install -r requirements-phase-c.txt 2>&1 | Tee-Object -FilePath ci-artifacts/dependency-install.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run native exclusion feasibility probe
         shell: pwsh
