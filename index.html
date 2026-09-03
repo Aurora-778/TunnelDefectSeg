@@ -1,0 +1,4494 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>机器人隧道巡检病害监测系统</title>
+  <style>
+    /* ============================================================
+       Theme: Liquid Glass (single source of truth)
+       Merged from the original report-paper base and the later
+       glass override layer. Every selector is defined exactly once;
+       layout and visual rules live in the same rule.
+       ============================================================ */
+    :root {
+      --text-light: #eef8ff;
+      --bg-dark: #071018;
+      --line: rgba(9, 24, 38, .22);
+      --muted: #5a7089;
+      --cyan: #00b6c7;
+      --amber: #f0b84f;
+      --red: #d85b52;
+      --green: #2e9a72;
+      --blue: #3578d4;
+      --glass: rgba(244, 250, 255, .70);
+      --glass-strong: rgba(250, 253, 255, .84);
+      --glass-dark: rgba(8, 18, 28, .58);
+      --glass-edge: rgba(88, 116, 139, .26);
+      --glass-line: rgba(88, 116, 139, .24);
+      --glass-shadow: 0 30px 100px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255,255,255,.58);
+      --glass-glow: 0 0 0 1px rgba(0, 182, 199, .24), 0 14px 46px rgba(0, 182, 199, .16);
+    }
+
+    * { box-sizing: border-box; }
+
+    /* Defensive overflow guard: some wide grids (DAG, tables) can push
+       past the viewport on small screens; clip horizontally rather than
+       letting the whole page scroll sideways. */
+    html, body { overflow-x: hidden; }
+
+    body {
+      margin: 0;
+      color: var(--text-light);
+      background:
+        linear-gradient(135deg, rgba(4, 12, 19, .92), rgba(9, 24, 34, .78) 42%, rgba(23, 39, 52, .82)),
+        url("assets/t1_1_original.jpg") center top / cover,
+        var(--bg-dark);
+      font-family: "Aptos", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.045) 1px, transparent 1px) 0 0 / 36px 36px,
+        linear-gradient(0deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 36px 36px,
+        linear-gradient(180deg, rgba(255,255,255,.06), transparent 26%, rgba(0,0,0,.26));
+      mask-image: linear-gradient(180deg, rgba(0,0,0,.82), rgba(0,0,0,.2));
+    }
+
+    .shell {
+      width: min(1520px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 20px 0 42px;
+    }
+
+    /* ---------- top navigation (keeps backdrop blur by design) ---------- */
+    .premium-nav {
+      position: sticky;
+      top: 14px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      width: min(1240px, 100%);
+      margin: 0 auto 36px;
+      padding: 10px 12px 10px 16px;
+      border: 1px solid rgba(255,255,255,.34);
+      border-radius: 999px;
+      background: linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,.08));
+      box-shadow: 0 22px 80px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.42);
+      backdrop-filter: blur(26px) saturate(1.65);
+      -webkit-backdrop-filter: blur(26px) saturate(1.65);
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      color: #fff;
+      font-weight: 800;
+      letter-spacing: .01em;
+      text-shadow: 0 1px 16px rgba(0,0,0,.38);
+    }
+
+    .nav-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.9), rgba(255,255,255,.18)),
+        conic-gradient(from 140deg, #9ff4ff, #fff2b0, #6ee1d1, #9ff4ff);
+      box-shadow: inset 0 1px 2px rgba(255,255,255,.78), 0 10px 30px rgba(0,182,199,.34);
+      flex: none;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      padding: 3px;
+      border-radius: 999px;
+      background: rgba(6, 16, 25, .22);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.18);
+    }
+
+    .nav-links a {
+      color: rgba(240, 248, 255, .78);
+      text-decoration: none;
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      transition: background .24s ease, color .24s ease, box-shadow .24s ease, transform .24s ease;
+    }
+
+    .nav-links a:hover {
+      background: rgba(255,255,255,.16);
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    .nav-links a.active {
+      color: #fff;
+      background: linear-gradient(135deg, rgba(255,255,255,.24), rgba(0,182,199,.26));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.42), 0 12px 34px rgba(0,182,199,.22);
+    }
+
+    /* ---------- view switching ---------- */
+    .app-view { display: none; }
+
+    .app-view.active-view { display: block; }
+
+    .quick-stats.app-view.active-view,
+    .dashboard.app-view.active-view,
+    .lower.app-view.active-view,
+    .experiment-grid.app-view.active-view {
+      display: grid;
+    }
+
+    .dashboard.app-view:not(.active-view),
+    .lower.app-view:not(.active-view) {
+      display: none;
+    }
+
+    /* ---------- glass surfaces (no backdrop-filter: near-opaque fills
+       keep the frosted look without the repaint cost) ---------- */
+    .panel,
+    .brand,
+    .stat,
+    .robot-chart-panel,
+    .recheck-panel,
+    .defect-detail,
+    .distribution-card,
+    .data-card,
+    .metric,
+    .glossary-item,
+    .advantage-card,
+    .queue-panel,
+    .evidence-source,
+    .report-export {
+      border: 1px solid var(--glass-edge);
+      border-radius: 26px;
+      background:
+        linear-gradient(145deg, rgba(255,255,255,.96), rgba(240,248,252,.94));
+      box-shadow: var(--glass-shadow);
+    }
+
+    .panel {
+      min-width: 0;
+      overflow: clip;
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--glass-line);
+      padding: 14px 16px;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .01em;
+      color: #102032;
+      background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.22));
+    }
+
+    .panel-title span {
+      color: rgba(62, 82, 101, .78);
+    }
+
+    .panel-body { padding: 16px; }
+
+    .panel-body,
+    .robot-dashboard-body,
+    .robot-workspace,
+    .robot-distribution-grid {
+      color: #102032;
+    }
+
+    /* ---------- quick stats (detect view header) ---------- */
+    .quick-stats {
+      display: grid;
+      grid-template-columns: minmax(240px, 1.3fr) repeat(4, minmax(118px, 0.46fr));
+      gap: 10px;
+      align-items: stretch;
+      margin-bottom: 34px;
+    }
+
+    .brand {
+      color: #17212b;
+      padding: 14px 16px;
+      min-height: 94px;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 28px;
+      line-height: 1.06;
+      letter-spacing: 0;
+    }
+
+    .brand p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .stat {
+      color: #17212b;
+      padding: 10px;
+      min-height: 94px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .stat strong {
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .stat span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    /* Risk colors must beat the glass surface rule above. */
+    .stat.risk-medium { background: var(--amber); color: #17212b; }
+    .stat.risk-medium span { color: rgba(23,33,43,0.72); }
+    .stat.risk-high { background: var(--red); color: #fff; }
+    .stat.risk-high span { color: rgba(255,255,255,0.82); }
+    .stat.risk-low { background: #d7eadf; color: #17212b; }
+    .stat.risk-none { background: rgba(248,251,253,.96); color: #17212b; }
+
+    /* ---------- robot dashboard ---------- */
+    .robot-dashboard {
+      margin-bottom: 34px;
+      background:
+        linear-gradient(140deg, rgba(255,255,255,.96), rgba(238,248,252,.94)),
+        linear-gradient(180deg, rgba(255,255,255,.16), transparent);
+    }
+
+    .robot-dashboard-body {
+      display: grid;
+      grid-template-columns: minmax(520px, 1.05fr) minmax(420px, .95fr);
+      gap: 18px;
+      align-items: start;
+      padding: 22px;
+    }
+
+    .robot-title h1 {
+      margin: 0;
+      max-width: 820px;
+      color: #0f1e2d;
+      font-size: clamp(38px, 3.45vw, 58px);
+      line-height: 1.04;
+      letter-spacing: 0;
+    }
+
+    .robot-title p {
+      max-width: 720px;
+      margin: 10px 0 0;
+      color: #688097;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .robot-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .robot-kpi,
+    .detail-cell,
+    .strip-row,
+    .thumb,
+    .reason-list li {
+      border: 1px solid rgba(88, 116, 139, .22);
+      border-radius: 18px;
+      background: linear-gradient(145deg, rgba(255,255,255,.94), rgba(243,249,253,.92));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 10px 26px rgba(16,32,48,.08);
+    }
+
+    .robot-kpi {
+      padding: 10px;
+      min-height: 82px;
+    }
+
+    .robot-kpi span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .robot-kpi b {
+      display: block;
+      margin-top: 10px;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .robot-kpi b,
+    .metric b,
+    .case-id,
+    .strip-row b,
+    .recheck-main b,
+    .detail-grid b {
+      color: #061524;
+    }
+
+    .claim-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .claim-chip,
+    .tag,
+    .pill {
+      border: 1px solid rgba(88, 116, 139, .26);
+      background: rgba(255,255,255,.85);
+      color: #496174;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.58);
+    }
+
+    .claim-chip {
+      padding: 6px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .robot-chart-panel {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      align-self: start;
+      overflow: hidden;
+      background: linear-gradient(145deg, rgba(255,255,255,.95), rgba(243,249,253,.93));
+    }
+
+    .robot-chart-panel h2,
+    .recheck-panel h2,
+    .defect-detail h2 {
+      margin: 0;
+      padding: 12px;
+      border-bottom: 1px solid rgba(23,33,43,.16);
+      font-size: 16px;
+    }
+
+    .robot-chart-panel img {
+      margin: 12px;
+      width: calc(100% - 24px);
+      height: clamp(220px, 20vw, 300px);
+      min-height: 0;
+      object-fit: contain;
+      border-radius: 20px;
+      background: rgba(255,255,255,.48);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.72);
+      display: block;
+    }
+
+    .robot-chart-panel img[hidden],
+    .robot-empty[hidden] {
+      display: none;
+    }
+
+    .robot-empty {
+      display: grid;
+      place-items: center;
+      min-height: 160px;
+      color: var(--muted);
+      padding: 16px;
+      text-align: center;
+    }
+
+    .robot-workspace {
+      display: grid;
+      grid-template-columns: minmax(360px, .82fr) minmax(520px, 1.18fr);
+      gap: 16px;
+      padding: 0 22px 22px;
+      align-items: start;
+      height: auto;
+      min-height: 0;
+    }
+
+    .recheck-panel,
+    .defect-detail {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 0;
+      background: linear-gradient(145deg, rgba(255,255,255,.95), rgba(243,249,253,.93));
+    }
+
+    .robot-workspace .recheck-panel,
+    .robot-workspace .defect-detail {
+      grid-template-rows: auto auto;
+    }
+
+    .recheck-list {
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      padding: 14px;
+      scrollbar-color: rgba(0,182,199,.55) transparent;
+    }
+
+    .recheck-item {
+      width: 100%;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      min-height: 58px;
+      text-align: left;
+      border: 1px solid rgba(88, 116, 139, .22);
+      border-radius: 18px;
+      background: rgba(255,255,255,.88);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.72);
+      transition: transform .22s ease, box-shadow .22s ease, background .22s ease;
+    }
+
+    .recheck-item:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--glass-glow);
+    }
+
+    .recheck-item.active {
+      background: linear-gradient(135deg, rgba(228, 251, 253, .94), rgba(255,255,255,.9));
+      border-color: rgba(0,182,199,.58);
+      box-shadow: var(--glass-glow);
+    }
+
+    .recheck-rank {
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-weight: 800;
+      color: var(--cyan);
+    }
+
+    .recheck-main b,
+    .detail-grid b {
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+    }
+
+    .recheck-main span,
+    .detail-grid span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .detail-body {
+      padding: 12px;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .detail-cell {
+      padding: 9px;
+      min-width: 0;
+    }
+
+    .detail-note,
+    .evidence-preview,
+    .advantage-note {
+      border: 1px solid rgba(88, 116, 139, .22);
+      border-left: 4px solid rgba(0,182,199,.72);
+      border-radius: 18px;
+      background: rgba(255,255,255,.9);
+      color: #445d72;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.68);
+    }
+
+    .detail-note {
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .evidence-preview {
+      margin-top: 10px;
+      overflow: hidden;
+    }
+
+    .evidence-preview img {
+      display: block;
+      width: 100%;
+      max-height: 300px;
+      object-fit: contain;
+      background: rgba(5, 12, 19, .9);
+    }
+
+    .evidence-preview figcaption {
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      border-top: 1px solid rgba(23,33,43,.12);
+    }
+
+    .robot-distribution-grid {
+      display: none;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      padding: 0 16px 16px;
+    }
+
+    .distribution-card {
+      padding: 10px;
+      min-height: 92px;
+    }
+
+    .distribution-card b {
+      display: block;
+      margin-bottom: 6px;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+    }
+
+    .distribution-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    /* ---------- data sections ---------- */
+    .data-section {
+      margin-top: 34px;
+    }
+
+    .data-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .data-card {
+      padding: 12px;
+      color: #17212b;
+      min-height: 84px;
+    }
+
+    .data-card b {
+      display: block;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+
+    .data-card strong {
+      display: inline-block;
+      margin-bottom: 8px;
+      color: var(--green);
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+    }
+
+    .data-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 7px;
+      margin: 0 4px 6px 0;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .tag.hot {
+      background: #fff3dd;
+      color: #8a4b00;
+      border-color: rgba(244,185,66,.72);
+    }
+
+    .visualization-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .chart-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,.94);
+      color: #17212b;
+      min-height: 320px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+    }
+
+    .chart-card b {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(23,33,43,.16);
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+    }
+
+    .chart-card img {
+      width: 100%;
+      height: 100%;
+      min-height: 260px;
+      object-fit: contain;
+      background: #f8fbfd;
+      display: block;
+    }
+
+    .data-note-box {
+      border-left: 5px solid var(--cyan);
+      border-radius: 0 18px 18px 0;
+      background: rgba(255,255,255,.94);
+      padding: 14px;
+      color: #425466;
+      line-height: 1.72;
+      font-size: 14px;
+    }
+
+    /* ---------- upload / experiment ---------- */
+    .upload-panel {
+      margin-bottom: 34px;
+    }
+
+    .experiment-panel {
+      margin-bottom: 34px;
+    }
+
+    .experiment-grid {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .score-board {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,.94);
+      color: #17212b;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .score-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .score-head > div {
+      min-width: 0;
+    }
+
+    .score-head h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.18;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+    }
+
+    .score-head p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .score-badge {
+      border: 2px solid var(--line);
+      border-radius: 14px;
+      background: var(--green);
+      color: #fff;
+      padding: 8px 10px;
+      min-width: 108px;
+      max-width: 100%;
+      text-align: center;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-weight: 700;
+    }
+
+    .score-badge span {
+      display: block;
+      font-size: 11px;
+      opacity: 0.82;
+      margin-bottom: 3px;
+    }
+
+    .stage-metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stage-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(248,251,253,.94);
+      padding: 10px;
+      min-height: 86px;
+    }
+
+    .stage-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .stage-card b {
+      display: block;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 23px;
+      line-height: 1;
+    }
+
+    .stage-card small {
+      display: block;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .delta-up { color: var(--green); }
+    .delta-flat { color: var(--muted); }
+
+    .experiment-notes {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .note-tile {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,.94);
+      padding: 9px;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .note-tile b {
+      display: block;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      margin-bottom: 5px;
+    }
+
+    .result-bars {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,.94);
+      color: #17212b;
+      padding: 12px;
+      display: grid;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .compare-row {
+      display: grid;
+      grid-template-columns: 92px 1fr 58px 58px 54px;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+    }
+
+    .compare-name {
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-weight: 700;
+    }
+
+    .compare-stack {
+      display: grid;
+      gap: 3px;
+    }
+
+    .compare-track {
+      height: 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #dfe8ee;
+      overflow: hidden;
+    }
+
+    .compare-fill {
+      height: 100%;
+      background: var(--cyan);
+    }
+
+    .compare-fill.final {
+      background: var(--green);
+    }
+
+    .drop-zone {
+      display: grid;
+      grid-template-columns: minmax(220px, 0.78fr) minmax(260px, 1.22fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-height: 136px;
+      border: 1px dashed rgba(0,166,166,.56);
+      border-radius: 24px;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(0,182,199,0.18), transparent 38%),
+        linear-gradient(90deg, rgba(255,255,255,0.98), rgba(237,246,249,0.94));
+      padding: 20px;
+      cursor: pointer;
+    }
+
+    .drop-zone.dragging {
+      border-color: var(--cyan);
+      box-shadow: inset 0 0 0 3px rgba(0,182,199,0.22);
+    }
+
+    .drop-title {
+      margin: 0;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+
+    .drop-zone p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    .upload-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .upload-status {
+      margin-top: 8px;
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .busy {
+      color: var(--blue);
+      font-weight: 700;
+    }
+
+    .error {
+      color: var(--red);
+      font-weight: 700;
+    }
+
+    /* ---------- detect view ---------- */
+    .dashboard {
+      display: grid;
+      grid-template-columns: 310px minmax(0, 1fr) 370px;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .report-export {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 10px 16px 0;
+      padding: 10px 12px;
+      color: #17212b;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .report-export a {
+      flex: none;
+      color: #0d6b6b;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .report-export a:hover {
+      text-decoration: underline;
+    }
+
+    .case-id {
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 35px;
+      margin: 0 0 8px;
+    }
+
+    .status-strip {
+      display: grid;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .strip-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 9px;
+      font-size: 13px;
+    }
+
+    .strip-row b {
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-weight: 700;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--amber);
+      display: inline-block;
+    }
+
+    .viewer {
+      min-height: 680px;
+      display: grid;
+      grid-template-rows: auto minmax(360px, 1fr) auto;
+      background: linear-gradient(145deg, rgba(240,249,252,.94), rgba(255,255,255,.92));
+    }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 14px;
+      border-bottom: 1px solid var(--glass-line);
+      background: rgba(255,255,255,.9);
+    }
+
+    button {
+      font: inherit;
+      color: #15283b;
+      border: 1px solid rgba(88, 116, 139, .3);
+      border-radius: 999px;
+      background: linear-gradient(135deg, rgba(255,255,255,.95), rgba(238,247,251,.9));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.76), 0 8px 22px rgba(15, 36, 54, .08);
+      padding: 9px 13px;
+      cursor: pointer;
+      min-height: 38px;
+      transition: transform .28s ease, box-shadow .28s ease, background .28s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 34px rgba(15,36,54,.16), inset 0 1px 0 rgba(255,255,255,.78);
+    }
+
+    button.active {
+      background: linear-gradient(135deg, rgba(0,182,199,.88), rgba(0,126,152,.78));
+      color: #fff;
+      box-shadow: 0 14px 40px rgba(0,182,199,.28), inset 0 1px 0 rgba(255,255,255,.48);
+    }
+
+    .image-stage {
+      position: relative;
+      display: grid;
+      place-items: center;
+      margin: 0 14px 14px;
+      padding: 14px;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 26px;
+      background:
+        linear-gradient(135deg, rgba(7, 17, 27, .96), rgba(16, 33, 48, .88)),
+        url("assets/t1_1_original.jpg") center / cover;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.1), inset 0 -80px 140px rgba(0,0,0,.32);
+      overflow: hidden;
+    }
+
+    .image-stage img {
+      width: min(100%, 760px);
+      max-height: 520px;
+      object-fit: contain;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 18px;
+      background: #050a0f;
+      box-shadow: 0 22px 70px rgba(0,0,0,.38);
+      image-rendering: auto;
+    }
+
+    .image-stage img.hidden { display: none; }
+
+    .view-message,
+    .stage-label,
+    .stage-help {
+      border: 1px solid rgba(255,255,255,.32);
+      border-radius: 16px;
+      background: rgba(6, 15, 24, .88);
+      color: #eef8ff;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 14px 42px rgba(0,0,0,.26);
+    }
+
+    .view-message {
+      display: none;
+      position: absolute;
+      top: 58px;
+      left: 16px;
+      right: 16px;
+      max-width: 680px;
+      padding: 12px 14px;
+      text-align: left;
+      z-index: 2;
+    }
+
+    .view-message.visible { display: block; }
+
+    .view-message b {
+      display: block;
+      margin-bottom: 4px;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 13px;
+      color: var(--amber);
+    }
+
+    .view-message p {
+      max-width: 520px;
+      margin: 0;
+      color: #b8c7d4;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .stage-label {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      padding: 7px 10px;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 12px;
+      color: #fff;
+    }
+
+    .stage-help {
+      position: absolute;
+      left: 16px;
+      bottom: 16px;
+      max-width: min(620px, calc(100% - 32px));
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #d7e4ee;
+    }
+
+    .filmstrip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+      gap: 8px;
+      padding: 10px;
+      background: rgba(255,255,255,.9);
+      border-top: 1px solid var(--glass-line);
+    }
+
+    .thumb {
+      position: relative;
+      overflow: hidden;
+      padding: 5px;
+      cursor: pointer;
+      min-height: 92px;
+    }
+
+    .thumb.active {
+      border-color: rgba(0,182,199,.72);
+      box-shadow: var(--glass-glow);
+    }
+
+    .thumb img {
+      width: 100%;
+      height: 54px;
+      object-fit: cover;
+      display: block;
+      border: 0;
+      border-radius: 12px;
+    }
+
+    .thumb-unavailable {
+      position: absolute;
+      top: 7px;
+      right: 7px;
+      padding: 2px 5px;
+      border: 1px solid rgba(244, 185, 66, .76);
+      background: rgba(10, 16, 22, .82);
+      color: var(--amber);
+      font-size: 10px;
+      font-weight: 900;
+    }
+
+    .thumb span { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      padding: 9px;
+      min-height: 84px;
+    }
+
+    .metric span { color: var(--muted); font-size: 12px; }
+    .metric b { display: block; font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace; font-size: 22px; margin-top: 6px; }
+    .metric small {
+      display: block;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .glossary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .glossary-item {
+      padding: 9px;
+      min-height: 84px;
+    }
+
+    .glossary-item b {
+      display: block;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .glossary-item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .bar-list { display: grid; gap: 8px; }
+    .bar-row { display: grid; grid-template-columns: 92px 1fr 54px; gap: 8px; align-items: center; font-size: 12px; }
+
+    .bar-track {
+      height: 13px;
+      border: 1px solid rgba(88, 116, 139, .3);
+      border-radius: 999px;
+      background: rgba(219,232,239,.72);
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #54a1f4, #00b6c7);
+    }
+
+    .bar-fill.bad { background: var(--red); }
+    .bar-fill.good { background: var(--green); }
+
+    table {
+      width: 100%;
+      font-size: 12px;
+      table-layout: fixed;
+      overflow: hidden;
+      border-radius: 18px;
+      background: rgba(255,255,255,.9);
+      border-collapse: separate;
+      border-spacing: 0;
+    }
+
+    th, td {
+      border: 1px solid rgba(82,106,128,.22);
+      padding: 7px 6px;
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    th {
+      background: rgba(255,255,255,.7);
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+    }
+
+    .lower {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      gap: 18px;
+    }
+
+    .reason-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .reason-list li {
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+
+    .advantage-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .aggregate-evidence {
+      margin-bottom: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .advantage-card {
+      padding: 16px;
+      min-height: 154px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 7px;
+      overflow-wrap: anywhere;
+      transition: transform .5s ease, box-shadow .5s ease;
+    }
+
+    .advantage-card:hover {
+      transform: translateY(-4px) scale(1.012);
+      box-shadow: 0 24px 60px rgba(23,33,43,.14);
+    }
+
+    .advantage-card b {
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 14px;
+    }
+
+    .advantage-card strong {
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 26px;
+      line-height: 1;
+      color: var(--green);
+    }
+
+    .advantage-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .advantage-note {
+      margin-top: 10px;
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
+    .queue-panel {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    #reviewQueueGrid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    #reviewQueueGrid .advantage-card {
+      min-height: 132px;
+    }
+
+    .evidence-source {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 430px;
+      overflow: auto;
+      border-radius: 20px;
+      background: rgba(7,17,27,.9);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+      color: #dce7ef;
+      padding: 12px;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .callout {
+      border: 1px solid rgba(23,33,43,.18);
+      border-radius: 18px;
+      background: rgba(255,255,255,.94);
+      padding: 14px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .split-note {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 8px;
+      line-height: 1.45;
+    }
+
+    .interest-bento {
+      scroll-margin-top: 120px;
+    }
+
+    .advantage-grid,
+    #aggregateEvidenceGrid {
+      grid-auto-flow: dense;
+    }
+
+    #aggregateEvidenceGrid {
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }
+
+    #aggregateEvidenceGrid .advantage-card:nth-child(1) { grid-column: span 5; }
+    #aggregateEvidenceGrid .advantage-card:nth-child(2) { grid-column: span 7; }
+    #aggregateEvidenceGrid .advantage-card:nth-child(3),
+    #aggregateEvidenceGrid .advantage-card:nth-child(4),
+    #aggregateEvidenceGrid .advantage-card:nth-child(5) { grid-column: span 4; }
+    #aggregateEvidenceGrid .advantage-card:nth-child(6) { grid-column: span 12; }
+
+    /* ---------- robot route / video ---------- */
+    #robotRouteGrid,
+    #robotTrackGrid {
+      grid-auto-flow: dense;
+    }
+
+    #robotRouteGrid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    #robotTrackGrid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .video-card video {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border-radius: 18px;
+      background: rgba(11,17,24,.9);
+      object-fit: contain;
+    }
+
+    .video-boundary {
+      display: grid;
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 14px 16px;
+      border: 1px solid rgba(0,182,199,.22);
+      border-radius: 18px;
+      background: rgba(0,182,199,.07);
+      color: #2c485e;
+      line-height: 1.65;
+    }
+
+    .video-table-block {
+      margin-top: 18px;
+      overflow-x: auto;
+    }
+
+    .video-table-block table {
+      min-width: 760px;
+      width: 100%;
+    }
+
+    /* ---------- reduced motion: honor the OS setting ---------- */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+      .agent-node.running { animation: none; }
+      button:hover,
+      .nav-links a:hover,
+      .recheck-item:hover,
+      .agent-node:hover,
+      .advantage-card:hover { transform: none; }
+    }
+
+    /* ---------- responsive ---------- */
+    @media (max-width: 1180px) {
+      .quick-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .brand { grid-column: 1 / -1; }
+      .dashboard, .lower, .experiment-grid { grid-template-columns: 1fr; }
+      .robot-dashboard-body, .robot-workspace { grid-template-columns: 1fr; }
+      .robot-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .robot-distribution-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .data-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stage-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #aggregateEvidenceGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #aggregateEvidenceGrid .advantage-card { grid-column: span 1 !important; }
+      #reviewQueueGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #robotRouteGrid,
+      #robotTrackGrid,
+      .video-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 680px) {
+      .shell { width: min(100% - 18px, 1480px); padding-top: 10px; }
+      .quick-stats { grid-template-columns: 1fr; }
+      .drop-zone { grid-template-columns: 1fr; cursor: default; }
+      .upload-actions { justify-content: flex-start; }
+      .panel-title { align-items: flex-start; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+      .strip-row { display: grid; grid-template-columns: 1fr; gap: 4px; }
+      .strip-row b { overflow-wrap: anywhere; }
+      .tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .tabs button { width: 100%; }
+      .image-stage { padding: 8px; min-height: 310px; }
+      .image-stage img { width: 100%; }
+      .filmstrip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric-grid { grid-template-columns: 1fr; }
+      .stage-metrics, .experiment-notes, .advantage-grid, #reviewQueueGrid { grid-template-columns: 1fr; }
+      .evidence-source { display: grid; grid-template-columns: 1fr; }
+      .score-head { display: grid; grid-template-columns: 1fr; }
+      .score-badge { width: 100%; }
+      .compare-row { grid-template-columns: 74px 1fr 44px; }
+      .compare-row span:nth-child(4),
+      .compare-row span:nth-child(5) { display: none; }
+      .robot-dashboard-body, .robot-workspace { padding: 12px; }
+      .robot-kpi-grid, .robot-distribution-grid, .detail-grid, .data-grid, .visualization-grid { grid-template-columns: 1fr; }
+      .robot-title h1 { font-size: 32px; }
+      .glossary { grid-template-columns: 1fr; }
+      .bar-row { grid-template-columns: 78px minmax(0, 1fr) 46px; }
+      .brand h1 { font-size: 23px; }
+      pre { max-height: 360px; }
+    }
+
+    /* Agent control-room navigation and workspace. */
+    .nav-menu-shell {
+      position: relative;
+      flex: none;
+    }
+
+    .nav-menu-trigger {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 14px 8px 10px;
+      border: 1px solid rgba(255,255,255,.28);
+      border-radius: 999px;
+      color: rgba(245,251,255,.96);
+      background: linear-gradient(135deg, rgba(255,255,255,.18), rgba(0,182,199,.16));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.34), 0 10px 30px rgba(0,0,0,.18);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: .01em;
+    }
+
+    .nav-menu-trigger:hover,
+    .nav-menu-trigger:focus-visible,
+    .nav-menu-shell.is-open .nav-menu-trigger {
+      border-color: rgba(159,244,255,.68);
+      background: linear-gradient(135deg, rgba(255,255,255,.24), rgba(0,182,199,.28));
+      outline: none;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.44), 0 0 0 3px rgba(0,182,199,.12), 0 14px 36px rgba(0,0,0,.24);
+    }
+
+    .nav-list-icon {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      align-content: center;
+      gap: 4px;
+      padding: 5px;
+      border-radius: 50%;
+      background: rgba(5,18,28,.30);
+    }
+
+    .nav-list-icon i {
+      display: block;
+      height: 2px;
+      border-radius: 999px;
+      background: #eafcff;
+      transform-origin: center;
+      transition: transform .22s ease, opacity .22s ease;
+    }
+
+    .nav-menu-shell.is-open .nav-list-icon i:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+    .nav-menu-shell.is-open .nav-list-icon i:nth-child(2) { opacity: 0; }
+    .nav-menu-shell.is-open .nav-list-icon i:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+    .nav-menu-panel {
+      position: absolute;
+      top: calc(100% + 12px);
+      right: 0;
+      width: min(580px, calc(100vw - 36px));
+      padding: 12px;
+      border: 1px solid rgba(255,255,255,.52);
+      border-radius: 24px;
+      color: #102032;
+      background:
+        linear-gradient(145deg, rgba(252,254,255,.94), rgba(226,244,249,.86)),
+        rgba(245,251,255,.92);
+      box-shadow: 0 32px 90px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.88);
+      backdrop-filter: blur(30px) saturate(1.5);
+      -webkit-backdrop-filter: blur(30px) saturate(1.5);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: translateY(-8px) scale(.98);
+      transform-origin: top right;
+      transition: opacity .18s ease, visibility .18s ease, transform .18s ease;
+    }
+
+    .nav-menu-panel::before {
+      content: "";
+      position: absolute;
+      right: 0;
+      bottom: 100%;
+      left: 0;
+      height: 14px;
+    }
+
+    .nav-menu-shell.is-open .nav-menu-panel {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
+    }
+
+    .nav-menu-groups {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .nav-menu-group {
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid rgba(82,106,128,.14);
+      border-radius: 17px;
+      background: rgba(255,255,255,.42);
+    }
+
+    .nav-menu-group h2 {
+      margin: 2px 8px 7px;
+      color: #718497;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+
+    .nav-menu-links {
+      display: grid;
+      gap: 3px;
+    }
+
+    .nav-menu-links a {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 11px;
+      border-radius: 13px;
+      color: #31475a;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      transition: color .18s ease, background .18s ease, transform .18s ease;
+    }
+
+    .nav-menu-links a::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      flex: none;
+      border: 2px solid rgba(71,100,123,.42);
+      border-radius: 50%;
+      background: transparent;
+    }
+
+    .nav-menu-links a:hover,
+    .nav-menu-links a:focus-visible {
+      color: #071828;
+      background: rgba(0,182,199,.11);
+      outline: none;
+      transform: translateX(2px);
+    }
+
+    .nav-menu-links a.active {
+      color: #041824;
+      background: linear-gradient(135deg, rgba(159,244,255,.50), rgba(255,242,176,.40));
+      box-shadow: inset 0 0 0 1px rgba(0,151,168,.25);
+    }
+
+    .nav-menu-links a.active::before {
+      border-color: #058b9b;
+      background: #08adbd;
+      box-shadow: 0 0 0 4px rgba(0,182,199,.13);
+    }
+
+    .agent-workbench {
+      position: relative;
+      color: #102032;
+      overflow: clip;
+      background:
+        radial-gradient(circle at 88% 8%, rgba(0,182,199,.13), transparent 24%),
+        linear-gradient(145deg, rgba(255,255,255,.84), rgba(229,244,249,.64));
+    }
+
+    .agent-workbench::after {
+      content: "";
+      position: absolute;
+      inset: 46px 0 auto;
+      height: 180px;
+      pointer-events: none;
+      background: linear-gradient(90deg, transparent, rgba(0,182,199,.08), transparent);
+      mask-image: linear-gradient(180deg, #000, transparent);
+    }
+
+    .agent-workbench-body {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 18px;
+      padding: 22px;
+    }
+
+    .agent-command-bar {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(310px, .7fr);
+      gap: 18px;
+      align-items: end;
+    }
+
+    .agent-command-copy .eyebrow {
+      display: block;
+      margin-bottom: 8px;
+      color: #188a98;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    .agent-command-copy h1 {
+      margin: 0;
+      max-width: 840px;
+      color: #081a29;
+      font-size: clamp(36px, 4vw, 62px);
+      line-height: .98;
+      letter-spacing: -.045em;
+    }
+
+    .agent-command-copy p {
+      max-width: 780px;
+      margin: 13px 0 0;
+      color: #668096;
+      line-height: 1.7;
+    }
+
+    .agent-run-controls {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 9px;
+      padding: 11px;
+      border: 1px solid rgba(255,255,255,.72);
+      border-radius: 20px;
+      background: rgba(255,255,255,.45);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.75);
+    }
+
+    .agent-run-controls label {
+      grid-column: 1 / -1;
+      color: #6d8295;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .agent-run-controls select,
+    .agent-run-controls button {
+      min-height: 44px;
+      border: 1px solid rgba(58,87,109,.20);
+      border-radius: 13px;
+      color: #12283a;
+      background: rgba(255,255,255,.72);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .agent-run-controls select { min-width: 0; padding: 0 12px; }
+    .agent-run-controls button { padding: 0 15px; cursor: pointer; }
+    .agent-run-controls button:hover { background: #fff; }
+
+    .agent-stale-note {
+      grid-column: 1 / -1;
+      min-height: 20px;
+      color: #a24b35;
+      font-size: 12px;
+    }
+
+    .agent-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .agent-kpi {
+      min-width: 0;
+      padding: 14px;
+      border: 1px solid rgba(255,255,255,.72);
+      border-radius: 18px;
+      background: linear-gradient(145deg, rgba(255,255,255,.75), rgba(234,246,250,.52));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.78), 0 12px 30px rgba(15,38,56,.08);
+    }
+
+    .agent-kpi span {
+      display: block;
+      color: #71879a;
+      font-size: 11px;
+      font-weight: 750;
+    }
+
+    .agent-kpi b {
+      display: block;
+      margin-top: 7px;
+      color: #061724;
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: clamp(20px, 2.1vw, 31px);
+      overflow-wrap: anywhere;
+    }
+
+    .agent-work-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.42fr) minmax(300px, .58fr);
+      gap: 14px;
+    }
+
+    .agent-surface {
+      min-width: 0;
+      border: 1px solid rgba(255,255,255,.72);
+      border-radius: 22px;
+      background: rgba(255,255,255,.48);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.78), 0 16px 38px rgba(15,38,56,.08);
+    }
+
+    .agent-surface-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 15px 17px;
+      border-bottom: 1px solid rgba(70,99,122,.14);
+    }
+
+    .agent-surface-head h2 {
+      margin: 0;
+      color: #0d2232;
+      font-size: 15px;
+    }
+
+    .agent-status-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      color: #4e6579;
+      background: rgba(255,255,255,.62);
+      font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .04em;
+    }
+
+    .agent-status-badge.success { color: #126746; background: rgba(46,154,114,.13); }
+    .agent-status-badge.running { color: #096c7c; background: rgba(0,182,199,.14); }
+    .agent-status-badge.failed { color: #9b3029; background: rgba(216,91,82,.14); }
+    .agent-status-badge.execution-only { color: #765b1e; background: rgba(240,184,79,.17); }
+
+    .agent-dag-shell {
+      position: relative;
+      min-height: 340px;
+      overflow: auto;
+      padding: 20px;
+    }
+
+    .agent-dag-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .agent-dag-layers {
+      position: relative;
+      z-index: 1;
+      min-width: 680px;
+      min-height: 300px;
+      display: grid;
+      align-items: stretch;
+      gap: 28px;
+    }
+
+    .agent-dag-layer {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-evenly;
+      gap: 12px;
+    }
+
+    .agent-node {
+      position: relative;
+      width: 100%;
+      min-height: 92px;
+      display: grid;
+      gap: 5px;
+      padding: 14px;
+      border: 1px solid rgba(74,104,126,.20);
+      border-left: 4px solid #8799a8;
+      border-radius: 17px;
+      color: #142c3e;
+      text-align: left;
+      background: rgba(255,255,255,.79);
+      box-shadow: 0 12px 28px rgba(17,42,59,.09);
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+
+    .agent-node:hover,
+    .agent-node:focus-visible,
+    .agent-node.active {
+      z-index: 2;
+      outline: none;
+      transform: translateY(-2px);
+      border-color: rgba(0,151,168,.42);
+      box-shadow: 0 16px 34px rgba(0,126,143,.16), inset 0 0 0 1px rgba(255,255,255,.72);
+    }
+
+    .agent-node.success { border-left-color: #2e9a72; }
+    .agent-node.running { border-left-color: #00a9ba; animation: agentPulse 1.6s ease-in-out infinite; }
+    .agent-node.failed { border-left-color: #d85b52; }
+
+    @keyframes agentPulse {
+      50% { box-shadow: 0 16px 38px rgba(0,182,199,.24); }
+    }
+
+    .agent-node strong { font-size: 13px; }
+    .agent-node span { color: #6f8497; font-size: 11px; line-height: 1.45; }
+    .agent-node small { color: #18818f; font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI", monospace; }
+
+    .agent-detail {
+      min-height: 340px;
+      padding: 18px;
+    }
+
+    .agent-detail h3 {
+      margin: 0 0 7px;
+      color: #071a29;
+      font-size: 23px;
+    }
+
+    .agent-detail > p {
+      margin: 0;
+      color: #6a8093;
+      line-height: 1.65;
+    }
+
+    .agent-metric-list {
+      display: grid;
+      gap: 7px;
+      margin-top: 16px;
+    }
+
+    .agent-metric-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 9px 10px;
+      border-radius: 12px;
+      color: #526a7d;
+      background: rgba(255,255,255,.58);
+      font-size: 12px;
+    }
+
+    .agent-metric-row b {
+      color: #102638;
+      overflow-wrap: anywhere;
+      text-align: right;
+    }
+
+    .agent-timeline {
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+    }
+
+    .agent-timeline-row {
+      display: grid;
+      grid-template-columns: minmax(150px, .7fr) minmax(180px, 1.3fr) 86px;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 11px;
+      border-radius: 14px;
+      background: rgba(255,255,255,.54);
+      font-size: 12px;
+    }
+
+    .agent-timeline-row b { color: #163047; }
+    .agent-timeline-track {
+      position: relative;
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(44,75,98,.12);
+    }
+
+    .agent-timeline-track i {
+      display: block;
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      height: 100%;
+      min-width: 8px;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #17a5b6, #71dccb);
+    }
+
+    .agent-results-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, .55fr);
+      gap: 14px;
+    }
+
+    .agent-result-kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      padding: 14px;
+    }
+
+    .agent-result-kpis .agent-kpi { padding: 11px; }
+    .agent-result-kpis .agent-kpi b { font-size: 22px; }
+
+    .agent-result-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 14px 14px;
+    }
+
+    .agent-result-links button {
+      min-height: 40px;
+      padding: 8px 12px;
+      border: 1px solid rgba(0,151,168,.23);
+      border-radius: 12px;
+      color: #0e6170;
+      background: rgba(0,182,199,.09);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .agent-truth-boundary {
+      display: grid;
+      align-content: start;
+      gap: 9px;
+      padding: 16px;
+      color: #4d6578;
+      line-height: 1.55;
+      font-size: 12px;
+    }
+
+    .agent-truth-boundary strong {
+      color: #0a2436;
+      font-size: 14px;
+    }
+
+    .agent-growth-zero {
+      padding: 10px 12px;
+      border: 1px solid rgba(240,184,79,.34);
+      border-radius: 13px;
+      color: #7b5d16;
+      background: rgba(240,184,79,.14);
+      font-weight: 800;
+    }
+
+    @media (max-width: 1180px) {
+      .agent-command-bar,
+      .agent-work-grid,
+      .agent-results-grid { grid-template-columns: 1fr; }
+      .agent-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 680px) {
+      .premium-nav {
+        position: sticky;
+        top: 8px;
+        align-items: center;
+        flex-direction: row;
+        gap: 8px;
+        padding: 8px;
+        border-radius: 20px;
+      }
+      .nav-brand {
+        gap: 7px;
+        font-size: 11px;
+        line-height: 1.12;
+      }
+      .nav-brand > span:last-child {
+        max-width: 118px;
+        overflow: hidden;
+      }
+      .nav-mark {
+        width: 26px;
+        height: 26px;
+      }
+      .nav-menu-trigger {
+        gap: 8px;
+        padding: 8px 10px 8px 8px;
+      }
+      .nav-menu-trigger > span:last-child { max-width: 88px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .nav-menu-panel {
+        position: absolute;
+        top: calc(100% + 12px);
+        right: -8px;
+        width: calc(100vw - 36px);
+        max-height: calc(100vh - 96px);
+        overflow: auto;
+        border-radius: 22px;
+      }
+      .nav-menu-groups { grid-template-columns: 1fr; }
+      .agent-workbench-body { padding: 12px; }
+      .agent-command-copy h1 { font-size: 36px; }
+      .agent-run-controls { grid-template-columns: 1fr; }
+      .agent-run-controls label { grid-column: auto; }
+      .agent-kpi-grid,
+      .agent-result-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .agent-dag-shell { padding: 12px; }
+      .agent-timeline-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <nav class="premium-nav" aria-label="主导航">
+      <div class="nav-brand"><span class="nav-mark"></span><span>机器人隧道巡检病害监测系统</span></div>
+      <div class="nav-menu-shell" id="navMenuShell">
+        <button class="nav-menu-trigger" id="navMenuTrigger" type="button" aria-expanded="false" aria-controls="navMenuPanel">
+          <span class="nav-list-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span id="navCurrentLabel">系统总览</span>
+        </button>
+        <div class="nav-menu-panel" id="navMenuPanel" aria-hidden="true">
+          <div class="nav-menu-groups">
+            <section class="nav-menu-group" aria-labelledby="navMonitorTitle">
+              <h2 id="navMonitorTitle">监测 Monitor</h2>
+              <div class="nav-menu-links">
+                <a href="#dashboard" data-view-link="dashboard">系统总览</a>
+                <a href="#agent-workbench" data-view-link="agent-workbench">Agent 工作台</a>
+                <a href="#engineering-report" data-view-link="engineering-report">工程报告</a>
+              </div>
+            </section>
+            <section class="nav-menu-group" aria-labelledby="navAnalysisTitle">
+              <h2 id="navAnalysisTitle">分析 Analysis</h2>
+              <div class="nav-menu-links">
+                <a href="#growth-analysis" data-view-link="growth-analysis">增长分析</a>
+                <a href="#recheck-list" data-view-link="recheck-list">复检清单</a>
+                <a href="#visualizations" data-view-link="visualizations">可视化图表</a>
+              </div>
+            </section>
+            <section class="nav-menu-group" aria-labelledby="navDemoTitle">
+              <h2 id="navDemoTitle">演示 Demo</h2>
+              <div class="nav-menu-links">
+                <a href="#video-analysis" data-view-link="video-analysis">视频分析</a>
+                <a href="#algorithm-flow" data-view-link="algorithm-flow">算法展示</a>
+                <a href="#detect" data-view-link="detect">单图检测</a>
+              </div>
+            </section>
+            <section class="nav-menu-group" aria-labelledby="navNotesTitle">
+              <h2 id="navNotesTitle">说明 Notes</h2>
+              <div class="nav-menu-links">
+                <a href="#data-note" data-view-link="data-note">数据说明</a>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <section class="panel robot-dashboard app-view" id="dashboard" data-app-view="dashboard">
+      <div class="panel-title">机器人隧道巡检病害监测系统 <span id="robotDashboardSource">数据加载中</span></div>
+      <div class="robot-dashboard-body">
+        <div>
+          <div class="robot-title">
+            <h1>机器人隧道巡检病害时空监测 Dashboard</h1>
+            <p>融合 KICT 裂缝 mask 几何特征与仿真巡检元数据，实现病害工程化定位、跨巡检增长分析和重点复检清单生成。</p>
+          </div>
+          <div class="robot-kpi-grid" id="robotKpiGrid">
+            <div class="robot-kpi" title="Inspection"><span>巡检次数</span><b>-</b></div>
+            <div class="robot-kpi" title="Frames"><span>帧数</span><b>-</b></div>
+            <div class="robot-kpi" title="Defects"><span>病害数</span><b>-</b></div>
+            <div class="robot-kpi" title="Recheck"><span>待复检</span><b>-</b></div>
+            <div class="robot-kpi" title="High risk"><span>高风险</span><b>-</b></div>
+          </div>
+          <div class="claim-row" id="claimChips">
+            <span class="claim-chip">rule evidence</span>
+            <span class="claim-chip">requires review</span>
+            <span class="claim-chip">simulation/coarse</span>
+          </div>
+        </div>
+        <div class="robot-chart-panel">
+          <h2>里程风险分布</h2>
+          <img id="mileageRiskChart" src="" alt="里程风险分布图" hidden />
+          <div class="robot-empty" id="mileageRiskEmpty">等待图表。</div>
+        </div>
+      </div>
+      <div class="robot-workspace">
+        <section class="recheck-panel" id="recheck">
+          <h2>重点复检清单</h2>
+          <div class="recheck-list" id="recheckList">
+            <div class="robot-empty">等待 priority_recheck_list.csv。</div>
+          </div>
+        </section>
+        <section class="defect-detail">
+          <h2>病害证据</h2>
+          <div class="detail-body" id="defectDetail">
+            <div class="robot-empty">选择一个复检对象。</div>
+          </div>
+        </section>
+      </div>
+      <div class="robot-distribution-grid" id="robotDistributionGrid"></div>
+    </section>
+
+    <section class="panel agent-workbench app-view" id="agent-workbench" data-app-view="agent-workbench">
+      <div class="panel-title">
+        Agent 编排与证据工作台
+        <span id="agentWorkbenchSource">数据加载中</span>
+      </div>
+      <div class="agent-workbench-body">
+        <div class="agent-command-bar">
+          <div class="agent-command-copy">
+            <span class="eyebrow">编排控制室</span>
+            <h1>让每一步判断<br />都有运行证据。</h1>
+            <p>选择一次真实运行，查看 Agent 依赖、并行执行、耗时、重试和结构化产物。历史回放只展示当次执行快照，不把当前图片冒充为历史证据。</p>
+          </div>
+          <div class="agent-run-controls">
+            <label for="agentRunSelect">运行记录</label>
+            <select id="agentRunSelect" aria-label="选择 Agent 运行记录">
+              <option value="">等待运行数据</option>
+            </select>
+            <button type="button" id="agentRefreshButton">刷新</button>
+            <div class="agent-stale-note" id="agentStaleNote" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="agent-kpi-grid" id="agentRunKpis">
+          <div class="agent-kpi" title="Run"><span>运行编号</span><b>-</b></div>
+          <div class="agent-kpi" title="Status"><span>状态</span><b>-</b></div>
+          <div class="agent-kpi" title="Progress"><span>进度</span><b>-</b></div>
+          <div class="agent-kpi" title="Agents"><span>Agent 数</span><b>-</b></div>
+          <div class="agent-kpi" title="Runtime"><span>耗时</span><b>-</b></div>
+          <div class="agent-kpi" title="Failed"><span>失败数</span><b>-</b></div>
+        </div>
+
+        <div class="agent-work-grid">
+          <section class="agent-surface" aria-labelledby="agentDagTitle">
+            <div class="agent-surface-head">
+              <h2 id="agentDagTitle">Agent 依赖图</h2>
+              <span class="agent-status-badge" id="agentReplayBadge">等待数据</span>
+            </div>
+            <div class="agent-dag-shell" id="agentDagShell">
+              <svg class="agent-dag-svg" id="agentDagSvg" aria-hidden="true"></svg>
+              <div class="agent-dag-layers" id="agentDagLayers">
+                <div class="robot-empty">等待 DAG 数据。</div>
+              </div>
+            </div>
+          </section>
+          <aside class="agent-surface agent-detail" id="agentNodeDetail" aria-live="polite">
+            <h3>选择一个 Agent</h3>
+            <p>点击 DAG 节点查看职责、执行状态、耗时、重试次数和真实输出指标。</p>
+          </aside>
+        </div>
+
+        <section class="agent-surface" aria-labelledby="agentTimelineTitle">
+          <div class="agent-surface-head">
+            <h2 id="agentTimelineTitle">执行时间线</h2>
+            <span class="agent-status-badge" id="agentTimelineSummary">0 events</span>
+          </div>
+          <div class="agent-timeline" id="agentTimeline">
+            <div class="robot-empty">等待运行时间线。</div>
+          </div>
+        </section>
+
+        <div class="agent-results-grid">
+          <section class="agent-surface" aria-labelledby="agentResultsTitle">
+            <div class="agent-surface-head">
+              <h2 id="agentResultsTitle">当前可展示结果</h2>
+              <span class="agent-status-badge" id="agentResultBinding">未绑定</span>
+            </div>
+            <div class="agent-result-kpis" id="agentResultKpis">
+              <div class="robot-empty">等待当前结果摘要。</div>
+            </div>
+            <div class="agent-result-links" id="agentResultLinks"></div>
+          </section>
+          <aside class="agent-surface agent-truth-boundary" id="agentTruthBoundary">
+            <strong>真实性边界</strong>
+            <span>KICT 图像和 mask 为真实数据；路线与跨巡检关系包含仿真元数据。</span>
+            <span>所有工程结论仍需人工或传感器复核。</span>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section app-view" id="engineering-report" data-app-view="engineering-report">
+      <div class="panel-title">工程化病害报告</div>
+      <div class="panel-body">
+        <div class="data-grid" id="engineeringReportGrid">
+          <div class="robot-empty">等待工程报告。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section app-view" id="growth-analysis" data-app-view="growth-analysis">
+      <div class="panel-title">跨巡检增长分析</div>
+      <div class="panel-body">
+        <div class="data-grid" id="growthAnalysisGrid">
+          <div class="robot-empty">等待增长分析。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section app-view" id="recheck-list" data-app-view="recheck-list">
+      <div class="panel-title">重点复检清单</div>
+      <div class="panel-body">
+        <div class="data-grid" id="fullRecheckGrid">
+          <div class="robot-empty">等待复检清单。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section app-view" id="visualizations" data-app-view="visualizations">
+      <div class="panel-title">可视化图表</div>
+      <div class="panel-body">
+        <div class="visualization-grid" id="visualizationGrid">
+          <div class="robot-empty">等待图表。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section app-view" id="video-analysis" data-app-view="video-analysis">
+      <div class="panel-title">视频分析结果 <span id="videoDashboardSource">数据加载中</span></div>
+      <div class="panel-body">
+        <div class="video-boundary" id="videoBoundaryNotes">
+          <span>tunnel_demo.mp4 是由 KICT 静态裂缝图像和 mask 合成的 demo video。</span>
+          <span>它用于验证视频输入 pipeline 和可视化展示，不是真实机器人连续巡检视频；当前系统不是实时视频流分析系统。</span>
+          <span>supervision 只是可选可视化工具层，不参与 Disease Memory Bank、no-id Association 和 Growth Analysis 核心逻辑。</span>
+        </div>
+        <div class="video-grid" id="videoCards">
+          <div class="robot-empty">等待视频分析产物。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section app-view" id="algorithm-flow" data-app-view="algorithm-flow">
+      <div class="panel-title">算法展示 / Algorithm Flow <span id="algorithmEventsSource">数据加载中</span></div>
+      <div class="panel-body">
+        <div class="video-boundary" id="algorithmBoundaryNotes">
+          <span>这是基于已生成 artifacts 的算法事件流展示。</span>
+          <span>它不运行任意代码，不做模型推理，也不是真实在线机器人算法执行。</span>
+          <span>每个步骤的 claim_boundary 会说明该步骤能证明什么、不能证明什么。</span>
+        </div>
+        <div class="claim-row" id="algorithmArtifactSummary">
+          <span class="claim-chip">generated_at N/A</span>
+          <span class="claim-chip">source artifacts 0</span>
+          <span class="claim-chip">missing 0</span>
+        </div>
+        <div class="video-grid">
+          <div class="data-grid" id="algorithmTimeline">
+            <div class="robot-empty">尚未生成算法展示事件流，请先运行 python scripts/generate_algorithm_events.py。</div>
+          </div>
+          <div class="data-card" id="algorithmEventDetail">
+            <div class="robot-empty">选择一个算法步骤。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <header class="quick-stats app-view" data-app-view="detect">
+      <section class="brand">
+        <h1>单图检测 / 现场复核</h1>
+      </section>
+      <section class="stat risk-medium" id="riskLevelCard"><span>Risk level</span><strong id="riskLevel">Medium</strong></section>
+      <section class="stat"><span>Risk score</span><strong id="riskScore">3.25</strong></section>
+      <section class="stat"><span>Defect pixels</span><strong id="defectPixels">1108</strong></section>
+      <section class="stat"><span>Review priority</span><strong id="reviewFlag">High</strong></section>
+    </header>
+
+    <section class="panel upload-panel app-view" id="detect" data-app-view="detect">
+      <div class="drop-zone" id="dropZone">
+        <div>
+          <p class="drop-title">拖入图片实时检测</p>
+          <p>支持 jpg / png / bmp / tif；首次检测会加载模型权重，后续图片复用同一个模型实例。</p>
+        </div>
+        <p id="uploadHint">把隧道衬砌图片拖到这里，或点击选择文件。检测完成后，下方证据图和风险报告会自动刷新。</p>
+        <div class="upload-actions">
+          <button type="button" id="pickFile">选择图片</button>
+          <button type="button" id="resetSample">恢复样例</button>
+          <input type="file" id="fileInput" accept="image/*" hidden />
+        </div>
+      </div>
+      <div class="upload-status" id="uploadStatus">当前展示内置样例 t1_1；上传图片后将替换为实时检测结果。</div>
+    </section>
+
+    <section class="panel experiment-panel app-view" data-app-view="detect">
+      <div class="panel-title">SegFormer B1 阶段结果</div>
+      <div class="panel-body">
+        <div class="experiment-grid">
+          <div class="score-board">
+            <div class="score-head">
+              <div>
+                <h2>主干升级完成：mIoU 84.33</h2>
+                <p>基于 6 类 mmseg 数据集验证集，训练集 700 张、验证集 150 张。当前 checkpoint 已跑满 160000 iter。</p>
+              </div>
+              <div class="score-badge"><span>GLOBAL</span>+3.23 mIoU</div>
+            </div>
+            <div class="stage-metrics" id="stageMetrics"></div>
+            <div class="experiment-notes">
+              <div class="note-tile"><b>有效提升</b>从 16000 到 160000，global mIoU 由 81.10 提升到 84.33，说明继续训练仍有收益。</div>
+              <div class="note-tile"><b>强项类别</b>pipeline 与 vertical 已分别达到 94.16 / 95.85，细长结构识别能力明显增强。</div>
+              <div class="note-tile"><b>主要瓶颈</b>blocky 当前 IoU 53.58，是后续冲分最值得优先优化的类别。</div>
+            </div>
+          </div>
+          <div class="result-bars">
+            <div class="compare-row">
+              <span class="compare-name">Class</span>
+              <span>IoU 对比</span>
+              <span>16k</span>
+              <span>160k</span>
+              <span>Δ</span>
+            </div>
+            <div id="classCompareRows"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="dashboard app-view" data-app-view="detect">
+      <aside class="panel">
+        <div class="panel-title">样本档案 <span class="pill"><i class="dot"></i> 当前样本</span></div>
+        <div class="panel-body">
+          <h2 class="case-id" id="caseId">t1_1</h2>
+          <div class="status-strip" id="statusStrip">
+            <div class="strip-row"><span>TTA specs</span><b>identity + hflip</b></div>
+            <div class="strip-row"><span>Selection</span><b>single</b></div>
+            <div class="strip-row"><span>Input size</span><b>384 x 384</b></div>
+            <div class="strip-row"><span>Main class</span><b>simple</b></div>
+            <div class="strip-row"><span>Direction</span><b>vertical</b></div>
+            <div class="strip-row"><span>Skeleton length</span><b>63</b></div>
+            <div class="strip-row"><span>Components</span><b>1</b></div>
+          </div>
+          <p class="split-note" id="caseNote">单次预测有 1108 个缺陷像素，选择输出为 1108 个；adaptive selection 回退 single 以保护小缺陷证据。</p>
+        </div>
+      </aside>
+
+      <section class="panel viewer">
+        <div class="tabs" id="tabs"></div>
+        <div class="image-stage">
+          <div class="stage-label" id="stageLabel">选择叠加图</div>
+          <img id="stageImage" src="assets/segformer_t1_1_selected_overlay.png" alt="当前影像证据" />
+          <div class="view-message" id="viewMessage" aria-live="polite"></div>
+          <div class="stage-help" id="stageHelp">最终选择的 mask 半透明叠加回原图，用来看病害位置和覆盖范围。</div>
+        </div>
+        <div class="filmstrip" id="filmstrip"></div>
+      </section>
+
+      <aside class="panel">
+        <div class="panel-title">风险证据</div>
+        <div class="panel-body">
+          <div class="metric-grid" id="riskMetrics">
+            <div class="metric"><span>Mean uncertainty</span><b>0.0046</b><small>整张图预测分布的平均不确定程度，越高表示模型越不确定。</small></div>
+            <div class="metric"><span>Max uncertainty</span><b>0.4433</b><small>图中最不确定的像素值，用于定位边界或疑似误判区域。</small></div>
+            <div class="metric"><span>Defect uncertainty</span><b>0.3732</b><small>只在已检测缺陷区域内统计，更贴近复核风险。</small></div>
+            <div class="metric"><span>High defect fraction</span><b>74.91%</b><small>缺陷区域中超过阈值的比例，越高越建议人工确认。</small></div>
+          </div>
+
+          <h3>风险触发原因</h3>
+          <ul class="reason-list" id="reasonList">
+            <li>类别严重度权重 1.00</li>
+            <li>面积占比较小 0.0075</li>
+            <li>骨架长度中等 63</li>
+            <li>缺陷区平均不确定性较高 0.373</li>
+            <li>高不确定缺陷占比较高 0.749</li>
+          </ul>
+
+          <h3>类别像素变化</h3>
+          <div class="bar-list" id="pixelBars">
+            <div class="bar-row"><span>single bg</span><div class="bar-track"><div class="bar-fill good" style="width:99.25%"></div></div><b>146348</b></div>
+            <div class="bar-row"><span>single defect</span><div class="bar-track"><div class="bar-fill" style="width:0.75%"></div></div><b>1108</b></div>
+            <div class="bar-row"><span>fused bg</span><div class="bar-track"><div class="bar-fill good" style="width:99.65%"></div></div><b>146939</b></div>
+            <div class="bar-row"><span>fused defect</span><div class="bar-track"><div class="bar-fill" style="width:0.35%"></div></div><b>517</b></div>
+            <div class="bar-row"><span>selected defect</span><div class="bar-track"><div class="bar-fill" style="width:0.75%"></div></div><b>1108</b></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="lower app-view" data-app-view="detect">
+      <section class="panel">
+        <div class="panel-title">指标汇总</div>
+        <div class="panel-body">
+          <div class="metric-grid" id="summaryMetrics">
+            <div class="metric"><span>Single mIoU</span><b>0.2221</b><small>单次预测与人工标注 GT 的重叠度，1 表示完全一致。</small></div>
+            <div class="metric"><span>Fused mIoU</span><b>0.1732</b><small>TTA 融合预测与人工标注 GT 的重叠度。</small></div>
+            <div class="metric"><span>Selected mIoU</span><b>0.2221</b><small>Adaptive fusion 选择输出与人工标注 GT 的重叠度。</small></div>
+            <div class="metric"><span>Delta selected</span><b>0</b><small>Selected mIoU - Single mIoU，用于观察自适应选择是否损伤精度。</small></div>
+            <div class="metric"><span>Mean uncertainty</span><b>0.1554</b><small>评估样本上的平均不确定程度。</small></div>
+          </div>
+          <h3>形态量化明细</h3>
+          <table>
+            <thead>
+              <tr><th>类别</th><th>面积像素</th><th>面积占比</th><th>连通域</th><th>骨架长度</th><th>主方向</th><th>风险</th></tr>
+            </thead>
+            <tbody id="morphologyRows">
+              <tr><td>simple</td><td>1108</td><td>0.007514</td><td>1</td><td>63</td><td>vertical 88.19 deg</td><td>Medium / 需复核</td></tr>
+              <tr><td>blocky</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
+              <tr><td>pipeline</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
+              <tr><td>vertical</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
+              <tr><td>horizontal</td><td>0</td><td>0</td><td>0</td><td>0</td><td>-</td><td>None</td></tr>
+            </tbody>
+          </table>
+          <h3>形态变化解释</h3>
+          <div class="metric-grid" id="morphologyDeltaGrid">
+            <div class="metric"><span>single -> fused</span><b>N/A</b><small>等待 morphology_delta。</small></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">结构化报告</div>
+        <div class="report-export" id="reportExport" hidden>
+          <span id="reportExportHint">结构化报告会在本地输出目录生成。</span>
+          <a id="reportExportLink" href="#" target="_blank" rel="noopener">下载结构化报告</a>
+        </div>
+        <pre id="jsonBlock"></pre>
+      </section>
+
+      <section class="panel" id="multidomainPanel" style="margin-top:34px;" hidden>
+        <div class="panel-title">多领域汇总</div>
+        <div class="panel-body">
+          <div class="metric-grid" id="multidomainCards"></div>
+          <div class="advantage-note" id="multidomainNote" style="margin-top:12px;"></div>
+          <table style="margin-top:12px;">
+            <thead>
+              <tr><th>领域</th><th>病害类型</th><th>来源</th><th>状态</th><th>位置</th><th>置信度</th><th>复核优先级</th></tr>
+            </thead>
+            <tbody id="multidomainRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section class="panel interest-bento" id="robot-route" hidden style="margin-top:34px;">
+      <div class="panel-title">机器人时空巡检报告</div>
+      <div class="panel-body">
+        <div class="aggregate-evidence">
+          <div class="evidence-source">
+            <span>Route-level JSON</span>
+            <b id="robotRouteSource">等待加载 robot_route_report.json</b>
+          </div>
+          <div class="advantage-grid" id="robotRouteGrid">
+            <div class="advantage-card"><b>Frames</b><strong>-</strong><p>等待路线级样例数据。</p></div>
+            <div class="advantage-card"><b>Tracks</b><strong>-</strong><p>等待 defect tracks。</p></div>
+            <div class="advantage-card"><b>Review queue</b><strong>-</strong><p>等待复核队列。</p></div>
+            <div class="advantage-card"><b>Claim guard</b><strong>-</strong><p>等待边界声明。</p></div>
+          </div>
+          <div class="advantage-grid" id="robotTrackGrid">
+            <div class="advantage-card"><b>Track evidence</b><strong>N/A</strong><p>加载后显示跨时间、里程和环号聚合结果。</p></div>
+          </div>
+          <div class="advantage-note" id="robotRouteNote">
+            机器人巡检报告把连续照片排序成 FrameRecord，再把单图检测结果聚合成 defect tracks；同一轮拍摄只标 apparent-change-evidence，只有跨轮次且可比时才允许 suspected-growth。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel data-section app-view" id="data-note" data-app-view="data-note">
+      <div class="panel-title">数据说明与仿真边界</div>
+      <div class="panel-body">
+        <div class="data-note-box">
+          本系统使用 KICT Tunnel Crack Segmentation Dataset 中的真实隧道裂缝图像和 mask 几何特征；机器人巡检过程中的时间、里程、环号、方位、disease_id 以及跨巡检增长关系为仿真元数据。本系统当前用于验证机器人巡检场景下病害工程化描述、时空聚合、增长分析和复检清单生成流程，不代表真实隧道病害长期演化规律。
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/ScrollTrigger.min.js"></script>
+  <script>
+    const sampleViews = [
+      { label: "Original", url: "assets/t1_1_original.jpg" },
+      { label: "GT mask", url: "assets/t1_1_gt_mask.png" },
+      { label: "Single mask", url: "assets/segformer_t1_1_single_mask.png" },
+      { label: "Fused mask", url: "assets/segformer_t1_1_fused_mask.png" },
+      { label: "Selected mask", url: "assets/segformer_t1_1_selected_mask.png" },
+      { label: "GT overlay", url: "assets/t1_1_gt_overlay.png" },
+      { label: "Overlay", url: "assets/segformer_t1_1_overlay.png" },
+      { label: "Selected overlay", url: "assets/segformer_t1_1_selected_overlay.png" },
+      {
+        label: "Uncertainty",
+        url: "assets/segformer_t1_1_uncertainty_heatmap.png"
+      },
+      {
+        label: "Disagreement",
+        url: "assets/segformer_t1_1_disagreement_heatmap.png"
+      },
+      { label: "Skeleton", url: "assets/segformer_t1_1_skeleton.png" }
+    ];
+
+    const experimentResult = {
+      checkpoints: {
+        early_iter: 16000,
+        final_iter: 160000,
+        train_images: 700,
+        val_images: 150
+      },
+      summary: {
+        early: { mIoU: 81.10, mAcc: 89.46, aAcc: 97.85 },
+        final: { mIoU: 84.33, mAcc: 91.17, aAcc: 98.62 }
+      },
+      classes: [
+        { name: "background", earlyIoU: 98.06, finalIoU: 99.01, acc: 99.51 },
+        { name: "simple", earlyIoU: 79.93, finalIoU: 80.23, acc: 88.40 },
+        { name: "blocky", earlyIoU: 50.71, finalIoU: 53.58, acc: 75.56 },
+        { name: "pipeline", earlyIoU: 87.95, finalIoU: 94.16, acc: 97.43 },
+        { name: "vertical", earlyIoU: 91.90, finalIoU: 95.85, acc: 97.75 },
+        { name: "horizontal", earlyIoU: 78.03, finalIoU: 83.17, acc: 88.34 }
+      ]
+    };
+
+    const fallbackEvidenceSummary = {
+      source: "fallback-sample",
+      split: "all",
+      num_samples: 1000,
+      metric_summary: {
+        selected_vs_fused_mIoU: 0.03932261654293195,
+        selected_vs_single_mIoU: -0.004428514871903581
+      },
+      selection: {
+        mode_counts: { single: 856, fused: 144 }
+      },
+      small_defect_guard: {
+        successful_guard_count: 614,
+        protected_event_count: 721,
+        total_protected_pixels_vs_fused: 1230616
+      },
+      miou_recovery: {
+        selected_recovers_over_fused_count: 699,
+        fixed_fusion_harm_count: 817
+      },
+      uncertainty_review: {
+        high_defect_uncertainty_count: 431,
+        high_uncertainty_threshold: 0.5,
+        review_fraction_threshold: 0.5,
+        pixel_high_uncertainty_threshold: 0.35,
+        mean_error_high_uncertainty_fraction: 0.4800912345681968,
+        mean_high_uncertainty_error_fraction: 0.7135018392130845,
+        micro_error_high_uncertainty_fraction: 0.4454186935198407,
+        micro_high_uncertainty_error_fraction: 0.7826871944180835,
+        total_error_pixels: 20742129,
+        total_high_uncertainty_pixels: 11804118,
+        total_high_uncertainty_error_pixels: 9238932,
+        mean_uncertainty_on_error: 0.28029261776432396,
+        mean_uncertainty_on_correct: 0.018612491859239525,
+        calibration_expected_error: 0.061,
+        calibration_mean_gap: 0.084,
+        calibration_max_gap: 0.219,
+        calibration_bins: [
+          { bin_index: 0, lower: 0, upper: 0.2, count: 129330000, mean_uncertainty: 0.012, error_rate: 0.041, calibration_gap: 0.029 },
+          { bin_index: 1, lower: 0.2, upper: 0.4, count: 9840000, mean_uncertainty: 0.283, error_rate: 0.468, calibration_gap: 0.185 }
+        ]
+      },
+      review_queue_summary: {
+        supported: true,
+        ranking_signal: "model-internal uncertainty, self-consistency, shrinkage, protected pixels, and selection mode",
+        gt_usage: "GT-derived flags are used only for bucket evaluation, not for ranking.",
+        priority_counts: { high: 27, medium: 86, low: 35, none: 2 },
+        top_k: [
+          {
+            image: "neg_-5_t2_18.jpg",
+            artifact_stem: "neg_-5_t2_18",
+            gt_available: true,
+            priority: "high",
+            score: 4.75,
+            reasons: [
+              "defect high-uncertainty fraction 0.812",
+              "single/fused foreground IoU 0.421 is severely unstable",
+              "selected preserves 591 pixels versus fused"
+            ],
+            gt_flags: { selected_recovers_over_fused: true, fixed_fusion_harmed_mIoU: true }
+          }
+        ],
+        bucket_metrics: {
+          high: { count: 27, selected_recovers_over_fused_count: 18, fixed_fusion_harmed_count: 24, total_protected_pixels_vs_fused: 52610 },
+          medium: { count: 86, selected_recovers_over_fused_count: 46, fixed_fusion_harmed_count: 63, total_protected_pixels_vs_fused: 89742 },
+          low: { count: 35, selected_recovers_over_fused_count: 8, fixed_fusion_harmed_count: 12, total_protected_pixels_vs_fused: 13949 },
+          none: { count: 2, selected_recovers_over_fused_count: 0, fixed_fusion_harmed_count: 0, total_protected_pixels_vs_fused: 0 }
+        }
+      }
+    };
+
+    const sampleReport = {
+      stem: "t1_1",
+      mask_source: {
+        name: "segformer_b1",
+        type: "mmsegmentation",
+        probability_tta: true,
+        uncertainty_available: true,
+        disagreement_available: true
+      },
+      tta_specs: ["segformer_identity", "segformer_hflip"],
+      class_names: { "0": "background", "1": "simple", "2": "blocky", "3": "pipeline", "4": "vertical", "5": "horizontal" },
+      single_prediction_stats: { "0": 146438, "1": 1018 },
+      fused_prediction_stats: { "0": 146453, "1": 1003 },
+      hybrid_prediction_stats: { "0": 146453, "1": 1003 },
+      selected_prediction_stats: { "0": 146453, "1": 1003 },
+      adaptive_selection: {
+        mode: "fused",
+        reasons: [
+          "stable single/fused foreground IoU 0.977",
+          "stable fused-to-single area ratio 0.985"
+        ],
+        consistency: {
+          foreground_iou: 0.9774951076320939,
+          pixel_agreement: 0.9998440212673612,
+          single_foreground_pixels: 1018,
+          fused_foreground_pixels: 1003,
+          fused_to_single_area_ratio: 0.9852652259332023,
+          single_to_fused_area_ratio: 1.0149551345962113
+        }
+      },
+      self_consistency: {
+        single_fused_mIoU: 0.9774951076320939,
+        foreground_iou: 0.9774951076320939,
+        pixel_agreement: 0.9998440212673612,
+        class_ious: { "1": 0.9774951076320939, "2": null, "3": null, "4": null, "5": null },
+        note: "Self-consistency between model outputs only; this is not ground-truth mIoU."
+      },
+      uncertainty_summary: {
+        available: true,
+        mean: 0.0011532915523275733,
+        max: 0.3870871365070343,
+        high_fraction: 0.0009765625,
+        defect_mean: 0.08400039374828339,
+        defect_high_fraction: 0.06779661016949153
+      },
+      disagreement_summary: {
+        available: true,
+        mean: 0.00015597873425576836,
+        max: 0.5,
+        high_fraction: 0.00031195746527777775,
+        defect_mean: 0.009970089420676231,
+        defect_high_fraction: 0.019940179461615155
+      },
+      morphology: {
+        image_shape: [384, 384],
+        total_pixels: 147456,
+        defect_area_pixels: 1003,
+        defect_area_ratio: 0.006802029079861111,
+        defect_component_count: 1,
+        defect_skeleton_length: 69,
+        classes: [
+          { class_id: 1, class_name: "simple", raw_area_pixels: 1003, area_pixels: 1003, area_ratio: 0.006802029079861111, component_count: 1, largest_component_area: 1003, skeleton_length: 69, dominant_direction: "horizontal", dominant_direction_degrees: 158.17233338861706, fragmentation_index: 0, fragmented: false },
+          { class_id: 2, class_name: "blocky", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
+          { class_id: 3, class_name: "pipeline", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
+          { class_id: 4, class_name: "vertical", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null },
+          { class_id: 5, class_name: "horizontal", area_pixels: 0, area_ratio: 0, component_count: 0, skeleton_length: 0, dominant_direction: null, dominant_direction_degrees: null }
+        ]
+      },
+      morphology_delta: {
+        single_to_fused: {
+          source: "single",
+          target: "fused",
+          defect_area_delta_pixels: -15,
+          defect_component_delta: 0,
+          defect_skeleton_length_delta: -2,
+          explanations: ["fused preserves morphology close to single"]
+        },
+        fused_to_selected: {
+          source: "fused",
+          target: "selected",
+          defect_area_delta_pixels: 0,
+          defect_component_delta: 0,
+          defect_skeleton_length_delta: 0,
+          explanations: ["selected preserves morphology close to fused"]
+        },
+        single_to_selected: {
+          source: "single",
+          target: "selected",
+          defect_area_delta_pixels: -15,
+          defect_component_delta: 0,
+          defect_skeleton_length_delta: -2,
+          explanations: ["selected preserves morphology close to single"]
+        }
+      },
+      risk: {
+        risk_level: "low",
+        score: 1.75,
+        review_required: false,
+        class_results: [
+          { class_id: 1, class_name: "simple", risk_level: "low", review_required: false, reasons: ["class severity weight 1.00", "small area ratio 0.0068", "moderate skeleton length 69"] },
+          { class_id: 2, class_name: "blocky", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] },
+          { class_id: 3, class_name: "pipeline", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] },
+          { class_id: 4, class_name: "vertical", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] },
+          { class_id: 5, class_name: "horizontal", risk_level: "none", review_required: false, reasons: ["no detected defect pixels after filtering"] }
+        ],
+        suggestions: [
+          "Low image-based defect risk; routine review is sufficient."
+        ],
+        uncertainty_available: true
+      },
+      review_priority: {
+        priority: "low",
+        score: 0.5,
+        review_required: false,
+        reasons: [
+          "routine review priority from image-based risk evidence"
+        ],
+        evidence: {
+          risk_score: 1.75,
+          defect_uncertainty: 0.08400039374828339,
+          defect_high_uncertainty_fraction: 0.06779661016949153,
+          defect_disagreement: 0.009970089420676231,
+          foreground_iou: 0.9774951076320939,
+          fused_to_single_area_ratio: 0.9852652259332023
+        },
+        note: "Image-based manual-review priority; not a structural safety diagnosis or maintenance decision."
+      }
+    };
+
+    let activeViews = [];
+    const tabs = document.querySelector("#tabs");
+    const filmstrip = document.querySelector("#filmstrip");
+    const stageImage = document.querySelector("#stageImage");
+    const stageLabel = document.querySelector("#stageLabel");
+    const viewMessage = document.querySelector("#viewMessage");
+    const stageHelp = document.querySelector("#stageHelp");
+    const dropZone = document.querySelector("#dropZone");
+    const fileInput = document.querySelector("#fileInput");
+    const uploadStatus = document.querySelector("#uploadStatus");
+
+    function fmt(value, digits = 4) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return Number(value).toFixed(digits).replace(/\.?0+$/, "");
+    }
+
+    function pct(value) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return `${(Number(value) * 100).toFixed(2)}%`;
+    }
+
+    function intFmt(value) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return Number(value).toLocaleString("en-US");
+    }
+
+    function metricCard(label, value, help) {
+      return `<div class="metric"><span>${label}</span><b>${value}</b><small>${help}</small></div>`;
+    }
+
+    function signedDelta(value, digits = 2) {
+      const num = Number(value || 0);
+      const sign = num > 0 ? "+" : "";
+      return `${sign}${num.toFixed(digits)}`;
+    }
+
+    function renderAggregateEvidence(summary, meta = {}) {
+      const sampleCount = Number(summary?.num_samples || 0);
+      const selectedVsFused = summary?.metric_summary?.selected_vs_fused_mIoU;
+      const selectedVsSingle = summary?.metric_summary?.selected_vs_single_mIoU;
+      const successfulGuard = summary?.small_defect_guard?.successful_guard_count;
+      const protectedEvents = summary?.small_defect_guard?.protected_event_count;
+      const protectedPixels = summary?.small_defect_guard?.total_protected_pixels_vs_fused;
+      const recovers = summary?.miou_recovery?.selected_recovers_over_fused_count;
+      const harm = summary?.miou_recovery?.fixed_fusion_harm_count;
+      const uncertaintyReview = summary?.uncertainty_review || {};
+      const review = uncertaintyReview.high_defect_uncertainty_count;
+      const errorCoverage = uncertaintyReview.micro_error_high_uncertainty_fraction
+        ?? uncertaintyReview.mean_error_high_uncertainty_fraction;
+      const uncertaintyPrecision = uncertaintyReview.micro_high_uncertainty_error_fraction
+        ?? uncertaintyReview.mean_high_uncertainty_error_fraction;
+      const pixelHighThreshold = uncertaintyReview.pixel_high_uncertainty_threshold;
+      const reviewFractionThreshold = uncertaintyReview.review_fraction_threshold
+        ?? uncertaintyReview.high_uncertainty_threshold;
+      const errorPixels = uncertaintyReview.total_error_pixels;
+      const overlapPixels = uncertaintyReview.total_high_uncertainty_error_pixels;
+      const calibrationError = uncertaintyReview.calibration_expected_error;
+      const calibrationMaxGap = uncertaintyReview.calibration_max_gap;
+      const modeCounts = summary?.selection?.mode_counts || {};
+      const source = meta.source || summary?.source || "fallback-sample";
+      const split = meta.split || summary?.split || "all";
+      const sourceLabel = source === "generated-json"
+        ? `generated JSON / ${split} split / ${sampleCount} samples`
+        : `fallback sample values / ${split} split`;
+
+      document.querySelector("#aggregateEvidenceSource").textContent = sourceLabel;
+      document.querySelector("#aggregateEvidenceGrid").innerHTML = [
+        [
+          "Selected vs Fused",
+          signedDelta(selectedVsFused, 4),
+          `${split} split 上 selected mIoU 相比 fixed fused 的恢复量；不是 selected 必然超过 single。`
+        ],
+        [
+          "Successful guard",
+          `${intFmt(successfulGuard)} / ${intFmt(sampleCount)}`,
+          `保护小缺陷且 selected-vs-fused mIoU 有正收益；保护事件总数 ${intFmt(protectedEvents)}。`
+        ],
+        [
+          "Protected pixels",
+          intFmt(protectedPixels),
+          `相对 fixed fused 被保留下来的缺陷前景像素，用于支撑 small defect guard。`
+        ],
+        [
+          "Review signal",
+          `${intFmt(review)} / ${intFmt(sampleCount)}`,
+          `缺陷区高不确定像素占比达到复核比例阈值 ${pct(reviewFractionThreshold)}；fixed fusion harmed ${intFmt(harm)}，selected recovered ${intFmt(recovers)}。`
+        ],
+        [
+          "Error coverage",
+          pct(errorCoverage),
+          `错误像素中被高不确定性覆盖的比例；像素高不确定阈值 ${fmt(pixelHighThreshold, 2)}，overlap ${intFmt(overlapPixels)} / error ${intFmt(errorPixels)}。`
+        ],
+        [
+          "HU error precision",
+          pct(uncertaintyPrecision),
+          `高不确定区域里实际预测错误的比例，说明 uncertainty heatmap 是否能有效指向误判区域；像素阈值同上。`
+        ],
+        [
+          "Calibration gap",
+          fmt(calibrationError, 4),
+          `按 uncertainty 分桶后，平均不确定性与真实错误率的加权差距；最大分桶差距 ${fmt(calibrationMaxGap, 4)}。`
+        ]
+      ].map(([title, value, help]) => `<div class="advantage-card"><b>${title}</b><strong>${value}</strong><p>${help}</p></div>`).join("");
+
+      const singleText = selectedVsSingle === null || selectedVsSingle === undefined
+        ? "selected-vs-single 暂无数据"
+        : `selected vs single mIoU ${signedDelta(selectedVsSingle, 4)}`;
+      document.querySelector("#aggregateEvidenceNote").textContent =
+        `全量证据来自 ${sourceLabel}。Selection modes: single ${intFmt(modeCounts.single || 0)}, fused ${intFmt(modeCounts.fused || 0)}；${singleText}。像素高不确定阈值 ${fmt(pixelHighThreshold, 2)}，复核比例阈值 ${pct(reviewFractionThreshold)}；高不确定区域命中错误 ${pct(uncertaintyPrecision)}，可作为人工复核优先级证据。这个面板描述增强模块相对 fixed fusion 的可靠性收益，单图上传仍只刷新下方 per-image evidence。`;
+
+      renderReviewQueue(summary?.review_queue_summary);
+    }
+
+    function renderReviewQueue(queueSummary = {}) {
+      const counts = queueSummary?.priority_counts || {};
+      const topCases = queueSummary?.top_k || [];
+      const buckets = queueSummary?.bucket_metrics || {};
+      const supported = Boolean(queueSummary?.supported && topCases.length);
+
+      document.querySelector("#reviewQueueSummary").textContent = supported
+        ? `High ${intFmt(counts.high || 0)} / Medium ${intFmt(counts.medium || 0)} / Low ${intFmt(counts.low || 0)}`
+        : "暂无 review queue 数据";
+
+      const cards = supported ? topCases.slice(0, 3).map((item, index) => {
+        const reasons = (item.reasons || []).slice(0, 2).map(escapeHtml).join("；") || "No reasons available";
+        const gt = item.gt_flags || {};
+        const flags = [
+          gt.fixed_fusion_harmed_mIoU ? "fixed fusion harmed" : null,
+          gt.selected_recovers_over_fused ? "selected recovered" : null
+        ].filter(Boolean).join(" / ") || "GT flags pending";
+        const stem = item.artifact_stem ? ` / ${escapeHtml(item.artifact_stem)}` : "";
+        const gtText = item.gt_available === false ? "GT unavailable" : flags;
+        return `<div class="advantage-card"><b>${index + 1}. ${escapeHtml(item.image || "case")}${stem}</b><strong>${riskLabel(item.priority || "none")}</strong><p>score ${fmt(item.score, 2)}；${gtText}。${reasons}</p></div>`;
+      }) : [
+        `<div class="advantage-card"><b>Review queue</b><strong>N/A</strong><p>当前 evidence JSON 尚未包含 review_queue_summary。</p></div>`
+      ];
+
+      document.querySelector("#reviewQueueGrid").innerHTML = cards.join("");
+      const highBucket = buckets.high || {};
+      document.querySelector("#reviewQueueNote").textContent = supported
+        ? `排序信号：${queueSummary.ranking_signal || "model-internal evidence"}。${queueSummary.gt_usage || "GT 只用于评估，不用于排序。"} High bucket 中 selected recovered ${intFmt(highBucket.selected_recovers_over_fused_count || 0)}，fixed fusion harmed ${intFmt(highBucket.fixed_fusion_harmed_count || 0)}，protected pixels ${intFmt(highBucket.total_protected_pixels_vs_fused || 0)}。`
+        : "Review queue 只用模型内部证据排序；GT 只用于评估队列是否覆盖真实错误或融合损伤。";
+    }
+
+    async function loadAggregateEvidence() {
+      try {
+        const response = await fetch("/api/evidence");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const split = payload.summaries?.all ? "all" : payload.summaries?.test ? "test" : "fallback";
+        const summary = payload.summaries?.[split] || fallbackEvidenceSummary;
+        renderAggregateEvidence(summary, { source: payload.source, split });
+      } catch (error) {
+        renderAggregateEvidence(fallbackEvidenceSummary, { source: "fallback-sample", split: "all" });
+        document.querySelector("#aggregateEvidenceNote").textContent += ` API 暂不可用：${error.message}。`;
+      }
+    }
+
+    function renderDistribution(title, distribution = {}) {
+      const entries = Object.entries(distribution);
+      const text = entries.length
+        ? entries.map(([name, count]) => `${escapeHtml(name)} ${intFmt(count)}`).join(" / ")
+        : "N/A";
+      return `<div class="distribution-card"><b>${escapeHtml(title)}</b><p>${text}</p></div>`;
+    }
+
+    function directionalMetricsAvailable(row = {}) {
+      return row.directional_metrics_available === true || row.directional_metrics_available === "true";
+    }
+
+    function staticAreaAuditText(row = {}) {
+      return `${row.first_area_px || "-"} -> ${row.last_area_px || "-"} px²`;
+    }
+
+    function renderDefectDetail(row = {}) {
+      const directional = directionalMetricsAvailable(row);
+      const cells = [
+        ["Disease", row.disease_id || "-"],
+        ["Type", row.disease_type || "-"],
+        ["Mileage", row.last_mileage_range || "-"],
+        ["Clock", row.main_clock_direction || "-"],
+        [directional ? "Trend" : "可比性", row.growth_trend || "-"],
+        ["Risk", row.last_risk_level || "-"],
+        [directional ? "Growth" : "静态面积审计", directional ? pct(row.area_growth_rate) : staticAreaAuditText(row)],
+        ["Evidence", row.evidence_status || "pending"],
+      ];
+      const evidenceFigure = row.evidence_overlay_url
+        ? `<figure class="evidence-preview">
+            <img src="${escapeHtml(row.evidence_overlay_url)}" alt="${escapeHtml(row.disease_id || "病害")} 原图与 mask 融合图" />
+            <figcaption>原图 + mask 融合图；样本 ${escapeHtml(row.evidence_image_id || "-")}，巡检 ${escapeHtml(row.evidence_inspection_id || row.last_inspection || "-")}，位置 ${escapeHtml(row.evidence_mileage_text || row.last_mileage_range || "-")} / ${escapeHtml(row.evidence_clock_direction || row.main_clock_direction || "-")}。</figcaption>
+          </figure>`
+        : `<div class="detail-note" style="margin-top:8px;">当前复检对象暂未找到可展示的原图 + mask 融合图，请检查 robot_kict_frame_records.csv 或 KICT 数据集路径。</div>`;
+      document.querySelector("#defectDetail").innerHTML = `
+        <div class="detail-grid">
+          ${cells.map(([label, value]) => `<div class="detail-cell"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`).join("")}
+        </div>
+        ${evidenceFigure}
+        <div class="detail-note">${escapeHtml(row.growth_description || row.recheck_reason || "暂无面积审计说明。")}</div>
+        <div class="detail-note" style="margin-top:8px;">${escapeHtml(row.recheck_suggestion || "建议人工复核后再形成养护结论。")}</div>
+      `;
+    }
+
+    function renderRobotDashboard(payload = {}) {
+      const summary = payload.summary || {};
+      const rechecks = payload.priority_rechecks || [];
+      const links = payload.visualization_links || {};
+      document.querySelector("#robotDashboardSource").textContent = payload.source || "fallback";
+
+      const kpis = [
+        ["巡检次数", summary.inspection_count ?? "-", "Inspection"],
+        ["帧数", summary.frame_count ?? "-", "Frames"],
+        ["病害数", summary.growth_object_count ?? summary.track_count ?? "-", "Defects"],
+        ["待复检", summary.priority_recheck_count ?? summary.review_count ?? "-", "Recheck"],
+        ["高风险", summary.high_risk_count ?? "-", "High risk"],
+      ];
+      document.querySelector("#robotKpiGrid").innerHTML = kpis
+        .map(([label, value, en]) => `<div class="robot-kpi" title="${escapeHtml(en)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`)
+        .join("");
+
+      const limitations = (payload.limitations || []).slice(0, 5);
+      document.querySelector("#claimChips").innerHTML = (limitations.length ? limitations : ["rule_evidence", "requires_review"])
+        .map((item) => `<span class="claim-chip">${escapeHtml(String(item).replaceAll("_", " "))}</span>`)
+        .join("");
+
+      const chart = document.querySelector("#mileageRiskChart");
+      const empty = document.querySelector("#mileageRiskEmpty");
+      if (links.mileage_risk) {
+        chart.src = links.mileage_risk;
+        chart.hidden = false;
+        empty.hidden = true;
+      } else {
+        chart.hidden = true;
+        empty.hidden = false;
+        empty.textContent = "里程风险图暂缺。";
+      }
+
+      const list = document.querySelector("#recheckList");
+      if (!rechecks.length) {
+        list.innerHTML = `<div class="robot-empty">暂无重点复检对象。</div>`;
+        renderDefectDetail({});
+      } else {
+        list.innerHTML = rechecks.slice(0, 12).map((row, index) => `
+          <button class="recheck-item ${index === 0 ? "active" : ""}" type="button" data-recheck-index="${index}">
+            <span class="recheck-rank">#${escapeHtml(row.priority_rank || index + 1)}</span>
+            <span class="recheck-main"><b>${escapeHtml(row.disease_id || "-")} / ${escapeHtml(row.disease_type || "-")}</b><span>${escapeHtml(row.last_mileage_range || "-")} · ${escapeHtml(row.main_clock_direction || "-")} · ${escapeHtml(row.growth_trend || "-")}</span></span>
+            <b>${escapeHtml(row.last_risk_level || "-")}</b>
+          </button>
+        `).join("");
+        list.querySelectorAll("[data-recheck-index]").forEach((button) => {
+          button.addEventListener("click", () => {
+            list.querySelectorAll(".recheck-item").forEach((item) => item.classList.remove("active"));
+            button.classList.add("active");
+            renderDefectDetail(rechecks[Number(button.dataset.recheckIndex)]);
+          });
+        });
+        renderDefectDetail(rechecks[0]);
+      }
+
+      document.querySelector("#robotDistributionGrid").innerHTML = [
+        renderDistribution("可比性与变化状态", payload.growth_distribution),
+        renderDistribution("Attention", payload.attention_distribution),
+        renderDistribution("Disease type", payload.disease_type_distribution),
+        renderDistribution("Risk level", payload.risk_level_distribution),
+      ].join("");
+    }
+
+    async function loadRobotDashboard() {
+      try {
+        const response = await fetch("/api/robot-dashboard");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        renderRobotDashboard(await response.json());
+      } catch (error) {
+        document.querySelector("#robotDashboardSource").textContent = "Dashboard 暂不可用";
+        document.querySelector("#recheckList").innerHTML = `<div class="robot-empty">Dashboard 暂不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function loadProjectSummary() {
+      try {
+        const response = await fetch("/api/project-summary");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const kpis = [
+          ["巡检次数", payload.inspection_count ?? "-"],
+          ["病害对象", payload.disease_count ?? "-"],
+          ["工程记录", payload.engineering_record_count ?? "-"],
+          ["重点复检", payload.priority_recheck_count ?? "-"],
+          ["高风险", payload.high_risk_count ?? "-"],
+          ["图表", payload.visualization_count ?? "-"],
+        ];
+        document.querySelector("#robotDashboardSource").textContent = payload.source || "fallback";
+        document.querySelector("#robotKpiGrid").innerHTML = kpis
+          .map(([label, value]) => `<div class="robot-kpi"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>`)
+          .join("");
+      } catch (error) {
+        document.querySelector("#robotDashboardSource").textContent = `摘要暂不可用：${error.message}`;
+      }
+    }
+
+    async function loadEngineeringReport() {
+      const grid = document.querySelector("#engineeringReportGrid");
+      try {
+        const response = await fetch("/api/engineering-report");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const rows = payload.items || [];
+        grid.innerHTML = rows.length ? rows.slice(0, 12).map((row) => `
+          <article class="data-card">
+            <b>${escapeHtml(row.disease_id || "-")} - ${escapeHtml(row.disease_type || "-")}</b>
+            <span class="tag ${row.risk_level === "高" ? "hot" : ""}">风险 ${escapeHtml(row.risk_level || "-")}</span>
+            <span class="tag">${escapeHtml(row.main_clock_direction || "-")}</span>
+            <p>里程：${escapeHtml(row.start_mileage_text || "-")} 至 ${escapeHtml(row.end_mileage_text || "-")}；环号：${escapeHtml(row.start_ring || "-")} 至 ${escapeHtml(row.end_ring || "-")}；连续帧数：${escapeHtml(row.frame_count || "-")}；最大面积：${escapeHtml(row.max_area_px || "-")} px²。</p>
+            <p style="margin-top:8px;">${escapeHtml(row.engineering_description || "暂无工程描述。")}</p>
+          </article>
+        `).join("") : `<div class="robot-empty">暂无工程化病害报告。</div>`;
+      } catch (error) {
+        grid.innerHTML = `<div class="robot-empty">工程报告不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function loadGrowthAnalysis() {
+      const grid = document.querySelector("#growthAnalysisGrid");
+      try {
+        const response = await fetch("/api/growth-analysis");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const rows = payload.items || [];
+        grid.innerHTML = rows.length ? rows.slice(0, 12).map((row) => {
+          const directional = directionalMetricsAvailable(row);
+          const evidence = directional
+            ? `面积：${escapeHtml(row.first_area_px || "-")} -> ${escapeHtml(row.last_area_px || "-")} px²；变化率：${escapeHtml(pct(row.area_growth_rate))}；风险：${escapeHtml(row.first_risk_level || "-")} -> ${escapeHtml(row.last_risk_level || "-")}。`
+            : `静态面积审计：${escapeHtml(staticAreaAuditText(row))}；当前风险：${escapeHtml(row.last_risk_level || "-")}。`;
+          return `
+            <article class="data-card">
+              <b>${escapeHtml(row.disease_id || "-")} / ${escapeHtml(row.disease_type || "-")}</b>
+              <span class="tag ${row.attention_level === "重点关注" ? "hot" : ""}">${escapeHtml(row.attention_level || "-")}</span>
+              <span class="tag">${escapeHtml(row.growth_trend || "-")}</span>
+              <p>${evidence}</p>
+              <p style="margin-top:8px;">${escapeHtml(row.growth_description || "暂无面积审计说明。")}</p>
+            </article>
+          `;
+        }).join("") : `<div class="robot-empty">暂无面积审计记录。</div>`;
+      } catch (error) {
+        grid.innerHTML = `<div class="robot-empty">增长分析不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function loadFullRecheckList() {
+      const grid = document.querySelector("#fullRecheckGrid");
+      try {
+        const response = await fetch("/api/recheck-list");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const rows = payload.items || [];
+        grid.innerHTML = rows.length ? rows.map((row) => {
+          const directional = directionalMetricsAvailable(row);
+          const riskText = directional
+            ? `${escapeHtml(row.first_risk_level || "-")} -> ${escapeHtml(row.last_risk_level || "-")}`
+            : `当前 ${escapeHtml(row.last_risk_level || "-")}`;
+          return `
+            <article class="data-card">
+              <b>Priority ${escapeHtml(row.priority_rank || "-")}：${escapeHtml(row.disease_id || "-")} ${escapeHtml(row.disease_type || "-")}</b>
+              <span class="tag hot">${escapeHtml(row.attention_level || "-")}</span>
+              <span class="tag">${escapeHtml(row.growth_trend || "-")}</span>
+              <p>位置：${escapeHtml(row.last_mileage_range || "-")}，${escapeHtml(row.main_clock_direction || "-")}；风险：${riskText}。</p>
+              <p style="margin-top:8px;">复检原因：${escapeHtml(row.recheck_reason || "-")}</p>
+              <p style="margin-top:8px;">复检建议：${escapeHtml(row.recheck_suggestion || "-")}</p>
+            </article>
+          `;
+        }).join("") : `<div class="robot-empty">当前未筛选出需要重点复检的病害对象。</div>`;
+      } catch (error) {
+        grid.innerHTML = `<div class="robot-empty">复检清单不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function loadVisualizationAssets() {
+      const grid = document.querySelector("#visualizationGrid");
+      try {
+        const response = await fetch("/api/visualization-assets");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        const items = payload.items || [];
+        grid.innerHTML = items.length ? items.map((item) => `
+          <article class="chart-card">
+            <b>${escapeHtml(item.title || item.key || "图表")}</b>
+            <img src="${escapeHtml(item.url)}" alt="${escapeHtml(item.title || "可视化图表")}" loading="lazy" />
+          </article>
+        `).join("") : `<div class="robot-empty">暂无可视化图表。</div>`;
+      } catch (error) {
+        grid.innerHTML = `<div class="robot-empty">图表不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderVideoDashboard(payload = {}) {
+      document.querySelector("#videoDashboardSource").textContent = payload.source || "fallback";
+      const notes = payload.boundary_notes || [];
+      document.querySelector("#videoBoundaryNotes").innerHTML = notes.length
+        ? notes.map((note) => `<span>${escapeHtml(note)}</span>`).join("")
+        : `<span>tunnel_demo.mp4 是由 KICT 静态裂缝图像和 mask 合成的 demo video。</span>`;
+
+      const videos = payload.videos || [];
+      document.querySelector("#videoCards").innerHTML = videos.length ? videos.map((video) => {
+        const poster = video.poster_url ? ` poster="${escapeHtml(video.poster_url)}"` : "";
+        const sources = (video.sources && video.sources.length ? video.sources : [{ url: video.url, type: "video/mp4" }])
+          .filter((source) => source.url)
+          .map((source) => `<source src="${escapeHtml(source.url)}" type="${escapeHtml(source.type || "")}">`)
+          .join("");
+        const body = video.exists
+          ? `<video controls preload="metadata"${poster}>${sources}当前浏览器无法播放该视频，请下载后查看。</video>
+             <small>${escapeHtml(video.compatibility_note || "未找到浏览器兼容 WebM 副本，当前回退使用 MP4。")}</small>`
+          : `<div class="robot-empty">${escapeHtml(video.missing_message || payload.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>`;
+        return `<article class="data-card video-card">
+          <b>${escapeHtml(video.title || video.key || "video")}</b>
+          ${body}
+        </article>`;
+      }).join("") : `<div class="robot-empty">${escapeHtml(payload.missing_message || "尚未生成该视频分析产物，请先运行 Step 1 / Step 2 / Step 3。")}</div>`;
+    }
+
+    async function loadVideoDashboard() {
+      try {
+        const response = await fetch("/api/video-dashboard");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        renderVideoDashboard(await response.json());
+      } catch (error) {
+        document.querySelector("#videoDashboardSource").textContent = "视频分析暂不可用";
+        document.querySelector("#videoCards").innerHTML = `<div class="robot-empty">视频分析结果不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderAlgorithmArtifacts(title, artifacts = []) {
+      if (!artifacts.length) {
+        return `<section class="video-table-block"><h3>${escapeHtml(title)}</h3><div class="robot-empty">无 artifact 引用。</div></section>`;
+      }
+      return `<section class="video-table-block">
+        <h3>${escapeHtml(title)}</h3>
+        <table>
+          <thead><tr><th>Label</th><th>Path</th><th>Status</th><th>Rows</th></tr></thead>
+          <tbody>
+            ${artifacts.map((artifact) => `<tr>
+              <td>${escapeHtml(artifact.label || "")}</td>
+              <td>${escapeHtml(artifact.path || "")}</td>
+              <td>${artifact.exists ? "available" : "missing"}</td>
+              <td>${escapeHtml(artifact.row_count ?? "")}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </section>`;
+    }
+
+    function renderAlgorithmEventDetail(event = {}) {
+      const metrics = event.metrics && Object.keys(event.metrics).length
+        ? `<section class="video-table-block"><h3>Metrics</h3><pre>${escapeHtml(JSON.stringify(event.metrics, null, 2))}</pre></section>`
+        : "";
+      document.querySelector("#algorithmEventDetail").innerHTML = `<b>${escapeHtml(event.title || event.event_id || "algorithm event")}</b>
+        <p>${escapeHtml(event.description || "暂无描述。")}</p>
+        <div class="claim-row">
+          <span class="claim-chip">${escapeHtml(event.stage || "stage")}</span>
+          <span class="claim-chip">${escapeHtml(event.status || "status")}</span>
+        </div>
+        <blockquote>${escapeHtml(event.claim_boundary || "暂无边界说明。")}</blockquote>
+        ${renderAlgorithmArtifacts("Inputs", event.inputs || [])}
+        ${renderAlgorithmArtifacts("Outputs", event.outputs || [])}
+        ${metrics}`;
+    }
+
+    function renderAlgorithmEvents(payload = {}) {
+      document.querySelector("#algorithmEventsSource").textContent = `${payload.source || "fallback"} / ${payload.schema_version || "no-schema"}`;
+      const sourceArtifacts = payload.source_artifacts || [];
+      const missingArtifacts = sourceArtifacts.filter((artifact) => !artifact.exists).length;
+      document.querySelector("#algorithmArtifactSummary").innerHTML = [
+        `<span class="claim-chip">generated_at ${escapeHtml(payload.generated_at || "N/A")}</span>`,
+        `<span class="claim-chip">source artifacts ${sourceArtifacts.length}</span>`,
+        `<span class="claim-chip">missing ${missingArtifacts}</span>`
+      ].join("");
+      const events = payload.events || [];
+      if (!events.length) {
+        const message = payload.missing_message || "尚未生成算法展示事件流，请先运行 python scripts/generate_algorithm_events.py。";
+        document.querySelector("#algorithmTimeline").innerHTML = `<div class="robot-empty">${escapeHtml(message)}</div>`;
+        document.querySelector("#algorithmEventDetail").innerHTML = `<div class="robot-empty">${escapeHtml(message)}</div>`;
+        return;
+      }
+      document.querySelector("#algorithmTimeline").innerHTML = events.map((event, index) => `<article class="data-card" tabindex="0" data-algorithm-event-index="${index}">
+        <b>${escapeHtml(event.event_id || `E${index + 1}`)} / ${escapeHtml(event.stage || "stage")}</b>
+        <p>${escapeHtml(event.title || "algorithm step")}</p>
+        <span class="tag">${escapeHtml(event.status || "status")}</span>
+      </article>`).join("");
+      document.querySelectorAll("[data-algorithm-event-index]").forEach((node) => {
+        const show = () => renderAlgorithmEventDetail(events[Number(node.dataset.algorithmEventIndex)]);
+        node.addEventListener("click", show);
+        node.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            show();
+          }
+        });
+      });
+      renderAlgorithmEventDetail(events[0]);
+    }
+
+    async function loadAlgorithmEvents() {
+      try {
+        const response = await fetch("/api/algorithm-events");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        renderAlgorithmEvents(await response.json());
+      } catch (error) {
+        document.querySelector("#algorithmEventsSource").textContent = "算法事件流暂不可用";
+        document.querySelector("#algorithmTimeline").innerHTML = `<div class="robot-empty">算法展示事件流不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+
+    function shortLocation(location = {}) {
+      let mileage = "里程 N/A";
+      if (typeof location.mileage === "number") {
+        mileage = `K${fmt(location.mileage / 1000, 3)}`;
+      } else if (location.mileage) {
+        mileage = String(location.mileage);
+      }
+      const ring = location.ring_id || "环号 N/A";
+      const clock = location.clock_position || "钟位 N/A";
+      return `${mileage} / ${ring} / ${clock}`;
+    }
+
+    function trendTone(label) {
+      const tones = {
+        "suspected-growth": "疑似增长",
+        "apparent-change-evidence": "同轮表观变化",
+        "stable": "稳定",
+        "baseline-only": "仅基线",
+        "uncertain": "不确定"
+      };
+      return tones[label] || label || "N/A";
+    }
+
+    function renderRobotRouteReport(payload = {}) {
+      const report = payload.report || payload;
+      const summary = report.summary || {};
+      const tracks = report.tracks || [];
+      const queue = report.review_queue || [];
+      const guard = report.claim_guard || {};
+      const source = payload.source || "static-asset";
+      const schema = report.schema_version || "unknown-schema";
+
+      document.querySelector("#robotRouteSource").textContent = `${source} / ${schema}`;
+      document.querySelector("#robotRouteGrid").innerHTML = [
+        ["Frames", intFmt(summary.frame_count || 0), `inspection_run 被保留在每个 FrameRecord 中；输入照片按里程、时间或 manifest 顺序排序。`],
+        ["Tracks", intFmt(summary.track_count || tracks.length || 0), `把连续照片里的 observation 关联成 defect tracks，避免只看单张图。`],
+        ["Review queue", intFmt(summary.review_count || queue.length || 0), `按趋势、风险和定位置信度生成复核优先级。`],
+        ["Claim guard", guard.not_prediction_unless_cross_cycle_comparable_or_manual_verified ? "ON" : "CHECK", `claim_level、measurement_basis、comparability_status 会随报告输出，避免把同轮变化说成真实增长。`]
+      ].map(([title, value, help]) => `<div class="advantage-card"><b>${title}</b><strong>${value}</strong><p>${escapeHtml(help)}</p></div>`).join("");
+
+      const trackCards = tracks.length ? tracks.slice(0, 3).map((track, index) => {
+        const latest = track.latest_observation || track.observations?.[track.observations.length - 1] || {};
+        const trend = track.trend || {};
+        const metrics = trend.metrics || {};
+        const location = latest.location || {};
+        const guardText = `${trend.claim_level || "claim N/A"} / ${trend.measurement_basis || "basis N/A"} / ${trend.comparability_status || "comparability N/A"}`;
+        return `<div class="advantage-card"><b>${index + 1}. ${escapeHtml(track.track_id || "track")}</b><strong>${escapeHtml(trendTone(trend.label))}</strong><p>${escapeHtml(shortLocation(location))}；area ${fmt(metrics.first_area, 0)} -> ${fmt(metrics.latest_area, 0)} px；${escapeHtml(guardText)}。</p></div>`;
+      }) : [
+        `<div class="advantage-card"><b>Track evidence</b><strong>N/A</strong><p>当前报告没有可展示的 defect track。</p></div>`
+      ];
+      document.querySelector("#robotTrackGrid").innerHTML = trackCards.join("");
+
+      const firstQueue = queue[0];
+      const queueText = firstQueue
+        ? `Top review: ${firstQueue.track_id} / ${trendTone(firstQueue.trend_label)} / score ${fmt(firstQueue.score, 2)}。`
+        : "暂无 review queue。";
+      document.querySelector("#robotRouteNote").textContent = `${queueText} 路线报告只把跨轮次且可比的证据标为 suspected-growth；同一轮照片中的变化只作为 apparent-change-evidence，仍需要人工或传感器复核。`;
+    }
+
+    async function loadRobotRouteReport() {
+      try {
+        const response = await fetch("/api/robot-route-report");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        renderRobotRouteReport(await response.json());
+      } catch (apiError) {
+        try {
+          const response = await fetch("assets/robot_route_report.json");
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          renderRobotRouteReport({ source: "static-asset", report: await response.json() });
+        } catch (assetError) {
+          document.querySelector("#robotRouteSource").textContent = "robot route report unavailable";
+          document.querySelector("#robotRouteNote").textContent = `路线级样例暂不可用：${apiError.message}；${assetError.message}。`;
+        }
+      }
+    }
+    function viewLabel(label) {
+      const labels = {
+        Original: "原图",
+        "GT mask": "GT 标注",
+        "Single mask": "单次 mask",
+        "Fused mask": "融合 mask",
+        "Selected mask": "选择 mask",
+        "GT overlay": "GT 叠加图",
+        Overlay: "叠加图",
+        "Selected overlay": "选择叠加图",
+        Uncertainty: "不确定性图",
+        Disagreement: "分歧图",
+        Skeleton: "骨架图"
+      };
+      return labels[label] || label;
+    }
+
+    function viewDescription(label) {
+      const descriptions = {
+        Original: "输入的隧道原图，所有 mask 和叠加图都以它为底图。",
+        "GT mask": "数据集人工标注的标准 mask，只在样例或有标注数据中存在。",
+        "Single mask": "模型对原图做一次推理得到的病害 mask。",
+        "Fused mask": "把对齐后的 SegFormer 多姿态概率平均后得到的 mask，用来稳定边界和弱缺陷区域。",
+        "Selected mask": "自适应选择后的最终 mask；当融合收缩或分歧较大时会保护更可信的缺陷证据。",
+        "GT overlay": "把人工 GT mask 半透明叠加到原图上，用来对照真实标注位置。",
+        Overlay: "把 fused mask 叠加回原图，用来看固定融合结果覆盖哪里。",
+        "Selected overlay": "把 selected mask 叠加回原图，是当前推荐查看的最终检测结果。",
+        Uncertainty: "由概率熵或 TTA 概率生成，用热力图显示模型更拿不准的位置。",
+        Disagreement: "由多组预测之间的不一致生成，用热力图显示候选预测分歧更大的位置。",
+        Skeleton: "从 selected mask 做形态学骨架提取得到，用来看方向、长度和连通结构。"
+      };
+      return descriptions[label] || "当前视图来自检测报告中的图像证据。";
+    }
+
+    function classLabel(name) {
+      const labels = {
+        background: "背景",
+        simple: "simple 类",
+        blocky: "块状类",
+        pipeline: "管线类",
+        vertical: "竖向类",
+        horizontal: "横向类"
+      };
+      return labels[name] || name;
+    }
+
+    function rawClassLabel(name) {
+      return name || "none";
+    }
+
+    function riskLabel(level) {
+      const labels = { none: "None", low: "Low", medium: "Medium", high: "High" };
+      return labels[String(level || "none").toLowerCase()] || level;
+    }
+
+    function translateReason(reason) {
+      return String(reason)
+        .replace("class severity weight", "类别严重度权重")
+        .replace("small area ratio", "面积占比较小")
+        .replace("moderate area ratio", "面积占比中等")
+        .replace("large area ratio", "面积占比较大")
+        .replace("moderate skeleton length", "骨架长度中等")
+        .replace("long skeleton length", "骨架较长")
+        .replace("many connected components", "连通域数量较多")
+        .replace("multiple connected components", "存在多个连通域")
+        .replace("fragmentation index", "碎片化指数")
+        .replace("high mean uncertainty", "缺陷区平均不确定性较高")
+        .replace("high uncertain-area fraction", "高不确定缺陷占比较高")
+        .replace("no detected defect pixels after filtering", "过滤后未检测到有效缺陷像素")
+        .replace("Medium image-based defect risk; review morphology and uncertainty before acceptance.", "图像病害风险为中等，建议结合形态和不确定性复核。")
+        .replace("Manual review recommended because uncertainty is high in detected defect regions.", "缺陷区域不确定性较高，建议人工复核。")
+        .replace("Low image-based defect risk; routine review is sufficient.", "图像病害风险较低，常规复核即可。")
+        .replace("Uncertainty unavailable for this mask source; review relies on morphology and selected-mask evidence.", "当前 mask source 未计算 uncertainty，复核依据主要来自 morphology 和 selected-mask evidence。")
+        .replace("High image-based defect risk; prioritize manual review and field confirmation.", "图像病害风险较高，优先人工复核并现场确认。")
+        .replace("No defect passed the configured measurement filters.", "没有缺陷通过当前测量过滤规则。")
+        .replace("fused foreground shrinkage ratio", "fused 前景收缩比例")
+        .replace("fallback to single mask to protect small defect evidence", "回退 single mask 以保护小缺陷证据")
+        .replace("stable single/fused foreground IoU", "single/fused 前景 IoU 稳定")
+        .replace("stable fused-to-single area ratio", "fused/single 面积比例稳定")
+        .replace("low single/fused foreground IoU", "single/fused 前景 IoU 偏低")
+        .replace("risk module already requests manual review", "风险模块已建议人工复核")
+        .replace("uncertainty unavailable; priority relies on morphology and selection evidence", "uncertainty 不可用，复核优先级主要依据 morphology 和 selection evidence")
+        .replace("defect uncertainty", "缺陷区 uncertainty")
+        .replace("exceeds review threshold", "超过复核阈值")
+        .replace("high-uncertainty defect fraction", "高不确定缺陷占比")
+        .replace("TTA disagreement", "TTA 分歧")
+        .replace("indicates unstable prediction", "提示预测不稳定")
+        .replace("single/fused foreground IoU", "single/fused 前景 IoU")
+        .replace("is severely unstable", "严重不稳定")
+        .replace("is below stability threshold", "低于稳定阈值")
+        .replace("may suppress small defect evidence", "可能压掉小病害证据")
+        .replace("selected mask preserves", "selected mask 相对 fused 保留")
+        .replace("pixels relative to fused mask", "个像素")
+        .replace("adaptive selection chose", "adaptive selection 选择")
+        .replace("instead of fixed fused output", "而不是固定 fused 输出")
+        .replace("routine review priority from image-based risk evidence", "基于图像风险证据，常规复核优先级")
+        .replace("no review priority trigger; no defect passed configured filters", "没有触发复核优先级；无缺陷通过测量过滤");
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function translateMorphologyDelta(text) {
+      return translateReason(text)
+        .replace("single and fused contain no measured defect foreground", "single 和 fused 都没有测得缺陷前景")
+        .replace("fused and selected contain no measured defect foreground", "fused 和 selected 都没有测得缺陷前景")
+        .replace("single and selected contain no measured defect foreground", "single 和 selected 都没有测得缺陷前景")
+        .replace("fused introduces", "fused 新增")
+        .replace("selected introduces", "selected 新增")
+        .replace("defect pixels not present in single", "个 single 中不存在的缺陷像素")
+        .replace("defect pixels not present in fused", "个 fused 中不存在的缺陷像素")
+        .replace("fused reduces measured defect area to", "fused 将测得缺陷面积压缩到 single 的")
+        .replace("selected reduces measured defect area to", "selected 将测得缺陷面积压缩到 fused 的")
+        .replace("fused expands measured defect area to", "fused 将测得缺陷面积扩展到 single 的")
+        .replace("selected expands measured defect area to", "selected 将测得缺陷面积扩展到 fused 的")
+        .replace("of single, which may suppress small defect evidence", "，可能压掉小病害证据")
+        .replace("of fused", "")
+        .replace("fused has", "fused 有")
+        .replace("selected has", "selected 有")
+        .replace("more connected components than single", "个比 single 更多的连通域")
+        .replace("fewer connected components than single", "个比 single 更少的连通域")
+        .replace("more connected components than fused", "个比 fused 更多的连通域")
+        .replace("fewer connected components than fused", "个比 fused 更少的连通域")
+        .replace("fused shortens the defect skeleton by", "fused 将缺陷骨架缩短")
+        .replace("selected shortens the defect skeleton by", "selected 将缺陷骨架缩短")
+        .replace("fused lengthens the defect skeleton by", "fused 将缺陷骨架拉长")
+        .replace("selected lengthens the defect skeleton by", "selected 将缺陷骨架拉长")
+        .replace("pixels versus single", "像素，相对 single")
+        .replace("pixels versus fused", "像素，相对 fused")
+        .replace("fused preserves morphology close to single", "fused 与 single 的形态接近")
+        .replace("selected preserves morphology close to fused", "selected 与 fused 的形态接近")
+        .replace("selected preserves morphology close to single", "selected 与 single 的形态接近")
+        .replace("changes dominant direction for", "改变主方向类别：");
+    }
+
+    let navMenuPinned = false;
+    let navMenuCloseTimer = null;
+    let agentWorkbenchPayload = null;
+    let agentWorkbenchController = null;
+    let agentWorkbenchRequestSequence = 0;
+    let agentWorkbenchPollTimer = null;
+    let selectedAgentNodeId = "";
+
+    function setNavMenuOpen(open, options = {}) {
+      const shell = document.querySelector("#navMenuShell");
+      const trigger = document.querySelector("#navMenuTrigger");
+      const panel = document.querySelector("#navMenuPanel");
+      if (!shell || !trigger || !panel) return;
+      shell.classList.toggle("is-open", open);
+      trigger.setAttribute("aria-expanded", String(open));
+      panel.setAttribute("aria-hidden", String(!open));
+      if (options.pin !== undefined) navMenuPinned = Boolean(options.pin);
+      if (options.focusFirst && open) {
+        document.querySelector("[data-view-link]")?.focus();
+      }
+    }
+
+    function closeNavMenu(resetPin = true) {
+      if (navMenuCloseTimer) window.clearTimeout(navMenuCloseTimer);
+      navMenuCloseTimer = null;
+      setNavMenuOpen(false, { pin: resetPin ? false : navMenuPinned });
+    }
+
+    function cancelNavHoverClose() {
+      if (navMenuCloseTimer) window.clearTimeout(navMenuCloseTimer);
+      navMenuCloseTimer = null;
+    }
+
+    function scheduleNavHoverClose() {
+      cancelNavHoverClose();
+      navMenuCloseTimer = window.setTimeout(() => {
+        navMenuCloseTimer = null;
+        const shell = document.querySelector("#navMenuShell");
+        if (!navMenuPinned && !shell?.matches(":hover")) closeNavMenu(false);
+      }, 240);
+    }
+
+    function initCollapsibleNavigation() {
+      const shell = document.querySelector("#navMenuShell");
+      const trigger = document.querySelector("#navMenuTrigger");
+      const panel = document.querySelector("#navMenuPanel");
+      if (!shell || !trigger || !panel) return;
+      const supportsHover = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+
+      trigger.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const willOpen = !shell.classList.contains("is-open") || !navMenuPinned;
+        setNavMenuOpen(willOpen, { pin: willOpen });
+      });
+      trigger.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          setNavMenuOpen(true, { pin: true, focusFirst: true });
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeNavMenu();
+        }
+      });
+
+      if (supportsHover) {
+        shell.addEventListener("mouseenter", () => {
+          cancelNavHoverClose();
+          setNavMenuOpen(true);
+        });
+        shell.addEventListener("mouseleave", () => {
+          if (!navMenuPinned) scheduleNavHoverClose();
+        });
+        panel.addEventListener("mouseenter", cancelNavHoverClose);
+      }
+
+      shell.addEventListener("focusout", () => {
+        window.setTimeout(() => {
+          if (!shell.contains(document.activeElement) && !navMenuPinned) closeNavMenu(false);
+        }, 0);
+      });
+      panel.addEventListener("keydown", (event) => {
+        const links = Array.from(panel.querySelectorAll("[data-view-link]"));
+        const currentIndex = links.indexOf(document.activeElement);
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeNavMenu();
+          trigger.focus();
+          return;
+        }
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        let nextIndex = currentIndex;
+        if (event.key === "Home") nextIndex = 0;
+        if (event.key === "End") nextIndex = links.length - 1;
+        if (event.key === "ArrowDown") nextIndex = (currentIndex + 1 + links.length) % links.length;
+        if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + links.length) % links.length;
+        links[nextIndex]?.focus();
+      });
+      document.addEventListener("pointerdown", (event) => {
+        if (!shell.contains(event.target)) closeNavMenu();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && shell.classList.contains("is-open")) {
+          closeNavMenu();
+          trigger.focus();
+        }
+      });
+    }
+
+    function agentStatusTone(status) {
+      const normalized = String(status || "pending").toLowerCase();
+      if (["success", "running", "failed"].includes(normalized)) return normalized;
+      return "pending";
+    }
+
+    function agentMetricLabel(key) {
+      return String(key || "")
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }
+
+    function topologicalAgentLayers(nodes = [], edges = []) {
+      const nodeMap = new Map(nodes.map((node) => [node.id, node]));
+      const incoming = new Map(nodes.map((node) => [node.id, 0]));
+      const outgoing = new Map(nodes.map((node) => [node.id, []]));
+      edges.forEach((edge) => {
+        if (!nodeMap.has(edge.source) || !nodeMap.has(edge.target)) return;
+        incoming.set(edge.target, (incoming.get(edge.target) || 0) + 1);
+        outgoing.get(edge.source).push(edge.target);
+      });
+      let frontier = nodes.filter((node) => incoming.get(node.id) === 0).map((node) => node.id);
+      const layers = [];
+      let visited = 0;
+      while (frontier.length) {
+        const current = frontier;
+        frontier = [];
+        layers.push(current.map((id) => nodeMap.get(id)));
+        current.forEach((id) => {
+          visited += 1;
+          outgoing.get(id).forEach((target) => {
+            incoming.set(target, incoming.get(target) - 1);
+            if (incoming.get(target) === 0) frontier.push(target);
+          });
+        });
+      }
+      return visited === nodes.length
+        ? { layers, cycle: false }
+        : { layers: [nodes], cycle: true };
+    }
+
+    function drawAgentDagEdges(edges = []) {
+      const shell = document.querySelector("#agentDagShell");
+      const svg = document.querySelector("#agentDagSvg");
+      const layers = document.querySelector("#agentDagLayers");
+      if (!shell || !svg || !layers) return;
+      const width = Math.max(shell.clientWidth, layers.scrollWidth);
+      const height = Math.max(shell.clientHeight, layers.scrollHeight);
+      const shellRect = shell.getBoundingClientRect();
+      const buttons = Array.from(layers.querySelectorAll("[data-agent-node-id]"));
+      const byId = new Map(buttons.map((button) => [button.dataset.agentNodeId, button]));
+      const paths = edges.map((edge) => {
+        const source = byId.get(edge.source);
+        const target = byId.get(edge.target);
+        if (!source || !target) return "";
+        const sourceRect = source.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const x1 = sourceRect.right - shellRect.left + shell.scrollLeft;
+        const y1 = sourceRect.top + sourceRect.height / 2 - shellRect.top + shell.scrollTop;
+        const x2 = targetRect.left - shellRect.left + shell.scrollLeft;
+        const y2 = targetRect.top + targetRect.height / 2 - shellRect.top + shell.scrollTop;
+        const bend = Math.max(32, Math.abs(x2 - x1) * .42);
+        return `<path d="M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}" fill="none" stroke="rgba(0,130,147,.43)" stroke-width="2" marker-end="url(#agentArrow)" />`;
+      }).join("");
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      svg.style.width = `${width}px`;
+      svg.style.height = `${height}px`;
+      svg.innerHTML = `<defs><marker id="agentArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(0,130,147,.58)"></path></marker></defs>${paths}`;
+    }
+
+    function renderAgentNodeDetail(node = {}) {
+      selectedAgentNodeId = node.id || "";
+      document.querySelectorAll("[data-agent-node-id]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.agentNodeId === selectedAgentNodeId);
+      });
+      const metrics = Object.entries(node.metrics || {});
+      document.querySelector("#agentNodeDetail").innerHTML = `
+        <span class="agent-status-badge ${agentStatusTone(node.status)}">${escapeHtml(node.status || "pending")}</span>
+        <h3>${escapeHtml(node.title || node.agent || node.id || "Agent")}</h3>
+        <p>${escapeHtml(node.description || "暂无职责说明。")}</p>
+        <div class="agent-metric-list">
+          <div class="agent-metric-row"><span>Task ID</span><b>${escapeHtml(node.id || "-")}</b></div>
+          <div class="agent-metric-row"><span>Runtime</span><b>${node.duration_seconds === null || node.duration_seconds === undefined ? "N/A" : `${fmt(node.duration_seconds, 4)} s`}</b></div>
+          <div class="agent-metric-row"><span>Retry</span><b>${intFmt(node.retry_count || 0)}</b></div>
+          ${metrics.length
+            ? metrics.map(([key, value]) => `<div class="agent-metric-row"><span>${escapeHtml(agentMetricLabel(key))}</span><b>${escapeHtml(String(value))}</b></div>`).join("")
+            : `<div class="agent-metric-row"><span>Output metrics</span><b>N/A</b></div>`}
+        </div>
+      `;
+    }
+
+    function renderAgentDag(payload = {}) {
+      const nodes = payload.dag?.nodes || [];
+      const edges = payload.dag?.edges || [];
+      const container = document.querySelector("#agentDagLayers");
+      const topology = topologicalAgentLayers(nodes, edges);
+      if (!nodes.length) {
+        container.innerHTML = `<div class="robot-empty">当前运行没有可展示的 DAG 节点。</div>`;
+        document.querySelector("#agentDagSvg").replaceChildren();
+        document.querySelector("#agentNodeDetail").innerHTML = `<h3>暂无 Agent</h3><p>运行记录存在，但 DAG 数据缺失或不可用。</p>`;
+        return;
+      }
+      container.style.gridTemplateColumns = `repeat(${Math.max(1, topology.layers.length)}, minmax(150px, 1fr))`;
+      container.innerHTML = topology.layers.map((layer, layerIndex) => `
+        <div class="agent-dag-layer" data-agent-layer="${layerIndex}">
+          ${layer.map((node) => `
+            <button type="button" class="agent-node ${agentStatusTone(node.status)}" data-agent-node-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(`${node.title || node.id}，状态 ${node.status || "pending"}`)}">
+              <small>${escapeHtml(node.status || "pending")} · ${node.duration_seconds === null || node.duration_seconds === undefined ? "N/A" : `${fmt(node.duration_seconds, 3)}s`}</small>
+              <strong>${escapeHtml(node.title || node.agent || node.id)}</strong>
+              <span>${escapeHtml(node.description || "")}</span>
+            </button>
+          `).join("")}
+        </div>
+      `).join("");
+      if (topology.cycle) {
+        document.querySelector("#agentStaleNote").textContent = "DAG 存在循环或无效依赖，已降级为任务列表。";
+      }
+      container.querySelectorAll("[data-agent-node-id]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const node = nodes.find((item) => item.id === button.dataset.agentNodeId);
+          if (node) renderAgentNodeDetail(node);
+        });
+      });
+      const selected = nodes.find((node) => node.id === selectedAgentNodeId) || nodes[0];
+      renderAgentNodeDetail(selected);
+      window.requestAnimationFrame(() => drawAgentDagEdges(topology.cycle ? [] : edges));
+    }
+
+    function renderAgentTimeline(timeline = []) {
+      const container = document.querySelector("#agentTimeline");
+      document.querySelector("#agentTimelineSummary").textContent = `${timeline.length} tasks`;
+      const durations = timeline.map((item) => Number(item.duration_seconds) || 0);
+      const maxDuration = Math.max(...durations, 0.001);
+      const timing = timeline.map((item) => {
+        const start = Date.parse(item.start_time || "");
+        const explicitEnd = Date.parse(item.end_time || "");
+        const duration = Number(item.duration_seconds);
+        const end = Number.isFinite(explicitEnd)
+          ? explicitEnd
+          : Number.isFinite(start) && Number.isFinite(duration)
+            ? start + duration * 1000
+            : start;
+        return { start, end };
+      });
+      const validStarts = timing.map((item) => item.start).filter(Number.isFinite);
+      const validEnds = timing.map((item) => item.end).filter(Number.isFinite);
+      const timelineStart = validStarts.length ? Math.min(...validStarts) : NaN;
+      const timelineEnd = validEnds.length ? Math.max(...validEnds) : NaN;
+      const timelineSpan = Number.isFinite(timelineStart) && Number.isFinite(timelineEnd)
+        ? Math.max(1, timelineEnd - timelineStart)
+        : NaN;
+      container.innerHTML = timeline.length ? timeline.map((item, index) => {
+        const duration = Number(item.duration_seconds);
+        const hasAbsoluteTiming = Number.isFinite(timing[index].start) && Number.isFinite(timelineSpan);
+        const left = hasAbsoluteTiming
+          ? Math.max(0, (timing[index].start - timelineStart) / timelineSpan * 100)
+          : 0;
+        const rawWidth = hasAbsoluteTiming
+          ? Math.max(0, timing[index].end - timing[index].start) / timelineSpan * 100
+          : Number.isFinite(duration) ? duration / maxDuration * 100 : 0;
+        const width = Math.min(100 - left, Math.max(3, rawWidth));
+        return `<div class="agent-timeline-row">
+          <b>${escapeHtml(item.task || "-")}</b>
+          <div class="agent-timeline-track" aria-label="${escapeHtml(`${item.task || "task"} timeline position and duration`)}"><i style="left:${left}%;width:${width}%"></i></div>
+          <span class="agent-status-badge ${agentStatusTone(item.status)}">${escapeHtml(item.status || "pending")}${Number.isFinite(duration) ? ` · ${fmt(duration, 3)}s` : ""}</span>
+        </div>`;
+      }).join("") : `<div class="robot-empty">当前运行没有可回放的时间线。</div>`;
+    }
+
+    function renderAgentResults(currentResults = {}) {
+      const summary = currentResults.summary || {};
+      const binding = currentResults.binding_status || "unavailable";
+      const bindingNode = document.querySelector("#agentResultBinding");
+      bindingNode.textContent = binding === "matched_latest" ? `latest · ${currentResults.bound_run_id || "-"}` : "execution only";
+      bindingNode.className = `agent-status-badge ${binding === "matched_latest" ? "success" : "execution-only"}`;
+      const metrics = [
+        ["巡检次数", summary.inspection_count],
+        ["病害对象", summary.disease_count],
+        ["工程记录", summary.engineering_record_count],
+        ["重点复检", summary.priority_recheck_count],
+        ["高风险", summary.high_risk_count],
+        ["可验证增长", summary.obvious_growth_count],
+        ["图表", summary.visualization_count],
+      ];
+      document.querySelector("#agentResultKpis").innerHTML = binding === "matched_latest"
+        ? metrics.map(([label, value]) => `<div class="agent-kpi"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value ?? "-"))}</b></div>`).join("")
+        : `<div class="robot-empty" style="grid-column:1/-1;">历史运行仅回放执行快照；当前图片和 CSV 不绑定到该 run。</div>`;
+      const links = currentResults.links || [];
+      const linkContainer = document.querySelector("#agentResultLinks");
+      linkContainer.innerHTML = links.map((link) => `<button type="button" data-workbench-view="${escapeHtml(link.view)}">${escapeHtml(link.label)}</button>`).join("");
+      linkContainer.querySelectorAll("[data-workbench-view]").forEach((button) => {
+        button.addEventListener("click", () => {
+          showAppView(button.dataset.workbenchView, { updateHash: true, scrollTop: true });
+        });
+      });
+      const limitations = currentResults.limitations || [];
+      const zeroGrowth = binding === "matched_latest" && Number(summary.obvious_growth_count) === 0
+        ? `<div class="agent-growth-zero">当前没有形成可验证纵向增长结论。</div>`
+        : "";
+      document.querySelector("#agentTruthBoundary").innerHTML = `
+        <strong>真实性边界</strong>
+        ${limitations.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+        ${zeroGrowth}
+      `;
+    }
+
+    function clearAgentWorkbenchPolling() {
+      if (agentWorkbenchPollTimer) window.clearTimeout(agentWorkbenchPollTimer);
+      agentWorkbenchPollTimer = null;
+    }
+
+    function scheduleAgentWorkbenchPolling(payload = {}) {
+      clearAgentWorkbenchPolling();
+      const interval = Number(payload.poll_interval_ms);
+      if (!interval || document.hidden || currentAppViewFromHash() !== "agent-workbench") return;
+      agentWorkbenchPollTimer = window.setTimeout(() => {
+        loadAgentWorkbench(payload.selected_run?.run_id, { silent: true, lightweight: true });
+      }, interval);
+    }
+
+    function renderAgentWorkbench(payload = {}) {
+      agentWorkbenchPayload = payload;
+      const run = payload.selected_run;
+      const source = document.querySelector("#agentWorkbenchSource");
+      if (!run) {
+        source.textContent = payload.source || "fallback";
+        document.querySelector("#agentRunKpis").innerHTML = `<div class="robot-empty" style="grid-column:1/-1;">尚无可展示的 Agent 运行记录。</div>`;
+        renderAgentDag(payload);
+        renderAgentTimeline([]);
+        renderAgentResults(payload.current_results || {});
+        return;
+      }
+      source.textContent = `${payload.source || "run-artifacts"} / ${run.run_id}`;
+      const select = document.querySelector("#agentRunSelect");
+      select.innerHTML = (payload.runs || []).map((item) => {
+        const selected = item.run_id === run.run_id ? " selected" : "";
+        return `<option value="${escapeHtml(item.run_id)}"${selected}>${escapeHtml(item.run_id)} · ${escapeHtml(item.status || "unknown")} · ${escapeHtml((item.updated_at || "").replace("T", " "))}</option>`;
+      }).join("");
+      const kpis = [
+        ["运行编号", run.run_id, "Run"],
+        ["状态", run.status, "Status"],
+        ["进度", `${Math.round(Number(run.progress || 0) * 100)}%`, "Progress"],
+        ["Agent 数", `${intFmt(run.completed_count || 0)} / ${intFmt(run.agent_count || 0)}`, "Agents"],
+        ["耗时", `${fmt(run.total_runtime_seconds || 0, 3)}s`, "Runtime"],
+        ["失败数", intFmt(run.failed_count || 0), "Failed"],
+      ];
+      document.querySelector("#agentRunKpis").innerHTML = kpis.map(([label, value, en]) => `
+        <div class="agent-kpi" title="${escapeHtml(en)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value))}</b></div>
+      `).join("");
+      const replayBadge = document.querySelector("#agentReplayBadge");
+      replayBadge.textContent = run.is_latest ? `${run.status} · live source` : "历史执行回放";
+      replayBadge.className = `agent-status-badge ${run.is_latest ? agentStatusTone(run.status) : "execution-only"}`;
+      const dataWarnings = [
+        ...(payload.missing || []).map((item) => `缺失 ${item}`),
+        ...Object.keys(payload.errors || {}).map((item) => `${item} 不可用`),
+      ];
+      document.querySelector("#agentStaleNote").textContent = dataWarnings.join("；");
+      renderAgentDag(payload);
+      renderAgentTimeline(payload.timeline || []);
+      renderAgentResults(payload.current_results || {});
+      scheduleAgentWorkbenchPolling(payload);
+    }
+
+    async function loadAgentWorkbench(runId = "", options = {}) {
+      clearAgentWorkbenchPolling();
+      if (agentWorkbenchController) agentWorkbenchController.abort();
+      const controller = new AbortController();
+      agentWorkbenchController = controller;
+      const sequence = ++agentWorkbenchRequestSequence;
+      const query = new URLSearchParams();
+      if (runId) query.set("run_id", runId);
+      if (options.lightweight) query.set("include_runs", "0");
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      if (!options.silent) document.querySelector("#agentStaleNote").textContent = "正在同步真实运行数据…";
+      try {
+        const response = await fetch(`/api/agent-workbench${suffix}`, { signal: controller.signal });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+        if (sequence !== agentWorkbenchRequestSequence) return;
+        if (!payload.runs_included && agentWorkbenchPayload?.runs) {
+          payload.runs = agentWorkbenchPayload.runs;
+        }
+        renderAgentWorkbench(payload);
+      } catch (error) {
+        if (error.name === "AbortError" || sequence !== agentWorkbenchRequestSequence) return;
+        document.querySelector("#agentStaleNote").textContent = `工作台数据可能已过期：${error.message}`;
+        if (!agentWorkbenchPayload) {
+          document.querySelector("#agentRunKpis").innerHTML = `<div class="robot-empty" style="grid-column:1/-1;">Agent 工作台不可用：${escapeHtml(error.message)}</div>`;
+        } else if (agentWorkbenchPayload.selected_run?.run_id === runId) {
+          scheduleAgentWorkbenchPolling(agentWorkbenchPayload);
+        }
+      }
+    }
+
+    function initAgentWorkbench() {
+      document.querySelector("#agentRunSelect")?.addEventListener("change", (event) => {
+        loadAgentWorkbench(event.target.value);
+      });
+      document.querySelector("#agentRefreshButton")?.addEventListener("click", () => {
+        loadAgentWorkbench(document.querySelector("#agentRunSelect")?.value || "");
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          clearAgentWorkbenchPolling();
+        } else if (currentAppViewFromHash() === "agent-workbench") {
+          loadAgentWorkbench(document.querySelector("#agentRunSelect")?.value || "");
+        }
+      });
+      window.addEventListener("resize", () => {
+        if (!agentWorkbenchPayload) return;
+        const nodes = agentWorkbenchPayload.dag?.nodes || [];
+        const edges = agentWorkbenchPayload.dag?.edges || [];
+        const topology = topologicalAgentLayers(nodes, edges);
+        drawAgentDagEdges(topology.cycle ? [] : edges);
+      });
+      loadAgentWorkbench();
+    }
+
+    function setStatus(text, type = "") {
+      uploadStatus.textContent = text;
+      uploadStatus.className = `upload-status ${type}`.trim();
+    }
+
+    const appViewIds = ["dashboard", "agent-workbench", "engineering-report", "growth-analysis", "recheck-list", "visualizations", "video-analysis", "algorithm-flow", "detect", "data-note"];
+
+    function currentAppViewFromHash() {
+      const hash = window.location.hash.replace("#", "");
+      return appViewIds.includes(hash) ? hash : "dashboard";
+    }
+
+    function showAppView(viewId, options = {}) {
+      const nextView = appViewIds.includes(viewId) ? viewId : "dashboard";
+      document.querySelectorAll("[data-app-view]").forEach((node) => {
+        node.classList.toggle("active-view", node.dataset.appView === nextView);
+      });
+      document.querySelectorAll("[data-view-link]").forEach((link) => {
+        const active = link.dataset.viewLink === nextView;
+        link.classList.toggle("active", active);
+        if (active) {
+          link.setAttribute("aria-current", "page");
+          document.querySelector("#navCurrentLabel").textContent = link.textContent.trim();
+        } else {
+          link.removeAttribute("aria-current");
+        }
+      });
+      closeNavMenu();
+      if (nextView === "agent-workbench") {
+        if (agentWorkbenchPayload) scheduleAgentWorkbenchPolling(agentWorkbenchPayload);
+      } else {
+        clearAgentWorkbenchPolling();
+      }
+      if (options.updateHash && window.location.hash !== `#${nextView}`) {
+        history.pushState(null, "", `#${nextView}`);
+      }
+      if (options.scrollTop) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      if (window.ScrollTrigger) {
+        window.ScrollTrigger.refresh();
+      }
+    }
+
+    function initAppNavigation() {
+      initCollapsibleNavigation();
+      document.querySelectorAll("[data-view-link]").forEach((link) => {
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          showAppView(link.dataset.viewLink, { updateHash: true, scrollTop: true });
+        });
+      });
+      window.addEventListener("hashchange", () => showAppView(currentAppViewFromHash()));
+      showAppView(currentAppViewFromHash());
+    }
+
+    function initTasteMotion() {
+      if (!window.gsap || !window.ScrollTrigger) return;
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      gsap.registerPlugin(ScrollTrigger);
+
+      gsap.utils.toArray(".image-stage img").forEach((img) => {
+        gsap.fromTo(
+          img,
+          { scale: 0.88, opacity: 0.82 },
+          {
+            scale: 1,
+            opacity: 1,
+            ease: "power2.out",
+            scrollTrigger: {
+              trigger: img,
+              start: "top 86%",
+              end: "bottom 18%",
+              scrub: true
+            }
+          }
+        );
+      });
+
+      gsap.utils.toArray(".advantage-card").forEach((card, index) => {
+        gsap.fromTo(
+          card,
+          { y: 54 + index * 5, opacity: 0.18, scale: 0.96 },
+          {
+            y: 0,
+            opacity: 1,
+            scale: 1,
+            ease: "power2.out",
+            scrollTrigger: {
+              trigger: card,
+              start: "top 88%",
+              end: "top 52%",
+              scrub: true
+            }
+          }
+        );
+      });
+    }
+
+    function selectView(index) {
+      const view = activeViews[index];
+      if (!view) return;
+      stageLabel.textContent = viewLabel(view.label);
+      stageHelp.textContent = viewDescription(view.label);
+      stageImage.classList.remove("hidden");
+      stageImage.src = view.url;
+      viewMessage.classList.remove("visible");
+      viewMessage.replaceChildren();
+      document.querySelectorAll("[data-view]").forEach((node) => {
+        node.classList.toggle("active", Number(node.dataset.view) === index);
+      });
+    }
+
+    function renderViews(views) {
+      activeViews = views;
+      tabs.replaceChildren();
+      filmstrip.replaceChildren();
+
+      views.forEach((view, index) => {
+        const button = document.createElement("button");
+        button.textContent = viewLabel(view.label);
+        button.dataset.view = index;
+        button.addEventListener("click", () => selectView(index));
+        tabs.appendChild(button);
+
+        const thumb = document.createElement("div");
+        thumb.className = "thumb";
+        thumb.dataset.view = index;
+        thumb.innerHTML = `<img src="${view.url}" alt="${viewLabel(view.label)} thumbnail"><span>${viewLabel(view.label)}</span>`;
+        thumb.addEventListener("click", () => selectView(index));
+        filmstrip.appendChild(thumb);
+      });
+
+      const selectedOverlayIndex = views.findIndex((item) => item.label === "Selected overlay");
+      const overlayIndex = selectedOverlayIndex >= 0 ? selectedOverlayIndex : Math.max(0, views.findIndex((item) => item.label === "Overlay"));
+      selectView(overlayIndex);
+    }
+
+    function renderExperiment() {
+      const early = experimentResult.summary.early;
+      const final = experimentResult.summary.final;
+      const deltaMIoU = final.mIoU - early.mIoU;
+      const deltaMAcc = final.mAcc - early.mAcc;
+      const deltaAAcc = final.aAcc - early.aAcc;
+      document.querySelector("#stageMetrics").innerHTML = [
+        ["Final mIoU", `${final.mIoU.toFixed(2)}%`, `${signedDelta(deltaMIoU)} vs 16000 iter`, "delta-up"],
+        ["Final mAcc", `${final.mAcc.toFixed(2)}%`, `${signedDelta(deltaMAcc)} vs 16000 iter`, "delta-up"],
+        ["Final aAcc", `${final.aAcc.toFixed(2)}%`, `${signedDelta(deltaAAcc)} vs 16000 iter`, "delta-up"],
+        ["Best bottleneck", "blocky", "IoU 53.58%, 仍需专项优化", "delta-flat"]
+      ].map(([label, value, help, tone]) => `<div class="stage-card"><span>${label}</span><b class="${tone}">${value}</b><small>${help}</small></div>`).join("");
+
+      document.querySelector("#classCompareRows").innerHTML = experimentResult.classes.map((item) => {
+        const delta = item.finalIoU - item.earlyIoU;
+        const tone = delta >= 3 ? "delta-up" : "delta-flat";
+        return `
+          <div class="compare-row">
+            <span class="compare-name">${item.name}</span>
+            <span class="compare-stack">
+              <i class="compare-track"><i class="compare-fill" style="width:${item.earlyIoU}%"></i></i>
+              <i class="compare-track"><i class="compare-fill final" style="width:${item.finalIoU}%"></i></i>
+            </span>
+            <span>${item.earlyIoU.toFixed(2)}</span>
+            <span>${item.finalIoU.toFixed(2)}</span>
+            <span class="${tone}">${signedDelta(delta)}</span>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderHeader(report) {
+      const risk = report.risk || {};
+      const priority = report.review_priority || {};
+      const level = String(risk.risk_level || "none").toLowerCase();
+      const riskCard = document.querySelector("#riskLevelCard");
+      riskCard.className = `stat risk-${level}`;
+      document.querySelector("#riskLevel").textContent = riskLabel(level);
+      document.querySelector("#riskScore").textContent = fmt(risk.score, 2);
+      document.querySelector("#defectPixels").textContent = report.morphology?.defect_area_pixels ?? 0;
+      document.querySelector("#reviewFlag").textContent = riskLabel(priority.priority || (risk.review_required ? "medium" : level));
+    }
+
+    function renderCase(report) {
+      const morph = report.morphology || {};
+      const classes = morph.classes || [];
+      const detected = classes.find((item) => Number(item.area_pixels || 0) > 0) || classes[0] || {};
+      const imageShape = morph.image_shape ? `${morph.image_shape[1]} x ${morph.image_shape[0]}` : "384 x 384";
+      document.querySelector("#caseId").textContent = report.stem || "uploaded";
+      document.querySelector("#statusStrip").innerHTML = [
+        ["TTA specs", (report.tta_specs || []).join(" + ") || "identity + hflip"],
+        ["Selection", report.adaptive_selection?.mode || "fused"],
+        ["Input size", imageShape],
+        ["Main class", classLabel(detected.class_name || "none")],
+        ["Direction", detected.dominant_direction || "none"],
+        ["Skeleton length", morph.defect_skeleton_length ?? detected.skeleton_length ?? 0],
+        ["Components", morph.defect_component_count ?? detected.component_count ?? 0]
+      ].map(([label, value]) => `<div class="strip-row"><span>${label}</span><b>${value}</b></div>`).join("");
+
+      const singleDefect = defectPixelCount(report.single_prediction_stats);
+      const selectedDefect = defectPixelCount(report.selected_prediction_stats || report.fused_prediction_stats);
+      const mode = report.adaptive_selection?.mode || "fused";
+      document.querySelector("#caseNote").textContent = `单次预测有 ${singleDefect} 个缺陷像素，选择输出为 ${selectedDefect} 个；adaptive selection 当前使用 ${mode}。`;
+    }
+
+    function renderRisk(report) {
+      const unc = report.uncertainty_summary || {};
+      const uncertaintyUnavailable = report.uncertainty_summary?.available === false;
+      const riskMetrics = uncertaintyUnavailable ? [
+        ["平均不确定性", "N/A", "当前 mask source 未计算 uncertainty；不能把占位热力图的 0 理解为模型很确定。"],
+        ["最大不确定性", "N/A", "未计算 uncertainty，边界和疑似误判区域需要结合 mask 形态复核。"],
+        ["缺陷区不确定性", "N/A", "未计算 uncertainty，风险提示当前主要来自 morphology 和 selected-mask evidence。"],
+        ["高不确定缺陷占比", "N/A", "未计算 uncertainty，无法统计高不确定缺陷像素比例。"]
+      ] : [
+        ["平均不确定性", fmt(unc.mean), "整张图预测分布的平均不确定程度，越高表示模型越不确定。"],
+        ["最大不确定性", fmt(unc.max), "图中最不确定的像素值，用于定位边界或疑似误判区域。"],
+        ["缺陷区不确定性", fmt(unc.defect_mean), "只在已检测缺陷区域内统计，更贴近复核风险。"],
+        ["高不确定缺陷占比", pct(unc.defect_high_fraction), "缺陷区域中超过阈值的比例，越高越建议人工确认。"]
+      ];
+      document.querySelector("#riskMetrics").innerHTML = riskMetrics.map(([label, value, help]) => metricCard(label, value, help)).join("");
+
+      const activeResult = (report.risk?.class_results || []).find((item) => item.risk_level !== "none") || report.risk?.class_results?.[0];
+      const priority = report.review_priority || {};
+      const priorityReasons = priority.reasons || [];
+      const reasons = priorityReasons.length ? priorityReasons : (activeResult?.reasons || report.risk?.suggestions || ["No risk reasons available."]);
+      document.querySelector("#reasonList").innerHTML = reasons.map((reason) => `<li>${translateReason(reason)}</li>`).join("");
+    }
+
+    function defectPixelCount(stats = {}) {
+      return Object.entries(stats)
+        .filter(([id]) => id !== "0")
+        .reduce((sum, [, count]) => sum + Number(count || 0), 0);
+    }
+
+    function renderPixelBars(report) {
+      const total = report.morphology?.total_pixels || 1;
+      const rows = [];
+      const classNames = report.class_names || {};
+      for (const [kind, stats] of [["single", report.single_prediction_stats || {}], ["fused", report.fused_prediction_stats || {}], ["selected", report.selected_prediction_stats || {}]]) {
+        for (const [classId, count] of Object.entries(stats)) {
+          const kindLabel = kind === "single" ? "单次" : kind === "fused" ? "融合" : "选择";
+          const label = `${kindLabel} ${classLabel(classNames[classId] || `class ${classId}`)}`;
+          const width = Math.min(100, Math.max(0.2, Number(count) / total * 100));
+          const tone = classId === "0" ? "good" : "";
+          rows.push(`<div class="bar-row"><span>${label}</span><div class="bar-track"><div class="bar-fill ${tone}" style="width:${width}%"></div></div><b>${count}</b></div>`);
+        }
+      }
+      document.querySelector("#pixelBars").innerHTML = rows.join("");
+    }
+
+    function renderSummary(report) {
+      const ev = report.evaluation;
+      const uncertaintyUnavailable = report.uncertainty_summary?.available === false;
+      const metrics = ev ? [
+        ["Single mIoU", fmt(ev.single_mIoU), "单次预测与人工标注 GT 的重叠度，1 表示完全一致。"],
+        ["Fused mIoU", fmt(ev.fused_mIoU), "TTA 融合预测与人工标注 GT 的重叠度。"],
+        ["Selected mIoU", fmt(ev.selected_mIoU ?? ev.single_mIoU), "Adaptive fusion 选择输出与人工标注 GT 的重叠度。"],
+        ["Delta selected", fmt((ev.selected_mIoU ?? ev.single_mIoU) - ev.single_mIoU), "Selected mIoU - Single mIoU，用于观察自适应选择是否损伤精度。"],
+        ["Mean uncertainty", uncertaintyUnavailable ? "N/A" : fmt(ev.mean_uncertainty ?? report.uncertainty_summary?.mean), uncertaintyUnavailable ? "当前 mask source 未计算 uncertainty。" : "预测概率分布的平均不确定程度，越高越不稳定。"]
+      ] : [
+        ["Single mIoU", "N/A", "自选图片没有人工标注 GT，无法计算真实 mIoU。"],
+        ["Fused mIoU", "N/A", "mIoU 必须用预测 mask 与 GT mask 比较；当前只有输入图像。"],
+        ["Selected mIoU", "N/A", "Selected mask 也需要 GT 才能计算真实 mIoU。"],
+        ["Selection", report.adaptive_selection?.mode || "-", "adaptive fusion 选择的输出模式：single / fused / hybrid。"],
+        ["Self IoU", fmt(report.self_consistency?.single_fused_mIoU), "只比较 Single mask 与 Fused mask 的一致性，不代表真实精度。"],
+        ["Mean uncertainty", uncertaintyUnavailable ? "N/A" : fmt(report.uncertainty_summary?.mean), uncertaintyUnavailable ? "当前 mask source 未计算 uncertainty；自选图片仍可查看 mask、morphology 和 Self IoU。" : "这个指标不需要 GT，可直接从模型概率分布计算。"]
+      ];
+      document.querySelector("#summaryMetrics").innerHTML = metrics.map(([label, value, help]) => metricCard(label, value, help)).join("");
+    }
+
+    function renderAdvantages(report) {
+      const advantageGrid = document.querySelector("#advantageGrid");
+      const advantageNote = document.querySelector("#advantageNote");
+      if (!advantageGrid || !advantageNote) return;
+      const ev = report.evaluation;
+      const singleDefect = defectPixelCount(report.single_prediction_stats);
+      const fusedDefect = defectPixelCount(report.fused_prediction_stats);
+      const selectedDefect = defectPixelCount(report.selected_prediction_stats || report.fused_prediction_stats);
+      const protectedPixels = Math.max(0, selectedDefect - fusedDefect);
+      const shrinkRatio = singleDefect > 0 ? 1 - fusedDefect / singleDefect : null;
+      const foregroundIoU = report.self_consistency?.foreground_iou;
+      const defectHighFraction = report.uncertainty_summary?.defect_high_fraction;
+      const skeletonLength = report.morphology?.defect_skeleton_length ?? 0;
+      const componentCount = report.morphology?.defect_component_count ?? 0;
+      const selectionMode = report.adaptive_selection?.mode || "fused";
+
+      const hasGT = Boolean(ev && ev.single_mIoU !== undefined && ev.fused_mIoU !== undefined);
+      const guardGain = hasGT ? (ev.selected_mIoU ?? ev.single_mIoU) - ev.fused_mIoU : null;
+      const relativeGuardGain = hasGT && ev.fused_mIoU ? guardGain / ev.fused_mIoU : null;
+
+      advantageGrid.innerHTML = [
+        [
+          "Review priority",
+          riskLabel(report.review_priority?.priority || "none"),
+          report.review_priority?.note || "人工复核排序信号，不等同于结构安全诊断或最终养护决策。"
+        ],
+        [
+          "Adaptive selection",
+          hasGT ? signedDelta(guardGain, 4) : selectionMode,
+          hasGT
+            ? `Selected mIoU 相比 Fused mIoU 的保护收益，约 ${pct(relativeGuardGain)} 相对提升。`
+            : "自选图片没有 GT，不能算真实 mIoU；这里展示模块最终选择的输出模式。"
+        ],
+        [
+          "Small defect guard",
+          `${protectedPixels} px`,
+          shrinkRatio !== null
+            ? `TTA fusion 前景收缩 ${pct(shrinkRatio)}；selection 保留下 ${protectedPixels} 个缺陷像素。`
+            : "当前图未检测到缺陷前景，无法计算收缩保护量。"
+        ],
+        [
+          "Uncertainty triage",
+          pct(defectHighFraction),
+          `缺陷区高不确定像素占比；该值不依赖 GT，可用于实时复核提示。`
+        ],
+        [
+          "Morphology evidence",
+          `${skeletonLength}`,
+          `骨架长度 ${skeletonLength}，连通域 ${componentCount}；把 mask 转成方向、长度、碎片化等工程量。`
+        ]
+      ].map(([title, value, help]) => `<div class="advantage-card"><b>${title}</b><strong>${value}</strong><p>${help}</p></div>`).join("");
+
+      const gtSentence = hasGT
+        ? `有 GT 的样例中，Fused mIoU=${fmt(ev.fused_mIoU)}，Selected mIoU=${fmt(ev.selected_mIoU ?? ev.single_mIoU)}，说明增强模块避免了这次融合收缩造成的精度损失。`
+        : `自选图片没有 GT，因此不能直接证明 mIoU 提升；但仍可展示 selection mode、前景收缩、uncertainty、disagreement 和 morphology 这些无 GT 可计算证据。`;
+      advantageNote.textContent =
+        `${gtSentence} Single/Fused foreground IoU=${fmt(foregroundIoU)}，当前 selection=${selectionMode}，保留缺陷像素 ${selectedDefect} px。`;
+    }
+
+    function renderMorphology(report) {
+      const riskByClass = new Map((report.risk?.class_results || []).map((item) => [Number(item.class_id), item]));
+      const rows = (report.morphology?.classes || []).map((item) => {
+        const risk = riskByClass.get(Number(item.class_id));
+        const direction = item.dominant_direction ? `${item.dominant_direction} ${fmt(item.dominant_direction_degrees, 2)} deg` : "-";
+        const review = risk?.review_required ? " / 需复核" : "";
+        return `<tr><td>${escapeHtml(rawClassLabel(item.class_name))}</td><td>${item.area_pixels}</td><td>${fmt(item.area_ratio, 6)}</td><td>${item.component_count}</td><td>${item.skeleton_length}</td><td>${escapeHtml(direction)}</td><td>${riskLabel(risk?.risk_level || "none")}${review}</td></tr>`;
+      });
+      document.querySelector("#morphologyRows").innerHTML = rows.join("");
+      renderMorphologyDelta(report.morphology_delta);
+    }
+
+    function renderMorphologyDelta(delta = {}) {
+      const pairs = [
+        ["single -> fused", delta.single_to_fused],
+        ["fused -> selected", delta.fused_to_selected],
+        ["single -> selected", delta.single_to_selected]
+      ];
+      const cards = pairs.map(([label, item]) => {
+        if (!item) {
+          return `<div class="metric"><span>${label}</span><b>N/A</b><small>当前报告未包含 morphology_delta。</small></div>`;
+        }
+        const area = Number(item.defect_area_delta_pixels || 0);
+        const components = Number(item.defect_component_delta || 0);
+        const skeleton = Number(item.defect_skeleton_length_delta || 0);
+        const explanation = (item.explanations || []).slice(0, 2).map(translateMorphologyDelta).join("；");
+        return `<div class="metric"><span>${label}</span><b>${signedDelta(area, 0)} px</b><small>连通域 ${signedDelta(components, 0)}，骨架 ${signedDelta(skeleton, 0)}。${escapeHtml(explanation || "形态变化较小。")}</small></div>`;
+      });
+      document.querySelector("#morphologyDeltaGrid").innerHTML = cards.join("");
+    }
+
+    function renderMultidomain(report) {
+      const panel = document.querySelector("#multidomainPanel");
+      const cards = document.querySelector("#multidomainCards");
+      const note = document.querySelector("#multidomainNote");
+      const rows = document.querySelector("#multidomainRows");
+      const payload = report.multidomain_results;
+
+      if (!payload || !Array.isArray(payload.results) || payload.results.length === 0) {
+        panel.hidden = true;
+        return;
+      }
+
+      const order = ["civil", "track", "equipment"];
+      const labels = {
+        civil: "Civil / 土建",
+        track: "Track / 轨道",
+        equipment: "Equipment / 设备",
+      };
+      const counts = Object.fromEntries(order.map((domain) => [domain, 0]));
+      const types = new Map();
+
+      payload.results.forEach((item) => {
+        const domain = item.domain || "unknown";
+        counts[domain] = (counts[domain] || 0) + 1;
+        if (!types.has(domain)) types.set(domain, new Set());
+        types.get(domain).add(item.defect_type || "-");
+      });
+
+      panel.hidden = false;
+      cards.innerHTML = order.map((domain) => {
+        const typeList = [...(types.get(domain) || [])].slice(0, 3).join(" / ") || "暂无";
+        const suffix = domain === "civil" ? "来自当前 SegFormer 输出。" : "来自 demo adapter，等待真实样本替换。";
+        return `<div class="metric"><span>${labels[domain]}</span><b>${counts[domain] || 0}</b><small>${escapeHtml(typeList)}，${escapeHtml(suffix)}</small></div>`;
+      }).join("");
+
+      rows.innerHTML = payload.results.map((item) => {
+        const locationSummary = item.location?.summary || {};
+        const locationParts = [];
+        if (locationSummary.clock_position?.label) locationParts.push(locationSummary.clock_position.label);
+        if (locationSummary.ring_id) locationParts.push(`环号 ${locationSummary.ring_id}`);
+        if (locationSummary.mileage) locationParts.push(`里程 ${locationSummary.mileage}`);
+        const locationStatus = item.location?.status || "unavailable";
+        const locationDisplayable = locationStatus !== "unavailable";
+        const location = locationDisplayable
+          ? `${item.location?.source || locationStatus}${item.location?.accuracy_level ? ` · ${item.location.accuracy_level}` : ""}${locationStatus === "partial" ? " · partial" : ""}${locationParts.length ? ` · ${locationParts.join(" / ")}` : ""}`
+          : "unavailable";
+        const confidence = item.confidence?.available ? fmt(item.confidence?.score, 3) : "N/A";
+        const priority = item.review_priority?.priority || "-";
+        return `<tr><td>${escapeHtml(item.domain || "-")}</td><td>${escapeHtml(item.defect_type || "-")}</td><td>${escapeHtml(item.source || "-")}</td><td>${escapeHtml(item.status || "-")}</td><td>${escapeHtml(location)}</td><td>${escapeHtml(confidence)}</td><td>${escapeHtml(priority)}</td></tr>`;
+      }).join("");
+
+      const civilCount = payload.summary?.civil_result_count ?? 0;
+      const locationStatus = payload.summary?.location_status || "unavailable";
+      note.textContent = `当前报告已把 civil 结果写入统一多领域合同（${civilCount} 项）；track / equipment 适配器可通过 demo runner 补充。定位状态：${locationStatus}。`;
+    }
+
+    function renderReport(report, views) {
+      renderHeader(report);
+      renderCase(report);
+      renderRisk(report);
+      renderPixelBars(report);
+      renderSummary(report);
+      renderAdvantages(report);
+      renderMorphology(report);
+      renderMultidomain(report);
+      renderViews(views);
+      const exportBox = document.querySelector("#reportExport");
+      const exportHint = document.querySelector("#reportExportHint");
+      const exportLink = document.querySelector("#reportExportLink");
+      const structuredUrl = report.inspection_report_url || report.report_url || "";
+      if (structuredUrl) {
+        exportBox.hidden = false;
+        exportLink.href = structuredUrl;
+        exportLink.textContent = report.inspection_report_url ? "下载结构化报告" : "下载原始报告";
+        exportHint.textContent = report.inspection_report_url
+          ? "结构化报告已生成，包含摘要、证据和导出友好的字段。"
+          : "当前结果只包含原始报告，可直接下载 JSON。";
+      } else {
+        exportBox.hidden = true;
+      }
+      document.querySelector("#jsonBlock").textContent = JSON.stringify(report, null, 2);
+    }
+
+    async function detectFile(file) {
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        setStatus("请选择图片文件。", "error");
+        return;
+      }
+
+      setStatus(`检测中：${file.name}。首次运行会加载模型，请等待。`, "busy");
+      const form = new FormData();
+      form.append("image", file);
+
+      try {
+        const response = await fetch("/api/detect", { method: "POST", body: form });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || `HTTP ${response.status}`);
+        }
+        renderReport(payload.report, payload.report.views);
+        setStatus(`检测完成：${file.name}，耗时 ${payload.report.elapsed_ms} ms。`);
+      } catch (error) {
+        setStatus(`检测失败：${error.message}。确认已用 python web_app.py 启动服务。`, "error");
+      }
+    }
+
+    dropZone.addEventListener("click", (event) => {
+      if (event.target.id !== "resetSample") fileInput.click();
+    });
+    document.querySelector("#pickFile").addEventListener("click", (event) => {
+      event.stopPropagation();
+      fileInput.click();
+    });
+    document.querySelector("#resetSample").addEventListener("click", (event) => {
+      event.stopPropagation();
+      renderReport(sampleReport, sampleViews);
+      setStatus("已恢复样例结果。");
+    });
+    fileInput.addEventListener("change", () => detectFile(fileInput.files[0]));
+
+    ["dragenter", "dragover"].forEach((name) => {
+      dropZone.addEventListener(name, (event) => {
+        event.preventDefault();
+        dropZone.classList.add("dragging");
+      });
+    });
+    ["dragleave", "drop"].forEach((name) => {
+      dropZone.addEventListener(name, (event) => {
+        event.preventDefault();
+        dropZone.classList.remove("dragging");
+      });
+    });
+    dropZone.addEventListener("drop", (event) => {
+      detectFile(event.dataTransfer.files[0]);
+    });
+
+    renderExperiment();
+    loadRobotDashboard();
+    loadProjectSummary();
+    loadEngineeringReport();
+    loadGrowthAnalysis();
+    loadFullRecheckList();
+    loadVisualizationAssets();
+    loadVideoDashboard();
+    loadAlgorithmEvents();
+    loadRobotRouteReport();
+    initAgentWorkbench();
+    renderReport(sampleReport, sampleViews);
+    initAppNavigation();
+    initTasteMotion();
+  </script>
+</body>
+</html>
