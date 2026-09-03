@@ -1,0 +1,343 @@
+{
+  "schema_version": "robot-inspection-report.v1",
+  "generated_at": "2026-06-25T04:00:45.359673+00:00",
+  "route": {
+    "route_id": null,
+    "inspection_run_ids": [
+      "robot-demo-run-001",
+      "robot-demo-run-002"
+    ]
+  },
+  "summary": {
+    "frame_count": 2,
+    "track_count": 1,
+    "review_count": 1,
+    "limitations": [
+      "calibration_missing",
+      "depth_missing",
+      "local_3d_unavailable",
+      "pose_missing"
+    ]
+  },
+  "frames": [
+    {
+      "frame_id": "tunnel-001-old",
+      "manifest_index": 0,
+      "image_path": "images/tunnel-001-old.jpg",
+      "report_path": "frame_reports/tunnel-001-old.json",
+      "timestamp": "2026-06-01T08:00:00Z",
+      "mileage": "K12+340.5",
+      "ring_id": "R-128",
+      "camera_id": "front-left",
+      "inspection_run_id": "robot-demo-run-001",
+      "pose": null,
+      "calibration": null,
+      "depth": null,
+      "metadata": {},
+      "ordering_confidence": "high",
+      "location_confidence": "high",
+      "limitations": [
+        "calibration_missing",
+        "depth_missing",
+        "pose_missing"
+      ]
+    },
+    {
+      "frame_id": "tunnel-001-new",
+      "manifest_index": 1,
+      "image_path": "images/tunnel-001-new.jpg",
+      "report_path": "frame_reports/tunnel-001-new.json",
+      "timestamp": "2026-06-20T08:00:00Z",
+      "mileage": "K12+341.2",
+      "ring_id": "R-128",
+      "camera_id": "front-left",
+      "inspection_run_id": "robot-demo-run-002",
+      "pose": null,
+      "calibration": null,
+      "depth": null,
+      "metadata": {},
+      "ordering_confidence": "high",
+      "location_confidence": "high",
+      "limitations": [
+        "calibration_missing",
+        "depth_missing",
+        "pose_missing"
+      ]
+    }
+  ],
+  "tracks": [
+    {
+      "track_id": "track_001",
+      "defect_class": "simple",
+      "observations": [
+        {
+          "observation_id": "obs_tunnel-001-old",
+          "frame_id": "tunnel-001-old",
+          "inspection_run_id": "robot-demo-run-001",
+          "manifest_index": 0,
+          "timestamp": "2026-06-01T08:00:00Z",
+          "mileage": "K12+340.5",
+          "ring_id": "R-128",
+          "camera_id": "front-left",
+          "class_id": 1,
+          "class_name": "simple",
+          "geometry": {
+            "bbox": [
+              0.48,
+              0.28,
+              0.57,
+              0.36
+            ],
+            "pixel_center": [
+              201.6,
+              122.8
+            ],
+            "normalized_center": [
+              0.525,
+              0.32
+            ]
+          },
+          "area": 96.0,
+          "skeleton_length": 31.0,
+          "location": {
+            "status": "available",
+            "mileage": "K12+340.5",
+            "ring_id": "R-128",
+            "clock_position": {
+              "hour": 12,
+              "label": "12点方向"
+            },
+            "normalized_center": [
+              0.525,
+              0.32
+            ],
+            "local_3d_status": "unavailable",
+            "local_3d": {
+              "status": "unavailable",
+              "available": false
+            },
+            "source": "robot_manifest_plus_mask",
+            "accuracy_level": "coarse",
+            "limitations": [
+              "local_3d_unavailable"
+            ]
+          },
+          "confidence": {
+            "ordering": "high",
+            "location": "high",
+            "uncertainty_mean": 0.08,
+            "uncertainty_defect_mean": 0.18
+          },
+          "risk": {
+            "score": 1.2,
+            "review_required": false,
+            "priority": "low"
+          },
+          "status": "available",
+          "measurement_basis": "route_metadata",
+          "claim_level": [
+            "rule_evidence_only",
+            "not_prediction",
+            "not_field_verified"
+          ],
+          "limitations": [
+            "calibration_missing",
+            "depth_missing",
+            "local_3d_unavailable",
+            "pose_missing"
+          ],
+          "evidence_links": {
+            "report_path": "frame_reports/tunnel-001-old.json",
+            "image_path": "images/tunnel-001-old.jpg"
+          }
+        },
+        {
+          "observation_id": "obs_tunnel-001-new",
+          "frame_id": "tunnel-001-new",
+          "inspection_run_id": "robot-demo-run-002",
+          "manifest_index": 1,
+          "timestamp": "2026-06-20T08:00:00Z",
+          "mileage": "K12+341.2",
+          "ring_id": "R-128",
+          "camera_id": "front-left",
+          "class_id": 1,
+          "class_name": "simple",
+          "geometry": {
+            "bbox": [
+              0.48,
+              0.28,
+              0.57,
+              0.36
+            ],
+            "pixel_center": [
+              201.6,
+              122.8
+            ],
+            "normalized_center": [
+              0.525,
+              0.32
+            ]
+          },
+          "area": 142.0,
+          "skeleton_length": 43.0,
+          "location": {
+            "status": "available",
+            "mileage": "K12+341.2",
+            "ring_id": "R-128",
+            "clock_position": {
+              "hour": 12,
+              "label": "12点方向"
+            },
+            "normalized_center": [
+              0.525,
+              0.32
+            ],
+            "local_3d_status": "unavailable",
+            "local_3d": {
+              "status": "unavailable",
+              "available": false
+            },
+            "source": "robot_manifest_plus_mask",
+            "accuracy_level": "coarse",
+            "limitations": [
+              "local_3d_unavailable"
+            ]
+          },
+          "confidence": {
+            "ordering": "high",
+            "location": "high",
+            "uncertainty_mean": 0.08,
+            "uncertainty_defect_mean": 0.18
+          },
+          "risk": {
+            "score": 2.1,
+            "review_required": true,
+            "priority": "medium"
+          },
+          "status": "available",
+          "measurement_basis": "route_metadata",
+          "claim_level": [
+            "rule_evidence_only",
+            "not_prediction",
+            "not_field_verified",
+            "requires_manual_review"
+          ],
+          "limitations": [
+            "calibration_missing",
+            "depth_missing",
+            "local_3d_unavailable",
+            "pose_missing"
+          ],
+          "evidence_links": {
+            "report_path": "frame_reports/tunnel-001-new.json",
+            "image_path": "images/tunnel-001-new.jpg"
+          }
+        }
+      ],
+      "association_reasons": [
+        "class_match",
+        "mileage_proximity",
+        "new_track",
+        "normalized_center_proximity",
+        "ring_match"
+      ],
+      "track_confidence": "high",
+      "comparability_status": "comparable",
+      "limitations": [
+        "calibration_missing",
+        "depth_missing",
+        "local_3d_unavailable",
+        "pose_missing"
+      ],
+      "trend": {
+        "label": "suspected-growth",
+        "reason": "Comparable cross-cycle observations show increasing image evidence.",
+        "metrics": {
+          "area_delta": 46.0,
+          "area_relative_delta": 0.4791666666666667,
+          "skeleton_length_delta": 12.0,
+          "centroid_shift": 0.0,
+          "risk_delta": 0.9000000000000001
+        },
+        "measurement_basis": "route_metadata",
+        "claim_level": [
+          "not_field_verified",
+          "not_prediction",
+          "requires_manual_review",
+          "rule_evidence_only"
+        ],
+        "comparability_status": "comparable-cross-cycle",
+        "limitations": []
+      },
+      "review_required": true,
+      "latest_location": {
+        "status": "available",
+        "mileage": "K12+341.2",
+        "ring_id": "R-128",
+        "clock_position": {
+          "hour": 12,
+          "label": "12点方向"
+        },
+        "normalized_center": [
+          0.525,
+          0.32
+        ],
+        "local_3d_status": "unavailable",
+        "local_3d": {
+          "status": "unavailable",
+          "available": false
+        },
+        "source": "robot_manifest_plus_mask",
+        "accuracy_level": "coarse",
+        "limitations": [
+          "local_3d_unavailable"
+        ]
+      }
+    }
+  ],
+  "review_queue": [
+    {
+      "track_id": "track_001",
+      "priority_score": 140,
+      "reason": "suspected growth evidence, risk rising, manual review required",
+      "trend_label": "suspected-growth",
+      "latest_location": {
+        "status": "available",
+        "mileage": "K12+341.2",
+        "ring_id": "R-128",
+        "clock_position": {
+          "hour": 12,
+          "label": "12点方向"
+        },
+        "normalized_center": [
+          0.525,
+          0.32
+        ],
+        "local_3d_status": "unavailable",
+        "local_3d": {
+          "status": "unavailable",
+          "available": false
+        },
+        "source": "robot_manifest_plus_mask",
+        "accuracy_level": "coarse",
+        "limitations": [
+          "local_3d_unavailable"
+        ]
+      },
+      "claim_level": [
+        "not_field_verified",
+        "not_prediction",
+        "requires_manual_review",
+        "rule_evidence_only"
+      ],
+      "requires_manual_review": true
+    }
+  ],
+  "claim_guard": {
+    "claim_level_required": true,
+    "not_prediction_unless_cross_cycle_comparable_or_manual_verified": true,
+    "prediction_claim": "not_prediction_unless_cross_cycle_comparable_or_manual_verified",
+    "field_verification": "not_field_verified",
+    "structural_deformation": "not_certified_structural_deformation"
+  }
+}
